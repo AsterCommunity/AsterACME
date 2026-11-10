@@ -15,6 +15,22 @@ pub(super) trait RegistrationPrompts {
 
 pub(super) struct TerminalPrompts;
 
+/// Missing update input is never interpreted as permission to clear contacts.
+pub(super) fn replacement_contacts(
+    contacts: Vec<String>,
+    clear: bool,
+    interactive: bool,
+    prompts: &mut impl RegistrationPrompts,
+) -> CliResult<Vec<String>> {
+    match (clear, contacts.is_empty(), interactive) {
+        (true, true, _) => Ok(Vec::new()),
+        (true, false, _) => Err("Use --contact or --clear-contacts, not both.".into()),
+        (false, false, _) => Ok(super::contact::normalize(contacts)?),
+        (false, true, false) => Err("Specify --contact <EMAIL> or --clear-contacts.".into()),
+        (false, true, true) => Ok(super::contact::normalize(vec![prompts.email()?])?),
+    }
+}
+
 impl RegistrationPrompts for TerminalPrompts {
     fn confirm(&mut self, message: &str) -> CliResult<bool> {
         prompt_result(inquire::Confirm::new(message).with_default(false).prompt())
@@ -116,6 +132,49 @@ mod tests {
             address: email.map(str::to_owned),
             messages: vec![],
         }
+    }
+
+    #[test]
+    fn contact_replacement_requires_explicit_clear_and_noninteractive_input() {
+        assert!(replacement_contacts(vec![], false, false, &mut prompts(&[], None)).is_err());
+        assert!(
+            replacement_contacts(
+                vec!["a@example.org".into()],
+                true,
+                false,
+                &mut prompts(&[], None)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            replacement_contacts(vec![], true, false, &mut prompts(&[], None)).unwrap(),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            replacement_contacts(
+                vec!["a@example.org".into()],
+                false,
+                false,
+                &mut prompts(&[], None)
+            )
+            .unwrap(),
+            ["mailto:a@example.org"]
+        );
+        assert_eq!(
+            replacement_contacts(
+                vec![],
+                false,
+                true,
+                &mut prompts(&[], Some("b@example.org"))
+            )
+            .unwrap(),
+            ["mailto:b@example.org"]
+        );
+        assert!(
+            replacement_contacts(vec![], false, true, &mut prompts(&[], None))
+                .unwrap_err()
+                .is::<Canceled>()
+        );
     }
 
     #[test]

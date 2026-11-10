@@ -16,6 +16,7 @@ publish = false
 # All dependency versions and feature selections belong here.
 # Members must inherit dependencies with `workspace = true`.
 [workspace.dependencies]
+aster_forge_http = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882", default-features = false }
 # Shared wire-enum generation; pin the published Forge revision.
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882" }
 aster_forge_macros = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882" }

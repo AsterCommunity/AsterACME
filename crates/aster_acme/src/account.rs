@@ -14,13 +14,16 @@ use crate::{
 use aster_acme_core::{
     account::{
         AccountAction, AccountOperation, AccountRecordState, AccountStateError, DeactivationState,
-        account_action, observed_deactivation,
+        KeyRotation, KeyRotationPhase, account_action, observed_deactivation,
     },
     protocol::AccountStatus,
 };
 
 use aster_acme_protocol::{
-    account::{AccountObject, AccountStatusRequest, FindAccountRequest, NewAccountRequest},
+    account::{
+        AccountObject, AccountStatusRequest, AccountUpdateRequest, FindAccountRequest,
+        NewAccountRequest,
+    },
     problem::ACCOUNT_DOES_NOT_EXIST,
 };
 
@@ -54,10 +57,13 @@ impl AccountClock for SystemAccountClock {
 /// Provider-neutral account metadata. The private key is kept in a separate key store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountRecord {
+    /// Explicit account HTTP identity; absence uses the client's built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
     /// Locally observed lifecycle timestamps, encoded as root account fields.
     #[serde(flatten)]
     pub times: AccountTimes,
-    /// Stable local identifier scoped by directory and key thumbprint.
+    /// Stable local identifier derived at initialization; unchanged by key rollover.
     pub account_id: String,
     /// Exact CA directory URL bound to this account identity.
     pub directory_url: AcmeUrl,
@@ -73,6 +79,8 @@ pub struct AccountRecord {
     pub last_status: Option<AccountStatus>,
     /// Durable deactivation intent; uncertain outcomes never silently become success.
     pub deactivation: DeactivationState,
+    /// Durable key rollover state; pending and confirmed phases make interrupted local swaps recoverable.
+    pub key_rotation: Option<KeyRotation>,
     /// Terms URL shown to the user and explicitly accepted.
     pub accepted_terms_url: Option<AcmeUrl>,
     /// Local protocol stage.
@@ -98,6 +106,7 @@ impl AccountRecord {
             self.state,
             self.deactivation,
             self.last_status.as_ref(),
+            self.key_rotation.as_ref(),
         )
     }
 
@@ -167,6 +176,45 @@ pub trait AccountKeyStore: Send + Sync {
     ) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
 }
 
+/// Object-safe durable key rollover adapter. Sessions own the account operation lease.
+/// Staged keys must survive cancellation and restart; commits must be idempotent.
+#[async_trait]
+pub trait AccountRotationStore: Send + Sync {
+    /// Open a locked snapshot without generating or replacing any key.
+    ///
+    /// # Errors
+    /// Rejects missing, corrupt, mismatched, or concurrently locked identities.
+    async fn rotation(
+        &self,
+        directory: &AcmeUrl,
+    ) -> Result<Box<dyn AccountRotation>, AccountStoreError>;
+}
+
+/// One locked rollover transaction, usable by files, databases, or remote signers.
+#[async_trait]
+pub trait AccountRotation: Send + Sync {
+    /// Snapshot captured while acquiring the session lease.
+    fn record(&self) -> AccountRecord;
+    /// Original signer, retained until local commit finishes.
+    fn old_signer(&self) -> Arc<dyn AccountSigner>;
+    /// Durably stage or reload the same proposed key. Never silently replace it.
+    ///
+    /// # Errors
+    /// Reports missing staged keys, encoding, or persistence failures.
+    async fn stage(&self) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
+    /// Save progress while retaining both keys and the operation lease.
+    ///
+    /// # Errors
+    /// Reports validation and durability failures.
+    async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError>;
+    /// Idempotently install the confirmed new key and metadata before deleting staging.
+    /// Blocking writes must retain the lease even when the calling task is cancelled.
+    ///
+    /// # Errors
+    /// Reports incomplete local commit; both keys must remain recoverable on failure.
+    async fn commit(&self, record: &AccountRecord) -> Result<(), AccountStoreError>;
+}
+
 /// Storage adapter failure without embedding secrets or persisted contents.
 #[derive(Debug, Error)]
 #[error("account storage failed: {message}")]
@@ -214,6 +262,12 @@ pub enum AccountError {
     /// Account is not in a known active state suitable for deactivation.
     #[error("account is not active or its status is unsupported")]
     AccountNotActive,
+    /// Account key rollover has an uncertain result and requires reconciliation.
+    #[error("account key rotation is pending reconciliation")]
+    KeyRotationUncertain,
+    /// The CA does not advertise keyChange in its directory.
+    #[error("the CA directory does not advertise the keyChange endpoint")]
+    KeyChangeUnavailable,
     /// Adapter storage failure.
     #[error(transparent)]
     Store(#[from] AccountStoreError),
@@ -252,6 +306,7 @@ impl From<AccountStateError> for AccountError {
             AccountStateError::NotRegistered => Self::AccountDoesNotExist,
             AccountStateError::NotActive => Self::AccountNotActive,
             AccountStateError::ReconciliationRequired => Self::DeactivationUncertain,
+            AccountStateError::KeyRotationUncertain => Self::KeyRotationUncertain,
         }
     }
 }
@@ -279,6 +334,192 @@ impl AccountService {
     pub fn with_clock(mut self, clock: Arc<dyn AccountClock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Rotate a durable account key under RFC 8555 section 7.3.5.
+    /// A previous pending request is reconciled using the new key and original account
+    /// URL; failure never authorizes another keyChange POST. No private key enters metadata.
+    ///
+    /// # Errors
+    /// Reports unsupported CA endpoints, inactive accounts, persistence failures, or
+    /// uncertain remote outcomes. Rerunning finishes a confirmed interrupted local commit.
+    pub async fn rotate_key(
+        &self,
+        keys: &dyn AccountRotationStore,
+    ) -> Result<AccountRecord, AccountError> {
+        let session = keys.rotation(self.client.directory_url()).await?;
+        let mut record = session.record();
+        let action = record
+            .action(AccountOperation::RotateKey)
+            .map_err(AccountError::from)?;
+        if matches!(action, AccountAction::SendKeyChange)
+            && self.client.directory().key_change.is_none()
+        {
+            return Err(AccountError::KeyChangeUnavailable);
+        }
+        let account_url = record
+            .account_url
+            .clone()
+            .ok_or(AccountError::AccountDoesNotExist)?;
+        let old = session.old_signer();
+        if record.directory_url != *self.client.directory_url()
+            || old.jwk()?.thumbprint()? != record.key_thumbprint
+        {
+            return Err(AccountError::IdentityMismatch);
+        }
+        let new = session.stage().await?;
+        let new_thumbprint = new.jwk()?.thumbprint()?;
+        if new_thumbprint == record.key_thumbprint
+            || record
+                .key_rotation
+                .as_ref()
+                .is_some_and(|rotation| rotation.new_thumbprint != new_thumbprint)
+        {
+            return Err(AccountError::IdentityMismatch);
+        }
+        match action {
+            AccountAction::SendKeyChange => {
+                self.send_key_change(session.as_ref(), &mut record, old.as_ref(), new.as_ref())
+                    .await?;
+            }
+            AccountAction::ReconcileKeyChange => {
+                let response = self
+                    .client
+                    .signed(&account_url, new.as_ref(), Some(&account_url), b"")
+                    .await
+                    .map_err(|_| AccountError::KeyRotationUncertain)?;
+                if response.status != reqwest::StatusCode::OK {
+                    return Err(AccountError::KeyRotationUncertain);
+                }
+                let account: AccountObject = serde_json::from_slice(&response.body)
+                    .map_err(|_| AccountError::KeyRotationUncertain)?;
+                record.observe(&account, self.clock.now());
+            }
+            AccountAction::FinalizeKeyChange => {}
+            AccountAction::LookupExisting
+            | AccountAction::Inspect
+            | AccountAction::SendDeactivation
+            | AccountAction::AlreadyDeactivated
+            | AccountAction::Select
+            | AccountAction::Update => {
+                return Err(AccountError::InvalidResponse);
+            }
+        }
+        record.key_rotation = Some(KeyRotation {
+            new_thumbprint: new_thumbprint.clone(),
+            phase: KeyRotationPhase::Confirmed,
+        });
+        session.save(&record).await?;
+        session.commit(&record).await?;
+        record.key_thumbprint = new_thumbprint;
+        record.key_rotation = None;
+        Ok(record)
+    }
+
+    // The mutation owns durable intent; the caller owns reconciliation and commit.
+    async fn send_key_change(
+        &self,
+        session: &dyn AccountRotation,
+        record: &mut AccountRecord,
+        old: &dyn AccountSigner,
+        new: &dyn AccountSigner,
+    ) -> Result<(), AccountError> {
+        let account_url = record
+            .account_url
+            .clone()
+            .ok_or(AccountError::AccountDoesNotExist)?;
+        let endpoint = self
+            .client
+            .directory()
+            .key_change
+            .as_ref()
+            .ok_or(AccountError::KeyChangeUnavailable)?;
+        let inner =
+            crate::crypto::sign_key_change(new, &old.jwk()?, &account_url, endpoint.as_str())?;
+        record.key_rotation = Some(KeyRotation {
+            new_thumbprint: new.jwk()?.thumbprint()?,
+            phase: KeyRotationPhase::Pending,
+        });
+        session.save(record).await?;
+        let response = self
+            .client
+            .signed(endpoint, old, Some(&account_url), &json_payload(&inner)?)
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(
+                error @ TransportError::Problem {
+                    status: 400 | 409, ..
+                },
+            ) => {
+                // A definitive protocol rejection is distinct from an unknown
+                // timeout/5xx result. A later explicit invocation may start over.
+                record.key_rotation = None;
+                session.save(record).await?;
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if response.status != reqwest::StatusCode::OK {
+            return Err(AccountError::InvalidResponse);
+        }
+        record.times.last_used_at = Some(self.clock.now().to_offset(time::UtcOffset::UTC));
+        Ok(())
+    }
+
+    /// Replace the complete account contact list under RFC 8555 section 7.3.2.
+    /// An empty list clears remote contacts. Local intent is saved before HTTP and
+    /// remains distinct from the last CA response if the update fails.
+    ///
+    /// # Errors
+    /// Rejects invalid contacts, inactive identities, storage failures, or CA errors.
+    pub async fn update_contacts(
+        &self,
+        signer: &dyn AccountSigner,
+        contacts: Vec<String>,
+    ) -> Result<AcmeAccount, AccountError> {
+        validate_contacts(&contacts)?;
+        let directory = self.client.directory_url();
+        let thumbprint = signer.jwk()?.thumbprint()?;
+        let _lease = self.store.lock_account(directory, &thumbprint).await?;
+        let mut record = self
+            .store
+            .load(directory, &thumbprint)
+            .await?
+            .ok_or(AccountError::AccountDoesNotExist)?;
+        if record.directory_url != *directory || record.key_thumbprint != thumbprint {
+            return Err(AccountError::IdentityMismatch);
+        }
+        record
+            .action(AccountOperation::Update)
+            .map_err(AccountError::from)?;
+        let account_url = record
+            .account_url
+            .clone()
+            .ok_or(AccountError::AccountDoesNotExist)?;
+        record.contacts.clone_from(&contacts);
+        self.store.save(&record).await?;
+        let payload = json_payload(&AccountUpdateRequest { contact: &contacts })?;
+        let response = self
+            .client
+            .signed(&account_url, signer, Some(&account_url), &payload)
+            .await?;
+        if response.status != reqwest::StatusCode::OK {
+            return Err(AccountError::InvalidResponse);
+        }
+        let account: AccountObject =
+            serde_json::from_slice(&response.body).map_err(|_| AccountError::InvalidResponse)?;
+        record.observe(&account, self.clock.now());
+        self.store.save(&record).await?;
+        Ok(AcmeAccount {
+            times: record.times,
+            account_id: record.account_id,
+            directory_url: directory.clone(),
+            account_url,
+            status: account.status,
+            contacts: account.contact.unwrap_or_default(),
+            recovered: false,
+        })
     }
 
     /// Register an account, reuse a registered identity, or recover a pending registration.
@@ -335,7 +576,11 @@ impl AccountService {
             AccountAction::LookupExisting => {}
             AccountAction::SendDeactivation
             | AccountAction::AlreadyDeactivated
-            | AccountAction::Select => return Err(AccountError::InvalidResponse),
+            | AccountAction::Select
+            | AccountAction::Update
+            | AccountAction::SendKeyChange
+            | AccountAction::ReconcileKeyChange
+            | AccountAction::FinalizeKeyChange => return Err(AccountError::InvalidResponse),
         }
 
         let mut recovered = false;
@@ -383,6 +628,7 @@ impl AccountService {
         let _lease = self.store.lock_account(&directory, &thumbprint).await?;
         let previous = self.store.load(&directory, &thumbprint).await?;
         let mut record = previous.unwrap_or_else(|| AccountRecord {
+            user_agent: None,
             times: AccountTimes::default(),
             account_id: account_id(&directory, &thumbprint),
             directory_url: directory.clone(),
@@ -392,9 +638,13 @@ impl AccountService {
             server_contacts: None,
             last_status: None,
             deactivation: crate::account::DeactivationState::NotRequested,
+            key_rotation: None,
             accepted_terms_url: None,
             state: AccountRecordState::RegistrationPending,
         });
+        record
+            .action(AccountOperation::Inspect)
+            .map_err(AccountError::from)?;
         if record.directory_url != directory || record.key_thumbprint != thumbprint {
             return Err(AccountError::IdentityMismatch);
         }
@@ -432,6 +682,9 @@ impl AccountService {
         {
             let _lease = self.store.lock_account(directory, &thumbprint).await?;
             if let Some(mut record) = self.store.load(directory, &thumbprint).await? {
+                record
+                    .action(AccountOperation::Inspect)
+                    .map_err(AccountError::from)?;
                 if record.directory_url != *directory || record.key_thumbprint != thumbprint {
                     return Err(AccountError::IdentityMismatch);
                 }
@@ -506,7 +759,13 @@ impl AccountService {
                 });
             }
             AccountAction::SendDeactivation => {}
-            AccountAction::LookupExisting | AccountAction::Inspect | AccountAction::Select => {
+            AccountAction::LookupExisting
+            | AccountAction::Inspect
+            | AccountAction::Select
+            | AccountAction::Update
+            | AccountAction::SendKeyChange
+            | AccountAction::ReconcileKeyChange
+            | AccountAction::FinalizeKeyChange => {
                 return Err(AccountError::InvalidResponse);
             }
         }
@@ -590,6 +849,7 @@ impl AccountService {
             return Err(AccountError::ExternalAccountRequired);
         }
         let record = AccountRecord {
+            user_agent: None,
             times: AccountTimes::default(),
             account_id: account_id(directory, thumbprint),
             directory_url: directory.clone(),
@@ -599,6 +859,7 @@ impl AccountService {
             server_contacts: None,
             last_status: None,
             deactivation: crate::account::DeactivationState::NotRequested,
+            key_rotation: None,
             accepted_terms_url: self.client.directory().meta.terms_of_service.clone(),
             state: AccountRecordState::RegistrationPending,
         };

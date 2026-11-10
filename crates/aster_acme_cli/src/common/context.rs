@@ -11,6 +11,7 @@ use aster_acme_cli_storage::CliAccountStore;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 pub(crate) struct CliContext {
+    pub(crate) account_user_agent: Option<String>,
     pub(crate) config: Config,
     pub(crate) config_path: PathBuf,
     pub(crate) name: String,
@@ -56,7 +57,9 @@ impl CliSettings {
             &name,
             Duration::from_secs(5),
         )?);
-        let bound = store.directory().await?;
+        let saved = store.metadata().await?;
+        let account_user_agent = saved.as_ref().and_then(|record| record.user_agent.clone());
+        let bound = saved.map(|record| record.directory_url);
         let directory = match (options.ca_directory.as_deref(), bound) {
             (Some(explicit), Some(bound)) if explicit != bound.as_str() => {
                 return Err("Account name is bound to another CA; choose another --name.".into());
@@ -69,6 +72,7 @@ impl CliSettings {
             )?,
         };
         Ok(CliContext {
+            account_user_agent,
             config,
             config_path,
             name,
@@ -85,13 +89,148 @@ impl CliContext {
         if !(1..=300).contains(&timeout) {
             return Err("Timeout must be between 1 and 300 seconds.".into());
         }
-        Ok(TransportOptions {
+        let transport = TransportOptions {
             request_timeout: Duration::from_secs(timeout),
             user_agent: options
                 .user_agent
                 .clone()
-                .or_else(|| self.config.user_agent.clone()),
+                .or_else(|| self.account_user_agent.clone()),
             ..TransportOptions::default()
-        })
+        };
+        transport.validate()?;
+        Ok(transport)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::account::{
+        args::{AccountCommand, CaArgs, HttpArgs, LocalArgs, NameArgs, RegisterArgs},
+        execute,
+    };
+    use aster_acme::account::{AccountKeyStore, AccountStore};
+
+    #[tokio::test]
+    async fn explicit_account_user_agent_survives_restart_and_temporary_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let ca = "http://127.0.0.1:1/directory";
+        let register = RegisterArgs {
+            identity: NameArgs {
+                name: Some("work".into()),
+                ..NameArgs::default()
+            },
+            http: HttpArgs {
+                user_agent: Some("AsterDrive/0.3.7".into()),
+                ..HttpArgs::default()
+            },
+            ca: CaArgs {
+                ca_directory: Some(ca.into()),
+                ..CaArgs::default()
+            },
+            local: LocalArgs {
+                data_dir: Some(temp.path().into()),
+                json: true,
+            },
+            ..RegisterArgs::default()
+        };
+        // Discovery fails, but validated explicit intent must already be durable.
+        assert!(
+            execute::execute(AccountCommand::Register(register))
+                .await
+                .is_err()
+        );
+        let account_path = temp.path().join("accounts/work/account.toml");
+        let text = std::fs::read_to_string(&account_path).unwrap();
+        assert!(text.contains("user_agent = \"AsterDrive/0.3.7\""));
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(!config.contains("user_agent"));
+        assert!(!config.contains("one-command"));
+        let options = AccountArgs {
+            data_dir: Some(temp.path().into()),
+            name: Some("work".into()),
+            ..AccountArgs::default()
+        };
+        let context = CliSettings::load(&options)
+            .await
+            .unwrap()
+            .account(&options)
+            .await
+            .unwrap();
+        assert_eq!(
+            context
+                .transport_options(&options)
+                .unwrap()
+                .user_agent
+                .as_deref(),
+            Some("AsterDrive/0.3.7")
+        );
+        let override_options = AccountArgs {
+            user_agent: Some("temporary/2".into()),
+            ..AccountArgs::default()
+        };
+        assert_eq!(
+            context
+                .transport_options(&override_options)
+                .unwrap()
+                .user_agent
+                .as_deref(),
+            Some("temporary/2")
+        );
+        let invalid = AccountArgs {
+            user_agent: Some("bad\nagent".into()),
+            ..AccountArgs::default()
+        };
+        assert!(context.transport_options(&invalid).is_err());
+        let key = context
+            .store
+            .signer(&context.directory, "work", false)
+            .await
+            .unwrap();
+        let record = context
+            .store
+            .load(
+                &context.directory,
+                &key.jwk().unwrap().thumbprint().unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.user_agent.as_deref(), Some("AsterDrive/0.3.7"));
+        assert_eq!(std::fs::read_to_string(&account_path).unwrap(), text);
+    }
+
+    #[tokio::test]
+    async fn default_user_agent_is_not_written_to_account_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let default_options = AccountArgs {
+            data_dir: Some(temp.path().into()),
+            name: Some("plain".into()),
+            ca_directory: Some("http://127.0.0.1:1/directory".into()),
+            ..AccountArgs::default()
+        };
+        let plain = CliSettings::load(&default_options)
+            .await
+            .unwrap()
+            .account(&default_options)
+            .await
+            .unwrap();
+        plain
+            .store
+            .signer(&plain.directory, "plain", true)
+            .await
+            .unwrap();
+        assert_eq!(
+            plain
+                .transport_options(&default_options)
+                .unwrap()
+                .user_agent,
+            None
+        );
+        assert!(
+            !std::fs::read_to_string(temp.path().join("accounts/plain/account.toml"))
+                .unwrap()
+                .contains("user_agent")
+        );
     }
 }

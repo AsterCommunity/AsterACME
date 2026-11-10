@@ -46,3 +46,14 @@ pub struct EabHeader<'a> {
     /// Discovered newAccount endpoint.
     pub url: &'a str,
 }
+
+/// RFC 8555 keyChange inner protected header: new-key JWK, exact URL, and no nonce.
+#[derive(Serialize)]
+pub struct KeyChangeHeader<'a, J> {
+    /// Signing algorithm.
+    pub alg: &'a str,
+    /// New account key.
+    pub jwk: &'a J,
+    /// Same keyChange endpoint as the outer JWS.
+    pub url: &'a str,
+}

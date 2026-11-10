@@ -1,33 +1,44 @@
-//! Centralized reqwest client policy for ACME traffic.
+//! Centralized Forge HTTP client policy for ACME traffic.
 
 use std::time::Duration;
 
-use reqwest::{Client, redirect::Policy};
+use aster_forge_http::HttpClient;
 
 use crate::transport::{TransportError, TransportOptions};
 
 /// Construct the reusable ACME HTTP connection pool with its security policy.
 ///
 /// Redirects are disabled because ACME JWS binds an exact URL. TLS validation uses
-/// reqwest's rustls platform roots. No proxy, cookie, or decompression policy is enabled here.
+/// reqwest's rustls platform roots. Forge owns redirect/retry/pool construction;
+/// ACME supplies its User-Agent and total/connect deadlines. System proxy policy is retained.
 ///
 /// # Errors
 /// Rejects malformed user agents and reports reqwest client configuration failures.
-pub(crate) fn build(options: &TransportOptions) -> Result<Client, TransportError> {
+pub(crate) fn build(options: &TransportOptions) -> Result<HttpClient, TransportError> {
     let user_agent = options
         .user_agent
         .as_deref()
         .unwrap_or(concat!("AsterACME/", env!("CARGO_PKG_VERSION")));
-    if user_agent.is_empty() || user_agent.len() > 512 || user_agent.chars().any(char::is_control) {
-        return Err(TransportError::InvalidUserAgent);
-    }
-    Client::builder()
-        .redirect(Policy::none())
+    validate_user_agent(user_agent)?;
+    HttpClient::builder()
+        .without_read_timeout()
         .timeout(options.request_timeout)
         .connect_timeout(options.request_timeout.min(Duration::from_secs(10)))
         .user_agent(user_agent)
         .build()
         .map_err(TransportError::Network)
+}
+
+/// Shared validation for an explicit command User-Agent override.
+///
+/// # Errors
+/// Rejects empty, oversized, or control-character-containing header values.
+pub(crate) fn validate_user_agent(user_agent: &str) -> Result<(), TransportError> {
+    if user_agent.is_empty() || user_agent.len() > 512 || user_agent.chars().any(char::is_control) {
+        Err(TransportError::InvalidUserAgent)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

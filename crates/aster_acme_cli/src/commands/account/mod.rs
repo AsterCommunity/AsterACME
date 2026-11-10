@@ -3,6 +3,7 @@ pub(crate) mod args;
 pub(crate) mod contact;
 pub(crate) mod execute;
 mod interaction;
+mod mutation;
 mod output;
 pub(crate) mod render;
 pub(crate) mod report;

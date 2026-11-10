@@ -24,6 +24,10 @@ pub(crate) enum AccountCommand {
     Register(RegisterArgs),
     /// Find an existing CA account using its saved key; never create one.
     Recover(NetworkArgs),
+    /// Replace or clear the contact addresses on an existing CA account.
+    UpdateContact(UpdateContactArgs),
+    /// Rotate the account signing key, or resume its saved rollover transaction.
+    RotateKey(RotateKeyArgs),
     /// Permanently deactivate a CA account; this cannot be undone.
     Deactivate(DeactivateArgs),
     /// Remove local account metadata and private key; does not deactivate the CA account.
@@ -111,7 +115,7 @@ pub(crate) struct CaArgs {
 
 #[derive(clap::Args, Default)]
 pub(crate) struct HttpArgs {
-    /// HTTP User-Agent; used only for commands that contact the CA.
+    /// HTTP User-Agent override; an explicit value during registration is saved for this account.
     #[arg(long)]
     pub(crate) user_agent: Option<String>,
     /// Whole-request timeout in seconds (1–300); used only for HTTP.
@@ -193,6 +197,30 @@ pub(crate) struct DeactivateArgs {
     #[command(flatten)]
     pub(crate) network: NetworkArgs,
     /// Confirm irreversible CA account deactivation without an interactive prompt.
+    #[arg(long)]
+    pub(crate) yes: bool,
+}
+
+#[derive(clap::Args, Default)]
+pub(crate) struct UpdateContactArgs {
+    #[command(flatten)]
+    pub(crate) network: NetworkArgs,
+    /// Complete replacement contact list; repeat for multiple email addresses.
+    #[arg(long, conflicts_with = "clear_contacts")]
+    pub(crate) contact: Vec<String>,
+    /// Remove all CA contacts explicitly.
+    #[arg(long)]
+    pub(crate) clear_contacts: bool,
+    /// Confirm this contact update without prompting.
+    #[arg(long)]
+    pub(crate) yes: bool,
+}
+
+#[derive(clap::Args, Default)]
+pub(crate) struct RotateKeyArgs {
+    #[command(flatten)]
+    pub(crate) network: NetworkArgs,
+    /// Confirm key rotation or reconciliation without prompting.
     #[arg(long)]
     pub(crate) yes: bool,
 }
@@ -281,6 +309,8 @@ impl From<DeactivateArgs> for AccountArgs {
 impl AccountCommand {
     pub(crate) fn json(&self) -> bool {
         match self {
+            Self::UpdateContact(args) => args.network.local.json,
+            Self::RotateKey(args) => args.network.local.json,
             Self::Remove(args) => args.target.local.json,
             Self::List(args) => args.local.json,
             Self::Deactivate(args) => args.network.local.json,

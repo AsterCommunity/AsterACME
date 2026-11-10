@@ -41,7 +41,7 @@ cargo test -p aster_acme --locked
 
 流程先保存注册意图，使用同一密钥查找已有账户，仅在明确 accountDoesNotExist 后创建；网络超时/取消保持 pending 供后续对账。已有注册元数据不代表服务端仍 valid，每次查看会读取真实远端状态。条款由调用者显式同意，服务保存当前 directory 公布的实际 URL，URL 变化后要求重新接受；HS256 EAB 的新账户响应必须反映原绑定才确认成功。
 
-遵守 RFC 8555 §6.2–6.7、§7.1.1–7.1.2、§7.2、§7.3–7.3.4，以及 RFC 7515/7518/7638。newAccount 使用 jwk，其他账户请求使用 kid；两者互斥。badNonce 重试直接使用错误响应 nonce；不自动重试网络超时、rateLimited、5xx 或条款交互。错误保留 problem URI、detail、instance、subproblems、扩展及 Retry-After。
+遵守 RFC 8555 §6.2–6.7、§7.1.1–7.1.2、§7.2、§7.3–7.3.6，以及 RFC 7515/7518/7638。newAccount 使用 jwk，其他账户请求使用 kid；两者互斥。badNonce 重试直接使用错误响应 nonce；不自动重试网络超时、rateLimited、5xx 或条款交互。错误保留 problem URI、detail、instance、subproblems、扩展及 Retry-After。
 
 Transport 不跟随重定向、默认验证系统信任的 TLS；仅显式本地测试选项允许数字 loopback HTTP。测试限额与证书信任不应通过禁用 TLS 来绕过。并发 nonce 池容量 64，响应体上限 1 MiB；账户服务的文件/分布式锁策略归存储适配。
 
@@ -70,7 +70,7 @@ JWS protected header 包含 `alg=ES256`、账户公钥 `jwk`、防重放 `nonce`
 
 账户不是邮箱/密码登录，身份控制依赖账户私钥。注册阶段不发送域名、CSR、证书私钥或 DNS 供应商凭据；域名属于后续订单，CSR 属于 finalize。HTTP 层会带 User-Agent，CA 也能观察请求来源 IP。
 
-账户记录的 `contacts` 保存本地设置，`server_contacts: Option<Vec<String>>` 保存最近 CA 返回值。RFC 8555 §7.1.2 的 contact 是可选 URL 数组；响应省略不等于明确空数组，二者都不能抹除本地输入。原有账户联系人修改仍需 §7.3.2 的专用更新请求，目前未实现。
+账户记录的 `contacts` 保存本地设置，`server_contacts: Option<Vec<String>>` 保存最近 CA 返回值。RFC 8555 §7.1.2 的 contact 是可选 URL 数组；响应省略不等于明确空数组，二者都不能抹除本地输入。`update_contacts` 按 §7.3.2 向原账户 URL 提交完整 contact 数组，空数组明确清空；仅 HTTP 200 和账户对象更新服务端观察。
 
 `AccountService::deactivate` 遵守 RFC 8555 §7.3.6，仅接受已有账户 URL，不隐式恢复或创建；先保存 DeactivationState::Pending，再发送包含 status=deactivated 的 kid 签名 POST。仅 200 + deactivated 确认成功。失败/取消保持 pending，重复调用不自动重放；confirmed 返回本地结果。`inspect` 只有得到真实账户对象才解除/确认 pending；401 不作为停用证据。账户记录保留 last_status，注册阶段与远端有效性仍分开。
 
@@ -79,3 +79,7 @@ JWS protected header 包含 `alg=ES256`、账户公钥 `jwk`、防重放 `nonce`
 账户本地状态类型已归 core::account，注册/复用/停用/可用性通过显式 account_action 决策，不在 CLI/服务重复维护业务条件。AccountService 执行动作并在成功解析权威账户对象时集中应用观察。
 
 AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at，UTC RFC 3339。registered_at 是本地首次成功确认（找回也算），不是 CA 原始创建时间；只写一次。成功认证查询/注册/找回/停用时更新状态观察和使用时间；失败、离线读取、已确认停用的本地返回不更新。AccountClock 支持 dyn 注入，默认 UTC 系统时钟。未知时间不猜测回填。
+
+`AccountService::rotate_key(&dyn AccountRotationStore)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。当前仅生成 ES256/P-256，不支持 CLI 导入新钥或选择其他算法。
+
+`http_client` 通过锁定 revision 的 `aster_forge_http::HttpClient` 构造连接池，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本。`TransportOptions::validate` 在副作用前校验设置。

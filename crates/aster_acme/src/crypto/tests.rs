@@ -3,6 +3,40 @@ use super::*;
 use p256::ecdsa::signature::Verifier as _;
 
 #[test]
+fn key_change_inner_signature_binds_new_key_old_key_and_exact_account_url() {
+    let old = AccountKey::generate().unwrap();
+    let new = AccountKey::generate().unwrap();
+    let account = AcmeUrl::new("https://ca.example/user/%41?x=%2f").unwrap();
+    let endpoint = "https://ca.example/rollover/%2f?x=%41";
+    let inner = sign_key_change(&new, &old.jwk().unwrap(), &account, endpoint).unwrap();
+    let header: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&inner.protected).unwrap()).unwrap();
+    assert_eq!(
+        header,
+        serde_json::json!({"alg":"ES256", "jwk":new.jwk().unwrap(), "url":endpoint})
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&inner.payload).unwrap()).unwrap();
+    assert_eq!(
+        payload,
+        serde_json::json!({"account":account.as_str(), "oldKey":old.jwk().unwrap()})
+    );
+    let signature =
+        Signature::from_slice(&URL_SAFE_NO_PAD.decode(&inner.signature).unwrap()).unwrap();
+    let input = format!("{}.{}", inner.protected, inner.payload);
+    new.0
+        .verifying_key()
+        .verify(input.as_bytes(), &signature)
+        .unwrap();
+    assert!(
+        old.0
+            .verifying_key()
+            .verify(input.as_bytes(), &signature)
+            .is_err()
+    );
+}
+
+#[test]
 fn key_pkcs8_roundtrip_and_signatures_verify_with_raw_rs_format() {
     let key = AccountKey::generate().unwrap();
     let restored = AccountKey::from_pkcs8(&key.to_pkcs8().unwrap()).unwrap();

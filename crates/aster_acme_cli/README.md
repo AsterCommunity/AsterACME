@@ -21,9 +21,9 @@ cargo run -p aster_acme_cli -- account show --verify --data-dir ./data --json
 - 本地输出标记 `source=local`、`verified=false`、`status=null`，`local_state` 为 `registration_pending` / `registered`；远端响应标记 `source=remote`、`verified=true`。本地 registered 不代表 CA 当前仍 valid。
 - 账户选择优先级：`--name` > 配置 `default_account` > `default`。
 - `account switch work` 仅切换本地默认账户，要求目标密钥和已注册元数据存在，不访问 CA，用 `toml_edit` 更新配置的 `default_account` 并保留注释和格式。
-- `--ca letsencrypt|zerossl|google` 选择公开提供商，或 `--ca-directory URL` 指定完整 ACME directory URL；两者互斥。`--user-agent` 支持自定义 HTTP User-Agent。
+- `--ca letsencrypt|zerossl|google` 选择公开提供商，或 `--ca-directory URL` 指定完整 ACME directory URL；两者互斥。注册时显式 `--user-agent` 保存到该账户 TOML 的 `user_agent`；后续本次参数覆盖账户设置，否则用内置默认值。默认值不写入文件，config 不保存 User-Agent。
 - `--timeout` 为单次请求期限，1–300 秒，默认 30 秒。只有 badNonce 自动限次重签；网络超时和 429/5xx 均不自动重放注册。
-- `--contact you@example.com` 可在注册时设置联系人，参数覆盖配置 `contact`，显式参数验证后回写配置 `contact`（普通邮箱格式）。编辑配置只改变未来注册的默认值，不更新 CA 上已有账户；账户联系人更新命令尚未实现。
+- `--contact you@example.com` 可在注册时设置联系人，参数覆盖配置 `contact`，显式参数验证后回写配置 `contact`（普通邮箱格式）。编辑配置只改变未来注册的默认值，不更新 CA 上已有账户；`account update-contact work --contact admin@example.org --yes` 更新已有 CA 账户，`--clear-contacts` 显式清空；不改全局注册默认联系人。
 - `--eab-kid ID --eab-key-file FILE` 提供 HS256 EAB，不把秘密放在命令行参数或账户元数据里。仅 register 接受注册选项。
 - 普通终端显示彩色状态和可操作诊断；重定向、`NO_COLOR`、`TERM=dumb` 禁用颜色。CA 返回的控制字符会转义。
 - `--json` 输出公有账户元数据，错误也以 JSON 写 stderr；失败退出码 1，参数错误由 clap 返回 2。
@@ -45,7 +45,6 @@ version = 1
 ca = "letsencrypt"
 # 自定义 CA 时删除 ca 并使用 ca_directory = "https://ca.example/directory"。
 default_account = "default"
-user_agent = "My ACME client/1.0"
 contact = ["admin@example.org"]
 timeout = 30
 ```
@@ -173,3 +172,17 @@ remove 仅删除本地 account.toml、account-key.pk8 和账户锁载体，不�
 workspace 的包名及 crates 目录统一使用下划线；可执行文件仍是 aster-acme。旧包名不保留别名。
 
 列表新增 REGISTERED AT (UTC)、STATUS AT (UTC)、LAST USED (UTC)，按分钟显示并对齐；show 和 JSON 保留 RFC 3339 精度。registered_at 表示本地首次确认账户已注册，找回旧账户也记录首次本地确认，并非 CA 原始创建时间。last_status_at 与 last_used_at 只随成功的权威认证响应更新；离线查看、失败、默认切换/本地移除不算账户使用。未知文本为 —，JSON 为 null，TOML 不伪造日期。
+
+## 更新联系人与轮换账户密钥
+
+```sh
+aster-acme account update-contact work --contact admin@example.org --yes
+aster-acme account update-contact work --clear-contacts --yes
+aster-acme account rotate-key work --yes
+```
+
+支持 NAME / --name、--data-dir、--json 和网络参数，交互终端可选账户并默认否确认；无输入不隐式清空邮箱。`rotate-key` 重复调用会继续同一保存的事务。超时或取消后不删除两个密钥；401/403 不能证明远端换钥失败。list/show 显示待对账或待提交状态，详细契约见架构。当前新钥为 ES256/P-256。
+
+注册显式值保存示例：`account.toml` 的 `[account]` 中 `user_agent = "AsterDrive/0.3.7"`。不指定时不写默认值；其他网络命令的同名参数仅覆盖当前请求。已注册的本地账户重用仍要求确认，不能把再次 register 当作新账户创建。
+
+CLI bin 的 `doc = false` 避免 `aster-acme` 与库 `aster_acme` 生成相同 rustdoc 目录；可执行文件名不变，CLI 参考以本 README / --help 为准。`cargo doc --workspace --no-deps` 生成库 API。

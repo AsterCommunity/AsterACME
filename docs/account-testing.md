@@ -4,7 +4,7 @@
 
 账户实现对照 RFC 8555 §6.2（flattened JWS 与 jwk/kid 互斥）、§6.3（空 payload 的 POST-as-GET）、§6.4（精确 URL）、§6.5（nonce）、§6.6–6.7（限流及 problem）、§7.1.1–7.1.2（directory/账户）、§7.2（newNonce）、§7.3–7.3.4（创建、找回、条款变化和 EAB）。签名格式遵守 RFC 7515、RFC 7518 ES256 R||S 与 RFC 7638 canonical JWK thumbprint。
 
-条款变化对应 §7.3.3，EAB 对应 §7.3.4。账户更新、停用和密钥轮换不在本次实现范围。
+条款变化对应 §7.3.3，EAB 对应 §7.3.4。账户更新、密钥轮换和停用分别对应 §7.3.2、§7.3.5 和 §7.3.6；下方历史分轮记录保留各自当时的验收范围。
 
 ## 本地测试
 
@@ -80,3 +80,9 @@ register 的无名称交互改为先选择新建/继续，默认新建，仅继�
 remove 覆盖取消/无 --yes 不改数据、只删目标/其他账户不变、坏钥可删、锁超时/未知文件/隐藏清理目录碰撞拒绝、符号链接目标不变，以及默认配置条件清理/保留其他选择。独立 CLI/PTY 进程逐命令以 stdin=DEVNULL 或明确终端输入验收，测试地址仅显式 loopback，无真实 CA mutation：list 部分验证失败时仍输出两项结果并退出 1；deactivate 默认否退出 130 且上下文分行；confirmed 重复只读返回单行；remove 的 JSON 结果、私钥/目录删除和默认清理验证通过。workspace 包名/目录改为下划线，可执行文件仍为 aster-acme，旧包名不保留。
 
 时间与显式账户状态机（当前 123 项测试）：core 新增账户注册/停用/选择的纯动作决策，覆盖 pending 对账限制、inactive/unknown 拒绝、confirmed 本地幂等返回和权威观察转换。客户端通过注入 AccountClock 验证 UTC 归一、首次确认不变、成功查询/停用更新时间、403 和本地重复返回不改时间；存储验证 RFC3339 往返、未知值省略及非法日期拒绝；CLI 检查 UTC分钟表格、未知 —、JSON 完整精度。独立 CLI 进程以 loopback 失败注册确认未知时间未伪造，随后读取受控 fixture 验证离线 list/show 不改变文件。未执行真实 CA mutation。
+
+账户更新/轮换与 Forge HTTP（当前 140 项本地测试）：对照 RFC 8555 §7.3.2 和 §7.3.5 原文检查请求字段、精确账户 URL、内层新钥 jwk/无 nonce/kid、外层旧钥 kid/nonce、相同 keyChange URL、200 空 body 成功。新增真实 ES256 内层验签、联系人替换/清空/非法状态与保存失败、非 200/坏响应/超时无自动重放、badNonce 保持相同内层及新钥；文件事务覆盖取消后新钥对账、超时保留双钥、401/403 不推断成功、合法 409 problem 保留旧身份、缺失端点/新钥/同钥拒绝、未确认/改身份提交拒绝，以及 confirmed 部分本地换钥在重启后不发 keyChange 直接完成。注入文件系统每一个断电点、真实硬件签名器与公网 CA 换钥尚未验收。
+
+User-Agent 验证显式注册值写账户 TOML、缺省不写、配置无全局字段、重启继承、本次覆盖不改账户和非法值在持久化前拒绝；loopback HTTP 验证默认/显式 header 传输。HTTP 构造与执行使用固定 Forge rev，协议错误/重定向/超时/badNonce 回归通过。短请求超时测试的 directory fixture 使用独立较长设置，随后重建为被测请求 deadline，避免把并行 setup 延迟误判成 mutation 超时。
+
+本轮 `cargo test --workspace --locked` 默认并发和 `--test-threads=4` 均通过；严格 Clippy、格式、workspace 依赖策略和 diff whitespace 检查通过。`cargo doc --workspace --no-deps --locked` 无 bin/lib 输出目录冲突；CLI bin 禁止 rustdoc，库文档保留。独立 CLI 子进程验证新命令帮助/互斥参数、JSON、无确认时零 mutation、显式 UA 落盘及离线 show；所有数据位于独立临时目录，未修改真实 CA 账户。本轮验证使用独立 CARGO_TARGET_DIR，避免占用用户 target 构建锁。

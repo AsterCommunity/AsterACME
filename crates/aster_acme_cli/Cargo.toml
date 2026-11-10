@@ -13,6 +13,7 @@ readme = "README.md"
 [[bin]]
 name = "aster-acme"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 aster_acme_protocol.workspace = true

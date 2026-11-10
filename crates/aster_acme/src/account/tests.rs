@@ -2,6 +2,7 @@
 use aster_acme_protocol::jws::FlattenedJws;
 mod deactivation;
 mod timestamps;
+mod update;
 use super::*;
 use crate::{
     crypto::AccountKey,
@@ -34,6 +35,7 @@ async fn account_requests_follow_custom_directory_and_location_urls() {
     Mock::given(method("GET"))
         .and(path("/entry-point"))
         .respond_with(ResponseTemplate::new(200).set_body_json(Directory {
+            key_change: None,
             new_nonce: resource("/vendor/replay"),
             new_account: new_account.clone(),
             meta: DirectoryMeta::default(),
@@ -109,6 +111,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
         let thumbprint = key.jwk().unwrap().thumbprint().unwrap();
         // Model the named file adapter's durable initialization before registration begins.
         *store.record.lock().await = Some(AccountRecord {
+            user_agent: None,
             times: crate::account::AccountTimes::default(),
             account_id: account_id(&directory, &thumbprint),
             directory_url: directory,
@@ -118,6 +121,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
             server_contacts: None,
             last_status: None,
             deactivation: aster_acme_core::account::DeactivationState::NotRequested,
+            key_rotation: None,
             accepted_terms_url: None,
             state: AccountRecordState::RegistrationPending,
         });

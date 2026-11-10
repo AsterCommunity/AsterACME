@@ -110,6 +110,22 @@ pub struct TransportOptions {
     /// Optional RFC 9110 product token/comment string. Defaults to this crate's name/version.
     pub user_agent: Option<String>,
 }
+
+impl TransportOptions {
+    /// Validate explicit transport settings before storing intent or performing I/O.
+    ///
+    /// # Errors
+    /// Rejects zero deadlines, excessive nonce retries and invalid User-Agent headers.
+    pub fn validate(&self) -> Result<(), TransportError> {
+        if self.request_timeout.is_zero() || self.bad_nonce_retries > 5 {
+            return Err(TransportError::InvalidOptions);
+        }
+        if let Some(user_agent) = &self.user_agent {
+            crate::http_client::validate_user_agent(user_agent)?;
+        }
+        Ok(())
+    }
+}
 impl Default for TransportOptions {
     fn default() -> Self {
         Self {
@@ -123,7 +139,7 @@ impl Default for TransportOptions {
 
 /// Account-oriented ACME transport with a concurrency-safe bounded nonce pool.
 pub struct AcmeClient {
-    http: reqwest::Client,
+    http: aster_forge_http::HttpClient,
     directory_url: AcmeUrl,
     pub(crate) directory: Directory,
     options: TransportOptions,
@@ -145,9 +161,7 @@ impl AcmeClient {
         directory_url: AcmeUrl,
         options: TransportOptions,
     ) -> Result<Self, TransportError> {
-        if options.request_timeout.is_zero() || options.bad_nonce_retries > 5 {
-            return Err(TransportError::InvalidOptions);
-        }
+        options.validate()?;
         check_transport(&directory_url, &options)?;
         let http = crate::http_client::build(&options)?;
         let response = read_response(http.get(directory_url.as_str()).send().await?).await?;
@@ -157,6 +171,9 @@ impl AcmeClient {
         let directory: Directory = serde_json::from_slice(&response.body)?;
         check_transport(&directory.new_nonce, &options)?;
         check_transport(&directory.new_account, &options)?;
+        if let Some(key_change) = &directory.key_change {
+            check_transport(key_change, &options)?;
+        }
         let client = Self {
             http,
             directory_url,

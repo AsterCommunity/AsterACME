@@ -19,6 +19,27 @@ pub(super) enum Mode {
     Registered,
 }
 
+/// Enumerate local choices only when a real terminal needs an unresolved target.
+pub(super) async fn complete(
+    options: &mut AccountArgs,
+    settings: &crate::common::context::CliSettings,
+    mode: Mode,
+) -> CliResult<()> {
+    if crate::common::terminal::interactive(options.json) && options.name.is_none() {
+        let accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
+        resolve(
+            options,
+            mode,
+            &accounts,
+            settings.config.default_account.as_deref(),
+            crate::ca::resolve(settings.config.ca, settings.config.ca_directory.as_deref())?,
+            true,
+            &mut TerminalSelection,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) trait SelectionPrompts {
     fn choose(&mut self, message: &str, choices: Vec<String>, default: usize) -> CliResult<usize>;
     fn text(&mut self, message: &str, default: &str) -> CliResult<String>;
@@ -218,6 +239,7 @@ mod tests {
     fn accounts() -> Vec<LocalAccount> {
         vec![
             LocalAccount {
+                key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "pending".into(),
                 directory: AcmeUrl::new("https://first.example/directory").unwrap(),
@@ -227,6 +249,7 @@ mod tests {
                 deactivation: aster_acme_core::account::DeactivationState::NotRequested,
             },
             LocalAccount {
+                key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "work".into(),
                 directory: AcmeUrl::new("https://other.example/directory").unwrap(),

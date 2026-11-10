@@ -16,12 +16,19 @@ pub(crate) async fn server(options: TransportOptions) -> (MockServer, AcmeClient
         .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "initial_nonce"))
         .mount(&server)
         .await;
-    let client = AcmeClient::discover(
+    // Discovery is fixture setup, not the operation whose timeout is under test.
+    // Keep short mutation deadlines independent of parallel test scheduling.
+    let mut discovery = options.clone();
+    discovery.request_timeout = discovery.request_timeout.max(Duration::from_secs(2));
+    let mut client = AcmeClient::discover(
         AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap(),
-        options,
+        discovery,
     )
     .await
     .unwrap();
+    // HTTP deadlines live on the pool, so reconstruct it with the tested policy.
+    client.http = crate::http_client::build(&options).unwrap();
+    client.options = options;
     (server, client)
 }
 

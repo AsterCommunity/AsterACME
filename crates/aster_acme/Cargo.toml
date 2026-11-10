@@ -11,6 +11,7 @@ publish.workspace = true
 readme = "README.md"
 
 [dependencies]
+aster_forge_http.workspace = true
 time.workspace = true
 aster_acme_protocol.workspace = true
 aster_forge_utils.workspace = true

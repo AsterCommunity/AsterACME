@@ -9,6 +9,12 @@ use serde::Serialize;
 #[derive(Serialize)]
 #[serde(untagged)]
 pub(super) enum Output<'a> {
+    KeyRotated {
+        name: &'a str,
+        account_url: Option<&'a AcmeUrl>,
+        key_thumbprint: &'a str,
+        rotated: bool,
+    },
     Local(SavedAccount<'a>),
     Remote(Remote<'a>),
     List(List<'a>),
@@ -27,6 +33,8 @@ pub(super) enum Output<'a> {
 
 #[derive(Serialize)]
 pub(super) struct SavedAccount<'a> {
+    user_agent: Option<&'a str>,
+    key_rotation: Option<&'a aster_acme_core::account::KeyRotation>,
     #[serde(flatten)]
     times: aster_acme::account::AccountTimes,
     name: &'a str,
@@ -102,6 +110,7 @@ pub(super) struct List<'a> {
 
 #[derive(Serialize)]
 struct ListEntry<'a> {
+    key_rotation: Option<&'a aster_acme_core::account::KeyRotation>,
     #[serde(flatten)]
     times: aster_acme::account::AccountTimes,
     name: &'a str,
@@ -116,6 +125,12 @@ struct ListEntry<'a> {
 impl<'a> From<&'a AccountReport> for Output<'a> {
     fn from(report: &'a AccountReport) -> Self {
         match report {
+            AccountReport::KeyRotated { name, record } => Self::KeyRotated {
+                name,
+                account_url: record.account_url.as_ref(),
+                key_thumbprint: &record.key_thumbprint,
+                rotated: true,
+            },
             AccountReport::Removed { name, directory } => Self::Removed {
                 name,
                 directory,
@@ -125,6 +140,8 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
             AccountReport::Local(local) => {
                 let record = local.record.as_ref();
                 Self::Local(SavedAccount {
+                    user_agent: record.and_then(|record| record.user_agent.as_deref()),
+                    key_rotation: record.and_then(|record| record.key_rotation.as_ref()),
                     times: record
                         .map_or_else(aster_acme::account::AccountTimes::default, |record| {
                             record.times
@@ -187,6 +204,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 accounts: accounts
                     .iter()
                     .map(|account| ListEntry {
+                        key_rotation: account.key_rotation.as_ref(),
                         times: account.times,
                         name: &account.name,
                         directory: &account.directory,

@@ -34,14 +34,9 @@ fn template() -> DocumentMut {
             "\n# Whole-request timeout in seconds (1-300).\n",
         ),
         (
-            "user_agent",
-            value(concat!("AsterACME/", env!("CARGO_PKG_VERSION"))),
-            "\n# HTTP User-Agent sent to the CA.\n",
-        ),
-        (
             "contact",
             value(toml_edit::Array::new()),
-            "\n# Optional email addresses, e.g. [\"you@example.com\"].\n# Terms acceptance is supplied explicitly with --accept-terms, never stored here.\n",
+            "\n# Optional default contacts, e.g. [\"you@example.com\"].\n# Terms acceptance is supplied explicitly with --accept-terms, never stored here.\n",
         ),
     ] {
         document["config"][name] = item;
@@ -58,8 +53,7 @@ fn template() -> DocumentMut {
     document
 }
 
-/// Create missing explicit or implicit configuration atomically and parse its bounded bytes.
-/// A configured `data_dir` redirects state, without recursively loading another configuration.
+/// Create the data directory's configuration atomically and parse its bounded bytes.
 pub(crate) async fn load(root: &std::path::Path) -> CliResult<Config> {
     let path = root.join("config.toml");
     let bytes = aster_acme_cli_storage::toml_file::load_or_create(
@@ -105,11 +99,6 @@ fn parse(text: &str) -> CliResult<Config> {
     }
     if let Some(directory) = &document.config.ca_directory {
         aster_acme_protocol::url::AcmeUrl::new(directory)?;
-    }
-    if let Some(agent) = &document.config.user_agent
-        && (agent.is_empty() || agent.len() > 512 || agent.chars().any(char::is_control))
-    {
-        return Err("Invalid configuration user_agent.".into());
     }
     super::commands::account::contact::normalize(document.config.contact.clone())?;
     Ok(document.config)
@@ -197,7 +186,6 @@ pub(crate) struct Config {
     pub(crate) default_account: Option<String>,
     #[serde(default)]
     pub(crate) contact: Vec<String>,
-    pub(crate) user_agent: Option<String>,
     pub(crate) timeout: Option<u64>,
 }
 
@@ -247,11 +235,11 @@ mod tests {
             "ca='google'\nca_directory='https://ca.example/directory'",
             "directory='https://ca.example/directory'",
             "data_dir='./elsewhere'",
+            "user_agent='legacy-global-agent'",
             "timeout=0",
             "timeout=301",
             "default_account='../bad'",
             "ca_directory='https://ca.example/#fragment'",
-            "user_agent=''",
             "contact=['not-an-email']",
         ] {
             assert!(
@@ -322,10 +310,7 @@ mod tests {
         ] {
             assert!(parse(input).is_err());
         }
-        let config = parse(
-            "version=1\n[config]\ndefault_account='work'\nuser_agent='my client'\ntimeout=20",
-        )
-        .unwrap();
+        let config = parse("version=1\n[config]\ndefault_account='work'\ntimeout=20").unwrap();
         assert_eq!(config.default_account.as_deref(), Some("work"));
     }
 
@@ -368,6 +353,7 @@ mod tests {
         );
         let generated = std::fs::read_to_string(&explicit).unwrap();
         assert!(generated.contains("# Public CA preset"));
+        assert!(!generated.contains("user_agent"));
         assert!(!generated.contains("terms_accepted ="));
         assert!(root.join("config.toml").exists());
         let custom = "# user comment\nversion=1\n[config]\ndefault_account = 'personal' # keep\n";

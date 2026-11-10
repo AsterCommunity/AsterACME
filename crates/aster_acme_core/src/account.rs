@@ -24,12 +24,32 @@ pub enum DeactivationState {
     Confirmed,
 }
 
+/// Durable local progress for RFC 8555 §7.3.5 key rollover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyRotation {
+    /// Thumbprint of the new key staged locally before the CA request.
+    pub new_thumbprint: String,
+    /// Server outcome; confirmed allows the adapter to finish an interrupted local swap.
+    pub phase: KeyRotationPhase,
+}
+
+/// A pending result is never assumed to mean the CA changed the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyRotationPhase {
+    Pending,
+    Confirmed,
+}
+
 /// Requested account operation, independent of transport and storage.
 #[derive(Debug, Clone, Copy)]
 pub enum AccountOperation {
+    Inspect,
     Register,
     Deactivate,
     Select,
+    Update,
+    RotateKey,
 }
 
 /// Next permitted action, or an explicit refusal requiring reconciliation.
@@ -40,6 +60,10 @@ pub enum AccountAction {
     SendDeactivation,
     AlreadyDeactivated,
     Select,
+    Update,
+    SendKeyChange,
+    ReconcileKeyChange,
+    FinalizeKeyChange,
 }
 
 /// Account lifecycle refusal; the caller maps it to its user-facing error contract.
@@ -48,6 +72,7 @@ pub enum AccountStateError {
     NotRegistered,
     NotActive,
     ReconciliationRequired,
+    KeyRotationUncertain,
 }
 
 /// Decide from persisted lifecycle and the last authoritative CA observation.
@@ -60,10 +85,36 @@ pub fn account_action(
     registration: AccountRecordState,
     deactivation: DeactivationState,
     status: Option<&AccountStatus>,
+    key_rotation: Option<&KeyRotation>,
 ) -> Result<AccountAction, AccountStateError> {
     use AccountAction::{AlreadyDeactivated, Inspect, LookupExisting, Select, SendDeactivation};
     use AccountStateError::{NotActive, NotRegistered, ReconciliationRequired};
+    match key_rotation {
+        Some(KeyRotation {
+            phase: KeyRotationPhase::Pending,
+            ..
+        }) => {
+            return match operation {
+                AccountOperation::RotateKey => Ok(AccountAction::ReconcileKeyChange),
+                _ => Err(AccountStateError::KeyRotationUncertain),
+            };
+        }
+        Some(KeyRotation {
+            phase: KeyRotationPhase::Confirmed,
+            ..
+        }) => {
+            return match operation {
+                AccountOperation::RotateKey => Ok(AccountAction::FinalizeKeyChange),
+                _ => Err(AccountStateError::KeyRotationUncertain),
+            };
+        }
+        None => {}
+    }
     match (operation, deactivation) {
+        (AccountOperation::Inspect, _) => match registration {
+            AccountRecordState::Registered => Ok(Inspect),
+            AccountRecordState::RegistrationPending => Ok(LookupExisting),
+        },
         (AccountOperation::Deactivate, DeactivationState::Confirmed) => Ok(AlreadyDeactivated),
         (_, DeactivationState::Pending) => Err(ReconciliationRequired),
         (_, DeactivationState::Confirmed) => Err(NotActive),
@@ -75,14 +126,19 @@ pub fn account_action(
                 ),
             ) => Err(NotActive),
             (AccountRecordState::RegistrationPending, _) => match operation {
-                AccountOperation::Register => Ok(LookupExisting),
-                AccountOperation::Deactivate | AccountOperation::Select => Err(NotRegistered),
+                AccountOperation::Register | AccountOperation::Inspect => Ok(LookupExisting),
+                AccountOperation::Deactivate
+                | AccountOperation::Select
+                | AccountOperation::Update
+                | AccountOperation::RotateKey => Err(NotRegistered),
             },
             (AccountRecordState::Registered, None | Some(AccountStatus::Valid)) => {
                 match operation {
-                    AccountOperation::Register => Ok(Inspect),
+                    AccountOperation::Register | AccountOperation::Inspect => Ok(Inspect),
                     AccountOperation::Deactivate => Ok(SendDeactivation),
                     AccountOperation::Select => Ok(Select),
+                    AccountOperation::Update => Ok(AccountAction::Update),
+                    AccountOperation::RotateKey => Ok(AccountAction::SendKeyChange),
                 }
             }
         },
@@ -105,6 +161,62 @@ pub fn observed_deactivation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollover_states_block_other_operations_and_only_resume_saved_key() {
+        for (phase, expected) in [
+            (KeyRotationPhase::Pending, AccountAction::ReconcileKeyChange),
+            (
+                KeyRotationPhase::Confirmed,
+                AccountAction::FinalizeKeyChange,
+            ),
+        ] {
+            let rotation = KeyRotation {
+                new_thumbprint: "new".into(),
+                phase,
+            };
+            for operation in [
+                AccountOperation::Inspect,
+                AccountOperation::Register,
+                AccountOperation::Select,
+                AccountOperation::Update,
+                AccountOperation::Deactivate,
+            ] {
+                assert_eq!(
+                    account_action(
+                        operation,
+                        AccountRecordState::Registered,
+                        DeactivationState::NotRequested,
+                        Some(&AccountStatus::Valid),
+                        Some(&rotation)
+                    ),
+                    Err(AccountStateError::KeyRotationUncertain)
+                );
+            }
+            assert_eq!(
+                account_action(
+                    AccountOperation::RotateKey,
+                    AccountRecordState::Registered,
+                    DeactivationState::NotRequested,
+                    Some(&AccountStatus::Valid),
+                    Some(&rotation)
+                ),
+                Ok(expected)
+            );
+        }
+        for operation in [AccountOperation::Update, AccountOperation::RotateKey] {
+            assert_eq!(
+                account_action(
+                    operation,
+                    AccountRecordState::RegistrationPending,
+                    DeactivationState::NotRequested,
+                    None,
+                    None
+                ),
+                Err(AccountStateError::NotRegistered)
+            );
+        }
+    }
 
     #[test]
     fn registration_and_deactivation_return_explicit_next_actions() {
@@ -140,7 +252,8 @@ mod tests {
                     operation,
                     registration,
                     DeactivationState::NotRequested,
-                    Some(&AccountStatus::Valid)
+                    Some(&AccountStatus::Valid),
+                    None
                 ),
                 expected
             );
@@ -169,7 +282,8 @@ mod tests {
                             operation,
                             registration,
                             DeactivationState::Pending,
-                            Some(&status)
+                            Some(&status),
+                            None
                         ),
                         Err(AccountStateError::ReconciliationRequired)
                     );
@@ -185,7 +299,8 @@ mod tests {
                         operation,
                         AccountRecordState::Registered,
                         DeactivationState::NotRequested,
-                        Some(&status)
+                        Some(&status),
+                        None
                     ),
                     Err(AccountStateError::NotActive)
                 );
@@ -196,7 +311,8 @@ mod tests {
                 AccountOperation::Deactivate,
                 AccountRecordState::Registered,
                 DeactivationState::Confirmed,
-                Some(&AccountStatus::Deactivated)
+                Some(&AccountStatus::Deactivated),
+                None
             ),
             Ok(AccountAction::AlreadyDeactivated)
         );
@@ -205,6 +321,7 @@ mod tests {
                 AccountOperation::Select,
                 AccountRecordState::Registered,
                 DeactivationState::Confirmed,
+                None,
                 None
             ),
             Err(AccountStateError::NotActive)

@@ -242,7 +242,7 @@ Forge 宏依赖已固定到远端 master 提交 `beb3d45faad47ca9e53e3f704e0db57
 
 `cli-storage::toml_file` 统一有界读取、锁等待与超时、取消 guard、原子替换及文件/目录 sync；依赖固定 rev 的 AsterFs 和 Forge StateDirectory。账户 lease 覆盖整个协议操作，写入不重复加锁；配置读取最新文本并在同一锁内编辑。元数据上限 256 KiB，配置 64 KiB，私钥 64 KiB。Unix 权限及链接校验启用，Windows ACL 未实现。
 
-联系人依据 RFC 8555 §7.1.2 / §7.3 / §7.3.2：本地 contacts 保存输入 URI，server_contacts 保存最新可选 CA 响应，省略与空数组不同。CLI 接受普通邮箱并转 mailto，响应绝不覆盖本地输入。重复 register 可保存本地设置，不等于远端账户更新；update、轮换尚未实现，停用已实现。条款必须显式同意并保存实际 URL，EAB 秘密不持久化。
+联系人依据 RFC 8555 §7.1.2 / §7.3 / §7.3.2：本地 contacts 保存输入 URI，server_contacts 保存最新可选 CA 响应，省略与空数组不同。CLI 接受普通邮箱并转 mailto，响应绝不覆盖本地输入。重复 register 可保存本地设置，不等于远端账户更新；联系人更新、轮换和停用均已实现，接口由账户服务编排。条款必须显式同意并保存实际 URL，EAB 秘密不持久化。
 
 CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,execute,report,render}。执行返回报告，呈现层无 HTTP/存储副作用，入口只负责 runtime、日志与退出码。HTTP client 在库的 http_client 模块统一构造。测试常规使用 wiremock，staging 独立验收，公网结果不能替代本地故障边界测试。
 
@@ -252,7 +252,7 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。switch 无注册、网络或 --name 选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
 
-配置只读写 <data-dir>/config.toml，不支持独立 --config 或配置内 data_dir。ca 为 letsencrypt/zerossl/google 生产预设，ca_directory 为显式自定义 URL，两者互斥。默认生产 Let’s Encrypt，生产代码无 staging/test 提供商或按构建类型切换。测试地址只在独立测试命令中显式传入。配置加载校验版本、账户名、URL、超时、User-Agent 和邮箱；旧 directory/server 参数不保留别名。
+配置只读写 <data-dir>/config.toml，不支持独立 --config 或配置内 data_dir。ca 为 letsencrypt/zerossl/google 生产预设，ca_directory 为显式自定义 URL，两者互斥。默认生产 Let’s Encrypt，生产代码无 staging/test 提供商或按构建类型切换。测试地址只在独立测试命令中显式传入。配置加载校验版本、账户名、URL、超时和邮箱；旧 directory/server 参数不保留别名。
 
 账户列表复用本地元数据枚举，默认标记来自配置，列表不加载密钥、不发 HTTP。last_status 为最后权威 CA 响应而非离线当前状态。AccountRecord::is_usable 统一判断本地账户可用于切换的条件，停用/撤销/未知状态及待对账意图均不可用。
 
@@ -271,3 +271,15 @@ CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），regis
 账户生命周期纯规则已移入 core::account：AccountRecordState、DeactivationState、AccountOperation、AccountAction 及 AccountStateError。account_action 为注册返回 LookupExisting/Inspect、停用返回 SendDeactivation/AlreadyDeactivated、默认账户选择返回 Select；pending 要求对账，inactive/unknown 拒绝活跃操作。观察状态转换由 observed_deactivation 决定。客户端与 CLI 使用相同入口，只有协议执行/存储在服务中。
 
 账户时间采样属于服务的 AccountClock（dyn 注入），成功应用 CA 账户对象时一次采样归一 UTC，集中更新 AccountTimes。registered_at 首次本地确认注册后保持；last_status_at 与 last_used_at 随成功观察更新。注册/找回/查询/停用共享该入口，失败/离线/重复本地结果不会推进时间。序列化为 RFC3339，列表按 UTC 分钟显示，详情/JSON保留精度，未知为文本 — / JSON null / TOML 省略。
+
+## 账户联系人与密钥轮换
+
+RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `update-contact` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
+
+RFC 8555 §7.3.5 的端点从 directory.keyChange 发现。`KeyChangePayload` 绑定原 Location 的精确账户 URL 和旧 JWK。内层由新钥签名，header 含 jwk、与外层一致的 url，省略 nonce/kid；外层由旧钥签名，使用原账户 kid 和新 nonce。成功 HTTP 200 可以没有 JSON body；不更改 account_id、account_url、contacts、订单或授权。只有 last_used_at 因成功轮换推进；没有账户对象不能伪造新的状态观察时间。
+
+Core 纯决策返回 SendKeyChange / ReconcileKeyChange / FinalizeKeyChange。服务通过对象安全的 AccountRotationStore / AccountRotation 会话持有完整操作锁；文件适配器负责双钥和日志，不把文件逻辑放进 CLI/core。先持久化 next key，再记录 Pending，才发送双层 JWS。成功后记录 Confirmed，备份 previous key，替换 primary，最后提交新指纹及清除日志。阻塞写任务持有 Arc 租约，调用方取消不会提前放锁。提交后的下一次持锁打开验证主钥/元数据一致后清理旧文件。
+
+恢复是本项目持久化策略，不是额外的 ACME 线上协议：Pending 仅以已存新钥向原账户 URL 做 POST-as-GET，成功证明新钥已被 CA 接受后提交；401/403、超时或非法响应保留待对账，不据此改用旧钥重放。合法 ACME 400/409 problem 明确拒绝当前请求时清除 pending，保留原身份，不采纳冲突 Location 作为本账户 URL。无合法 problem 的错误及 5xx 保守保留 pending；无法证明结果时需联系 CA，不能自动猜测。Confirmed 只完成本地提交，即使当前 directory 不再提供 keyChange 也不再发送轮换。badNonce 只有限重签外层，始终使用相同内层和持久化新钥。
+
+账户 User-Agent 是本地 HTTP 偏好，不是 RFC 账户对象字段。只有 register 显式传入的值保存到 account.toml；优先级为本次参数、账户设置、内置默认值。默认值及全局配置不落盘此字段，其他网络命令的显式参数不改账户偏好。Forge HTTP 统一连接池构造和执行，产品保留超时、UA、JWS 及错误策略；reqwest 作为共享响应/错误/header 类型依赖仍需保留。

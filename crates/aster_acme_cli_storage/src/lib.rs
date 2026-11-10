@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
 mod removal;
+mod rotation;
 pub mod toml_file;
 #[cfg(test)]
 use toml_file::open_lock;
@@ -41,6 +42,8 @@ const MAX_KEY_FILE: u64 = 64 * 1024;
 /// Public local metadata used by interactive account selection; never includes key bytes.
 #[derive(Debug, Clone)]
 pub struct LocalAccount {
+    /// Outstanding key rollover, retained until durable local commit.
+    pub key_rotation: Option<aster_acme_core::account::KeyRotation>,
     /// Local observation timestamps; enumeration never updates them.
     pub times: aster_acme::account::AccountTimes,
     /// Local unique account name.
@@ -91,6 +94,7 @@ pub async fn accounts(root: PathBuf) -> Result<Vec<LocalAccount>, AccountStoreEr
             if let Some(record) = read_record(&entry.path().join("account.toml"))? {
                 let usable = record.is_usable();
                 accounts.push(LocalAccount {
+                    key_rotation: record.key_rotation,
                     times: record.times,
                     name,
                     directory: record.directory_url,
@@ -148,17 +152,15 @@ impl CliAccountStore {
         })
     }
 
-    /// Read the CA bound to this local name without loading its key or contacting it.
+    /// Read this name's metadata without loading its key or contacting the CA.
     ///
     /// # Errors
     /// Rejects corrupt, unsafe, or unsupported account records.
-    pub async fn directory(&self) -> Result<Option<AcmeUrl>, AccountStoreError> {
+    pub async fn metadata(&self) -> Result<Option<AccountRecord>, AccountStoreError> {
         let path = self.account_slot().join("account.toml");
-        tokio::task::spawn_blocking(move || {
-            Ok(read_record(&path)?.map(|record| record.directory_url))
-        })
-        .await
-        .map_err(|_| store_error("account storage worker failed"))?
+        tokio::task::spawn_blocking(move || read_record(&path))
+            .await
+            .map_err(|_| store_error("account storage worker failed"))?
     }
 
     fn account_slot(&self) -> PathBuf {
@@ -293,17 +295,18 @@ impl AccountKeyStore for CliAccountStore {
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = previous.ok_or_else(|| store_error("account key exists without its identity record; refusing to guess its CA"))?;
                     verify_identity(&record, &directory, &thumbprint)?;
+                    rotation::cleanup(&slot, &record)?;
                     Ok(Arc::new(key) as Arc<dyn AccountSigner>)
                 }
                 Err(StorageError::NotFound) if create && previous.is_none() => {
                     let key = AccountKey::generate().map_err(|_| store_error("cannot generate account key"))?;
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = AccountRecord {
- times: aster_acme::account::AccountTimes::default(),                        account_id: local_account_id(&directory, &thumbprint), directory_url: directory,
+            user_agent: None, times: aster_acme::account::AccountTimes::default(),                        account_id: local_account_id(&directory, &thumbprint), directory_url: directory,
                         key_thumbprint: thumbprint, account_url: None, contacts: Vec::new(),
                         server_contacts: None,
 last_status: None,
-deactivation: aster_acme_core::account::DeactivationState::NotRequested, accepted_terms_url: None,
+deactivation: aster_acme_core::account::DeactivationState::NotRequested, key_rotation: None, accepted_terms_url: None,
                         state: aster_acme_core::account::AccountRecordState::RegistrationPending,
                     };
                     // The record replaces a separate initialization marker. A crash after

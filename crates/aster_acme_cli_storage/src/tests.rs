@@ -107,6 +107,7 @@ async fn removal_rejects_key_links_without_touching_the_target() {
 
 fn fixture(directory: &AcmeUrl, thumbprint: &str) -> AccountRecord {
     AccountRecord {
+        user_agent: None,
         times: aster_acme::account::AccountTimes::default(),
         account_id: "a".repeat(43),
         directory_url: directory.clone(),
@@ -116,6 +117,7 @@ fn fixture(directory: &AcmeUrl, thumbprint: &str) -> AccountRecord {
         server_contacts: None,
         last_status: None,
         deactivation: aster_acme_core::account::DeactivationState::NotRequested,
+        key_rotation: None,
         accepted_terms_url: None,
         state: AccountRecordState::RegistrationPending,
     }

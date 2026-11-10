@@ -128,7 +128,7 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
         verify: true,
         http: HttpArgs {
             timeout: Some(1),
-            user_agent: None,
+            ..HttpArgs::default()
         },
         local: LocalArgs {
             data_dir: Some(temp.path().into()),
@@ -166,6 +166,8 @@ fn all_single_account_commands_share_positional_and_named_targets() {
         "recover",
         "deactivate",
         "remove",
+        "update-contact",
+        "rotate-key",
     ] {
         for target in [vec!["work"], vec!["--name", "work"]] {
             let mut argv = vec!["aster-acme", "account", command];
@@ -183,6 +185,8 @@ fn all_single_account_commands_share_positional_and_named_targets() {
                 AccountCommand::Remove(options) => options.into(),
                 AccountCommand::Register(options) => options.into(),
                 AccountCommand::Deactivate(options) => options.into(),
+                AccountCommand::UpdateContact(options) => options.network.into(),
+                AccountCommand::RotateKey(options) => options.network.into(),
                 AccountCommand::List(_) => panic!("list has no target"),
             };
             assert_eq!(options.name.as_deref(), Some("work"));
@@ -899,6 +903,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
             };
             store
                 .save(&AccountRecord {
+                    user_agent: None,
                     times: aster_acme::account::AccountTimes::default(),
                     account_id: "a".repeat(43),
                     directory_url: directory.clone(),
@@ -908,6 +913,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
                     server_contacts: None,
                     last_status: None,
                     deactivation: aster_acme_core::account::DeactivationState::NotRequested,
+                    key_rotation: None,
                     accepted_terms_url: None,
                     state,
                 })

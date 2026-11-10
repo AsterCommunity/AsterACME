@@ -33,6 +33,23 @@ pub struct AccountStatusRequest {
     pub status: AccountStatus,
 }
 
+/// RFC 8555 section 7.3.2 replaces the account's complete contact URL set.
+#[derive(Serialize)]
+pub struct AccountUpdateRequest<'a> {
+    /// Empty clears all server contacts.
+    pub contact: &'a [String],
+}
+
+/// Inner RFC 8555 section 7.3.5 keyChange payload. JWK schema is supplied by crypto.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyChangePayload<'a, J> {
+    /// Exact account URL returned in the original Location header.
+    pub account: &'a crate::url::AcmeUrl,
+    /// Old public account key.
+    pub old_key: &'a J,
+}
+
 /// Account object returned by the CA. Optional contact omission differs from an empty list.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

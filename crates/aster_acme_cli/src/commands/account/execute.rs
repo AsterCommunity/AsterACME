@@ -36,10 +36,18 @@ impl Operation {
 }
 
 pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport> {
+    let command = match command {
+        AccountCommand::UpdateContact(args) => return super::mutation::update_contacts(args).await,
+        AccountCommand::RotateKey(args) => return super::mutation::rotate_key(args).await,
+        command => command,
+    };
     if let AccountCommand::List(options) = command {
         return list(options).await;
     }
     let (mut options, operation) = match command {
+        AccountCommand::UpdateContact(_) | AccountCommand::RotateKey(_) => {
+            return Err("Mutation was not dispatched.".into());
+        }
         AccountCommand::Remove(options) => (AccountArgs::from(options), Operation::Remove),
         AccountCommand::List(_) => return Err("List command was not dispatched.".into()),
         AccountCommand::Deactivate(options) => (AccountArgs::from(options), Operation::Deactivate),
@@ -51,26 +59,14 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         AccountCommand::Switch(options) => (AccountArgs::from(options), Operation::Switch),
     };
     let settings = CliSettings::load(&options).await?;
-    let interactive = crate::common::terminal::interactive(options.json);
-    if interactive && options.name.is_none() {
-        let accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
-        let mode = match operation {
-            Operation::Register => super::selection::Mode::Register,
-            Operation::Recover | Operation::Remove | Operation::Show { .. } => {
-                super::selection::Mode::Existing
-            }
-            Operation::Deactivate | Operation::Switch => super::selection::Mode::Registered,
-        };
-        super::selection::resolve(
-            &mut options,
-            mode,
-            &accounts,
-            settings.config.default_account.as_deref(),
-            crate::ca::resolve(settings.config.ca, settings.config.ca_directory.as_deref())?,
-            true,
-            &mut super::selection::TerminalSelection,
-        )?;
-    }
+    let mode = match operation {
+        Operation::Register => super::selection::Mode::Register,
+        Operation::Recover | Operation::Remove | Operation::Show { .. } => {
+            super::selection::Mode::Existing
+        }
+        Operation::Deactivate | Operation::Switch => super::selection::Mode::Registered,
+    };
+    super::selection::complete(&mut options, &settings, mode).await?;
     if matches!(operation, Operation::Switch) && options.name.is_none() {
         return Err(
             "Specify account switch <NAME> or --name <NAME>, or use an interactive terminal to select an account."
@@ -84,7 +80,7 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
     // Check before loading/creating keys, changing contacts, or constructing HTTP.
     // Both registered accounts and interrupted pending identities require explicit reuse.
     let reused =
-        matches!(operation, Operation::Register) && context.store.directory().await?.is_some();
+        matches!(operation, Operation::Register) && context.store.metadata().await?.is_some();
     if reused {
         crate::common::terminal::confirm_write(
             &format!(
@@ -176,7 +172,7 @@ async fn list(args: super::args::ListArgs) -> CliResult<AccountReport> {
 
 /// Local removal deliberately never initializes HTTP or decodes the private key.
 async fn remove(context: CliContext, options: &AccountArgs) -> CliResult<AccountReport> {
-    if context.store.directory().await?.is_none() {
+    if context.store.metadata().await?.is_none() {
         return Err("No local account record exists for this name.".into());
     }
     let root = context
@@ -248,7 +244,11 @@ async fn deactivate(
         aster_acme_core::account::AccountAction::SendDeactivation => {}
         aster_acme_core::account::AccountAction::Inspect
         | aster_acme_core::account::AccountAction::LookupExisting
-        | aster_acme_core::account::AccountAction::Select => {
+        | aster_acme_core::account::AccountAction::Select
+        | aster_acme_core::account::AccountAction::Update
+        | aster_acme_core::account::AccountAction::SendKeyChange
+        | aster_acme_core::account::AccountAction::ReconcileKeyChange
+        | aster_acme_core::account::AccountAction::FinalizeKeyChange => {
             return Err(AccountError::InvalidResponse.into());
         }
     }
@@ -337,6 +337,7 @@ async fn remote(
 ) -> CliResult<AccountReport> {
     let transport = context.transport_options(&options)?;
     let interactive = crate::common::terminal::interactive(options.json);
+    let account_user_agent = options.user_agent.clone();
     let mut persist_contacts = !options.contact.is_empty();
     let thumbprint = signer.jwk()?.thumbprint()?;
     let saved = context.store.load(&context.directory, &thumbprint).await?;
@@ -376,6 +377,7 @@ async fn remote(
         signer.as_ref(),
         registration.as_ref(),
         persist_contacts,
+        account_user_agent,
     )
     .await?;
     let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
@@ -432,6 +434,7 @@ async fn save_registration_intent(
     signer: &dyn AccountSigner,
     registration: Option<&RegistrationOptions>,
     persist_contacts: bool,
+    user_agent: Option<String>,
 ) -> CliResult<()> {
     if persist_contacts && let Some(registration) = registration {
         crate::config::persist(
@@ -442,7 +445,7 @@ async fn save_registration_intent(
         .await?;
     }
     if let Some(registration) = registration
-        && !registration.contacts.is_empty()
+        && (!registration.contacts.is_empty() || user_agent.is_some())
     {
         // Discovery failure must not lose local input; this is not CA acceptance.
         let thumbprint = signer.jwk()?.thumbprint()?;
@@ -455,7 +458,12 @@ async fn save_registration_intent(
             .load(&context.directory, &thumbprint)
             .await?
             .ok_or("Local account identity record is missing.")?;
-        record.contacts.clone_from(&registration.contacts);
+        if !registration.contacts.is_empty() {
+            record.contacts.clone_from(&registration.contacts);
+        }
+        if user_agent.is_some() {
+            record.user_agent = user_agent;
+        }
         context.store.save(&record).await?;
     }
     Ok(())

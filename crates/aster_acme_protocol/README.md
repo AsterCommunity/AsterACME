@@ -21,3 +21,5 @@ cargo test -p aster_acme_protocol --locked
 MIT OR Apache-2.0.
 
 公开提供商定义与入口地址由本 crate 的 directory::Provider 唯一持有，CLI 只通过 TypedValueParser 适配 Clap，配置直接反序列化 Provider。protocol 不依赖 Clap，不包含测试环境预设。
+
+账户更新的 AccountUpdateRequest 与 §7.3.5 的泛型 KeyChangePayload / KeyChangeHeader 是独立线上模型；目录 key_change 可缺省。内层 header 不具备 nonce/kid 字段；FlattenedJws 本身就是外层 payload，不添加仅透传的包装类型。签名与文件事务留在上层。

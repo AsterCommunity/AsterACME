@@ -4,6 +4,10 @@ use aster_acme_protocol::url::AcmeUrl;
 use aster_acme::account::{AccountRecord, AcmeAccount};
 
 pub(crate) enum AccountReport {
+    KeyRotated {
+        name: String,
+        record: AccountRecord,
+    },
     Removed {
         name: String,
         directory: AcmeUrl,
@@ -38,6 +42,7 @@ pub(crate) enum AccountReport {
 #[derive(Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RemoteAction {
+    UpdateContact,
     Register,
     Recover,
     Show,
@@ -61,6 +66,7 @@ impl AccountReport {
                 verification: None, ..
             }
             | Self::Local(_)
+            | Self::KeyRotated { .. }
             | Self::Remote { .. }
             | Self::Switched { .. }
             | Self::Removed { .. }

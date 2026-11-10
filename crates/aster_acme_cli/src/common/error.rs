@@ -18,6 +18,14 @@ pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, Option<String>) {
     if let Some(account) = error.downcast_ref::<AccountError>() {
         return match account {
+            AccountError::KeyRotationUncertain => (
+                "Account key rotation has an unfinished or uncertain result.".into(),
+                Some("Retain both keys and rerun account rotate-key to reconcile the saved rotation.".into()),
+            ),
+            AccountError::KeyChangeUnavailable => (
+                "This CA does not advertise account key rotation.".into(),
+                None,
+            ),
             AccountError::DeactivationUncertain => (
                 "A previous deactivation request has an uncertain remote result.".into(),
                 Some("Use account show --verify to attempt reconciliation. A 401 does not prove deactivation; consult your CA if it cannot confirm the result. The saved key is retained.".into()),

@@ -1,6 +1,9 @@
 //! ES256 account signing, RFC 7638 thumbprints and RFC 8555 flattened JWS.
 
-use aster_acme_protocol::jws::{EabHeader, FlattenedJws, ProtectedHeader, RequestIdentity};
+use aster_acme_protocol::jws::{
+    EabHeader, FlattenedJws, KeyChangeHeader, ProtectedHeader, RequestIdentity,
+};
+use aster_acme_protocol::url::AcmeUrl;
 use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
@@ -145,6 +148,32 @@ pub(crate) fn sign_request(
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).map_err(|_| CryptoError::Encoding)?);
     let payload = URL_SAFE_NO_PAD.encode(payload);
     let signature = signer.sign(format!("{protected}.{payload}").as_bytes())?;
+    Ok(FlattenedJws {
+        protected,
+        payload,
+        signature: URL_SAFE_NO_PAD.encode(signature),
+    })
+}
+
+/// Sign the nonce-free inner JWS required by RFC 8555 §7.3.5.
+pub(crate) fn sign_key_change(
+    new_signer: &dyn AccountSigner,
+    old_key: &Es256Jwk,
+    account: &AcmeUrl,
+    endpoint: &str,
+) -> Result<FlattenedJws, CryptoError> {
+    let new_key = new_signer.jwk()?;
+    let header = KeyChangeHeader {
+        alg: "ES256",
+        jwk: &new_key,
+        url: endpoint,
+    };
+    let payload = aster_acme_protocol::account::KeyChangePayload { account, old_key };
+    let protected =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).map_err(|_| CryptoError::Encoding)?);
+    let payload =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).map_err(|_| CryptoError::Encoding)?);
+    let signature = new_signer.sign(format!("{protected}.{payload}").as_bytes())?;
     Ok(FlattenedJws {
         protected,
         payload,

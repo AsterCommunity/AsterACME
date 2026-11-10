@@ -56,6 +56,9 @@ pub struct Directory {
     pub new_nonce: AcmeUrl,
     /// Account creation and key-based lookup endpoint.
     pub new_account: AcmeUrl,
+    /// Optional RFC 8555 keyChange endpoint; absent means rotation is unsupported.
+    #[serde(default)]
+    pub key_change: Option<AcmeUrl>,
     /// Optional server metadata.
     #[serde(default)]
     pub meta: DirectoryMeta,

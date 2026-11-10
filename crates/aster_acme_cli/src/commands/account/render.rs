@@ -18,6 +18,9 @@ pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<Stri
     }
     let color = colors(io::stdout().is_terminal());
     Ok(match report {
+        AccountReport::KeyRotated { name, .. } => {
+            success(&format!("Rotated key for account {}.", safe(name)), color)
+        }
         AccountReport::Removed { name, .. } => {
             success(&format!("Removed local account {}.", safe(name)), color)
         }
@@ -31,13 +34,14 @@ pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<Stri
             use super::report::RemoteAction;
             match action {
                 RemoteAction::Show => remote_lines(name, account, true, color).join("\n"),
-                RemoteAction::Register | RemoteAction::Recover => {
+                RemoteAction::Register | RemoteAction::Recover | RemoteAction::UpdateContact => {
                     let verb = match action {
                         RemoteAction::Register if *reused => "Reused",
                         RemoteAction::Register if account.recovered => "Recovered existing",
                         RemoteAction::Register => "Registered",
                         RemoteAction::Recover => "Recovered",
                         RemoteAction::Show => "Verified",
+                        RemoteAction::UpdateContact => "Updated contacts for",
                     };
                     let status = match &account.status {
                         aster_acme_core::protocol::AccountStatus::Valid => String::new(),
@@ -72,6 +76,13 @@ pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<Stri
 
 fn success(message: &str, color: bool) -> String {
     format!("{} {message}", styled("[OK]", "1;32", color))
+}
+
+fn rotation_label(phase: aster_acme_core::account::KeyRotationPhase) -> &'static str {
+    match phase {
+        aster_acme_core::account::KeyRotationPhase::Pending => "key rotation pending",
+        aster_acme_core::account::KeyRotationPhase::Confirmed => "key commit pending",
+    }
 }
 
 /// Pad plain cells before applying ANSI so highlighting never changes alignment.
@@ -119,7 +130,10 @@ fn list_text(
                 safe(&account.name)
             ),
             safe(account.directory.as_str()),
-            state_label(account.state).into(),
+            match &account.key_rotation {
+                Some(rotation) => rotation_label(rotation.phase).into(),
+                None => state_label(account.state).into(),
+            },
             safe(&status),
             deactivation_label(account.deactivation).into(),
             timestamp(account.times.registered_at, true),
@@ -264,6 +278,15 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
         format!("  Local state: {}", local_state(local)),
     ];
     if let Some(record) = &local.record {
+        if let Some(user_agent) = &record.user_agent {
+            lines.push(format!("  User-Agent: {}", safe(user_agent)));
+        }
+        if let Some(rotation) = &record.key_rotation {
+            lines.push(format!(
+                "  Key rotation: {}. Use account rotate-key to resume.",
+                rotation_label(rotation.phase)
+            ));
+        }
         lines.push(format!("  Account ID: {}", safe(&record.account_id)));
         lines.extend(time_lines(record.times));
         if let Some(status) = &record.last_status {
@@ -323,6 +346,7 @@ mod tests {
         };
         let report = AccountReport::List {
             accounts: vec![LocalAccount {
+                key_rotation: None,
                 times,
                 name: "work".into(),
                 directory: AcmeUrl::new("https://ca.example/directory").unwrap(),
@@ -349,6 +373,7 @@ mod tests {
     fn list_aligns_marker_name_and_columns_before_applying_highlight() {
         let accounts = [
             LocalAccount {
+                key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "default".into(),
                 directory: AcmeUrl::new("https://ca.example/directory").unwrap(),
@@ -358,6 +383,7 @@ mod tests {
                 deactivation: DeactivationState::NotRequested,
             },
             LocalAccount {
+                key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "new-account".into(),
                 directory: AcmeUrl::new("https://longer-ca.example/directory").unwrap(),

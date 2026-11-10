@@ -24,3 +24,5 @@ cargo test -p aster_acme_core --locked
 覆盖已知/未知 wire 状态、授权部分成功/失败、终态拒绝、跳跃观察及轮询动作。仍未实现网络签发。依赖只能从根 workspace 继承。License: MIT OR Apache-2.0.
 
 账户决策返回 LookupExisting / Inspect / SendDeactivation / AlreadyDeactivated / Select；pending 停用必须对账，inactive/unknown 不能授权活跃操作。HTTP/磁盘/时间采样不进入 core。调用方 `aster_acme::AccountRecord::action` 委托纯函数，再按动作执行副作用；CA 状态观察同样应用 core 转换。
+
+账户 Update/RotateKey 也由纯决策驱动；轮换 Pending 只允许 ReconcileKeyChange、Confirmed 只允许 FinalizeKeyChange，并阻止其他活跃操作/远端观察。Inspect 独立于注册资格，允许对停用意图做权威查询；不绕过轮换的双钥恢复。Core 不持有密钥或决定文件事务。

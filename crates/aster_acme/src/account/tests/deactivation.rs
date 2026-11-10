@@ -4,7 +4,7 @@ use aster_acme_protocol::jws::FlattenedJws;
 use super::*;
 use crate::transport::{TransportOptions, tests::server};
 
-async fn fixture(
+pub(super) async fn fixture(
     options: TransportOptions,
 ) -> (
     wiremock::MockServer,
@@ -18,6 +18,7 @@ async fn fixture(
     let thumbprint = key.jwk().unwrap().thumbprint().unwrap();
     let store = Arc::new(MemoryStore::default());
     *store.record.lock().await = Some(AccountRecord {
+        user_agent: None,
         times: crate::account::AccountTimes::default(),
         account_id: account_id(&directory, &thumbprint),
         directory_url: directory,
@@ -27,6 +28,7 @@ async fn fixture(
         server_contacts: Some(vec![]),
         last_status: Some(AccountStatus::Valid),
         deactivation: DeactivationState::NotRequested,
+        key_rotation: None,
         accepted_terms_url: None,
         state: AccountRecordState::Registered,
     });

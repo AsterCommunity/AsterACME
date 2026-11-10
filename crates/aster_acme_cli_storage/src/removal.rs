@@ -38,7 +38,7 @@ impl CliAccountStore {
             for entry in fs::read_dir(&slot).map_err(|_| store_error("cannot inspect account directory"))? {
                 let entry = entry.map_err(|_| store_error("cannot inspect account file"))?;
                 let filename = entry.file_name();
-                if !matches!(filename.to_str(), Some("account.toml" | "account-key.pk8" | "account.lock")) {
+                if !matches!(filename.to_str(), Some("account.toml" | "account-key.pk8" | "account.lock" | "account-key.next.pk8" | "account-key.previous.pk8")) {
                     return Err(store_error("account directory contains unknown files; refusing removal"));
                 }
                 // Enforce the same no-follow/owner/single-link policy even for corrupt
