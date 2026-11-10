@@ -1,0 +1,15 @@
+[package]
+name = "aster-acme-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ACME protocol models and state transition rules."
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

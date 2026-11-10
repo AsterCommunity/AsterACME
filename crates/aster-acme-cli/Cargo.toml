@@ -1,0 +1,22 @@
+[package]
+name = "aster-acme-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for AsterACME."
+publish.workspace = true
+
+[[bin]]
+name = "aster-acme"
+path = "src/main.rs"
+
+[dependencies]
+aster-acme.workspace = true
+aster-acme-dns.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

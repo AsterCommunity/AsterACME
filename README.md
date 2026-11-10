@@ -2,7 +2,7 @@
 
 A Rust ACME client for automated certificate issuance and lifecycle management.
 
-> Initial project setup. The client is not implemented yet.
+> Rust workspace scaffold. Certificate operations are not implemented yet.
 
 ## Direction
 
@@ -15,6 +15,7 @@ These are planned capabilities, not currently available features.
 
 ## Documentation
 
+- [Architecture design (中文)](docs/architecture.md)
 - [ACME RFC reference and implementation considerations (中文)](docs/rfc-reference.md)
 
 ## License
@@ -31,3 +32,18 @@ SPDX license expression: `MIT OR Apache-2.0`.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you shall be dual licensed as above, without
 any additional terms or conditions.
+
+## Development
+
+Requires stable Rust (currently at least 1.99) and Python 3.11+ for the dependency policy check.
+
+```sh
+python3 scripts/check-workspace-deps.py
+cargo fmt --all --check
+cargo check --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo run -p aster-acme-cli -- --help
+```
+
+All member dependencies must inherit from `[workspace.dependencies]` using
+`workspace = true`; versions and features are selected only at the root.
