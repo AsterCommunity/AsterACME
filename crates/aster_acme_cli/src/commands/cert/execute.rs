@@ -4,9 +4,10 @@ use super::{
     args::{CertCommand, IssueArgs},
     render, selection,
 };
+use crate::common::args::{HttpArgs, LocalArgs};
 use crate::common::log::Level;
 use crate::{
-    commands::account::args::{AccountArgs, HttpArgs, LocalArgs},
+    commands::account::args::AccountArgs,
     common::{
         context::{CliContext, CliSettings},
         error::CliResult,
@@ -214,6 +215,7 @@ impl DnsReadiness for ManualDns {
         force: bool,
         execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
+        execution.check().map_err(|_| IssueError::Interrupted)?;
         // A new scripted invocation must expose its fresh TXT values before any
         // acknowledgement. --yes only removes human confirmation, not publication.
         if !self.resuming && (self.yes || !self.interactive) {
@@ -286,6 +288,7 @@ pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
         }
         CertCommand::Show {
             name,
+            named_name,
             operation,
             verify,
             http,
@@ -297,7 +300,7 @@ pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
             let records = store.list().await?;
             let name = selection::certificate_name(
                 &records,
-                name.as_deref(),
+                name.as_deref().or(named_name.as_deref()),
                 operation.as_deref(),
                 local.json,
             )?;

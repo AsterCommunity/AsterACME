@@ -1,6 +1,7 @@
 //! Command-specific argument groups; registration flags never appear on local commands.
 //! Shared groups are composed in declaration order, matching the public help sequence.
 
+use crate::common::args::{HttpArgs, LocalArgs, parse_account_name};
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -35,36 +36,18 @@ pub(crate) enum AccountCommand {
 }
 
 #[derive(clap::Args, Default)]
-pub(crate) struct LocalArgs {
-    /// Unified state root (default: system directory for com.astercosm.acme).
-    #[arg(long, value_name = "PATH", help_heading = "Storage and output")]
-    pub(crate) data_dir: Option<PathBuf>,
-    /// Structured JSON; disables interactive prompts and terminal styling.
-    #[arg(long, help_heading = "Storage and output")]
-    pub(crate) json: bool,
-}
-
-#[derive(clap::Args, Default)]
 pub(crate) struct NameArgs {
     /// Local account name; omit to select interactively or use the configured default.
-    #[arg(index = 1, value_name = "NAME", conflicts_with = "name", value_parser = parse_name)]
+    #[arg(index = 1, value_name = "NAME", conflicts_with = "name", value_parser = parse_account_name)]
     pub(crate) positional_name: Option<String>,
     /// Local account name; omit to select interactively or use the configured default.
-    #[arg(short = 'n', long, value_parser = parse_name)]
+    #[arg(short = 'n', long, value_parser = parse_account_name)]
     pub(crate) name: Option<String>,
 }
 
 impl NameArgs {
     fn resolve(self) -> Option<String> {
         self.positional_name.or(self.name)
-    }
-}
-
-fn parse_name(value: &str) -> Result<String, String> {
-    if aster_acme_cli_storage::valid_account_name(value) {
-        Ok(value.to_owned())
-    } else {
-        Err("Use 1–64 ASCII letters, digits, hyphens or underscores for the account name.".into())
     }
 }
 
@@ -111,16 +94,6 @@ pub(crate) struct CaArgs {
     /// Full ACME directory URL; must match an existing account's bound CA.
     #[arg(long, value_name = "URL", conflicts_with = "ca")]
     pub(crate) ca_directory: Option<String>,
-}
-
-#[derive(clap::Args, Default)]
-pub(crate) struct HttpArgs {
-    /// HTTP User-Agent override; an explicit value during registration is saved for this account.
-    #[arg(long)]
-    pub(crate) user_agent: Option<String>,
-    /// Whole-request timeout in seconds (1–300); used only for HTTP.
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..=300))]
-    pub(crate) timeout: Option<u64>,
 }
 
 #[derive(clap::Args, Default)]
@@ -206,7 +179,7 @@ pub(crate) struct UpdateContactArgs {
     #[command(flatten)]
     pub(crate) network: NetworkArgs,
     /// Complete replacement contact list; repeat for multiple email addresses.
-    #[arg(long, conflicts_with = "clear_contacts")]
+    #[arg(short = 'm', long, conflicts_with = "clear_contacts")]
     pub(crate) contact: Vec<String>,
     /// Remove all CA contacts explicitly.
     #[arg(long)]
@@ -228,7 +201,7 @@ pub(crate) struct RotateKeyArgs {
 /// Resolved execution input, shared by CLI parsing and interactive completion.
 #[derive(Default)]
 pub(crate) struct AccountArgs {
-    /// Confirm reuse of an existing local account without an interactive prompt (register only).
+    /// Confirm this command's action only; never accept terms or bypass validation.
     pub(crate) yes: bool,
     /// Explicit ACME directory URL (default: Let's Encrypt).
     pub(crate) ca_directory: Option<String>,

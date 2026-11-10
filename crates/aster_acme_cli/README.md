@@ -121,7 +121,7 @@ EAB 是 CA 外部账户绑定，Let’s Encrypt 通常不需要；ZeroSSL 和 Go
 
 ## 版本与构建信息
 
-根命令帮助按 `account`、`version` 排列。`aster-acme version` 显示产品版本、Git revision、dirty 状态、target、profile、features 和构建时间，`aster-acme version --json` 返回同一份结构化信息。保留 `--version` 的简短版本输出。版本命令不加载配置、不创建数据文件、不发 HTTP，运行时无需 Git。
+根命令帮助按 `account`、`cert`、`version` 排列。`aster-acme version` 显示产品版本、Git revision、dirty 状态、target、profile、features 和构建时间，`aster-acme version --json` 返回同一份结构化信息。保留 `--version` 的简短版本输出。版本命令不加载配置、不创建数据文件、不发 HTTP，运行时无需 Git。
 
 构建脚本在编译时捕获元数据，源码归档缺少 Git 时输出 unknown。可用 `ASTER_BUILD_REVISION`（unknown 或 7–64 位十六进制）、`ASTER_BUILD_TIME`（RFC 3339）显式注入；否则使用 Git revision 和当前构建 UTC 时间，`SOURCE_DATE_EPOCH` 可提供可复现时间戳。dirty 状态来自构建时工作树，不能作为代码已提交的证明。
 
@@ -223,3 +223,6 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 账户写入前检查本地身份。注册成功后仅在最新配置没有 default_account 时补为本次名称；注册失败/取消不设默认，已有默认或并发切换不覆盖。remove 默认会清除同名选择，随后成功注册可补回；switch 对合法缺省字段安全插入，重复同一值不改变已有字符串格式。缺账户主错误与 Hint 分开显示，提示核对 --name / --data-dir。
 
 --help 统一显示 AsterACME <CLI version>、描述和 usage，所有子命令使用相同布局；version 文本按共享表格对齐产品版本与 Revision 等值列。构建时间的人类显示也使用统一 UTC 秒级格式，JSON 保留构建时 RFC3339。
+
+
+cert issue 支持 -y/--yes：恢复已有申请时仅跳过 TXT 人工确认，正常执行 DNS 检查；-f/--force 仅控制本地 DNS 查询。首次自动化申请即使同时带两个选项，也先返回 action_required 和新 TXT 值，发布后显式 resume。--yes 不关闭域名/证书名称选择、不接受条款，也不隐含 --json。公共存储与 HTTP 参数组位于 common/args.rs，各命令领取自己适用的组；完整范围和后续扩展约定见 [CLI 参数契约](../../docs/cli-contract.md)。

@@ -42,7 +42,7 @@ AsterACME 是可嵌入的 Rust ACME 客户端与 CLI。全局身份和工程流�
 
 ## Rust 与依赖
 
-- stable、edition 2024。所有依赖版本及 features 只能定义在根 `[workspace.dependencies]`；成员依赖只用 `workspace = true`，Forge/AsterFs 当前开发分支固定 rev；各 crate 的 `[package].version` 独立显式声明，不继承 workspace.package.version。
+- stable、edition 2024。所有依赖版本及 features 只能定义在根 `[workspace.dependencies]`；成员依赖只用 `workspace = true`，Forge/AsterFs 使用根表固定的已发布版本；各 crate 的 `[package].version` 独立显式声明，不继承 workspace.package.version。
 - 复用 Forge 数字转换工具；文件锁使用 AsterFs，不新增 fs2。
 - 每个 crate 写 README。公开 API、失败策略、持久化顺序和协议边界写清注释，使用 `//` / `///` / `//!`，不使用块注释。
 - crate 入口先模块文档，再 `cfg_attr(not(test), deny(...))`，禁止生产 unwrap/expect/panic/unreachable/unimplemented/todo；继承 workspace 的 unsafe forbid 与严格 Clippy。
@@ -90,7 +90,7 @@ git diff HEAD --check
 
 - 账户状态由 core::account 的显式纯决策驱动；本地注册/停用状态类型归 core，客户端按 AccountAction 执行 I/O，CLI 调用相同规则，不重复写业务条件。字段校验保留普通 if，不把业务转换藏在布尔判断中。AccountTimes 的三个 UTC RFC3339 字段仅在成功权威账户观察处更新，registered_at 首次不变，失败/离线不更新，未知不猜测；AccountClock 可注入。
 
-- HTTP 连接池构造和执行复用固定 rev 的 aster_forge_http，ACME 持有 User-Agent、deadline 和协议重试策略；reqwest 保留响应/错误/状态/header 类型依赖。User-Agent 优先级：本次参数 > 账户显式设置 > 内置默认；register 的显式值写 account.toml，默认值和 config.toml 不写此字段。其他命令覆盖不持久化。
+- HTTP 连接池构造和执行复用明确 registry 版本的 aster_forge_http，ACME 持有 User-Agent、deadline 和协议重试策略；reqwest 保留响应/错误/状态/header 类型依赖。User-Agent 优先级：本次参数 > 账户显式设置 > 内置默认；register 的显式值写 account.toml，默认值和 config.toml 不写此字段。其他命令覆盖不持久化。
 - update-contact 按 RFC 8555 §7.3.2 只 POST contact 到原账户 URL；清空必须显式，成功观察与本地意图分开。rotate-key 按 §7.3.5 双层 JWS，内层新钥 jwk/无 nonce，外层旧钥 kid，URL 一致，200 可空 body。事务租约覆盖双钥持久化、pending/confirmed、对账和本地提交；pending 不自动重放，confirmed 不再发 keyChange。CLI bin 禁用 rustdoc 输出以避免与库同名目录碰撞，二进制名不变。
 
 - cert issue 是完整签发入口，cert list/show 只读/显式刷新，删除根 order 命令；不保留旧 order 参数或别名。默认名称为首个规范化域名，通配符保留；内部 ID 区分世代。恢复同名多候选必须交互选择并显示申请时间，脚本显式 --operation，不猜最新。
@@ -102,3 +102,6 @@ git diff HEAD --check
 - 产物保存 certs/<name>/<UTC-time>-<random8>，current 原子相对 symlink 指向完整版本。四类 PEM 文件为 fullchain/cert/ca/private-key，DER/CSR 是固定内部材料。扫描忽略额外文件/未托管目录，仅对 cert.toml/operation.toml 识别的托管内容校验；删除保留用户额外内容和必要锁 inode，不要求目录封闭。
 
 - 所有已有账户操作先检查本地身份，再进行交互/CA discovery；rotate-key 还需验证原密钥/事务资格。只有 register 可创建新身份。注册成功后 default_account 缺省才补回，不覆盖已有/并发选择；失败或 pending 不设默认。toml_edit 对用户文档的可选字段用 get/get_mut/insert，集中锁内解析/编辑并保留 trivia，不用索引读取缺省值。
+
+- 公共 LocalArgs/HttpArgs 位于 common/args.rs；参数语义以 docs/cli-contract.md 为准。--yes 仅确认当前操作，不隐含 force、accept-terms 或关闭选择；cert resume 可跳过 TXT 确认但继续 DNS 检查，首次自动化申请必须先 yield TXT 指令。account contact 统一 -m，cert show 位置与 --name 互斥。
+- README.md / README.zh.md、CHANGELOG.md / CHANGELOG.zh.md 配对维护；官网为 https://acme.astercosm.com。release 体积配置在根 profile，不在成员声明被 Cargo 忽略的 profile。

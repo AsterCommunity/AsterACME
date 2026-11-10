@@ -17,16 +17,16 @@ publish = false
 [workspace.dependencies]
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 x509-parser = { version = "0.18.1", features = ["verify-aws"] }
-aster_forge_http = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882", default-features = false }
-# Shared wire-enum generation; pin the published Forge revision.
-aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882" }
-aster_forge_macros = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882" }
+aster_forge_http = { version = "=0.1.0-alpha.1", default-features = false }
+# Shared Forge crates use explicit published alpha versions.
+aster_forge_utils = { version = "=0.1.0-alpha.1" }
+aster_forge_macros = { version = "=0.1.0-alpha.1" }
 aster_acme_protocol = { path = "crates/aster_acme_protocol" }
 aster_acme_core = { path = "crates/aster_acme_core" }
 aster_acme = { path = "crates/aster_acme" }
 aster_acme_validation = { path = "crates/aster_acme_validation" }
 aster_acme_cli_storage = { path = "crates/aster_acme_cli_storage" }
-aster-fs = { git = "https://github.com/AsterCommunity/AsterFs", rev = "913ed30598119c184f49f18e5b339fc98869fff2", default-features = false, features = ["sync"] }
+aster-fs = { version = "=0.1.0", default-features = false, features = ["sync"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util", "signal"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
@@ -44,7 +44,7 @@ hickory-resolver = { version = "0.26.3", default-features = false, features = ["
 thiserror = "2"
 url = { version = "2", features = ["serde"] }
 time = { version = "0.3", features = ["serde", "serde-well-known", "formatting", "parsing"] }
-base64 = "0.22"
+base64 = "0.23.1"
 idna = "1"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }

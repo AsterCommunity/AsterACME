@@ -83,7 +83,7 @@ AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at
 
 `AccountService::rotate_key(&dyn AccountRotationStore)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。当前仅生成 ES256/P-256，不支持 CLI 导入新钥或选择其他算法。
 
-`http_client` 通过锁定 revision 的 `aster_forge_http::HttpClient` 构造连接池，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本。`TransportOptions::validate` 在副作用前校验设置。
+`http_client` 通过固定 registry 版本的 `aster_forge_http::HttpClient` 构造连接池，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本。`TransportOptions::validate` 在副作用前校验设置。
 
 ## 手动 DNS-01 签发
 

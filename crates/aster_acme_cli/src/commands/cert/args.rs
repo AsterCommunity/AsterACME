@@ -1,5 +1,6 @@
 //! Certificate issuance and read-only order command arguments.
-use crate::commands::account::args::{HttpArgs, LocalArgs};
+
+use crate::common::args::{HttpArgs, LocalArgs, parse_account_name};
 use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Subcommand)]
@@ -9,7 +10,7 @@ pub(crate) enum CertCommand {
     /// List saved certificate requests without HTTP.
     List {
         /// Restrict the list to one certificate name.
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long,value_parser=parse_certificate_name)]
         name: Option<String>,
         #[command(flatten)]
         local: LocalArgs,
@@ -18,9 +19,13 @@ pub(crate) enum CertCommand {
     #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","timeout"]).multiple(true).requires("verify")))]
     Show {
         /// Certificate name; omit to select interactively.
+        #[arg(value_parser=parse_certificate_name,conflicts_with="named_name")]
         name: Option<String>,
+        /// Local certificate name; equivalent to the positional NAME.
+        #[arg(short='n',long="name",value_name="NAME",conflicts_with="name",value_parser=parse_certificate_name)]
+        named_name: Option<String>,
         /// Exact request ID when the name has multiple generations.
-        #[arg(long)]
+        #[arg(long,value_parser=parse_operation)]
         operation: Option<String>,
         /// Query existing order and authorizations; never submit validation or finalize.
         #[arg(long)]
@@ -44,7 +49,7 @@ pub(crate) enum Challenge {
 #[derive(Args)]
 pub(crate) struct IssueArgs {
     /// Local certificate name; default is the first normalized domain (wildcard retained).
-    #[arg(short = 'n', long, conflicts_with = "resume")]
+    #[arg(short = 'n', long, conflicts_with = "resume",value_parser=parse_certificate_name)]
     pub name: Option<String>,
     /// DNS identifier; repeat for SANs. First is the primary domain.
     #[arg(
@@ -55,16 +60,16 @@ pub(crate) struct IssueArgs {
     )]
     pub domain: Vec<aster_acme::identifier::DnsIdentifier>,
     /// Local account; default is the configured default account.
-    #[arg(short = 'a', long, conflicts_with = "resume")]
+    #[arg(short = 'a', long, conflicts_with = "resume",value_parser=parse_account_name)]
     pub account: Option<String>,
     /// How to validate domain ownership.
     #[arg(short = 'c', long, value_enum, default_value = "manual_dns")]
     pub challenge: Challenge,
     /// Resume by certificate name; select interactively when several requests are unfinished.
-    #[arg(long, value_name = "CERTIFICATE")]
+    #[arg(long, value_name = "CERTIFICATE",value_parser=parse_certificate_name)]
     pub resume: Option<String>,
     /// Exact saved request ID; required for ambiguous noninteractive recovery.
-    #[arg(long, requires = "resume", conflicts_with_all = ["domain", "name", "account"])]
+    #[arg(long, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
     pub operation: Option<String>,
     /// Skip the manual TXT confirmation when resuming; DNS checks still run.
     #[arg(short = 'y', long)]
@@ -92,4 +97,18 @@ impl CertCommand {
 
 fn parse_domain(value: &str) -> Result<aster_acme::identifier::DnsIdentifier, String> {
     aster_acme::identifier::DnsIdentifier::new(value).map_err(|error| error.to_string())
+}
+
+fn parse_certificate_name(value: &str) -> Result<String, String> {
+    aster_acme::issuance::CertificateName::new(value)
+        .map(|name| name.as_str().to_owned())
+        .map_err(|error| error.to_string())
+}
+
+fn parse_operation(value: &str) -> Result<String, String> {
+    if aster_acme_cli_storage::issuance::valid_operation_id(value) {
+        Ok(value.to_owned())
+    } else {
+        Err("Use the complete saved request ID shown by cert show.".into())
+    }
 }

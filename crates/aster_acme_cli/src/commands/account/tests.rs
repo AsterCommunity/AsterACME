@@ -1,6 +1,7 @@
 //! Account command parsing, selection, offline inspection and network boundaries.
 use super::args::AccountCommand;
 use crate::app::{Args, Command};
+use crate::common::args::{HttpArgs, LocalArgs};
 use aster_acme_core::account::{AccountRecordState, DeactivationState};
 use aster_acme_protocol::url::AcmeUrl;
 use clap::Parser;
@@ -35,7 +36,7 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
                 positional_name: Some("personal".into()),
                 ..super::args::NameArgs::default()
             },
-            local: super::args::LocalArgs {
+            local: LocalArgs {
                 data_dir: Some(temp.path().into()),
                 json: true,
             },
@@ -98,10 +99,7 @@ fn list_http_options_require_explicit_verification() {
 
 #[tokio::test]
 async fn list_verification_continues_after_failures_and_returns_each_result() {
-    use super::{
-        args::{HttpArgs, ListArgs, LocalArgs},
-        execute, render,
-    };
+    use super::{args::ListArgs, execute, render};
     use aster_acme::account::AccountKeyStore;
     use aster_acme_cli_storage::CliAccountStore;
     use std::time::Duration;
@@ -252,7 +250,7 @@ fn list_and_deactivate_expose_only_their_own_arguments() {
 
 #[tokio::test]
 async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
-    use super::{args::LocalArgs, execute, render};
+    use super::{execute, render};
     use aster_acme::account::{AccountKeyStore, AccountStore};
     use aster_acme_cli_storage::CliAccountStore;
     use std::time::Duration;
@@ -311,7 +309,7 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
 
 #[tokio::test]
 async fn empty_list_is_actionable_and_stale_default_is_explicit() {
-    use super::{args::LocalArgs, execute, render};
+    use super::{execute, render};
     let temp = tempfile::tempdir().unwrap();
     let report = execute::execute(AccountCommand::List(
         LocalArgs {
@@ -424,7 +422,7 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
 #[tokio::test]
 async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() {
     use super::{
-        args::{AccountArgs, DeactivateArgs, LocalArgs},
+        args::{AccountArgs, DeactivateArgs},
         execute, render,
     };
     use aster_acme::account::{AccountKeyStore, AccountStore};
@@ -545,7 +543,7 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
 }
 
 // Test fixtures use resolved input; rebuild only fields owned by each parser group.
-impl From<super::args::AccountArgs> for super::args::LocalArgs {
+impl From<super::args::AccountArgs> for LocalArgs {
     fn from(args: super::args::AccountArgs) -> Self {
         Self {
             data_dir: args.data_dir,
@@ -565,11 +563,11 @@ impl From<super::args::AccountArgs> for super::args::NetworkArgs {
                 ca: None,
                 ca_directory: args.ca_directory,
             },
-            http: super::args::HttpArgs {
+            http: HttpArgs {
                 user_agent: args.user_agent,
                 timeout: args.timeout,
             },
-            local: super::args::LocalArgs {
+            local: LocalArgs {
                 data_dir: args.data_dir,
                 json: args.json,
             },

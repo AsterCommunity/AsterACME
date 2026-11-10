@@ -1,0 +1,182 @@
+//! Shared storage/output and HTTP flags. Command owners compose only applicable groups.
+
+use std::path::PathBuf;
+
+#[derive(clap::Args, Default)]
+pub(crate) struct LocalArgs {
+    /// Unified state root (default: system directory for com.astercosm.acme).
+    #[arg(long, value_name = "PATH", help_heading = "Storage and output")]
+    pub(crate) data_dir: Option<PathBuf>,
+    /// Structured JSON; disables interactive prompts and terminal styling.
+    #[arg(long, help_heading = "Storage and output")]
+    pub(crate) json: bool,
+}
+
+#[derive(clap::Args, Default)]
+pub(crate) struct HttpArgs {
+    /// HTTP User-Agent override; an explicit value during registration is saved for this account.
+    #[arg(long)]
+    pub(crate) user_agent: Option<String>,
+    /// Whole-request timeout in seconds (1–300); used only for HTTP.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..=300))]
+    pub(crate) timeout: Option<u64>,
+}
+
+/// Account names are local storage identifiers, shared by account targets and cert -a.
+pub(crate) fn parse_account_name(value: &str) -> Result<String, String> {
+    if aster_acme_cli_storage::valid_account_name(value) {
+        Ok(value.to_owned())
+    } else {
+        Err("Use 1–64 ASCII letters, digits, hyphens or underscores for the account name.".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{Args, Command};
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn confirmation_and_bypass_flags_exist_only_on_their_own_commands() {
+        let root = Args::command();
+        for (group, commands) in [
+            (
+                "account",
+                vec![
+                    "list",
+                    "show",
+                    "switch",
+                    "register",
+                    "recover",
+                    "update-contact",
+                    "rotate-key",
+                    "deactivate",
+                    "remove",
+                ],
+            ),
+            ("cert", vec!["issue", "list", "show"]),
+        ] {
+            for name in commands {
+                let command = root
+                    .find_subcommand(group)
+                    .unwrap()
+                    .find_subcommand(name)
+                    .unwrap();
+                let longs = command
+                    .get_arguments()
+                    .filter_map(clap::Arg::get_long)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    longs.contains(&"yes"),
+                    matches!(
+                        (group, name),
+                        (
+                            "account",
+                            "register" | "update-contact" | "rotate-key" | "deactivate" | "remove"
+                        ) | ("cert", "issue")
+                    ),
+                    "{group} {name}"
+                );
+                assert_eq!(longs.contains(&"force"), (group, name) == ("cert", "issue"));
+                assert_eq!(
+                    longs.contains(&"accept-terms"),
+                    (group, name) == ("account", "register")
+                );
+                assert!(longs.contains(&"json") && longs.contains(&"data-dir"));
+                if let Some(yes) = command
+                    .get_arguments()
+                    .find(|arg| arg.get_long() == Some("yes"))
+                {
+                    assert_eq!(yes.get_short(), Some('y'));
+                }
+                assert!(!longs.contains(&"config") && !longs.contains(&"solver"));
+            }
+        }
+    }
+
+    #[test]
+    fn account_contact_and_certificate_target_short_options_are_consistent() {
+        for command in ["register", "update-contact"] {
+            assert!(
+                Args::try_parse_from([
+                    "aster-acme",
+                    "account",
+                    command,
+                    "work",
+                    "-m",
+                    "a@example.com",
+                    "-y"
+                ])
+                .is_ok()
+            );
+        }
+        for target in [
+            vec!["example.com"],
+            vec!["-n", "example.com"],
+            vec!["--name", "example.com"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "show"].into_iter().chain(target))
+                    .is_ok()
+            );
+        }
+        assert!(
+            Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "show",
+                "example.com",
+                "-n",
+                "other.example"
+            ])
+            .is_err()
+        );
+        for invalid in ["../escape", "a/b", ""] {
+            assert!(Args::try_parse_from(["aster-acme", "cert", "show", invalid]).is_err());
+            assert!(
+                Args::try_parse_from([
+                    "aster-acme",
+                    "cert",
+                    "issue",
+                    "-d",
+                    "example.com",
+                    "-a",
+                    invalid
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn json_and_yes_do_not_imply_terms_force_or_other_confirmation() {
+        let parsed = Args::try_parse_from([
+            "aster-acme",
+            "account",
+            "register",
+            "work",
+            "--yes",
+            "--json",
+        ])
+        .unwrap();
+        let Command::Account { command } = parsed.command else {
+            panic!("expected account");
+        };
+        let crate::commands::account::args::AccountCommand::Register(args) = *command else {
+            panic!("expected register");
+        };
+        assert!(args.yes);
+        assert!(!args.accept_terms);
+        let parsed =
+            Args::try_parse_from(["aster-acme", "cert", "issue", "-d", "example.com", "--json"])
+                .unwrap();
+        let Command::Cert { command } = parsed.command else {
+            panic!("expected cert");
+        };
+        let crate::commands::cert::args::CertCommand::Issue(args) = *command else {
+            panic!("expected issue");
+        };
+        assert!(!args.yes);
+        assert!(!args.force);
+    }
+}

@@ -113,7 +113,8 @@ dependencies = [
 [[package]]
 name = "aster-fs"
 version = "0.1.0"
-source = "git+https://github.com/AsterCommunity/AsterFs?rev=913ed30598119c184f49f18e5b339fc98869fff2#913ed30598119c184f49f18e5b339fc98869fff2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8840eeba8f4b07f8cc25188538497fd46ea4cf6b98f8b3bf96da1916ecb8828c"
 dependencies = [
  "libc",
  "rustix",
@@ -130,7 +131,7 @@ dependencies = [
  "aster_forge_utils",
  "async-trait",
  "aws-lc-rs",
- "base64 0.22.1",
+ "base64 0.23.1",
  "hmac",
  "httpdate",
  "idna",
@@ -187,7 +188,7 @@ dependencies = [
  "aster_acme_protocol",
  "aster_forge_utils",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "rcgen",
  "rustix",
  "serde",
@@ -239,8 +240,9 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_http"
-version = "0.1.0"
-source = "git+https://github.com/AsterCommunity/AsterForge?rev=beb3d45faad47ca9e53e3f704e0db57c686a4882#beb3d45faad47ca9e53e3f704e0db57c686a4882"
+version = "0.1.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4cea88976672056f3644ba5716adafcafce11f635a07b20872d9b19a4646b0b"
 dependencies = [
  "futures",
  "http",
@@ -251,13 +253,15 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_macros"
-version = "0.1.0"
-source = "git+https://github.com/AsterCommunity/AsterForge?rev=beb3d45faad47ca9e53e3f704e0db57c686a4882#beb3d45faad47ca9e53e3f704e0db57c686a4882"
+version = "0.1.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e52e778add69bad85d7d0973ac3fbe509b94fc3967325b49a53aedbf466bdde6"
 
 [[package]]
 name = "aster_forge_utils"
-version = "0.1.0"
-source = "git+https://github.com/AsterCommunity/AsterForge?rev=beb3d45faad47ca9e53e3f704e0db57c686a4882#beb3d45faad47ca9e53e3f704e0db57c686a4882"
+version = "0.1.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28a808110e1e8d74090fd14c22a69859f8053cb0b3113362978c78d19e529ed3"
 dependencies = [
  "headers",
  "http",
@@ -486,9 +490,9 @@ dependencies = [
 
 [[package]]
 name = "const-oid"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "convert_case"
@@ -2100,9 +2104,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.15.1"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
+checksum = "102f35f7de7b06d8c61f1cff6592f5253e0dea431c74867aad5dfd70f44663fb"
 dependencies = [
  "web-time",
  "zeroize",

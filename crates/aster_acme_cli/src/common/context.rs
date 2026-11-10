@@ -116,9 +116,10 @@ impl CliContext {
 mod tests {
     use super::*;
     use crate::commands::account::{
-        args::{AccountCommand, CaArgs, HttpArgs, LocalArgs, NameArgs, RegisterArgs},
+        args::{AccountCommand, CaArgs, NameArgs, RegisterArgs},
         execute,
     };
+    use crate::common::args::{HttpArgs, LocalArgs};
     use aster_acme::account::{AccountKeyStore, AccountStore};
 
     #[tokio::test]

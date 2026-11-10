@@ -46,3 +46,9 @@ cargo doc --workspace --no-deps --locked
 账户/config 回归覆盖七个已有账户命令缺失身份时在确认/HTTP/建账户目录前拒绝、结构化 Hint 包含 --name/--data-dir、切换缺省 default_account 安全插入、重复切换不变、注册成功后条件补回默认、移除默认再补回、已有并发选择不覆盖、缺省 contact 写入、注释/格式保留、未知版本/错误表类型/损坏文件拒绝且文本不改、并发联系人/默认更新。toml_edit 用户文档读改写集中到同一个锁内 edit helper，可选字段用 get/insert，不用索引读取缺失字段。
 
 密码学后端统一 rustls + AWS-LC；独立公开标量测试钥和外部 cryptography 生成的 PKCS#8/ES256 签名验证标准互操作，HS256/JWK/换钥/签发全量回归通过。依赖统计（同一 macOS target normal+build 口径）由 277 降到 258，Cargo.lock 全平台/测试条目由 355 到 334。没有 native-tls/openssl-sys，CI 增加 TLS 后端守卫；Cargo.lock 中平台根证书探测组件不等于 OpenSSL TLS。
+
+
+本轮参数和依赖验证：200 项 workspace 测试通过（在同一候选版本上运行），包括 cert -y/--yes 的短/长参数、终端确认跳过、DNS checker 仍调用、force 不被隐含、首次 yes+force 仍返回待办、取消/期限，以及全部现有命令确认/强制/条款选项的作用域矩阵。common/args 共享参数、-m 联系人、cert show 位置/命名目标互斥与非法输入边界均覆盖。Forge/AsterFs registry 切换与 base64 0.23.1 后重跑签名、EAB、CSR、换钥、签发、恢复与存储测试；测试不访问公网 CA。
+
+
+Registry/参数与 release 收尾：200 项 workspace 测试和严格 Clippy 通过。以 opt-level=z、lto=true、codegen-units=1、debug=0、panic=unwind、strip=debuginfo 构建实际 macOS arm64 release CLI 成功；version --json 确认 profile=release，nm 确认函数符号保留。二进制约 7.6 MB（7,605,024 字节，此构建/平台样本，不作为跨平台体积保证）。--help 和 cert issue --help 的 release 进程确认产品版本与 -y/--yes；本轮仍无公网 CA mutation。
