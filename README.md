@@ -2,7 +2,7 @@
 
 A Rust ACME client for automated certificate issuance and lifecycle management.
 
-> Protocol states, input types, and solver contracts are implemented. Certificate operations are not implemented yet.
+> Account registration, listing, recovery, inspection, deactivation, and local removal are implemented, alongside protocol states and solver contracts. Certificate issuance is not implemented yet.
 
 ## Direction
 
@@ -15,7 +15,8 @@ These are planned capabilities, not currently available features.
 
 ## Documentation
 
-- Crate guides: [core](crates/aster-acme-core/README.md), [client](crates/aster-acme/README.md), [DNS](crates/aster-acme-dns/README.md), [CLI](crates/aster-acme-cli/README.md)
+- Crate guides: [core](crates/aster_acme_core/README.md), [protocol](crates/aster_acme_protocol/README.md), [client](crates/aster_acme/README.md), [DNS](crates/aster_acme_dns/README.md), [CLI](crates/aster_acme_cli/README.md), [CLI storage](crates/aster_acme_cli_storage/README.md)
+- [Account protocol tests and staging evidence (中文)](docs/account-testing.md)
 - [Architecture design (中文)](docs/architecture.md)
 - [ACME RFC reference and implementation considerations (中文)](docs/rfc-reference.md)
 
@@ -44,7 +45,7 @@ cargo fmt --all --check
 cargo check --workspace --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo run -p aster-acme-cli -- --help
+cargo run -p aster_acme_cli -- --help
 ```
 
 All member dependencies must inherit from `[workspace.dependencies]` using

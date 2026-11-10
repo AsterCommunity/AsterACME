@@ -1,0 +1,18 @@
+[package]
+name = "aster_acme_dns"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DNS-01 challenge automation for AsterACME."
+publish.workspace = true
+readme = "README.md"
+
+[dependencies]
+aster_acme.workspace = true
+aster_acme_core.workspace = true
+
+[lints]
+workspace = true

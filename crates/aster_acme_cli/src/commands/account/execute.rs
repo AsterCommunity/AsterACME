@@ -1,0 +1,488 @@
+//! Account execution injects storage and signers; offline reads never construct HTTP clients.
+
+use super::{
+    args::{AccountArgs, AccountCommand},
+    report::{AccountReport, LocalAccountReport},
+};
+use crate::common::{
+    context::{CliContext, CliSettings},
+    error::CliResult,
+};
+use aster_acme::{
+    account::{AccountError, AccountKeyStore, AccountService, AccountStore, RegistrationOptions},
+    crypto::{AccountSigner, ExternalAccountCredentials},
+    transport::AcmeClient,
+};
+use std::sync::Arc;
+
+enum Operation {
+    Register,
+    Deactivate,
+    Recover,
+    Show { verify: bool },
+    Switch,
+    Remove,
+}
+
+impl Operation {
+    fn creates_key(&self) -> bool {
+        match self {
+            Self::Register => true,
+            Self::Recover | Self::Deactivate | Self::Show { .. } | Self::Switch | Self::Remove => {
+                false
+            }
+        }
+    }
+}
+
+pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport> {
+    if let AccountCommand::List(options) = command {
+        return list(options).await;
+    }
+    let (mut options, operation) = match command {
+        AccountCommand::Remove(options) => (AccountArgs::from(options), Operation::Remove),
+        AccountCommand::List(_) => return Err("List command was not dispatched.".into()),
+        AccountCommand::Deactivate(options) => (AccountArgs::from(options), Operation::Deactivate),
+        AccountCommand::Register(options) => (AccountArgs::from(options), Operation::Register),
+        AccountCommand::Recover(options) => (AccountArgs::from(options), Operation::Recover),
+        AccountCommand::Show { options, verify } => {
+            (AccountArgs::from(options), Operation::Show { verify })
+        }
+        AccountCommand::Switch(options) => (AccountArgs::from(options), Operation::Switch),
+    };
+    let settings = CliSettings::load(&options).await?;
+    let interactive = crate::common::terminal::interactive(options.json);
+    if interactive && options.name.is_none() {
+        let accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
+        let mode = match operation {
+            Operation::Register => super::selection::Mode::Register,
+            Operation::Recover | Operation::Remove | Operation::Show { .. } => {
+                super::selection::Mode::Existing
+            }
+            Operation::Deactivate | Operation::Switch => super::selection::Mode::Registered,
+        };
+        super::selection::resolve(
+            &mut options,
+            mode,
+            &accounts,
+            settings.config.default_account.as_deref(),
+            crate::ca::resolve(settings.config.ca, settings.config.ca_directory.as_deref())?,
+            true,
+            &mut super::selection::TerminalSelection,
+        )?;
+    }
+    if matches!(operation, Operation::Switch) && options.name.is_none() {
+        return Err(
+            "Specify account switch <NAME> or --name <NAME>, or use an interactive terminal to select an account."
+                .into(),
+        );
+    }
+    let context = settings.account(&options).await?;
+    if matches!(operation, Operation::Remove) {
+        return remove(context, &options).await;
+    }
+    // Check before loading/creating keys, changing contacts, or constructing HTTP.
+    // Both registered accounts and interrupted pending identities require explicit reuse.
+    let reused =
+        matches!(operation, Operation::Register) && context.store.directory().await?.is_some();
+    if reused {
+        crate::common::terminal::confirm_write(
+            &format!(
+                "Local account '{}' already exists for {}. Reuse its saved key and resume/query that account? This will not create a separate identity.",
+                crate::common::terminal::safe(&context.name),
+                crate::common::terminal::safe(context.directory.as_str()),
+            ),
+            options.yes,
+            options.json,
+        )?;
+    }
+    if let Operation::Switch = operation {
+        return switch(context).await;
+    }
+    let name = context.name.clone();
+    let signer = context
+        .store
+        .signer(&context.directory, &name, operation.creates_key())
+        .await?;
+    if matches!(operation, Operation::Deactivate) {
+        return deactivate(context, signer, options).await;
+    }
+    match operation {
+        Operation::Show { verify: false } => local(&context, signer.as_ref(), name).await,
+        operation => remote(context, signer, name, options, operation, reused).await,
+    }
+}
+
+/// Verification is sequential and bounded per request. Each failure is a row result,
+/// so one unavailable CA does not discard the rest of the local account inventory.
+async fn list(args: super::args::ListArgs) -> CliResult<AccountReport> {
+    let options = AccountArgs {
+        user_agent: args.http.user_agent,
+        timeout: args.http.timeout,
+        ..args.local.into()
+    };
+    let settings = CliSettings::load(&options).await?;
+    let mut accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
+    let verification = if args.verify {
+        let mut results = Vec::with_capacity(accounts.len());
+        for account in &accounts {
+            let selected = AccountArgs {
+                name: Some(account.name.clone()),
+                ..AccountArgs::default()
+            };
+            let result = async {
+                let context = settings.clone().account(&selected).await?;
+                let signer = context
+                    .store
+                    .signer(&context.directory, &context.name, false)
+                    .await?;
+                let transport = context.transport_options(&options)?;
+                let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+                Ok::<_, Box<dyn std::error::Error>>(
+                    AccountService::new(client, context.store)
+                        .inspect(signer.as_ref())
+                        .await?,
+                )
+            }
+            .await;
+            let (status, error) = match result {
+                Ok(account) => (Some(account.status), None),
+                Err(error) => (
+                    None,
+                    Some(crate::common::error::diagnostic(error.as_ref()).0),
+                ),
+            };
+            results.push(super::report::AccountVerification {
+                name: account.name.clone(),
+                status,
+                error,
+            });
+        }
+        // Reflect successful observations in the same inventory rather than stale statuses.
+        accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
+        Some(results)
+    } else {
+        None
+    };
+    Ok(AccountReport::List {
+        accounts,
+        default: settings
+            .config
+            .default_account
+            .unwrap_or_else(|| "default".into()),
+        verification,
+    })
+}
+
+/// Local removal deliberately never initializes HTTP or decodes the private key.
+async fn remove(context: CliContext, options: &AccountArgs) -> CliResult<AccountReport> {
+    if context.store.directory().await?.is_none() {
+        return Err("No local account record exists for this name.".into());
+    }
+    let root = context
+        .config_path
+        .parent()
+        .ok_or("Data directory is missing.")?;
+    crate::common::terminal::confirm_action(
+        &format!(
+            "Remove local account\n  Name: {}\n  CA: {}\n  Directory: {}\n\nLocal metadata and the account private key will be deleted.\nThis does not deactivate the account at the CA or revoke certificates.\nWithout a backup of this key, access to the CA account will be lost.",
+            crate::common::terminal::safe(&context.name),
+            crate::common::terminal::safe(context.directory.as_str()),
+            crate::common::terminal::safe(
+                &root
+                    .join("accounts")
+                    .join(&context.name)
+                    .display()
+                    .to_string()
+            ),
+        ),
+        "Remove this local account?",
+        options.yes,
+        options.json,
+    )?;
+    context.store.remove().await?;
+    crate::config::clear_removed_default(context.config_path, context.name.clone()).await
+        .map_err(|error| format!("Local account was removed, but default-account configuration cleanup failed: {error}"))?;
+    Ok(AccountReport::Removed {
+        name: context.name,
+        directory: context.directory,
+    })
+}
+
+/// Confirm from local metadata before discovery, then let the protocol service persist
+/// its intent under the operation lock. No unknown account URL is recovered implicitly.
+async fn deactivate(
+    context: CliContext,
+    signer: Arc<dyn AccountSigner>,
+    options: AccountArgs,
+) -> CliResult<AccountReport> {
+    let thumbprint = signer.jwk()?.thumbprint()?;
+    let record = context
+        .store
+        .load(&context.directory, &thumbprint)
+        .await?
+        .ok_or(AccountError::AccountDoesNotExist)?;
+    let account_url = record
+        .account_url
+        .clone()
+        .ok_or(AccountError::AccountDoesNotExist)?;
+    match record
+        .action(aster_acme_core::account::AccountOperation::Deactivate)
+        .map_err(AccountError::from)?
+    {
+        aster_acme_core::account::AccountAction::AlreadyDeactivated => {
+            return Ok(AccountReport::Deactivated {
+                name: context.name,
+                verified: false,
+                account: aster_acme::account::AcmeAccount {
+                    times: record.times,
+                    account_id: record.account_id,
+                    directory_url: context.directory,
+                    account_url,
+                    status: aster_acme_core::protocol::AccountStatus::Deactivated,
+                    contacts: record.server_contacts.unwrap_or_default(),
+                    recovered: false,
+                },
+            });
+        }
+        aster_acme_core::account::AccountAction::SendDeactivation => {}
+        aster_acme_core::account::AccountAction::Inspect
+        | aster_acme_core::account::AccountAction::LookupExisting
+        | aster_acme_core::account::AccountAction::Select => {
+            return Err(AccountError::InvalidResponse.into());
+        }
+    }
+    crate::common::terminal::confirm_action(
+        &format!(
+            "Permanently deactivate account\n  Name: {}\n  CA: {}\n  Account URL: {}\n\nThis cannot be undone.\nThe account key will no longer authorize ACME requests.\nLocal key and metadata will be retained.",
+            crate::common::terminal::safe(&context.name),
+            crate::common::terminal::safe(context.directory.as_str()),
+            crate::common::terminal::safe(account_url.as_str()),
+        ),
+        "Deactivate this account?",
+        options.yes,
+        options.json,
+    )?;
+    let transport = context.transport_options(&options)?;
+    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    let account = AccountService::new(client, context.store)
+        .deactivate(signer.as_ref())
+        .await?;
+    Ok(AccountReport::Deactivated {
+        name: context.name,
+        account,
+        verified: true,
+    })
+}
+
+/// Switching validates a registered local identity and edits only the shared configuration.
+async fn switch(context: CliContext) -> CliResult<AccountReport> {
+    let target = context.name.clone();
+    let signer = context
+        .store
+        .signer(&context.directory, &target, false)
+        .await?;
+    let thumbprint = signer.jwk()?.thumbprint()?;
+    let _lease = context
+        .store
+        .lock_account(&context.directory, &thumbprint)
+        .await?;
+    let record = context
+        .store
+        .load(&context.directory, &thumbprint)
+        .await?
+        .ok_or("No local registration record exists.")?;
+    if !record.is_usable() {
+        return Err("Switch requires a registered local account with no pending deactivation or inactive status.".into());
+    }
+    crate::config::persist(context.config_path, Some(target.clone()), None).await?;
+    Ok(AccountReport::Switched {
+        name: target,
+        directory: context.directory,
+    })
+}
+
+/// Read a consistent local snapshot; no discovery, recovery, or metadata refresh occurs.
+async fn local(
+    context: &CliContext,
+    signer: &dyn AccountSigner,
+    name: String,
+) -> CliResult<AccountReport> {
+    let thumbprint = signer.jwk()?.thumbprint()?;
+    let _lease = context
+        .store
+        .lock_account(&context.directory, &thumbprint)
+        .await?;
+    let record = context.store.load(&context.directory, &thumbprint).await?;
+    if let Some(record) = &record
+        && (record.directory_url != context.directory || record.key_thumbprint != thumbprint)
+    {
+        return Err(AccountError::IdentityMismatch.into());
+    }
+    Ok(AccountReport::Local(LocalAccountReport {
+        name,
+        directory: context.directory.clone(),
+        key_thumbprint: thumbprint,
+        record,
+    }))
+}
+
+async fn remote(
+    context: CliContext,
+    signer: Arc<dyn AccountSigner>,
+    name: String,
+    options: AccountArgs,
+    operation: Operation,
+    reused: bool,
+) -> CliResult<AccountReport> {
+    let transport = context.transport_options(&options)?;
+    let interactive = crate::common::terminal::interactive(options.json);
+    let mut persist_contacts = !options.contact.is_empty();
+    let thumbprint = signer.jwk()?.thumbprint()?;
+    let saved = context.store.load(&context.directory, &thumbprint).await?;
+    if matches!(operation, Operation::Register)
+        && let Some(saved) = &saved
+    {
+        saved
+            .action(aster_acme_core::account::AccountOperation::Register)
+            .map_err(AccountError::from)?;
+    }
+    let mut registration = match operation {
+        Operation::Register => Some(registration_options(
+            options,
+            context.config.contact.clone(),
+        )?),
+        Operation::Recover
+        | Operation::Deactivate
+        | Operation::Show { .. }
+        | Operation::Switch
+        | Operation::Remove => None,
+    };
+    if let Some(registration) = &mut registration {
+        // Existing local input is preferable to asking again when no global default exists.
+        if registration.contacts.is_empty()
+            && let Some(saved) = &saved
+        {
+            registration.contacts.clone_from(&saved.contacts);
+        }
+        persist_contacts |= super::interaction::contact(
+            registration,
+            interactive,
+            &mut super::interaction::TerminalPrompts,
+        )?;
+    }
+    save_registration_intent(
+        &context,
+        signer.as_ref(),
+        registration.as_ref(),
+        persist_contacts,
+    )
+    .await?;
+    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    if let Some(registration) = &mut registration {
+        super::interaction::terms(
+            registration,
+            client.directory().meta.terms_of_service.as_ref(),
+            saved
+                .as_ref()
+                .and_then(|record| record.accepted_terms_url.as_ref()),
+            interactive,
+            &mut super::interaction::TerminalPrompts,
+        )?;
+    }
+    let service = AccountService::new(client, context.store);
+    let account = match operation {
+        Operation::Register => {
+            service
+                .register_or_recover(
+                    signer.as_ref(),
+                    registration.ok_or("Missing registration options.")?,
+                )
+                .await?
+        }
+        Operation::Recover => service.recover(signer.as_ref()).await?,
+        Operation::Show { verify: true } => service.inspect(signer.as_ref()).await?,
+        Operation::Show { verify: false }
+        | Operation::Deactivate
+        | Operation::Switch
+        | Operation::Remove => {
+            return Err("Local command was dispatched to the network executor.".into());
+        }
+    };
+    let action = match operation {
+        Operation::Register => super::report::RemoteAction::Register,
+        Operation::Recover => super::report::RemoteAction::Recover,
+        Operation::Show { .. } => super::report::RemoteAction::Show,
+        Operation::Deactivate | Operation::Switch | Operation::Remove => {
+            return Err("Unexpected remote action.".into());
+        }
+    };
+    Ok(AccountReport::Remote {
+        action,
+        name,
+        account,
+        reused,
+    })
+}
+
+/// Persist local input before discovery so transient HTTP failures cannot lose it.
+/// This does not claim the CA has accepted a contact or changed an existing account.
+async fn save_registration_intent(
+    context: &CliContext,
+    signer: &dyn AccountSigner,
+    registration: Option<&RegistrationOptions>,
+    persist_contacts: bool,
+) -> CliResult<()> {
+    if persist_contacts && let Some(registration) = registration {
+        crate::config::persist(
+            context.config_path.clone(),
+            None,
+            Some(registration.contacts.clone()),
+        )
+        .await?;
+    }
+    if let Some(registration) = registration
+        && !registration.contacts.is_empty()
+    {
+        // Discovery failure must not lose local input; this is not CA acceptance.
+        let thumbprint = signer.jwk()?.thumbprint()?;
+        let _lease = context
+            .store
+            .lock_account(&context.directory, &thumbprint)
+            .await?;
+        let mut record = context
+            .store
+            .load(&context.directory, &thumbprint)
+            .await?
+            .ok_or("Local account identity record is missing.")?;
+        record.contacts.clone_from(&registration.contacts);
+        context.store.save(&record).await?;
+    }
+    Ok(())
+}
+
+pub(super) fn registration_options(
+    options: AccountArgs,
+    default_contacts: Vec<String>,
+) -> CliResult<RegistrationOptions> {
+    let external_account = match (options.eab_kid, options.eab_key_file) {
+        (Some(kid), Some(path)) => {
+            if std::fs::metadata(&path)?.len() > 8192 {
+                return Err("EAB key file exceeds 8 KiB.".into());
+            }
+            let secret = zeroize::Zeroizing::new(std::fs::read_to_string(path)?);
+            Some(ExternalAccountCredentials::new(&kid, secret.trim())?)
+        }
+        (None, None) => None,
+        _ => return Err("EAB requires both --eab-kid and --eab-key-file.".into()),
+    };
+    Ok(RegistrationOptions {
+        contacts: super::contact::normalize(if options.contact.is_empty() {
+            default_contacts
+        } else {
+            options.contact
+        })?,
+        terms_accepted: options.accept_terms,
+        external_account,
+    })
+}

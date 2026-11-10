@@ -1,2 +1,4 @@
 /target/
+/data/
+*.pk8
 .DS_Store

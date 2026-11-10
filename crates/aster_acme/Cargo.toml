@@ -1,0 +1,40 @@
+[package]
+name = "aster_acme"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embeddable ACME client and certificate lifecycle orchestration."
+publish.workspace = true
+readme = "README.md"
+
+[dependencies]
+time.workspace = true
+aster_acme_protocol.workspace = true
+aster_forge_utils.workspace = true
+aster_forge_macros.workspace = true
+aster_acme_core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+base64.workspace = true
+sha2.workspace = true
+idna.workspace = true
+p256.workspace = true
+hmac.workspace = true
+httpdate.workspace = true
+percent-encoding.workspace = true
+zeroize.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,44 @@
+[package]
+name = "aster_acme_cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for AsterACME."
+publish.workspace = true
+readme = "README.md"
+
+[[bin]]
+name = "aster-acme"
+path = "src/main.rs"
+
+[dependencies]
+aster_acme_protocol.workspace = true
+aster_acme.workspace = true
+aster_acme_core.workspace = true
+aster_acme_cli_storage.workspace = true
+clap.workspace = true
+directories.workspace = true
+inquire.workspace = true
+unicode-width.workspace = true
+time.workspace = true
+httpdate.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zeroize.workspace = true
+
+[build-dependencies]
+time.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
