@@ -1,6 +1,6 @@
 # AsterACME 架构设计
 
-状态：架构基线；状态决策、上层类型与 solver 契约已实现，网络签发尚未实现。日期：2026-11-10。
+状态：架构基线；账户与手动 DNS-01 签发、持久化恢复及只读订单查看已实现；自动 DNS provider、续期、吊销和部署仍为设计目标。日期：2026-11-11。
 
 规范依据见 [ACME RFC 参考](rfc-reference.md)。本文确定职责、依赖方向与可靠性契约；Rust 代码均为接口示意，不承诺最终签名。
 
@@ -37,11 +37,11 @@ flowchart TD
 | `aster_acme_core` | 资源状态枚举、本地流程阶段及纯状态推进决策 | 验证方法、材料计算、网络、磁盘、供应商凭据、调度 |
 | `aster_acme_protocol` | 线上请求/响应、精确资源 URL、directory 发现模型、problem、JWS/header | HTTP 执行、签名算法、持久化、命令输出 DTO |
 | `aster_acme` | 标识符、验证策略与材料、公共高层 API、异步编排、ACME transport、solver/存储/密钥接口、续期策略 | DNS 供应商实现、命令解析 |
-| `aster_acme_dns` | DNS-01 solver、zone 路由、委托解析、传播检查、provider 适配 | ACME 订单推进、证书部署 |
+| `aster_acme_validation` | DNS-01 solver、zone 路由、委托解析、传播检查、provider 适配 | ACME 订单推进、证书部署 |
 | `aster_acme_cli_storage` | CLI 账户元数据、PKCS#8 文件、锁、权限和原子持久化；实现上层 dyn 契约 | 协议、core、DNS 验证及命令解析 |
 | `aster_acme_cli` | 参数与配置、适配器组装、进度显示、证书输出、部署 hook、退出码 | 协议状态机、challenge 重试与清理算法 |
 
-`aster_acme_dns` 依赖 `aster_acme` 的 solver 契约；`aster_acme` 不反向依赖 DNS 实现，由应用注入 solver。HTTP-01 和后续 TLS-ALPN-01 可先作为 `aster_acme` 内模块，存在独立依赖或复用需求后再拆分。
+`aster_acme_validation` 依赖 `aster_acme` 的 solver 契约；`aster_acme` 不反向依赖 DNS 实现，由应用注入 solver。HTTP-01 和后续 TLS-ALPN-01 可先作为 `aster_acme` 内模块，存在独立依赖或复用需求后再拆分。
 
 ## 3. Core：资源状态机与客户端流程分离
 
@@ -123,7 +123,7 @@ trait ChallengeSolver {
 
 ### DNS-01
 
-- 优先复用 `dns-orchestrator-provider`，由适配器隔离其类型和错误，避免其公共类型成为整个库的 API 契约。
+- 自动 DNS provider 按需复制并改造 dns-orchestrator 代码，保留原许可，不直接依赖已废弃的 crate。
 - 使用最长匹配的显式 zone/provider 路由；自动发现需处理分页与真实 zone 边界。
 - CNAME/NS 委托限定在配置授权范围，并限制追踪深度、检测循环。
 - 同一名称多个 TXT 值必须共存；裸域名与通配符授权可能共享名称。
@@ -206,7 +206,7 @@ CLI 初期提供可由 systemd timer/cron 调用的单次续期检查，库暴�
 
 ## 12. 依赖与工程约束
 
-采用 Tokio、reqwest + rustls、Serde/serde_json、tracing、clap、toml 和 Hickory。reqwest 关闭默认 feature，仅启用 rustls 与 JSON；不默认开启 HTTP/2、系统代理、压缩和 cookies。TLS 使用稳定 rustls 0.23 系列，与 reqwest 的后端保持一致，不采用 0.24 开发版。
+采用 Tokio、reqwest + rustls、Serde/serde_json、tracing、clap、toml 和 Hickory。ACME 直接声明的 reqwest 关闭默认 feature，仅启用 rustls 与 JSON；固定 Forge HTTP 当前会合并开启 HTTP/2、系统代理、charset、form、multipart 等 feature，下游不能关闭上游已启用 feature。没有 native-tls/OpenSSL 传输。TLS 使用稳定 rustls 0.23 系列，与 reqwest 的后端保持一致，不采用 0.24 开发版。
 
 根 `Cargo.toml` 的 `[workspace.dependencies]` 是所有依赖版本和 feature 策略的唯一事实源。成员 crate 的普通、开发、构建及 target 专用依赖都必须使用 `workspace = true`，不得自行声明 version、path、git 或额外 feature；新增能力先修改根配置。依赖仅在实际使用时由成员领取，根表中的预选依赖不代表已编译或已验证集成。提交 Cargo.lock 固定 CLI 的完整解析结果。
 
@@ -218,14 +218,14 @@ Core 保持无网络和运行时依赖。其他基础组件包括 thiserror、ur
 
 DNSO 不作为 crate 依赖。按需迁入 provider 源码，保留原 MIT 版权与许可声明，重新核验 API 签名、分页、TXT 多值、错误与重试语义，并适配统一 reqwest 客户端。原项目不作为维护和正确性的保证。
 
-当前骨架使用 stable Rust channel、edition 2024，manifest 的最低版本暂设 1.99，成员暂不发布；MSRV 尚未作跨版本验证。CLI 已提供账户注册、找回和查看，证书申请命令尚未实现。
+当前骨架使用 stable Rust channel、edition 2024，manifest 的最低版本暂设 1.99，成员暂不发布；MSRV 尚未作跨版本验证。CLI 已提供账户管理、manual DNS-01 的 cert issue / resume 与只读 cert list/show。
 
 
 ## 13. 首批类型实现状态
 
 已实现 core 资源状态与纯动作决策，上层 DNS 标识符、challenge 类型/策略/材料及 solver trait。`ChallengeSolver` 用 async-trait 提供可注入的 dyn 接口；执行上下文包含取消令牌和单次调用 deadline，但实际 I/O 中的取消与期限执行仍由 solver 实现。恢复句柄带非零 schema 版本，未知方法与状态均保留 wire 文本但不进入执行。
 
-字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。账户网络交互及持久化恢复已实现；尚未实现具体 challenge solver 和证书申请编排，不能据此声称已有端到端证书签发能力。
+字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。账户网络交互及持久化恢复已实现；manual DNS-01 的完整签发链路已有 loopback CA 验收；HTTP/TLS 与自动 DNS 发布尚未实现，真实 staging 签发尚未验收。
 
 Forge 宏依赖已固定到远端 master 提交 `beb3d45faad47ca9e53e3f704e0db57c686a4882`；成员仅从根 workspace 继承，不保留本地 path 或 patch。
 
@@ -270,7 +270,7 @@ CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），regis
 
 账户生命周期纯规则已移入 core::account：AccountRecordState、DeactivationState、AccountOperation、AccountAction 及 AccountStateError。account_action 为注册返回 LookupExisting/Inspect、停用返回 SendDeactivation/AlreadyDeactivated、默认账户选择返回 Select；pending 要求对账，inactive/unknown 拒绝活跃操作。观察状态转换由 observed_deactivation 决定。客户端与 CLI 使用相同入口，只有协议执行/存储在服务中。
 
-账户时间采样属于服务的 AccountClock（dyn 注入），成功应用 CA 账户对象时一次采样归一 UTC，集中更新 AccountTimes。registered_at 首次本地确认注册后保持；last_status_at 与 last_used_at 随成功观察更新。注册/找回/查询/停用共享该入口，失败/离线/重复本地结果不会推进时间。序列化为 RFC3339，列表按 UTC 分钟显示，详情/JSON保留精度，未知为文本 — / JSON null / TOML 省略。
+账户时间采样属于服务的 AccountClock（dyn 注入），成功应用 CA 账户对象时一次采样归一 UTC，集中更新 AccountTimes。registered_at 首次本地确认注册后保持；last_status_at 与 last_used_at 随成功观察更新。注册/找回/查询/停用共享该入口，失败/离线/重复本地结果不会推进时间。序列化为 RFC3339，所有人类时间按 YYYY-MM-DD HH:MM:SS UTC 显示，JSON/TOML 保留 RFC3339 精度，未知为文本 — / JSON null / TOML 省略。
 
 ## 账户联系人与密钥轮换
 
@@ -283,3 +283,32 @@ Core 纯决策返回 SendKeyChange / ReconcileKeyChange / FinalizeKeyChange。�
 恢复是本项目持久化策略，不是额外的 ACME 线上协议：Pending 仅以已存新钥向原账户 URL 做 POST-as-GET，成功证明新钥已被 CA 接受后提交；401/403、超时或非法响应保留待对账，不据此改用旧钥重放。合法 ACME 400/409 problem 明确拒绝当前请求时清除 pending，保留原身份，不采纳冲突 Location 作为本账户 URL。无合法 problem 的错误及 5xx 保守保留 pending；无法证明结果时需联系 CA，不能自动猜测。Confirmed 只完成本地提交，即使当前 directory 不再提供 keyChange 也不再发送轮换。badNonce 只有限重签外层，始终使用相同内层和持久化新钥。
 
 账户 User-Agent 是本地 HTTP 偏好，不是 RFC 账户对象字段。只有 register 显式传入的值保存到 account.toml；优先级为本次参数、账户设置、内置默认值。默认值及全局配置不落盘此字段，其他网络命令的显式参数不改账户偏好。Forge HTTP 统一连接池构造和执行，产品保留超时、UA、JWS 及错误策略；reqwest 作为共享响应/错误/header 类型依赖仍需保留。
+
+## 当前签发链路（2026-11-11）
+
+用户写入口为 `cert issue`，一次表达完整证书需求；cert list/show 只读及显式 --verify，根 order 命令删除。内部 Order/Authorization/Challenge 由 protocol 模型和 core 动作推进，不把 newOrder/finalize 分成用户必须手动调用的命令。网络路径全部来自 directory、Location 或资源字段。
+
+本地名称默认首个规范化域名，可用 -n 指定。名称不是操作 ID：certs/<name>/<UTC-time>-<random8> 保存多轮申请，created_at 是本地请求时间。resume <name> 唯一候选直接恢复，多候选交互仅显示主域名、时间和状态；JSON/无终端多候选要求 --operation。没有候选不创建申请，过期候选可见但不重新验证。OrderStatus 不增加 expired wire 变体；订单 expires、授权 expires、证书 notAfter 单独保存和显示。pending/valid 订单与 valid 授权按 RFC 检查必需 expires；未知状态不执行。
+
+IssueService 注入 `dyn IssueSession` 与 `dyn DnsReadiness`。当前 solver_id 固定 manual_dns，人工 TXT 发布/确认由 CLI 负责，DNS crate 只检查可见性；通用自动 ChallengeSolver 的 provider 发布/receipt 生命周期尚待实现，不将人工操作伪装成自动 DNS provider。force 只跳过本地查询，不跳过用户操作、CA 验证、状态机、有效期或证书检查。首次非交互执行总是 yield action_required，用户添加 TXT 后显式 resume；同名 TXT 多值一起准备才允许通知任一 challenge。
+
+newOrder 的持久化创建意图先于 POST；201 的 Location 先存，再解析 body。无 Location 的响应丢失没有标准幂等恢复路径，保留 uncertain，不自动再下单。通知 challenge 使用 `{}`，查询使用零字节 payload。SubmissionState 保存于通知/finalize 前，core 根据 Submitted + pending/ready 返回轮询动作，不能按未变化的远端状态重复提交。badNonce 是 transport 的有限重签例外，保持同一 payload。网络超时/429/5xx 本轮不自动重放；可恢复查询失败由用户显式 resume，服务端 Retry-After 保留在下一次轮询时间中。
+
+轮询是 Tokio 前台执行，不启动 daemon：单请求 timeout、整体 wait-timeout 与取消边界分别控制请求和执行；CA Retry-After 优先、缺省 2 秒，最小 100ms 防止忙循环。read-only verify 不触发发布/通知/finalize。授权状态与订单状态允许跳跃观察，valid 授权复用，不重新准备；订单 ready/processing/valid 优先于缓存授权观察。真实公网授权结果始终以 CA 为准，系统递归 DNS 检查不证明全球传播。
+
+固定 P-256 证书私钥与 CSR 在首次网络提交前落盘，与账户私钥独立；material.sha256 绑定原始字节，恢复不重签 CSR。fullchain 完成解析、公钥/SAN/有效期/相邻签名检查后落盘，再原子切换 cert.toml.current，最后标记 Completed。中途失败保留旧 current 或已验证的新版本；Downloading 可重新下载同一订单产物，不重下单。手动清理作为独立待办返回，不执行删除。历史世代暂不自动回收。
+
+各 crate 的 package.version 独立声明，workspace 只继承作者、许可、edition 等公共元数据；依赖版本/source/features 仍唯一归根 workspace.dependencies。当前开发 Forge/AsterFs 继续固定 Git rev；独立 0.0.1 发布准备 worktree 与签发代码分开，发布暂停，不视为已上传 registry。
+
+IssueSession.record 异步读取最新 durable 状态，不返回创建会话时的静态快照。IssueService::run/inspect 使用独占可变借用阻止同一 session 的并发推进；文件适配器另以每会话 I/O 队列序列化读写，OwnedMutexGuard 与文件租约一起进入阻塞任务。被取消的 future 不释放已经启动的持久化许可，后续同会话恢复读取不会越过前次写入。支持同一嵌入会话重复等待人工操作，也支持丢弃会话后跨进程恢复。
+
+
+## 最终用户入口与展示契约
+
+验证实现 crate 改为 aster_acme_validation，按 dns01/visibility 等方法模块组织；CLI 只显示 -c manual_dns，wire DNS-01 不作为第二个重复选项。未支持 challenge 的扩展字段完整保留：RFC 8555 §7.1.5 的公共结构不要求 token，DNS-01 token 按 §8.4 仅在选中执行时严格检查。已实测 staging 返回无 token 的 dns-persist-01，它仍为 draft-ietf-acme-dns-persist-02；本客户端不执行该草案方法，不影响同授权正常 DNS-01。
+
+通用展示拆为 common/output、time、log、table、terminal，分别负责样式、UTC 时间、阶段输出、表格、交互。每个 Rust 文件最多一个末尾 cfg(test) mod tests，所有仅测试 helper/import 归测试区域。账户和证书 show 字段对齐且状态着色，verify 不切换不同信息模板；只有成功权威查询才显示 verified/source=remote。cert show 缺省名称引导选择，申请列表只主域名/时间/状态，相同文字保留独立 UI 身份。
+
+产物集合为 fullchain.pem/cert.pem/ca.pem/private-key.pem，先校验 SAN/公钥/链并全部落盘，再原子切换 current。current 指向同级 YYYYMMDDTHHMMSSZ-random8，完整 ID 留在元数据；不迁移旧 generations/ID。用户额外文件/目录不参与正确性检查，托管标记确定所有权后才校验其身份/权限；删除只处理托管内容。
+
+账户 ES256 改用 rustls 已采用的 AWS-LC 后端，仍保持标准 PKCS#8、P-256 JWK、64 字节 R||S 和 HS256；外部生成的公开测试密钥/签名验证互操作性。SHA/HMAC 与现有新版本链统一后，本轮 macOS CLI normal+build 依赖从 277 到 258，锁文件解析条目从 355 到 334；锁文件包含测试/其他平台依赖，不等于 CLI 实际构建数量。CI 的 check-tls-backend.py 拒绝 native-tls/OpenSSL 传输依赖；保留平台证书根查询不等于使用 native TLS。Forge HTTP feature 收紧需要上游支持，未擅自修改正在发布的 Forge 工作树。

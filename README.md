@@ -2,7 +2,7 @@
 
 A Rust ACME client for automated certificate issuance and lifecycle management.
 
-> Account registration, listing, recovery, inspection, deactivation, and local removal are implemented, alongside protocol states and solver contracts. Certificate issuance is not implemented yet.
+> Account registration, listing, recovery, inspection, deactivation, and local removal are implemented, alongside protocol states and solver contracts. Manual DNS-01 certificate issuance, durable recovery and read-only order inspection are implemented and tested against a loopback CA. Automated DNS providers, renewal and revocation remain unimplemented.
 
 ## Direction
 
@@ -11,12 +11,13 @@ A Rust ACME client for automated certificate issuance and lifecycle management.
 - HTTP-01 validation and certificate renewal, including [ACME Renewal Information (RFC 9773)](https://www.rfc-editor.org/rfc/rfc9773.html).
 - An embeddable Rust library and a CLI for certificate automation.
 
-These are planned capabilities, not currently available features.
+Automatic DNS publication, HTTP/TLS validation, renewal and deployment remain planned capabilities.
 
 ## Documentation
 
-- Crate guides: [core](crates/aster_acme_core/README.md), [protocol](crates/aster_acme_protocol/README.md), [client](crates/aster_acme/README.md), [DNS](crates/aster_acme_dns/README.md), [CLI](crates/aster_acme_cli/README.md), [CLI storage](crates/aster_acme_cli_storage/README.md)
+- Crate guides: [core](crates/aster_acme_core/README.md), [protocol](crates/aster_acme_protocol/README.md), [client](crates/aster_acme/README.md), [DNS](crates/aster_acme_validation/README.md), [CLI](crates/aster_acme_cli/README.md), [CLI storage](crates/aster_acme_cli_storage/README.md)
 - [Account protocol tests and staging evidence (中文)](docs/account-testing.md)
+- [Manual DNS issuance tests and limits (中文)](docs/issuance-testing.md)
 - [Architecture design (中文)](docs/architecture.md)
 - [ACME RFC reference and implementation considerations (中文)](docs/rfc-reference.md)
 

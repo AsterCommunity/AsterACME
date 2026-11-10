@@ -8,6 +8,7 @@ use crate::{
 
 pub(crate) async fn execute(args: Args) -> CliResult<()> {
     match args.command {
+        Command::Cert { command } => crate::commands::cert::execute::execute(*command).await,
         Command::Version { json } => {
             println!("{}", crate::commands::build_info::render(json)?);
             Ok(())

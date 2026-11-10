@@ -83,6 +83,16 @@ impl CliSettings {
 }
 
 impl CliContext {
+    /// Check local existence before prompts, signer initialization or CA discovery.
+    /// Registration is the only operation that may create a missing account identity.
+    pub(crate) async fn require_account(&self) -> CliResult<aster_acme::account::AccountRecord> {
+        self.store.metadata().await?.ok_or_else(|| {
+            Box::new(super::error::MissingLocalAccount {
+                name: self.name.clone(),
+            }) as Box<dyn std::error::Error>
+        })
+    }
+
     /// Network-only settings are validated only when a command actually requests HTTP.
     pub(crate) fn transport_options(&self, options: &AccountArgs) -> CliResult<TransportOptions> {
         let timeout = options.timeout.or(self.config.timeout).unwrap_or(30);

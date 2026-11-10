@@ -1,6 +1,6 @@
 [package]
-name = "aster_acme_dns"
-version.workspace = true
+name = "aster_acme_validation"
+version = "0.1.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,13 @@ publish.workspace = true
 readme = "README.md"
 
 [dependencies]
+async-trait.workspace = true
+hickory-resolver.workspace = true
+tokio.workspace = true
 aster_acme.workspace = true
-aster_acme_core.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true
 
 [lints]
 workspace = true

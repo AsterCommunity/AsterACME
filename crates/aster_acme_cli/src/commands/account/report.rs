@@ -45,7 +45,6 @@ pub(crate) enum RemoteAction {
     UpdateContact,
     Register,
     Recover,
-    Show,
 }
 
 #[derive(serde::Serialize)]
@@ -76,6 +75,7 @@ impl AccountReport {
 }
 
 pub(crate) struct LocalAccountReport {
+    pub(crate) verified: bool,
     pub(crate) name: String,
     pub(crate) directory: AcmeUrl,
     pub(crate) key_thumbprint: String,

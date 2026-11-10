@@ -15,6 +15,7 @@
 pub mod account;
 pub mod directory;
 pub mod jws;
+pub mod order;
 pub mod problem;
 pub mod url;
 

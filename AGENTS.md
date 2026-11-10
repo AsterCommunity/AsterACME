@@ -14,7 +14,7 @@ AsterACME 是可嵌入的 Rust ACME 客户端与 CLI。全局身份和工程流�
 - `aster_acme_core`：纯状态与下一步决策，不依赖网络、文件、运行时或验证方式。
 - `aster_acme_protocol`：具名线上请求/响应、公开生产提供商 Provider/入口 URL 注册表、directory 端点发现、AcmeUrl、problem、JWS header/envelope；无 HTTP、签名、存储或 runtime。请求 struct→JSON，不用 json!/Map 拼字段；端点从 directory/Location/资源响应取得，不拼固定路径。CLI JSON DTO 留在 CLI output，不混入线上协议 crate。
 - `aster_acme`：协议、账户编排、JWS、transport、标识符和验证材料；提供对象安全的 `dyn` signer/store/solver 契约，支持嵌入服务。
-- `aster_acme_dns`：DNS solver/provider；按需求复制并改造 DNSO 源码，保留原许可，不直接依赖废弃 DNSO crate。
+- `aster_acme_validation`：按验证方法组织实现，目前 dns01::visibility；未来 provider；按需求复制并改造 DNSO 源码，保留原许可，不直接依赖废弃 DNSO crate。
 - `aster_acme_cli_storage`：Unix 私钥、账户文件、锁与原子持久化。`toml_file` 统一文件读取、上限、锁超时、取消生命周期和原子写入；不拥有 CLI 配置 schema。
 - register 无名称交互先区分新建/继续，默认新建；仅继续时选择已有账户，不用通用账户列表作为注册第一屏。交互式和命令行共用执行入口：selection 组件统一按 Register/Existing/Registered 策略选择账户，显式参数跳过选择。单账户命令位置 NAME 与 --name 互斥，共用 NameArgs；脚本/JSON 不弹问题。参数结构按本地、目标、网络、注册职责组合，不把所有选项暴露给全部子命令；switch 只有本地选项，show 的网络选项 requires verify。
 - CLI 帮助按参数/参数组声明顺序排列，不用 display_order；注册顺序 name、contact、ca、ca-directory、accept-terms、user-agent、timeout、yes。账户子命令顺序 list、show、switch、register、recover、deactivate；根命令 account 在 version 前，version 只展示编译时构建信息，不加载配置或执行运行时 Git/HTTP。
@@ -42,7 +42,7 @@ AsterACME 是可嵌入的 Rust ACME 客户端与 CLI。全局身份和工程流�
 
 ## Rust 与依赖
 
-- stable、edition 2024。所有版本及 features 只能定义在根 `[workspace.dependencies]`；成员只用 `workspace = true`，Forge/AsterFs 固定 rev。
+- stable、edition 2024。所有依赖版本及 features 只能定义在根 `[workspace.dependencies]`；成员依赖只用 `workspace = true`，Forge/AsterFs 当前开发分支固定 rev；各 crate 的 `[package].version` 独立显式声明，不继承 workspace.package.version。
 - 复用 Forge 数字转换工具；文件锁使用 AsterFs，不新增 fs2。
 - 每个 crate 写 README。公开 API、失败策略、持久化顺序和协议边界写清注释，使用 `//` / `///` / `//!`，不使用块注释。
 - crate 入口先模块文档，再 `cfg_attr(not(test), deny(...))`，禁止生产 unwrap/expect/panic/unreachable/unimplemented/todo；继承 workspace 的 unsafe forbid 与严格 Clippy。
@@ -92,3 +92,13 @@ git diff HEAD --check
 
 - HTTP 连接池构造和执行复用固定 rev 的 aster_forge_http，ACME 持有 User-Agent、deadline 和协议重试策略；reqwest 保留响应/错误/状态/header 类型依赖。User-Agent 优先级：本次参数 > 账户显式设置 > 内置默认；register 的显式值写 account.toml，默认值和 config.toml 不写此字段。其他命令覆盖不持久化。
 - update-contact 按 RFC 8555 §7.3.2 只 POST contact 到原账户 URL；清空必须显式，成功观察与本地意图分开。rotate-key 按 §7.3.5 双层 JWS，内层新钥 jwk/无 nonce，外层旧钥 kid，URL 一致，200 可空 body。事务租约覆盖双钥持久化、pending/confirmed、对账和本地提交；pending 不自动重放，confirmed 不再发 keyChange。CLI bin 禁用 rustdoc 输出以避免与库同名目录碰撞，二进制名不变。
+
+- cert issue 是完整签发入口，cert list/show 只读/显式刷新，删除根 order 命令；不保留旧 order 参数或别名。默认名称为首个规范化域名，通配符保留；内部 ID 区分世代。恢复同名多候选必须交互选择并显示申请时间，脚本显式 --operation，不猜最新。
+- 当前只执行 manual_dns，人工确认属于 CLI，DNS 查询属于 aster_acme_validation，dyn DnsReadiness 不发布/删除记录。--force 仅跳过本地 DNS 可见性，不跳过首次非交互待办、CA 验证、过期或证书检查。order/auth expires 与证书 notAfter 分开，不捏造远端 expired order 状态。
+- Issuance 使用账户→证书锁序，阻塞持久化保留租约；generation 固定密钥/CSR。先保存意图再 newOrder/ack/finalize，Location 先存后解析 body；响应丢失不自动下新单，Submitted 的 pending/ready 只轮询。保存验证后的 fullchain，再切换 current，最后 Completed；失败保留旧有效版本，人工 TXT 清理独立提示。
+
+- 人类输出统一 common/output、time、log、table；时间为 YYYY-MM-DD HH:MM:SS UTC，机器时间保持 RFC3339。show 字段标签统一宽度，颜色只在 TTY/非 NO_COLOR；Tips: 蓝色，待人工操作 WARN，最终签发 DONE。account show 的 verify 与离线共用完整快照模板；cert/account 只有成功 CA 查询才标 verified。
+- 一个 Rust 文件最多一个 cfg(test) mod tests，必须在末尾；测试 helper/import 放入测试模块，不能放在生产实现中间或另建 verification_tests 等测试模块。测试调用方直接引用其所属测试支持，不加转发。
+- 产物保存 certs/<name>/<UTC-time>-<random8>，current 原子相对 symlink 指向完整版本。四类 PEM 文件为 fullchain/cert/ca/private-key，DER/CSR 是固定内部材料。扫描忽略额外文件/未托管目录，仅对 cert.toml/operation.toml 识别的托管内容校验；删除保留用户额外内容和必要锁 inode，不要求目录封闭。
+
+- 所有已有账户操作先检查本地身份，再进行交互/CA discovery；rotate-key 还需验证原密钥/事务资格。只有 register 可创建新身份。注册成功后 default_account 缺省才补回，不覆盖已有/并发选择；失败或 pending 不设默认。toml_edit 对用户文档的可选字段用 get/get_mut/insert，集中锁内解析/编辑并保留 trivia，不用索引读取缺省值。

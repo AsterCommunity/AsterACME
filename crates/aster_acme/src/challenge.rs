@@ -1,24 +1,12 @@
 //! Challenge selection and validated method-specific response materials.
 
-use aster_forge_macros::wire_enum;
+use aster_acme_protocol::order::WireChallengeKind;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::identifier::{DnsIdentifier, DnsName, IdentifierError};
-wire_enum! {
-    /// Challenge type as received from the CA; unknown extensions are retained.
-    pub enum WireChallengeKind {
-        /// HTTP-01 method.
-        Http01 => "http-01",
-        /// DNS-01 method.
-        Dns01 => "dns-01",
-        /// TLS-ALPN-01 method.
-        TlsAlpn01 => "tls-alpn-01",
-    }
-}
-
 /// Known executable challenge methods; a solver must also be registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -41,19 +29,6 @@ impl ChallengeKind {
         match self {
             Self::Dns01 => true,
             Self::Http01 | Self::TlsAlpn01 => false,
-        }
-    }
-}
-
-impl WireChallengeKind {
-    /// Convert a wire method into a known method; unknown methods stay unselectable.
-    #[must_use]
-    pub fn known(&self) -> Option<ChallengeKind> {
-        match self {
-            Self::Http01 => Some(ChallengeKind::Http01),
-            Self::Dns01 => Some(ChallengeKind::Dns01),
-            Self::TlsAlpn01 => Some(ChallengeKind::TlsAlpn01),
-            Self::Unknown(_) => None,
         }
     }
 }
@@ -139,7 +114,7 @@ impl ChallengePolicy {
             .find(|kind| {
                 (!identifier.is_wildcard() || kind.supports_wildcards())
                     && supported.contains(kind)
-                    && offered.iter().any(|wire| wire.known() == Some(*kind))
+                    && offered.iter().any(|wire| known_method(wire) == Some(*kind))
             })
             .ok_or(ChallengeError::NoCompatibleChallenge)
     }
@@ -271,5 +246,15 @@ impl ChallengeMaterial {
             Self::Http01 { .. } => ChallengeKind::Http01,
             Self::TlsAlpn01 { .. } => ChallengeKind::TlsAlpn01,
         }
+    }
+}
+
+/// Map only supported wire methods; extensions are never executed.
+pub(crate) fn known_method(kind: &WireChallengeKind) -> Option<ChallengeKind> {
+    match kind {
+        WireChallengeKind::Http01 => Some(ChallengeKind::Http01),
+        WireChallengeKind::Dns01 => Some(ChallengeKind::Dns01),
+        WireChallengeKind::TlsAlpn01 => Some(ChallengeKind::TlsAlpn01),
+        WireChallengeKind::Unknown(_) => None,
     }
 }

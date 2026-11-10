@@ -3,7 +3,6 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
 authors = [
     "AsterCommunity Contributors <contributors@astercosm.com>",
 ]
@@ -16,6 +15,8 @@ publish = false
 # All dependency versions and feature selections belong here.
 # Members must inherit dependencies with `workspace = true`.
 [workspace.dependencies]
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
+x509-parser = { version = "0.18.1", features = ["verify-aws"] }
 aster_forge_http = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882", default-features = false }
 # Shared wire-enum generation; pin the published Forge revision.
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882" }
@@ -23,10 +24,10 @@ aster_forge_macros = { git = "https://github.com/AsterCommunity/AsterForge", rev
 aster_acme_protocol = { path = "crates/aster_acme_protocol" }
 aster_acme_core = { path = "crates/aster_acme_core" }
 aster_acme = { path = "crates/aster_acme" }
-aster_acme_dns = { path = "crates/aster_acme_dns" }
+aster_acme_validation = { path = "crates/aster_acme_validation" }
 aster_acme_cli_storage = { path = "crates/aster_acme_cli_storage" }
 aster-fs = { git = "https://github.com/AsterCommunity/AsterFs", rev = "913ed30598119c184f49f18e5b339fc98869fff2", default-features = false, features = ["sync"] }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util", "signal"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
 serde = { version = "1", features = ["derive"] }
@@ -47,10 +48,10 @@ base64 = "0.22"
 idna = "1"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
-sha2 = "0.10"
+sha2 = "0.11"
 zeroize = { version = "1", features = ["derive"] }
-p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
-hmac = "0.12"
+aws-lc-rs = { version = "1.19", default-features = false, features = ["non-fips", "alloc"] }
+hmac = "0.13"
 httpdate = "1"
 percent-encoding = "2"
 rustix = { version = "1.1", features = ["fs", "process"] }
@@ -70,3 +71,14 @@ cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
 multiple_unsafe_ops_per_block = "deny"
 undocumented_unsafe_blocks = "deny"
+
+# Release policy applies to the CLI and its workspace dependencies.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# Retain function symbols for useful panic backtraces without source-level debug data.
+debug = 0
+# Allow unwinding through task/operation boundaries; stack overflow and OOM remain fatal.
+panic = "unwind"
+strip = "debuginfo"

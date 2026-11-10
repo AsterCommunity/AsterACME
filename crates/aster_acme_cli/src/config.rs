@@ -111,61 +111,74 @@ pub(crate) async fn persist(
     name: Option<String>,
     contacts: Option<Vec<String>>,
 ) -> CliResult<()> {
-    aster_acme_cli_storage::toml_file::update(path, Duration::from_secs(5), move |text| {
-        parse(text).map_err(|error| std::io::Error::other(error.to_string()))?;
-        let mut document: DocumentMut = text.parse().map_err(std::io::Error::other)?;
+    edit(path, move |_, table| {
         if let Some(name) = name {
-            set_value(
-                document["config"]
-                    .as_table_mut()
-                    .ok_or_else(|| std::io::Error::other("missing config table"))?,
-                "default_account",
-                value(name),
-            );
+            set_value(table, "default_account", value(name));
         }
         if let Some(contacts) = contacts {
             let mut array = toml_edit::Array::new();
             for contact in contacts {
                 array.push(contact.strip_prefix("mailto:").unwrap_or(&contact));
             }
-            set_value(
-                document["config"]
-                    .as_table_mut()
-                    .ok_or_else(|| std::io::Error::other("missing config table"))?,
-                "contact",
-                value(array),
-            );
+            set_value(table, "contact", value(array));
         }
-        Ok(document.to_string())
     })
-    .await?;
-    Ok(())
+    .await
 }
 
-fn set_value(document: &mut Table, key: &str, mut item: toml_edit::Item) {
-    if let (Some(previous), Some(next)) = (document[key].as_value(), item.as_value_mut()) {
-        *next.decor_mut() = previous.decor().clone();
-    }
-    document[key] = item;
-}
-
-/// Clear a removed default only if it is still the same account in the latest file.
-/// A concurrent switch to another account is preserved.
-pub(crate) async fn clear_removed_default(path: PathBuf, removed: String) -> CliResult<()> {
+// Parse and validate the latest locked document once for every targeted config edit.
+// Optional fields use get/insert; indexing never reads user-controlled missing values.
+async fn edit(
+    path: PathBuf,
+    change: impl FnOnce(&Config, &mut Table) + Send + 'static,
+) -> CliResult<()> {
     aster_acme_cli_storage::toml_file::update(path, Duration::from_secs(5), move |text| {
         let config = parse(text).map_err(|error| std::io::Error::other(error.to_string()))?;
-        if config.default_account.as_deref() != Some(removed.as_str()) {
-            return Ok(text.to_owned());
-        }
         let mut document: DocumentMut = text.parse().map_err(std::io::Error::other)?;
-        document["config"]
-            .as_table_mut()
-            .ok_or_else(|| std::io::Error::other("missing config table"))?
-            .remove("default_account");
+        let table = document
+            .get_mut("config")
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| std::io::Error::other("missing config table"))?;
+        change(&config, table);
         Ok(document.to_string())
     })
     .await?;
     Ok(())
+}
+
+fn set_value(document: &mut Table, key: &str, mut item: Item) {
+    if let (Some(old), Some(next)) = (document.get(key).and_then(Item::as_str), item.as_str())
+        && old == next
+    {
+        return;
+    }
+    if let (Some(previous), Some(next)) = (
+        document.get(key).and_then(Item::as_value),
+        item.as_value_mut(),
+    ) {
+        *next.decor_mut() = previous.decor().clone();
+    }
+    document.insert(key, item);
+}
+
+/// Restore a default only after successful registration, without replacing another selection.
+pub(crate) async fn default_after_registration(path: PathBuf, name: String) -> CliResult<()> {
+    edit(path, move |config, table| {
+        if config.default_account.is_none() {
+            set_value(table, "default_account", value(name));
+        }
+    })
+    .await
+}
+
+/// Clear a removed default only if it still points at that account in the latest file.
+pub(crate) async fn clear_removed_default(path: PathBuf, removed: String) -> CliResult<()> {
+    edit(path, move |config, table| {
+        if config.default_account.as_deref() == Some(removed.as_str()) {
+            table.remove("default_account");
+        }
+    })
+    .await
 }
 
 pub(crate) const DEFAULT_CA_DIRECTORY: &str =
@@ -368,5 +381,97 @@ mod tests {
             assert!(config::load(root).await.is_err());
             assert_eq!(std::fs::read_to_string(&explicit).unwrap(), malformed);
         }
+    }
+    #[tokio::test]
+    async fn optional_config_fields_can_be_added_removed_and_recreated_without_panics() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let original =
+            "# keep header\nversion = 1\n\n[config]\n# keep timeout\ntimeout = 17 # retained\n";
+        std::fs::write(&path, original).unwrap();
+        persist(
+            path.clone(),
+            Some("default".into()),
+            Some(vec!["mailto:a@example.com".into()]),
+        )
+        .await
+        .unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.contains("# keep header"));
+        assert!(first.contains("timeout = 17 # retained"));
+        assert_eq!(
+            parse(&first).unwrap().default_account.as_deref(),
+            Some("default")
+        );
+        assert_eq!(parse(&first).unwrap().contact, ["a@example.com"]);
+        persist(path.clone(), Some("default".into()), None)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+        clear_removed_default(path.clone(), "default".into())
+            .await
+            .unwrap();
+        assert_eq!(load(temp.path()).await.unwrap().default_account, None);
+        default_after_registration(path.clone(), "default".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            load(temp.path()).await.unwrap().default_account.as_deref(),
+            Some("default")
+        );
+        persist(path.clone(), Some("other".into()), None)
+            .await
+            .unwrap();
+        let selected = std::fs::read_to_string(&path).unwrap();
+        default_after_registration(path.clone(), "default".into())
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), selected);
+    }
+
+    #[tokio::test]
+    async fn targeted_edits_reject_invalid_tables_and_versions_without_changing_user_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        for text in [
+            "version=2\n[config]\n",
+            "version=1\nconfig='wrong'\n",
+            "version=1\n[config]\ndefault_account=7\n",
+            "version=1\n[config]\ncontact='wrong'\n",
+            "invalid=[",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert!(
+                persist(path.clone(), Some("default".into()), None)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                default_after_registration(path.clone(), "default".into())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        }
+    }
+
+    #[tokio::test]
+    async fn conditional_default_and_contact_updates_keep_both_intents_under_one_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "version=1\n[config]\n").unwrap();
+        let (default, contacts) = tokio::join!(
+            default_after_registration(path.clone(), "work".into()),
+            persist(
+                path.clone(),
+                None,
+                Some(vec!["mailto:a@example.com".into()])
+            )
+        );
+        default.unwrap();
+        contacts.unwrap();
+        let config = load(temp.path()).await.unwrap();
+        assert_eq!(config.default_account.as_deref(), Some("work"));
+        assert_eq!(config.contact, ["a@example.com"]);
     }
 }

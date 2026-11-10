@@ -26,14 +26,11 @@ use std::{
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use tokio::time::sleep;
 
+pub mod issuance;
 mod removal;
 mod rotation;
 pub mod toml_file;
-#[cfg(test)]
-use toml_file::open_lock;
 use toml_file::{FileLease, atomic_write, ensure_real_dir, private_dir, read_private};
 
 const MAX_ACCOUNT_FILE: u64 = 256 * 1024;
@@ -83,6 +80,13 @@ pub async fn accounts(root: PathBuf) -> Result<Vec<LocalAccount>, AccountStoreEr
                 return Err(store_error("account listing exceeds 1024 entries"));
             }
             let entry = entry.map_err(|_| store_error("cannot read account entry"))?;
+            if !entry
+                .file_type()
+                .map_err(|_| store_error("cannot inspect account entry"))?
+                .is_dir()
+            {
+                continue;
+            }
             let name = entry
                 .file_name()
                 .into_string()
@@ -382,9 +386,6 @@ fn store_error(message: &str) -> AccountStoreError {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 /// Account names are 1–64 ASCII letters, digits, hyphens or underscores.
 /// Shared by the file adapter and CLI prompts so path validation has one owner.
 #[must_use]
@@ -395,3 +396,6 @@ pub fn valid_account_name(name: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
+
+#[cfg(test)]
+mod tests;

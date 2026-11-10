@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。证书申请、续期和吊销尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS-01 证书申请、恢复和只读订单查看已实现；自动续期与吊销尚未实现。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -165,13 +165,13 @@ aster-acme account remove personal --yes --json
 
 list --verify 逐个读取密钥、按绑定 CA 查询并保存真实状态；单个失败仍继续后续账户。输出保留完整清单和 verification 数组（每项 name/status/error），全部成功才 verified=true；部分失败时先输出报告再以非零退出码和 stderr 诊断结束。默认 list 零 HTTP。已停用账户验证可能返回 401/403，该错误不伪装成验证成功。
 
-remove 仅删除本地 account.toml、account-key.pk8 和账户锁载体，不停用 CA、不吊销证书。先多行展示名称、CA、目录及丢失密钥意味着无法访问 CA 账户的说明，再默认否确认。无需解码私钥，损坏密钥也可移除；未知文件或不安全链接会阻止删除。删除与账户操作共用锁，先原子移动到隐藏 .<name>.removing 目录再清理；异常清理保留该目录供检查，不静默删除未知文件。当前默认被移除时条件清理配置，保留并发切换到其他账户的选择。
+remove 仅删除本地托管账户元数据与密钥；有用户内容时保留目录和锁载体，不停用 CA、不吊销证书。先多行展示名称、CA、目录及丢失密钥意味着无法访问 CA 账户的说明，再默认否确认。无需解码私钥，损坏密钥也可移除；额外用户文件会保留；不安全的托管文件会阻止删除。删除与账户操作共用锁，先原子移动到隐藏 .<name>.removing 目录再清理；异常清理保留该目录供检查，不静默删除未知文件。当前默认被移除时条件清理配置，保留并发切换到其他账户的选择。
 
 修改命令的成功文本只给摘要，例如 [OK] Deactivated account personal.；完整账户信息留给 show，JSON 保留完整结果。确认说明在短问题上方逐行展示，脚本无确认时仍能得到完整对象信息。
 
 workspace 的包名及 crates 目录统一使用下划线；可执行文件仍是 aster-acme。旧包名不保留别名。
 
-列表新增 REGISTERED AT (UTC)、STATUS AT (UTC)、LAST USED (UTC)，按分钟显示并对齐；show 和 JSON 保留 RFC 3339 精度。registered_at 表示本地首次确认账户已注册，找回旧账户也记录首次本地确认，并非 CA 原始创建时间。last_status_at 与 last_used_at 只随成功的权威认证响应更新；离线查看、失败、默认切换/本地移除不算账户使用。未知文本为 —，JSON 为 null，TOML 不伪造日期。
+列表新增 REGISTERED AT (UTC)、STATUS AT (UTC)、LAST USED (UTC)，全部人类时间统一为 YYYY-MM-DD HH:MM:SS UTC 并对齐；JSON 保留 RFC 3339 原始精度。registered_at 表示本地首次确认账户已注册，找回旧账户也记录首次本地确认，并非 CA 原始创建时间。last_status_at 与 last_used_at 只随成功的权威认证响应更新；离线查看、失败、默认切换/本地移除不算账户使用。未知文本为 —，JSON 为 null，TOML 不伪造日期。
 
 ## 更新联系人与轮换账户密钥
 
@@ -186,3 +186,40 @@ aster-acme account rotate-key work --yes
 注册显式值保存示例：`account.toml` 的 `[account]` 中 `user_agent = "AsterDrive/0.3.7"`。不指定时不写默认值；其他网络命令的同名参数仅覆盖当前请求。已注册的本地账户重用仍要求确认，不能把再次 register 当作新账户创建。
 
 CLI bin 的 `doc = false` 避免 `aster-acme` 与库 `aster_acme` 生成相同 rustdoc 目录；可执行文件名不变，CLI 参考以本 README / --help 为准。`cargo doc --workspace --no-deps` 生成库 API。
+
+## 手动 DNS 签发与订单查看
+
+```sh
+aster-acme cert issue -a default -d example.com -d '*.example.com' -c manual_dns
+aster-acme cert issue --resume example.com
+aster-acme cert issue --resume example.com --operation <ID> --force
+aster-acme cert list
+aster-acme cert show example.com
+aster-acme cert show example.com --operation <ID> --verify
+```
+
+`-n/--name` 指定证书名称，不指定使用首个规范化域名（通配符保留）；`-a` 账户、`-d` 域名可重复、`-c` 验证实现、`-f` 跳过本地 DNS 检查。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
+
+只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 --force 不允许绕过过期/失效状态或重新下单。
+
+手动模式展示所有 TXT 值，同名记录必须共存；交互确认后用 Hickory 检查本地 DNS 可见性再通知 CA。--force 仅跳过本地可见性检查，CA 必须照常验证。首次 JSON/非交互执行返回 status=action_required 和记录/恢复命令，不因 -f 直接通知 CA；添加记录后再 --resume。action_required 正常退出 0，脚本应检查 status，不能将它当作已签出。完成后明确提示删除本次具体 TXT，客户端不自动改动用户 DNS。
+
+--timeout 是单次 HTTP 限制，--wait-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 2 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前仅 manual_dns 可执行（内部使用 DNS-01）；自动 DNS、HTTP/TLS、续期、吊销、部署命令未开放。
+
+每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
+
+
+## 统一展示和产物
+
+当前根命令为 account、cert、version；证书命令只有 cert issue/list/show，不提供旧 order 别名。只用 `-c manual_dns` 选择验证方案，删除 --solver 和 -c dns-01。无域名的 cert issue 在终端询问，脚本要求 -d/--resume；无名称的 cert show 在终端先选证书，多次申请再选主域名/时间/状态，--operation 可直接定位申请。相同显示标签通过独立行索引选中，不靠文本匹配。
+
+common/output 统一字段、颜色、Tips 和转义；common/time 统一所有人类 UTC 时间（秒级），common/log 统一阶段日志/级别对齐，common/table 统一 Unicode 列宽。颜色遵守 TTY/NO_COLOR，JSON 无 ANSI/阶段日志。cert list 使用紧凑表格，蓝色 Tips: 指向 cert show；account/cert show 详情使用同样的标签宽度。account show 的离线/verify 使用同一完整快照模板；成功查询后末行 Remote status: verified with CA，离线 not verified。cert show 的 source/verified 与实际请求一致，不再输出固定的 unless --verify 文案。
+
+人工待办使用 [WARN]，最终签发使用 [DONE]；恢复说明与命令分行便于复制。签发阶段事件通过库的 dyn IssueObserver 注入，CLI 翻译为阶段文字、限频等待，不将人类日志硬编码进协议层。账户选择项仅名称/状态；危险确认详情和字段使用共享样式，默认否的问题保持明确。
+
+新产物布局为 `certs/<name>/<UTC-time>-<random8>/`，`current` 相对链接在完整文件落盘后原子切换。成功输出固定指向 current/fullchain.pem、cert.pem、ca.pem、private-key.pem。DER 私钥与固定 CSR 是内部恢复资料；PEM 私钥和 DER 是同一把钥。CA 文件只包含服务端返回的剩余链，不自行追加根证书；只有叶子时 ca.pem 为空。旧未发布目录格式不兼容或迁移。
+
+
+账户写入前检查本地身份。注册成功后仅在最新配置没有 default_account 时补为本次名称；注册失败/取消不设默认，已有默认或并发切换不覆盖。remove 默认会清除同名选择，随后成功注册可补回；switch 对合法缺省字段安全插入，重复同一值不改变已有字符串格式。缺账户主错误与 Hint 分开显示，提示核对 --name / --data-dir。
+
+--help 统一显示 AsterACME <CLI version>、描述和 usage，所有子命令使用相同布局；version 文本按共享表格对齐产品版本与 Revision 等值列。构建时间的人类显示也使用统一 UTC 秒级格式，JSON 保留构建时 RFC3339。

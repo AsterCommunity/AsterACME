@@ -155,3 +155,42 @@ fn resource_urls_keep_exact_spelling_and_reject_unsafe_input() {
         assert!(AcmeUrl::new(invalid).is_err());
     }
 }
+
+#[test]
+fn method_specific_fields_do_not_make_unknown_challenges_require_dns01_tokens() {
+    use super::order::{AuthorizationObject, WireChallengeKind};
+    let resource = serde_json::json!({"identifier":{"type":"dns","value":"example.com"},"status":"pending","expires":"2099-01-01T00:00:00Z","challenges":[
+        {"type":"dns-persist-01","status":"pending","url":"https://ca.example/persist","issuer-domain-names":["letsencrypt.org"]},
+        {"type":"dns-01","status":"pending","url":"https://ca.example/dns","token":"long-enough-opaque-token"},
+        {"type":"future","status":"pending","url":"https://ca.example/future","token":{"extension":true}}
+    ]});
+    let parsed: AuthorizationObject = serde_json::from_value(resource.clone()).unwrap();
+    assert!(
+        matches!(&parsed.challenges[0].kind,WireChallengeKind::Unknown(value) if value=="dns-persist-01")
+    );
+    assert_eq!(
+        parsed.challenges[0].parameters["issuer-domain-names"],
+        serde_json::json!(["letsencrypt.org"])
+    );
+    assert_eq!(
+        serde_json::to_value(&parsed).unwrap()["challenges"][0]["issuer-domain-names"],
+        resource["challenges"][0]["issuer-domain-names"]
+    );
+    assert!(!parsed.challenges[0].parameters.contains_key("token"));
+    assert_eq!(
+        parsed.challenges[1].parameters["token"],
+        "long-enough-opaque-token"
+    );
+    assert_eq!(
+        parsed.challenges[2].parameters["token"],
+        resource["challenges"][2]["token"]
+    );
+    for key in ["type", "url", "status"] {
+        let mut invalid = resource.clone();
+        invalid["challenges"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(key);
+        assert!(serde_json::from_value::<AuthorizationObject>(invalid).is_err());
+    }
+}

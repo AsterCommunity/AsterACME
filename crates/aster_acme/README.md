@@ -1,6 +1,6 @@
 # aster_acme
 
-面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、ES256 JWS 和账户所需 transport；证书 issue/renew/revoke 编排尚未实现。
+面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、ES256 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；自动 DNS 发布、renew/revoke 尚未实现。
 
 - `account`：账户服务、注册恢复、不可恢复停用、条款/EAB、对象安全的 `AccountStore` / `AccountKeyStore`。
 - `crypto`：`dyn AccountSigner`、软件 P-256 密钥、JWK/thumbprint、原始 R||S ES256 JWS 和 HS256 EAB。
@@ -12,7 +12,8 @@
 依赖方向：本 crate → protocol / core / Forge 宏；DNS 实现 → 本 crate。具体供应商代码不放在此处。
 
 ```rust
-use aster_acme::{challenge::{ChallengeKind, ChallengePolicy, WireChallengeKind}, identifier::DnsIdentifier};
+use aster_acme::{challenge::{ChallengeKind, ChallengePolicy}, identifier::DnsIdentifier};
+use aster_acme_protocol::order::WireChallengeKind;
 
 let identifier = DnsIdentifier::new("*.example.com")?;
 let method = ChallengePolicy::Require(ChallengeKind::Dns01).select(
@@ -83,3 +84,13 @@ AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at
 `AccountService::rotate_key(&dyn AccountRotationStore)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。当前仅生成 ES256/P-256，不支持 CLI 导入新钥或选择其他算法。
 
 `http_client` 通过锁定 revision 的 `aster_forge_http::HttpClient` 构造连接池，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本。`TransportOptions::validate` 在副作用前校验设置。
+
+## 手动 DNS-01 签发
+
+`issuance::service::IssueService` 从已注册账户、签名器和已发现 directory 构造；`dyn IssueStore/IssueSession` 持有独立证书世代与固定密钥/CSR，`dyn DnsReadiness` 返回待人工操作或本地 DNS 就绪。库不打印终端、不调用 DNS provider、不后台启动续期任务。CLI 的手动发布适配器询问用户，DNS crate 只做查询；强制标志只跳过本地查询。
+
+依据 RFC 8555 §7.1.3–7.1.5、§7.4、§7.4.2、§7.5.1、§8.4：保存创建意图→newOrder 201/Location→获取授权→返回全部 TXT→就绪后空对象通知 challenge→等待授权/订单→固定 CSR finalize→processing 只轮询→valid 后 POST-as-GET 下载 PEM。原始线上模型 WireIdentifier/WireChallengeKind 归 protocol::order，客户端只拥有验证与执行语义。
+
+CA 的订单/授权 expires 与证书 notAfter 分开处理；订单没有虚构的 expired wire 状态。恢复先观察，已过期申请不能继续验证/finalize；valid 订单允许取回已经签出的证书。newOrder 的 Location 丢失没有通用幂等恢复，不能自动再下单。challenge/finalize 的 Submitted 检查点令迟到的 pending/ready 只轮询，不自动重放。显式 fresh issue 才创建新操作。
+
+本地证书检查包括 PEM 语法、SAN 精确集合、公钥与保存密钥一致、叶子非 CA/有效期，以及提供的相邻证书链签名；不代表建立了公众信任链，尤其不安装 staging 根。当前仅生成独立 P-256 证书密钥，不导入外部 CSR；续期调度、ARI、自动 provider 与部署未实现。

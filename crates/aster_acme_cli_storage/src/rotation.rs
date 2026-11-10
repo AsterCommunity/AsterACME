@@ -7,9 +7,6 @@ use super::{
 use aster_acme::account::{AccountRotation, AccountRotationStore};
 use aster_acme_core::account::{AccountOperation, KeyRotationPhase};
 
-#[cfg(test)]
-mod tests;
-
 struct Rotation {
     slot: PathBuf,
     lease: Arc<FileLease>,
@@ -227,3 +224,6 @@ impl AccountRotation for Rotation {
         .map_err(|_| store_error("rotation commit worker failed"))?
     }
 }
+
+#[cfg(test)]
+mod tests;

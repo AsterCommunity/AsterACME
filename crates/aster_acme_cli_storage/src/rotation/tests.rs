@@ -38,6 +38,7 @@ async fn setup(endpoint: bool, timeout: Duration) -> Fixture {
             ResponseTemplate::new(200)
                 .insert_header("Replay-Nonce", "response_nonce")
                 .set_body_json(Directory {
+                    new_order: None,
                     new_nonce: url("/nonce"),
                     new_account: url("/unused"),
                     key_change: endpoint.then(|| url("/vendor/rollover")),

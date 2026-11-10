@@ -19,8 +19,6 @@ mod common;
 mod config;
 mod dispatch;
 
-use clap::Parser;
-
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let args = app::Args::parse();

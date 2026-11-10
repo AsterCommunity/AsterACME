@@ -363,7 +363,7 @@ fn nonce_header_is_single_and_uses_only_base64url_alphabet() {
 
 #[tokio::test]
 async fn concurrent_requests_consume_distinct_nonces_and_send_valid_signatures() {
-    use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier as _};
+    use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey};
     use std::{
         collections::HashSet,
         sync::{
@@ -444,11 +444,11 @@ async fn concurrent_requests_consume_distinct_nonces_and_send_valid_signatures()
                 .decode(header["jwk"]["y"].as_str().unwrap())
                 .unwrap(),
         );
-        let verifier = VerifyingKey::from_sec1_bytes(&point).unwrap();
+        let verifier = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, &point);
         verifier
             .verify(
                 format!("{}.{}", jws.protected, jws.payload).as_bytes(),
-                &Signature::from_slice(&URL_SAFE_NO_PAD.decode(&jws.signature).unwrap()).unwrap(),
+                &URL_SAFE_NO_PAD.decode(&jws.signature).unwrap(),
             )
             .unwrap();
     }

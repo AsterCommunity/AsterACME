@@ -17,6 +17,7 @@ pub mod challenge;
 pub mod crypto;
 mod http_client;
 pub mod identifier;
+pub mod issuance;
 pub mod solver;
 pub mod transport;
 

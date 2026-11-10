@@ -4,16 +4,18 @@ use aster_acme_protocol::jws::{
     EabHeader, FlattenedJws, KeyChangeHeader, ProtectedHeader, RequestIdentity,
 };
 use aster_acme_protocol::url::AcmeUrl;
+use aws_lc_rs::{
+    rand::SystemRandom,
+    signature::{
+        ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _,
+        ParsedPublicKey,
+    },
+};
 use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
-use hmac::{Hmac, Mac as _};
-use p256::{
-    ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer as _},
-    elliptic_curve::Generate as _,
-    pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _},
-};
+use hmac::{Hmac, KeyInit as _, Mac as _};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -54,9 +56,11 @@ impl Es256Jwk {
     /// # Errors
     /// Rejects invalid P-256 public points.
     pub fn from_sec1(bytes: &[u8]) -> Result<Self, CryptoError> {
-        let key = VerifyingKey::from_sec1_bytes(bytes).map_err(|_| CryptoError::InvalidKey)?;
-        let point = key.to_sec1_point(false);
-        let bytes = point.as_bytes();
+        if bytes.len() != 65 || bytes[0] != 4 {
+            return Err(CryptoError::InvalidKey);
+        }
+        ParsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, bytes)
+            .map_err(|_| CryptoError::InvalidKey)?;
         Ok(Self {
             crv: "P-256",
             kty: "EC",
@@ -90,7 +94,7 @@ pub trait AccountSigner: Send + Sync {
 }
 
 /// Software account key. No Debug or Clone implementation exposes private material.
-pub struct AccountKey(SigningKey);
+pub struct AccountKey(EcdsaKeyPair);
 
 impl AccountKey {
     /// Generate an account key using fallible OS randomness.
@@ -98,7 +102,7 @@ impl AccountKey {
     /// # Errors
     /// Returns an error if OS randomness is unavailable.
     pub fn generate() -> Result<Self, CryptoError> {
-        SigningKey::try_generate()
+        EcdsaKeyPair::generate(&ECDSA_P256_SHA256_FIXED_SIGNING)
             .map(Self)
             .map_err(|_| CryptoError::Randomness)
     }
@@ -107,7 +111,7 @@ impl AccountKey {
     /// # Errors
     /// Rejects malformed encodings and keys on other curves.
     pub fn from_pkcs8(bytes: &[u8]) -> Result<Self, CryptoError> {
-        SigningKey::from_pkcs8_der(bytes)
+        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, bytes)
             .map(Self)
             .map_err(|_| CryptoError::InvalidKey)
     }
@@ -116,18 +120,24 @@ impl AccountKey {
     /// # Errors
     /// Returns an error if the key cannot be encoded.
     pub fn to_pkcs8(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-        let document = self.0.to_pkcs8_der().map_err(|_| CryptoError::InvalidKey)?;
-        Ok(Zeroizing::new(document.as_bytes().to_vec()))
+        let document = self.0.to_pkcs8v1().map_err(|_| CryptoError::InvalidKey)?;
+        Ok(Zeroizing::new(document.as_ref().to_vec()))
     }
 }
 
 impl AccountSigner for AccountKey {
     fn jwk(&self) -> Result<Es256Jwk, CryptoError> {
-        Es256Jwk::from_sec1(self.0.verifying_key().to_sec1_point(false).as_bytes())
+        Es256Jwk::from_sec1(self.0.public_key().as_ref())
     }
     fn sign(&self, input: &[u8]) -> Result<[u8; 64], CryptoError> {
-        let signature: Signature = self.0.try_sign(input).map_err(|_| CryptoError::Signing)?;
-        Ok(signature.to_bytes().into())
+        let signature = self
+            .0
+            .sign(&SystemRandom::new(), input)
+            .map_err(|_| CryptoError::Signing)?;
+        signature
+            .as_ref()
+            .try_into()
+            .map_err(|_| CryptoError::Signing)
     }
 }
 

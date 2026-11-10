@@ -1,5 +1,6 @@
 //! Validated DNS names and ACME identifier representations.
 
+use aster_acme_protocol::order::WireIdentifier;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use thiserror::Error;
@@ -144,16 +145,6 @@ impl From<DnsIdentifier> for String {
 pub enum Identifier {
     /// DNS certificate identifier.
     Dns(DnsIdentifier),
-}
-
-/// Wire representation preserves unsupported types for diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WireIdentifier {
-    /// ACME identifier type.
-    #[serde(rename = "type")]
-    pub kind: String,
-    /// Unmodified wire value.
-    pub value: String,
 }
 
 impl TryFrom<WireIdentifier> for Identifier {

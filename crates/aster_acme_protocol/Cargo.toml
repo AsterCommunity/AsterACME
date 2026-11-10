@@ -1,6 +1,6 @@
 [package]
 name = "aster_acme_protocol"
-version.workspace = true
+version = "0.1.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,8 @@ publish.workspace = true
 readme = "README.md"
 
 [dependencies]
+time.workspace = true
+aster_forge_macros.workspace = true
 aster_acme_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

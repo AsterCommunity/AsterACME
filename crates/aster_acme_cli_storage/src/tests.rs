@@ -1,6 +1,8 @@
 //! Local durability, locking, permissions and key identity tests.
+use super::toml_file::open_lock;
 use super::*;
 use aster_acme_core::account::AccountRecordState;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn timestamp_metadata_roundtrips_without_inventing_unknown_values() {
@@ -61,7 +63,7 @@ async fn local_removal_is_scoped_and_does_not_require_a_valid_key() {
 }
 
 #[tokio::test]
-async fn removal_unknown_files_lock_timeout_and_cleanup_collision_preserve_account() {
+async fn removal_lock_timeout_and_cleanup_collision_preserve_account() {
     let temp = tempfile::tempdir().unwrap();
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
     let store = CliAccountStore::open(temp.path(), "personal", Duration::from_millis(30)).unwrap();
@@ -78,10 +80,6 @@ async fn removal_unknown_files_lock_timeout_and_cleanup_collision_preserve_accou
     let held = store.lock_account(&ca, &thumb).await.unwrap();
     assert!(store.remove().await.is_err());
     drop(held);
-    fs::write(store.account_slot().join("do-not-delete"), "user data").unwrap();
-    assert!(store.remove().await.is_err());
-    assert_eq!(fs::read(&key_path).unwrap(), before);
-    fs::remove_file(store.account_slot().join("do-not-delete")).unwrap();
     fs::create_dir(temp.path().join("accounts/.personal.removing")).unwrap();
     assert!(store.remove().await.is_err());
     assert_eq!(fs::read(key_path).unwrap(), before);
@@ -164,13 +162,24 @@ async fn listing_is_offline_sorted_filters_uninitialized_and_rejects_corrupt_ent
 
 #[cfg(unix)]
 #[tokio::test]
-async fn listing_rejects_symlink_account_directories() {
+async fn listing_ignores_unmanaged_symlink_but_explicit_account_open_rejects_it() {
     use std::os::unix::fs::symlink;
     let temp = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join("accounts")).unwrap();
     symlink(outside.path(), temp.path().join("accounts/alias")).unwrap();
-    assert!(accounts(temp.path().into()).await.is_err());
+    assert_eq!(accounts(temp.path().into()).await.unwrap().len(), 0);
+    let store = CliAccountStore::open(temp.path(), "alias", Duration::from_secs(1)).unwrap();
+    assert!(
+        store
+            .signer(
+                &AcmeUrl::new("https://ca.example/directory").unwrap(),
+                "alias",
+                true
+            )
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -447,4 +456,27 @@ fn state_reads_reject_hardlinks_and_enforce_exact_limit() {
     fs::create_dir(&unsafe_dir).unwrap();
     fs::set_permissions(&unsafe_dir, fs::Permissions::from_mode(0o777)).unwrap();
     assert!(CliAccountStore::open(&unsafe_dir, "default", Duration::from_secs(1)).is_err());
+}
+
+#[tokio::test]
+async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+    let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
+    store.signer(&directory, "work", true).await.unwrap();
+    let slot = store.account_slot();
+    fs::write(slot.join("notes.txt"), b"user notes").unwrap();
+    fs::create_dir(slot.join("backup")).unwrap();
+    fs::write(slot.join("backup/own-file"), b"retain").unwrap();
+    store.remove().await.unwrap();
+    assert_eq!(fs::read(slot.join("notes.txt")).unwrap(), b"user notes");
+    assert_eq!(fs::read(slot.join("backup/own-file")).unwrap(), b"retain");
+    assert!(slot.join("account.lock").exists());
+    assert!(!slot.join("account.toml").exists());
+    assert!(!slot.join("account-key.pk8").exists());
+    assert!(accounts(temp.path().into()).await.unwrap().is_empty());
+    // The leftover directory is uninitialized, and future explicit registration can
+    // use the retained lock without touching user contents.
+    store.signer(&directory, "work", true).await.unwrap();
+    assert_eq!(fs::read(slot.join("notes.txt")).unwrap(), b"user notes");
 }

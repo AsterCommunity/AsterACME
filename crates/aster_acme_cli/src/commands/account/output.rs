@@ -147,14 +147,18 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                             record.times
                         }),
                     name: &local.name,
-                    source: "local",
-                    verified: false,
+                    source: if local.verified { "remote" } else { "local" },
+                    verified: local.verified,
                     directory: &local.directory,
                     key_thumbprint: &local.key_thumbprint,
                     account_id: record.map(|record| record.account_id.as_str()),
                     account_url: record.and_then(|record| record.account_url.as_ref()),
                     local_state: record.map(|record| record.state),
-                    status: None,
+                    status: if local.verified {
+                        record.and_then(|record| record.last_status.clone())
+                    } else {
+                        None
+                    },
                     last_status: record.and_then(|record| record.last_status.as_ref()),
                     deactivation: record.map(|record| record.deactivation),
                     contacts: record.map_or(&[], |record| record.contacts.as_slice()),

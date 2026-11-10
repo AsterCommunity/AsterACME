@@ -1,5 +1,6 @@
 //! State machine regression tests.
 
+use crate::workflow::SubmissionState;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{machine::*, protocol::*};
@@ -75,16 +76,25 @@ fn order_decisions_use_authoritative_observations() {
     assert_eq!(
         order_action(
             &OrderStatus::Pending,
-            &[AuthorizationStatus::Valid, AuthorizationStatus::Pending]
+            Some(&[AuthorizationStatus::Valid, AuthorizationStatus::Pending]),
+            SubmissionState::NotSubmitted
         ),
         Ok(OrderAction::ResolveAuthorizations)
     );
     assert_eq!(
-        order_action(&OrderStatus::Pending, &[AuthorizationStatus::Valid]),
+        order_action(
+            &OrderStatus::Pending,
+            Some(&[AuthorizationStatus::Valid]),
+            SubmissionState::NotSubmitted
+        ),
         Ok(OrderAction::RefreshOrder)
     );
     assert_eq!(
-        order_action(&OrderStatus::Pending, &[]),
+        order_action(
+            &OrderStatus::Pending,
+            Some(&[]),
+            SubmissionState::NotSubmitted
+        ),
         Ok(OrderAction::RefreshOrder)
     );
     for (state, action) in [
@@ -94,15 +104,30 @@ fn order_decisions_use_authoritative_observations() {
     ] {
         // A fresh order observation supersedes stale cached authorization state.
         assert_eq!(
-            order_action(&state, &[AuthorizationStatus::Pending]),
+            order_action(
+                &state,
+                Some(&[AuthorizationStatus::Pending]),
+                SubmissionState::NotSubmitted
+            ),
             Ok(action)
         );
     }
     assert_eq!(
-        order_action(&OrderStatus::Invalid, &[]),
+        order_action(
+            &OrderStatus::Invalid,
+            Some(&[]),
+            SubmissionState::NotSubmitted
+        ),
         Err(StateError::InvalidOrder)
     );
-    assert!(order_action(&OrderStatus::Unknown("future".into()), &[]).is_err());
+    assert!(
+        order_action(
+            &OrderStatus::Unknown("future".into()),
+            Some(&[]),
+            SubmissionState::NotSubmitted
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -118,7 +143,8 @@ fn failed_or_unknown_authorizations_cannot_advance_a_pending_order() {
         assert!(
             order_action(
                 &OrderStatus::Pending,
-                &[AuthorizationStatus::Pending, state]
+                Some(&[AuthorizationStatus::Pending, state]),
+                SubmissionState::NotSubmitted
             )
             .is_err()
         );
@@ -132,17 +158,51 @@ fn failed_or_unknown_authorizations_cannot_advance_a_pending_order() {
 #[test]
 fn processing_challenges_are_polled_and_success_requires_authorization_refresh() {
     assert_eq!(
-        challenge_action(&ChallengeStatus::Pending),
+        challenge_action(&ChallengeStatus::Pending, SubmissionState::NotSubmitted),
         Ok(ChallengeAction::PrepareAndAcknowledge)
     );
     assert_eq!(
-        challenge_action(&ChallengeStatus::Processing),
+        challenge_action(&ChallengeStatus::Processing, SubmissionState::NotSubmitted),
         Ok(ChallengeAction::PollChallenge)
     );
     assert_eq!(
-        challenge_action(&ChallengeStatus::Valid),
+        challenge_action(&ChallengeStatus::Valid, SubmissionState::NotSubmitted),
         Ok(ChallengeAction::RefreshAuthorization)
     );
-    assert!(challenge_action(&ChallengeStatus::Invalid).is_err());
-    assert!(challenge_action(&ChallengeStatus::Unknown("future".into())).is_err());
+    assert!(challenge_action(&ChallengeStatus::Invalid, SubmissionState::NotSubmitted).is_err());
+    assert!(
+        challenge_action(
+            &ChallengeStatus::Unknown("future".into()),
+            SubmissionState::NotSubmitted
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn submitted_mutations_only_poll_until_authoritative_state_advances() {
+    assert_eq!(
+        order_action(&OrderStatus::Ready, Some(&[]), SubmissionState::Submitted),
+        Ok(OrderAction::PollOrder)
+    );
+    assert_eq!(
+        challenge_action(&ChallengeStatus::Pending, SubmissionState::Submitted),
+        Ok(ChallengeAction::PollChallenge)
+    );
+}
+
+#[test]
+fn unfetched_authorizations_are_distinct_from_an_explicit_empty_set() {
+    assert_eq!(
+        order_action(&OrderStatus::Pending, None, SubmissionState::NotSubmitted),
+        Ok(OrderAction::ResolveAuthorizations)
+    );
+    assert_eq!(
+        order_action(
+            &OrderStatus::Pending,
+            Some(&[]),
+            SubmissionState::NotSubmitted
+        ),
+        Ok(OrderAction::RefreshOrder)
+    );
 }

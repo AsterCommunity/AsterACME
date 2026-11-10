@@ -74,6 +74,16 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         );
     }
     let context = settings.account(&options).await?;
+    match operation {
+        Operation::Register => {}
+        Operation::Recover
+        | Operation::Remove
+        | Operation::Show { .. }
+        | Operation::Deactivate
+        | Operation::Switch => {
+            context.require_account().await?;
+        }
+    }
     if matches!(operation, Operation::Remove) {
         return remove(context, &options).await;
     }
@@ -85,8 +95,8 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         crate::common::terminal::confirm_write(
             &format!(
                 "Local account '{}' already exists for {}. Reuse its saved key and resume/query that account? This will not create a separate identity.",
-                crate::common::terminal::safe(&context.name),
-                crate::common::terminal::safe(context.directory.as_str()),
+                crate::common::output::safe(&context.name),
+                crate::common::output::safe(context.directory.as_str()),
             ),
             options.yes,
             options.json,
@@ -104,7 +114,21 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         return deactivate(context, signer, options).await;
     }
     match operation {
-        Operation::Show { verify: false } => local(&context, signer.as_ref(), name).await,
+        Operation::Show { verify } => {
+            if verify {
+                let client = Arc::new(
+                    AcmeClient::discover(
+                        context.directory.clone(),
+                        context.transport_options(&options)?,
+                    )
+                    .await?,
+                );
+                AccountService::new(client, context.store.clone())
+                    .inspect(signer.as_ref())
+                    .await?;
+            }
+            local(&context, signer.as_ref(), name, verify).await
+        }
         operation => remote(context, signer, name, options, operation, reused).await,
     }
 }
@@ -182,9 +206,9 @@ async fn remove(context: CliContext, options: &AccountArgs) -> CliResult<Account
     crate::common::terminal::confirm_action(
         &format!(
             "Remove local account\n  Name: {}\n  CA: {}\n  Directory: {}\n\nLocal metadata and the account private key will be deleted.\nThis does not deactivate the account at the CA or revoke certificates.\nWithout a backup of this key, access to the CA account will be lost.",
-            crate::common::terminal::safe(&context.name),
-            crate::common::terminal::safe(context.directory.as_str()),
-            crate::common::terminal::safe(
+            crate::common::output::safe(&context.name),
+            crate::common::output::safe(context.directory.as_str()),
+            crate::common::output::safe(
                 &root
                     .join("accounts")
                     .join(&context.name)
@@ -255,9 +279,9 @@ async fn deactivate(
     crate::common::terminal::confirm_action(
         &format!(
             "Permanently deactivate account\n  Name: {}\n  CA: {}\n  Account URL: {}\n\nThis cannot be undone.\nThe account key will no longer authorize ACME requests.\nLocal key and metadata will be retained.",
-            crate::common::terminal::safe(&context.name),
-            crate::common::terminal::safe(context.directory.as_str()),
-            crate::common::terminal::safe(account_url.as_str()),
+            crate::common::output::safe(&context.name),
+            crate::common::output::safe(context.directory.as_str()),
+            crate::common::output::safe(account_url.as_str()),
         ),
         "Deactivate this account?",
         options.yes,
@@ -307,6 +331,7 @@ async fn local(
     context: &CliContext,
     signer: &dyn AccountSigner,
     name: String,
+    verified: bool,
 ) -> CliResult<AccountReport> {
     let thumbprint = signer.jwk()?.thumbprint()?;
     let _lease = context
@@ -320,6 +345,7 @@ async fn local(
         return Err(AccountError::IdentityMismatch.into());
     }
     Ok(AccountReport::Local(LocalAccountReport {
+        verified,
         name,
         directory: context.directory.clone(),
         key_thumbprint: thumbprint,
@@ -403,19 +429,21 @@ async fn remote(
                 .await?
         }
         Operation::Recover => service.recover(signer.as_ref()).await?,
-        Operation::Show { verify: true } => service.inspect(signer.as_ref()).await?,
-        Operation::Show { verify: false }
-        | Operation::Deactivate
-        | Operation::Switch
-        | Operation::Remove => {
+        Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
             return Err("Local command was dispatched to the network executor.".into());
         }
     };
     let action = match operation {
-        Operation::Register => super::report::RemoteAction::Register,
+        Operation::Register => {
+            crate::config::default_after_registration(context.config_path, name.clone())
+                .await
+                .map_err(|error| {
+                    format!("Account registered, but saving its default selection failed: {error}")
+                })?;
+            super::report::RemoteAction::Register
+        }
         Operation::Recover => super::report::RemoteAction::Recover,
-        Operation::Show { .. } => super::report::RemoteAction::Show,
-        Operation::Deactivate | Operation::Switch | Operation::Remove => {
+        Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
             return Err("Unexpected remote action.".into());
         }
     };

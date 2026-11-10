@@ -45,3 +45,13 @@ pub enum CleanupState {
     /// Owned resources have been removed.
     Completed,
 }
+
+/// Whether a protocol mutation has a durable submission intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionState {
+    /// No request was submitted; the orchestrator may persist intent and send it.
+    NotSubmitted,
+    /// Request may already have taken effect; observe without automatically replaying.
+    Submitted,
+}

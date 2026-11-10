@@ -1,5 +1,6 @@
 //! Pure decisions based on observed server state, without challenge method knowledge.
 
+use crate::workflow::SubmissionState;
 use thiserror::Error;
 
 use crate::protocol::{AuthorizationStatus, ChallengeStatus, OrderStatus};
@@ -63,17 +64,22 @@ pub enum StateError {
 
 /// Determine an order action from a fresh observation, allowing skipped intermediate states.
 ///
-/// An empty authorization set is vacuously satisfied; missing/unfetched authorization
-/// resources must be fetched by the orchestrator before calling this function.
+/// None means authorizations have not been refreshed and must be resolved first.
+/// Some(empty) is an explicitly fetched empty set, never a stand-in for missing resources.
+/// A submitted finalize is polled even while the CA still reports ready.
 ///
 /// # Errors
 /// Rejects unknown or invalid orders and unusable authorizations on pending orders.
 pub fn order_action(
     status: &OrderStatus,
-    authorizations: &[AuthorizationStatus],
+    authorizations: Option<&[AuthorizationStatus]>,
+    finalize_submitted: SubmissionState,
 ) -> Result<OrderAction, StateError> {
     match status {
         OrderStatus::Pending => {
+            let Some(authorizations) = authorizations else {
+                return Ok(OrderAction::ResolveAuthorizations);
+            };
             let mut outstanding = false;
             for status in authorizations {
                 match authorization_action(status)? {
@@ -87,7 +93,10 @@ pub fn order_action(
                 OrderAction::RefreshOrder
             })
         }
-        OrderStatus::Ready => Ok(OrderAction::Finalize),
+        OrderStatus::Ready => Ok(match finalize_submitted {
+            SubmissionState::NotSubmitted => OrderAction::Finalize,
+            SubmissionState::Submitted => OrderAction::PollOrder,
+        }),
         OrderStatus::Processing => Ok(OrderAction::PollOrder),
         OrderStatus::Valid => Ok(OrderAction::DownloadCertificate),
         OrderStatus::Invalid => Err(StateError::InvalidOrder),
@@ -123,9 +132,15 @@ pub fn authorization_action(
 ///
 /// # Errors
 /// Rejects unknown and invalid challenges.
-pub fn challenge_action(status: &ChallengeStatus) -> Result<ChallengeAction, StateError> {
+pub fn challenge_action(
+    status: &ChallengeStatus,
+    acknowledged: SubmissionState,
+) -> Result<ChallengeAction, StateError> {
     match status {
-        ChallengeStatus::Pending => Ok(ChallengeAction::PrepareAndAcknowledge),
+        ChallengeStatus::Pending => Ok(match acknowledged {
+            SubmissionState::NotSubmitted => ChallengeAction::PrepareAndAcknowledge,
+            SubmissionState::Submitted => ChallengeAction::PollChallenge,
+        }),
         ChallengeStatus::Processing => Ok(ChallengeAction::PollChallenge),
         ChallengeStatus::Valid => Ok(ChallengeAction::RefreshAuthorization),
         ChallengeStatus::Invalid => Err(StateError::InvalidChallenge),

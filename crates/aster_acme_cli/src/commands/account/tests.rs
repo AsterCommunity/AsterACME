@@ -57,8 +57,8 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
     let report = execute::execute(AccountCommand::Remove(args(true)))
         .await
         .unwrap();
-    assert_eq!(render::json_value(&report)["removed_locally"], true);
-    assert_eq!(render::json_value(&report)["ca_deactivated"], false);
+    assert_eq!(render::tests::json_value(&report)["removed_locally"], true);
+    assert_eq!(render::tests::json_value(&report)["ca_deactivated"], false);
     assert!(!temp.path().join("accounts/personal").exists());
     assert_eq!(
         crate::config::load(temp.path())
@@ -141,7 +141,7 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
         peer.await.unwrap();
     }
     assert!(report.has_failures());
-    let value = render::json_value(&report);
+    let value = render::tests::json_value(&report);
     assert_eq!(value["verified"], false);
     assert_eq!(value["verification"].as_array().unwrap().len(), 2);
     assert_eq!(value["verification"][0]["name"], "alpha");
@@ -295,7 +295,7 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
     ))
     .await
     .unwrap();
-    let value = render::json_value(&report);
+    let value = render::tests::json_value(&report);
     assert_eq!(value["verified"], false);
     assert_eq!(value["accounts"][0]["name"], "alpha");
     assert_eq!(value["accounts"][0]["is_default"], true);
@@ -323,7 +323,7 @@ async fn empty_list_is_actionable_and_stale_default_is_explicit() {
     .await
     .unwrap();
     assert_eq!(
-        render::json_value(&report)["accounts"],
+        render::tests::json_value(&report)["accounts"],
         serde_json::json!([])
     );
     assert!(
@@ -459,8 +459,8 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
     }))
     .await
     .unwrap();
-    assert_eq!(render::json_value(&report)["verified"], false);
-    assert_eq!(render::json_value(&report)["deactivated"], true);
+    assert_eq!(render::tests::json_value(&report)["verified"], false);
+    assert_eq!(render::tests::json_value(&report)["deactivated"], true);
     assert!(
         execute::execute(AccountCommand::Switch(super::args::LocalTargetArgs {
             identity: super::args::NameArgs {
@@ -936,7 +936,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
         .await
         .unwrap();
         assert!(matches!(report, AccountReport::Local(_)));
-        let value = render::json_value(&report);
+        let value = render::tests::json_value(&report);
         assert_eq!(value["local_state"], expected);
         assert_eq!(value["verified"], false);
         assert_eq!(value["source"], "local");
@@ -1071,4 +1071,42 @@ fn parser_requires_commands_and_bounds_timeout_and_eab_pairs() {
         .is_ok()
     );
     assert!(Args::try_parse_from(["aster-acme", "account", "switch"]).is_ok());
+}
+
+#[tokio::test]
+async fn existing_account_commands_reject_missing_names_before_prompts_keys_or_http() {
+    let temp = tempfile::tempdir().unwrap();
+    crate::config::load(temp.path()).await.unwrap();
+    for command in [
+        "show",
+        "recover",
+        "switch",
+        "deactivate",
+        "remove",
+        "update-contact",
+        "rotate-key",
+    ] {
+        let parsed = Args::try_parse_from([
+            "aster-acme",
+            "account",
+            command,
+            "missing",
+            "--data-dir",
+            temp.path().to_str().unwrap(),
+            "--json",
+        ])
+        .unwrap();
+        let Command::Account { command } = parsed.command else {
+            panic!("expected account");
+        };
+        let error = super::execute::execute(*command).await.err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("No local account named 'missing'"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("confirmation"));
+        assert!(!temp.path().join("accounts/missing").exists());
+    }
 }

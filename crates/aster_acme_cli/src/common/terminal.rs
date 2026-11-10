@@ -34,6 +34,54 @@ pub(crate) fn prompt_result<T>(result: Result<T, inquire::InquireError>) -> CliR
     }
 }
 
+/// Shared prompt palette; terminal controls stay disabled under `NO_COLOR` or redirects.
+pub(crate) fn prompt_style(danger: bool) -> inquire::ui::RenderConfig<'static> {
+    use inquire::ui::{Color, RenderConfig, StyleSheet};
+    if !super::output::colors(io::stderr().is_terminal()) {
+        return RenderConfig::empty();
+    }
+    RenderConfig {
+        prompt: StyleSheet::new().with_fg(if danger {
+            Color::LightRed
+        } else {
+            Color::LightCyan
+        }),
+        answer: StyleSheet::new().with_fg(Color::LightGreen),
+        ..RenderConfig::default()
+    }
+}
+
+/// Resolve terminal selection to a stable caller-owned index and normalize cancellation.
+pub(crate) fn select_index(message: &str, choices: &[String], default: usize) -> CliResult<usize> {
+    let items = choices
+        .iter()
+        .enumerate()
+        .map(|(index, label)| SelectionItem {
+            index,
+            label: label.clone(),
+        })
+        .collect();
+    let chosen = prompt_result(
+        inquire::Select::new(message, items)
+            .with_starting_cursor(default)
+            .with_render_config(prompt_style(false))
+            .prompt(),
+    )?;
+    Ok(chosen.index)
+}
+
+// Keep UI identity separate from labels: two requests may display the same domain,
+// minute and status without selecting the first matching string by mistake.
+struct SelectionItem {
+    index: usize,
+    label: String,
+}
+impl fmt::Display for SelectionItem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
 /// Follow the Drive confirmation policy: default no, explicit opt-in for automation.
 /// JSON mode never prompts, even when attached to a terminal.
 pub(crate) fn confirm_write(message: &str, yes: bool, json: bool) -> CliResult<()> {
@@ -42,7 +90,14 @@ pub(crate) fn confirm_write(message: &str, yes: bool, json: bool) -> CliResult<(
         yes,
         json,
         io::stdin().is_terminal() && io::stderr().is_terminal(),
-        |message| prompt_result(inquire::Confirm::new(message).with_default(false).prompt()),
+        |message| {
+            prompt_result(
+                inquire::Confirm::new(message)
+                    .with_default(false)
+                    .with_render_config(prompt_style(false))
+                    .prompt(),
+            )
+        },
     )
 }
 
@@ -63,8 +118,19 @@ pub(crate) fn confirm_action(
         )
         .into());
     }
-    eprintln!("{details}\n");
-    confirm_write(question, false, false)
+    let color = super::output::colors(io::stderr().is_terminal());
+    eprintln!("{}\n", super::output::confirmation(details, color));
+    let accepted = prompt_result(
+        inquire::Confirm::new(question)
+            .with_default(false)
+            .with_render_config(prompt_style(true))
+            .prompt(),
+    )?;
+    if accepted {
+        Ok(())
+    } else {
+        Err(Box::new(Canceled))
+    }
 }
 
 fn confirm_with(
@@ -88,34 +154,6 @@ fn confirm_with(
     } else {
         Err(Box::new(Canceled))
     }
-}
-
-pub(crate) fn colors(terminal: bool) -> bool {
-    terminal
-        && std::env::var_os("NO_COLOR").is_none()
-        && std::env::var_os("TERM").is_none_or(|term| term != "dumb")
-}
-
-pub(crate) fn styled(text: &str, code: &str, enabled: bool) -> String {
-    if enabled {
-        format!("\x1b[{code}m{text}\x1b[0m")
-    } else {
-        text.to_owned()
-    }
-}
-
-/// CA details and configured names are untrusted terminal text, including on errors.
-pub(crate) fn safe(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|c| {
-            if c.is_control() {
-                c.escape_default().collect::<Vec<_>>()
-            } else {
-                vec![c]
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

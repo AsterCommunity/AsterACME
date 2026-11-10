@@ -16,7 +16,10 @@ def check(table, path):
 
 
 for path in sorted((root / "crates").glob("*/Cargo.toml")):
-    check(tomllib.loads(path.read_text()), path.relative_to(root))
+    manifest = tomllib.loads(path.read_text())
+    if not isinstance(manifest.get("package", {}).get("version"), str):
+        errors.append(f"{path.relative_to(root)}: package.version must be explicit per crate")
+    check(manifest, path.relative_to(root))
 if errors:
     raise SystemExit("\n".join(errors))
 print("Workspace dependency policy: OK")

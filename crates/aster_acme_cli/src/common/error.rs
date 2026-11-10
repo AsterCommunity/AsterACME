@@ -1,6 +1,6 @@
 //! Structured library errors translated at the process boundary.
 
-use super::terminal::{colors, safe, styled};
+use super::output::{colors, safe, styled};
 use aster_acme::{
     account::AccountError,
     transport::{RetryAfter, TransportError},
@@ -13,9 +13,41 @@ use std::io::{self, IsTerminal};
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
+/// Missing local identity, distinct from a CA rejecting an existing signing key.
+#[derive(Debug)]
+pub(crate) struct MissingLocalAccount {
+    pub(crate) name: String,
+}
+impl std::fmt::Display for MissingLocalAccount {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "No local account named '{}'.", self.name)
+    }
+}
+impl std::error::Error for MissingLocalAccount {}
+
 /// Convert structured library failures at the CLI boundary; embedded callers retain
 /// the original problem document and retry metadata for their own policy decisions.
 pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, Option<String>) {
+    if let Some(missing) = error.downcast_ref::<MissingLocalAccount>() {
+        return (
+            missing.to_string(),
+            Some(format!(
+                "Check --name and --data-dir, or run account list --data-dir <PATH> to inspect saved accounts. Create one with account register --name '{}' --data-dir <PATH>.",
+                missing.name
+            )),
+        );
+    }
+    if let Some(issue) = error.downcast_ref::<aster_acme::issuance::IssueError>() {
+        use aster_acme::issuance::IssueError;
+        return match issue {
+            IssueError::Transport(error)=>transport_diagnostic(error),
+            IssueError::Store(error)=>storage_message(&error.message),
+            IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; --force never bypasses CA expiry.".into())),
+            IssueError::CreationUncertain=>(issue.to_string(),Some("Use cert list to inspect the retained request. Keep its key/CSR; a missing Location cannot be reconstructed safely and no new order will be created automatically.".into())),
+            IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Manual TXT records remain under your control.".into())),
+            IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and manual TXT requirements. Retain the certificate key and CSR.".into())),
+        };
+    }
     if let Some(account) = error.downcast_ref::<AccountError>() {
         return match account {
             AccountError::KeyRotationUncertain => (
@@ -107,7 +139,7 @@ fn missing_account() -> (String, Option<String>) {
 fn retry_hint(retry_after: Option<&RetryAfter>) -> String {
     match retry_after {
         Some(RetryAfter::Delay(delay)) => format!("Wait at least {} seconds before retrying.", delay.as_secs()),
-        Some(RetryAfter::At(time)) => format!("Retry after {}.", httpdate::fmt_http_date(*time)),
+        Some(RetryAfter::At(time)) => format!("Retry after {}.", crate::common::time::timestamp(Some(time::OffsetDateTime::from(*time)))),
         None => "The CA has rate limited this request. Wait before retrying; consult its rate limit policy.".into(),
     }
 }
@@ -194,7 +226,23 @@ mod tests {
             retry_hint(Some(&RetryAfter::Delay(std::time::Duration::from_secs(60))))
                 .contains("60 seconds")
         );
-        assert!(retry_hint(Some(&RetryAfter::At(std::time::UNIX_EPOCH))).contains("01 Jan 1970"));
+        assert!(
+            retry_hint(Some(&RetryAfter::At(std::time::UNIX_EPOCH)))
+                .contains("1970-01-01 00:00:00 UTC")
+        );
         assert!(!retry_hint(None).contains("None"));
+    }
+    #[test]
+    fn missing_local_account_points_to_name_and_data_directory_in_a_separate_hint() {
+        let error = MissingLocalAccount {
+            name: "work".into(),
+        };
+        let (message, hint) = diagnostic(&error);
+        assert_eq!(message, "No local account named 'work'.");
+        let hint = hint.unwrap();
+        assert!(hint.contains("--data-dir"));
+        assert!(hint.contains("--name"));
+        assert!(hint.contains("account list"));
+        assert!(!hint.contains("--ca-directory"));
     }
 }

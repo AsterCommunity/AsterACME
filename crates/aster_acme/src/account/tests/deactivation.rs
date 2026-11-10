@@ -114,7 +114,7 @@ async fn invalid_identity_missing_url_inactive_state_and_failed_intent_never_pos
 #[tokio::test]
 async fn timeout_rate_limit_malformed_and_unexpected_status_preserve_uncertain_intent() {
     for response in [
-        ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(200)),
+        ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)),
         ResponseTemplate::new(429)
             .set_body_json(serde_json::json!({"type":"urn:ietf:params:acme:error:rateLimited"})),
         ResponseTemplate::new(503).set_body_string("unavailable"),
@@ -123,7 +123,7 @@ async fn timeout_rate_limit_malformed_and_unexpected_status_preserve_uncertain_i
         ResponseTemplate::new(200).set_body_json(serde_json::json!({"status":"valid"})),
     ] {
         let (server, service, store, key) = fixture(TransportOptions {
-            request_timeout: std::time::Duration::from_millis(50),
+            request_timeout: std::time::Duration::from_secs(1),
             ..local_options()
         })
         .await;

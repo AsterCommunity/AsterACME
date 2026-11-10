@@ -1,4 +1,4 @@
-//! DNS-01 solver and DNS provider adapters.
+//! Challenge validation implementations and method-specific readiness checks.
 
 #![cfg_attr(
     not(test),
@@ -11,3 +11,5 @@
         clippy::todo
     )
 )]
+
+pub mod dns01;

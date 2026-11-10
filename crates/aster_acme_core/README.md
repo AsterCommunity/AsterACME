@@ -12,17 +12,19 @@
 ```rust
 use aster_acme_core::{machine::{order_action, OrderAction}, protocol::OrderStatus};
 
-assert_eq!(order_action(&OrderStatus::Processing, &[]), Ok(OrderAction::PollOrder));
+assert_eq!(order_action(&OrderStatus::Processing, Some(&[]), aster_acme_core::workflow::SubmissionState::NotSubmitted), Ok(OrderAction::PollOrder));
 ```
 
-`order_action` 使用已获取的授权快照；尚未查询的授权不能用空列表伪装。新鲜订单状态优先于过时的本地授权状态。返回 DownloadCertificate 只代表可下载，不代表已落盘或部署。
+`order_action` 以 None 表示未刷新的授权，Some(&[]) 才表示明确获取到空集合；不能用空列表伪装未查询的资源。新鲜订单状态优先于过时的本地授权状态。返回 DownloadCertificate 只代表可下载，不代表已落盘或部署。
 
 ```sh
 cargo test -p aster_acme_core --locked
 ```
 
-覆盖已知/未知 wire 状态、授权部分成功/失败、终态拒绝、跳跃观察及轮询动作。仍未实现网络签发。依赖只能从根 workspace 继承。License: MIT OR Apache-2.0.
+覆盖已知/未知 wire 状态、授权部分成功/失败、终态拒绝、跳跃观察及轮询动作。网络签发由上层 aster_acme 编排，此 crate 不执行 I/O。依赖只能从根 workspace 继承。License: MIT OR Apache-2.0.
 
 账户决策返回 LookupExisting / Inspect / SendDeactivation / AlreadyDeactivated / Select；pending 停用必须对账，inactive/unknown 不能授权活跃操作。HTTP/磁盘/时间采样不进入 core。调用方 `aster_acme::AccountRecord::action` 委托纯函数，再按动作执行副作用；CA 状态观察同样应用 core 转换。
 
 账户 Update/RotateKey 也由纯决策驱动；轮换 Pending 只允许 ReconcileKeyChange、Confirmed 只允许 FinalizeKeyChange，并阻止其他活跃操作/远端观察。Inspect 独立于注册资格，允许对停用意图做权威查询；不绕过轮换的双钥恢复。Core 不持有密钥或决定文件事务。
+
+`SubmissionState::NotSubmitted/Submitted` 是本地持久化通知意图，区别于 CA 状态。order_action 接收 finalize 提交状态，ready + Submitted 返回 PollOrder；challenge_action 接收 acknowledgement 状态，pending + Submitted 返回 PollChallenge。只有未提交的动作允许上层保存意图后通知 CA，不能根据仍未变化的远端状态重放 mutation。

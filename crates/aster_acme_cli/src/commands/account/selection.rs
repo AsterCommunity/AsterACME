@@ -2,15 +2,10 @@
 
 use super::args::AccountArgs;
 use crate::{
-    common::{
-        error::CliResult,
-        terminal::{prompt_result, safe},
-    },
+    common::{error::CliResult, output::safe, terminal::prompt_result},
     config::DEFAULT_CA_DIRECTORY,
 };
 use aster_acme_cli_storage::{LocalAccount, valid_account_name};
-#[cfg(test)]
-use aster_acme_protocol::url::AcmeUrl;
 
 #[derive(Clone, Copy)]
 pub(super) enum Mode {
@@ -50,19 +45,16 @@ pub(super) struct TerminalSelection;
 
 impl SelectionPrompts for TerminalSelection {
     fn choose(&mut self, message: &str, choices: Vec<String>, default: usize) -> CliResult<usize> {
-        let chosen = prompt_result(
-            inquire::Select::new(message, choices.clone())
-                .with_starting_cursor(default)
-                .prompt(),
-        )?;
-        choices
-            .iter()
-            .position(|choice| *choice == chosen)
-            .ok_or_else(|| "Invalid account selection.".into())
+        crate::common::terminal::select_index(message, &choices, default)
     }
 
     fn text(&mut self, message: &str, default: &str) -> CliResult<String> {
-        prompt_result(inquire::Text::new(message).with_default(default).prompt())
+        prompt_result(
+            inquire::Text::new(message)
+                .with_default(default)
+                .with_render_config(crate::common::terminal::prompt_style(false))
+                .prompt(),
+        )
     }
 
     fn invalid(&mut self, message: &str) {
@@ -125,13 +117,14 @@ pub(super) fn resolve(
     let choices = candidates
         .iter()
         .map(|account| {
-            format!(
-                "{} — {} ({}, deactivation: {})",
-                safe(&account.name),
-                safe(account.directory.as_str()),
-                super::report::state_label(account.state),
-                super::report::deactivation_label(account.deactivation),
-            )
+            let state = match account.deactivation {
+                aster_acme_core::account::DeactivationState::Pending => "deactivation pending",
+                aster_acme_core::account::DeactivationState::Confirmed => "deactivated",
+                aster_acme_core::account::DeactivationState::NotRequested => {
+                    super::report::state_label(account.state)
+                }
+            };
+            format!("{} — {state}", safe(&account.name))
         })
         .collect();
     let default = candidates
@@ -198,6 +191,7 @@ fn create(
 mod tests {
     use super::*;
     use crate::common::terminal::Canceled;
+    use aster_acme_protocol::url::AcmeUrl;
     use std::collections::VecDeque;
 
     #[derive(Default)]
@@ -283,7 +277,8 @@ mod tests {
             assert_eq!(options.name.as_deref(), Some("work"));
             assert_eq!(options.ca_directory, None);
             assert_eq!(prompts.default, 1);
-            assert!(prompts.shown[1].contains("https://other.example/directory"));
+            assert!(prompts.shown[1].contains("work"));
+            assert!(!prompts.shown[1].contains("https://"));
             match mode {
                 Mode::Register => assert_eq!(
                     prompts.messages,

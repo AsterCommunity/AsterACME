@@ -56,10 +56,10 @@ async fn failed_updates_preserve_local_intent_and_previous_observation_without_r
         ResponseTemplate::new(201),
         ResponseTemplate::new(200)
             .insert_header("Replay-Nonce", "response_nonce")
-            .set_delay(Duration::from_millis(500)),
+            .set_delay(Duration::from_secs(2)),
     ] {
         let (server, service, store, key) = deactivation::fixture(TransportOptions {
-            request_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(1),
             ..local_options()
         })
         .await;

@@ -341,17 +341,7 @@ async fn read_response(mut response: reqwest::Response) -> Result<AcmeResponse, 
 }
 
 fn response_error(response: &AcmeResponse) -> TransportError {
-    let retry_after = response
-        .headers
-        .get(RETRY_AFTER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|value| {
-            value
-                .parse::<u64>()
-                .map(|seconds| RetryAfter::Delay(Duration::from_secs(seconds)))
-                .ok()
-                .or_else(|| httpdate::parse_http_date(value).ok().map(RetryAfter::At))
-        });
+    let retry_after = retry_after(&response.headers);
     match serde_json::from_slice::<Problem>(&response.body) {
         Ok(problem) if response.status.is_client_error() || response.status.is_server_error() => {
             TransportError::Problem {
@@ -370,6 +360,20 @@ fn response_error(response: &AcmeResponse) -> TransportError {
 /// Encode public payloads for account requests.
 pub(crate) fn json_payload(value: &impl Serialize) -> Result<Vec<u8>, TransportError> {
     Ok(serde_json::to_vec(value)?)
+}
+
+/// Parse the CA scheduling hint once for both errors and successful resource responses.
+pub(crate) fn retry_after(headers: &HeaderMap) -> Option<RetryAfter> {
+    headers
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .parse::<u64>()
+                .map(|seconds| RetryAfter::Delay(Duration::from_secs(seconds)))
+                .ok()
+                .or_else(|| httpdate::parse_http_date(value).ok().map(RetryAfter::At))
+        })
 }
 
 #[cfg(test)]

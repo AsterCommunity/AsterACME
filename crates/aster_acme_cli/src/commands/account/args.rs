@@ -50,7 +50,7 @@ pub(crate) struct NameArgs {
     #[arg(index = 1, value_name = "NAME", conflicts_with = "name", value_parser = parse_name)]
     pub(crate) positional_name: Option<String>,
     /// Local account name; omit to select interactively or use the configured default.
-    #[arg(long, value_parser = parse_name)]
+    #[arg(short = 'n', long, value_parser = parse_name)]
     pub(crate) name: Option<String>,
 }
 
@@ -81,7 +81,7 @@ pub(crate) struct RemoveArgs {
     #[command(flatten)]
     pub(crate) target: LocalTargetArgs,
     /// Confirm deletion of local account metadata and private key without prompting.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     pub(crate) yes: bool,
 }
 
@@ -161,7 +161,7 @@ pub(crate) struct RegisterArgs {
     #[command(flatten)]
     pub(crate) identity: NameArgs,
     /// Contact email; repeat for multiple addresses (mailto: is also accepted).
-    #[arg(long)]
+    #[arg(short = 'm', long)]
     pub(crate) contact: Vec<String>,
     #[command(flatten)]
     pub(crate) ca: CaArgs,
@@ -171,7 +171,7 @@ pub(crate) struct RegisterArgs {
     #[command(flatten)]
     pub(crate) http: HttpArgs,
     /// Confirm existing account reuse; does not accept terms or disable other prompts.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     pub(crate) yes: bool,
     #[command(flatten)]
     pub(crate) local: LocalArgs,
@@ -197,7 +197,7 @@ pub(crate) struct DeactivateArgs {
     #[command(flatten)]
     pub(crate) network: NetworkArgs,
     /// Confirm irreversible CA account deactivation without an interactive prompt.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     pub(crate) yes: bool,
 }
 
@@ -212,7 +212,7 @@ pub(crate) struct UpdateContactArgs {
     #[arg(long)]
     pub(crate) clear_contacts: bool,
     /// Confirm this contact update without prompting.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     pub(crate) yes: bool,
 }
 
@@ -221,7 +221,7 @@ pub(crate) struct RotateKeyArgs {
     #[command(flatten)]
     pub(crate) network: NetworkArgs,
     /// Confirm key rotation or reconciliation without prompting.
-    #[arg(long)]
+    #[arg(short = 'y', long)]
     pub(crate) yes: bool,
 }
 

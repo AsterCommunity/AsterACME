@@ -3,7 +3,8 @@ use aster_acme_protocol::url::AcmeUrl;
 
 use crate::common::{
     error::CliResult,
-    terminal::{Canceled, prompt_result, safe},
+    output::safe,
+    terminal::{Canceled, prompt_result},
 };
 use aster_acme::account::{AccountError, RegistrationOptions};
 
@@ -33,12 +34,18 @@ pub(super) fn replacement_contacts(
 
 impl RegistrationPrompts for TerminalPrompts {
     fn confirm(&mut self, message: &str) -> CliResult<bool> {
-        prompt_result(inquire::Confirm::new(message).with_default(false).prompt())
+        prompt_result(
+            inquire::Confirm::new(message)
+                .with_default(false)
+                .with_render_config(crate::common::terminal::prompt_style(false))
+                .prompt(),
+        )
     }
 
     fn email(&mut self) -> CliResult<String> {
         prompt_result(
             inquire::Text::new("Contact email:")
+                .with_render_config(crate::common::terminal::prompt_style(false))
                 .with_placeholder("you@example.com")
                 .with_help_message("Optional CA contact; saved locally for future registrations.")
                 .with_validator(|input: &str| {

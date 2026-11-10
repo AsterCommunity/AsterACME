@@ -1,12 +1,12 @@
 //! Account presentation: distinguish local lifecycle from a fresh CA response.
 
 use super::report::{AccountReport, LocalAccountReport, deactivation_label, state_label};
+use crate::common::time::timestamp;
 use crate::common::{
     error::CliResult,
-    terminal::{colors, safe, styled},
+    output::{colors, field, safe, styled},
 };
 use aster_acme_core::account::AccountRecordState;
-use unicode_width::UnicodeWidthStr;
 
 use std::io::{self, IsTerminal};
 
@@ -33,14 +33,12 @@ pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<Stri
         } => {
             use super::report::RemoteAction;
             match action {
-                RemoteAction::Show => remote_lines(name, account, true, color).join("\n"),
                 RemoteAction::Register | RemoteAction::Recover | RemoteAction::UpdateContact => {
                     let verb = match action {
                         RemoteAction::Register if *reused => "Reused",
                         RemoteAction::Register if account.recovered => "Recovered existing",
                         RemoteAction::Register => "Registered",
                         RemoteAction::Recover => "Recovered",
-                        RemoteAction::Show => "Verified",
                         RemoteAction::UpdateContact => "Updated contacts for",
                     };
                     let status = match &account.status {
@@ -136,38 +134,17 @@ fn list_text(
             },
             safe(&status),
             deactivation_label(account.deactivation).into(),
-            timestamp(account.times.registered_at, true),
-            timestamp(account.times.last_status_at, true),
-            timestamp(account.times.last_used_at, true),
+            timestamp(account.times.registered_at),
+            timestamp(account.times.last_status_at),
+            timestamp(account.times.last_used_at),
         ]);
     }
-    let widths: [usize; 8] = std::array::from_fn(|column| {
-        rows.iter()
-            .map(|row| row[column].width())
-            .max()
-            .unwrap_or(0)
-    });
     let mut lines = vec![if verification.is_some() {
         "Accounts (* = configured default; per-account verification below):".into()
     } else {
         "Local accounts (* = configured default; remote status not verified):".into()
     }];
-    for (index, row) in rows.iter().enumerate() {
-        let line = row
-            .iter()
-            .enumerate()
-            .map(|(column, cell)| {
-                if column == widths.len() - 1 {
-                    cell.clone()
-                } else {
-                    format!(
-                        "{cell}{}",
-                        " ".repeat(widths[column].saturating_sub(cell.width()))
-                    )
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
+    for (index, line) in crate::common::table::align(&rows).into_iter().enumerate() {
         lines.push(styled(
             &line,
             if index == 0 { "1;36" } else { "1;32" },
@@ -190,71 +167,19 @@ fn list_text(
     lines.join("\n")
 }
 
-#[cfg(test)]
-pub(super) fn json_value(report: &AccountReport) -> serde_json::Value {
-    serde_json::to_value(super::output::Output::from(report)).unwrap()
-}
-
-fn remote_lines(
-    name: &str,
-    account: &aster_acme::account::AcmeAccount,
-    verified: bool,
-    color: bool,
-) -> Vec<String> {
-    let mut lines = vec![
-        format!("{} Account {}", styled("[OK]", "1;32", color), safe(name)),
-        format!("  CA: {}", safe(account.directory_url.as_str())),
-        format!("  Account: {}", safe(account.account_url.as_str())),
-        format!("  Status: {}", safe(&String::from(account.status.clone()))),
-        format!(
-            "  Source: {}",
-            if verified {
-                "CA response (verified)"
-            } else {
-                "saved local confirmation (not verified now)"
-            }
-        ),
-    ];
-    lines.extend(time_lines(account.times));
-    for contact in &account.contacts {
-        lines.push(format!("  Contact: {}", safe(contact)));
-    }
-    lines
-}
-
-/// Lists use minute precision for scanning; detail keeps UTC RFC 3339 precision.
-fn timestamp(value: Option<time::OffsetDateTime>, compact: bool) -> String {
-    let Some(value) = value else {
-        return "—".into();
-    };
-    let value = value.to_offset(time::UtcOffset::UTC);
-    if compact {
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}",
-            value.year(),
-            u8::from(value.month()),
-            value.day(),
-            value.hour(),
-            value.minute()
-        )
-    } else {
-        value
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap_or_else(|_| "—".into())
-    }
-}
-
-fn time_lines(times: aster_acme::account::AccountTimes) -> [String; 3] {
+fn time_lines(times: aster_acme::account::AccountTimes, color: bool) -> [String; 3] {
     [
-        format!(
-            "  First registered locally: {}",
-            timestamp(times.registered_at, false)
+        field(
+            "First registered locally:",
+            &timestamp(times.registered_at),
+            color,
         ),
-        format!(
-            "  Last CA status at: {}",
-            timestamp(times.last_status_at, false)
+        field(
+            "Last CA status at:",
+            &timestamp(times.last_status_at),
+            color,
         ),
-        format!("  Last used at: {}", timestamp(times.last_used_at, false)),
+        field("Last used at:", &timestamp(times.last_used_at), color),
     ]
 }
 
@@ -269,76 +194,131 @@ fn local_state(local: &LocalAccountReport) -> &'static str {
 fn local_text(local: &LocalAccountReport, color: bool) -> String {
     let mut lines = vec![
         format!(
-            "{} Account {} (local)",
+            "{} Account {}",
             styled("[INFO]", "1;36", color),
             safe(&local.name)
         ),
-        format!("  CA: {}", safe(local.directory.as_str())),
-        format!("  Key thumbprint: {}", safe(&local.key_thumbprint)),
-        format!("  Local state: {}", local_state(local)),
+        field("CA:", &safe(local.directory.as_str()), color),
+        field("Key thumbprint:", &safe(&local.key_thumbprint), color),
+        field(
+            "Local state:",
+            &styled(
+                local_state(local),
+                match local.record.as_ref().map(|record| record.state) {
+                    Some(AccountRecordState::Registered) => "32",
+                    Some(AccountRecordState::RegistrationPending) | None => "33",
+                },
+                color,
+            ),
+            color,
+        ),
     ];
     if let Some(record) = &local.record {
         if let Some(user_agent) = &record.user_agent {
-            lines.push(format!("  User-Agent: {}", safe(user_agent)));
+            lines.push(field("User-Agent:", &safe(user_agent), color));
         }
         if let Some(rotation) = &record.key_rotation {
-            lines.push(format!(
-                "  Key rotation: {}. Use account rotate-key to resume.",
-                rotation_label(rotation.phase)
+            lines.push(field(
+                "Key rotation:",
+                &styled(
+                    &format!(
+                        "{}. Use account rotate-key to resume.",
+                        rotation_label(rotation.phase)
+                    ),
+                    "33",
+                    color,
+                ),
+                color,
             ));
         }
-        lines.push(format!("  Account ID: {}", safe(&record.account_id)));
-        lines.extend(time_lines(record.times));
+        lines.push(field("Account ID:", &safe(&record.account_id), color));
+        lines.extend(time_lines(record.times, color));
         if let Some(status) = &record.last_status {
-            lines.push(format!(
-                "  Last CA status: {}",
-                safe(&String::from(status.clone()))
+            lines.push(field(
+                "Last CA status:",
+                &account_status(status, color),
+                color,
             ));
         }
-        lines.push(format!(
-            "  Deactivation: {}",
-            deactivation_label(record.deactivation)
+        let deactivation_style = match record.deactivation {
+            aster_acme_core::account::DeactivationState::NotRequested => "32",
+            aster_acme_core::account::DeactivationState::Pending => "33",
+            aster_acme_core::account::DeactivationState::Confirmed => "31",
+        };
+        lines.push(field(
+            "Deactivation:",
+            &styled(
+                deactivation_label(record.deactivation),
+                deactivation_style,
+                color,
+            ),
+            color,
         ));
         if let Some(url) = &record.account_url {
-            lines.push(format!("  Account: {}", safe(url.as_str())));
+            lines.push(field("Account:", &safe(url.as_str()), color));
         }
         for contact in &record.contacts {
-            lines.push(format!("  Configured contact: {}", safe(contact)));
+            lines.push(field("Configured contact:", &safe(contact), color));
         }
         match &record.server_contacts {
             Some(contacts) if contacts.is_empty() => {
-                lines.push("  CA contacts: empty in the last response".into());
+                lines.push(field("CA contacts:", "empty in the last response", color));
             }
             Some(contacts) => {
                 for contact in contacts {
-                    lines.push(format!("  Last CA contact: {}", safe(contact)));
+                    lines.push(field("Last CA contact:", &safe(contact), color));
                 }
             }
-            None => lines.push("  CA contacts: not provided".into()),
+            None => lines.push(field("CA contacts:", "not provided", color)),
         }
         if let Some(url) = &record.accepted_terms_url {
-            lines.push(format!("  Accepted terms: {}", safe(url.as_str())));
+            lines.push(field("Accepted terms:", &safe(url.as_str()), color));
         }
     }
-    lines.push("  Remote status: not verified. Use account show --verify to query the CA.".into());
+    lines.push(field(
+        "Remote status:",
+        &styled(
+            if local.verified {
+                "verified with CA"
+            } else {
+                "not verified. Use account show --verify to query the CA."
+            },
+            if local.verified { "32" } else { "33" },
+            color,
+        ),
+        color,
+    ));
     lines.join("\n")
 }
 
+fn account_status(status: &aster_acme_core::protocol::AccountStatus, color: bool) -> String {
+    use aster_acme_core::protocol::AccountStatus;
+    let style = match status {
+        AccountStatus::Valid => "32",
+        AccountStatus::Deactivated | AccountStatus::Revoked | AccountStatus::Unknown(_) => "31",
+    };
+    styled(&safe(&String::from(status.clone())), style, color)
+}
+
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use aster_acme_cli_storage::LocalAccount;
     use aster_acme_core::account::DeactivationState;
     use aster_acme_protocol::url::AcmeUrl;
+
+    pub(in crate::commands::account) fn json_value(report: &AccountReport) -> serde_json::Value {
+        serde_json::to_value(super::super::output::Output::from(report)).unwrap()
+    }
 
     #[test]
     fn time_columns_are_utc_unknown_values_are_explicit_and_json_keeps_precision() {
         let at = time::OffsetDateTime::from_unix_timestamp(0)
             .unwrap()
             .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap());
-        assert_eq!(timestamp(None, true), "—");
-        assert_eq!(timestamp(Some(at), true), "1970-01-01 00:00");
-        assert_eq!(timestamp(Some(at), false), "1970-01-01T00:00:00Z");
+        assert_eq!(timestamp(None), "—");
+        assert_eq!(timestamp(Some(at)), "1970-01-01 00:00:00 UTC");
+        assert_eq!(timestamp(Some(at)), "1970-01-01 00:00:00 UTC");
         let times = aster_acme::account::AccountTimes {
             registered_at: Some(at.to_offset(time::UtcOffset::UTC)),
             last_status_at: None,
@@ -447,17 +427,6 @@ mod tests {
             action: RemoteAction::Register,
         };
         assert!(render(&report, false).unwrap().contains("Reused account"));
-        let report = AccountReport::Remote {
-            name: "work".into(),
-            account: account.clone(),
-            reused: false,
-            action: RemoteAction::Show,
-        };
-        assert!(
-            render(&report, false)
-                .unwrap()
-                .contains("https://ca.example/account/1")
-        );
         let mut inactive = account.clone();
         inactive.status = AccountStatus::Deactivated;
         let report = AccountReport::Remote {
@@ -482,5 +451,96 @@ mod tests {
                 .unwrap()
                 .contains("Deactivated account work.")
         );
+    }
+
+    #[test]
+    fn account_details_use_shared_field_colors_and_explicit_unverified_state() {
+        let account = LocalAccountReport {
+            verified: false,
+            name: "default".into(),
+            directory: aster_acme_protocol::url::AcmeUrl::new("https://ca.example/directory")
+                .unwrap(),
+            key_thumbprint: "public-key".into(),
+            record: None,
+        };
+        let colored = local_text(&account, true);
+        assert!(colored.contains("\x1b[36mCA:\x1b[0m"));
+        assert!(colored.contains("\x1b[33mkey_only\x1b[0m"));
+        assert!(colored.contains("\x1b[33mnot verified."));
+        let plain = local_text(&account, false);
+        assert!(!plain.contains('\x1b'));
+        assert!(
+            plain
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("CA: https://ca.example/directory")
+        );
+        assert!(
+            account_status(&aster_acme_core::protocol::AccountStatus::Valid, true)
+                .contains("\x1b[32mvalid")
+        );
+        assert!(
+            account_status(&aster_acme_core::protocol::AccountStatus::Deactivated, true)
+                .contains("\x1b[31mdeactivated")
+        );
+    }
+
+    #[test]
+    fn verified_and_offline_account_details_keep_identical_fields_and_explicit_source() {
+        use aster_acme::account::{AccountRecord, AccountTimes};
+        use aster_acme_core::{account::DeactivationState, protocol::AccountStatus};
+        let directory =
+            aster_acme_protocol::url::AcmeUrl::new("https://ca.example/directory").unwrap();
+        let account = AccountRecord {
+            user_agent: Some("test/1".into()),
+            times: AccountTimes::default(),
+            account_id: "id".into(),
+            directory_url: directory.clone(),
+            key_thumbprint: "thumbprint".into(),
+            account_url: Some(
+                aster_acme_protocol::url::AcmeUrl::new("https://ca.example/account").unwrap(),
+            ),
+            contacts: vec!["mailto:a@example.com".into()],
+            server_contacts: None,
+            last_status: Some(AccountStatus::Valid),
+            deactivation: DeactivationState::NotRequested,
+            key_rotation: None,
+            accepted_terms_url: None,
+            state: AccountRecordState::Registered,
+        };
+        let mut labels = Vec::new();
+        for verified in [false, true] {
+            let local = LocalAccountReport {
+                verified,
+                name: "default".into(),
+                directory: directory.clone(),
+                key_thumbprint: "thumbprint".into(),
+                record: Some(account.clone()),
+            };
+            let text = local_text(&local, false);
+            labels.push(
+                text.lines()
+                    .filter_map(|line| line.split_once(": ").map(|(label, _)| label.to_owned()))
+                    .collect::<Vec<_>>(),
+            );
+            assert!(
+                text.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .contains(if verified {
+                        "Remote status: verified with CA"
+                    } else {
+                        "Remote status: not verified"
+                    })
+            );
+            let report = AccountReport::Local(local);
+            let json = json_value(&report);
+            assert_eq!(json["verified"], verified);
+            assert_eq!(json["source"], if verified { "remote" } else { "local" });
+            assert_eq!(json["key_thumbprint"], "thumbprint");
+            assert_eq!(json["contacts"][0], "mailto:a@example.com");
+        }
+        assert_eq!(labels[0], labels[1]);
     }
 }

@@ -11,10 +11,11 @@ impl CliAccountStore {
     /// The account lock serializes against registration and remote operations. Rename
     /// removes the whole account from the visible inventory before unlinking known files.
     /// A cleanup error leaves the hidden directory for manual inspection; it is never
-    /// reused as an account. Unknown files and unsafe links are rejected before mutation.
+    /// reused as an account. Extra user files are retained in their original directory;
+    /// only known managed files are inspected and removed.
     ///
     /// # Errors
-    /// Reports missing identity, unsafe/unknown files, lock timeout, cleanup or sync failures.
+    /// Reports missing identity, unsafe managed files, lock timeout, cleanup or sync failures.
     pub async fn remove(&self) -> Result<(), AccountStoreError> {
         let slot = self.account_slot();
         ensure_real_dir(&slot)?;
@@ -35,16 +36,32 @@ impl CliAccountStore {
                 Err(_) => return Err(store_error("cannot inspect deletion directory")),
             }
             let mut files = Vec::new();
+            let mut has_user_entries=false;
             for entry in fs::read_dir(&slot).map_err(|_| store_error("cannot inspect account directory"))? {
                 let entry = entry.map_err(|_| store_error("cannot inspect account file"))?;
                 let filename = entry.file_name();
                 if !matches!(filename.to_str(), Some("account.toml" | "account-key.pk8" | "account.lock" | "account-key.next.pk8" | "account-key.previous.pk8")) {
-                    return Err(store_error("account directory contains unknown files; refusing removal"));
+                    has_user_entries=true;
+                    continue;
                 }
                 // Enforce the same no-follow/owner/single-link policy even for corrupt
                 // keys. Removal does not require key decoding or a successful CA request.
                 let _bytes = zeroize::Zeroizing::new(read_private(&entry.path(), MAX_ACCOUNT_FILE).map_err(|_| store_error("account file is unsafe; refusing removal"))?);
                 files.push(filename);
+            }
+            if has_user_entries {
+                // Retain the same lock inode while removing metadata first. New opens
+                // cannot confuse a leftover user directory with an initialized account.
+                let metadata=slot.join("account.toml");
+                if files.iter().any(|name|name=="account.toml") {
+                    fs::remove_file(&metadata).map_err(|_|store_error("cannot remove account metadata"))?;
+                    sync_directory(&slot)?;
+                }
+                for filename in files {
+                    if filename=="account.lock" || filename=="account.toml" {continue;}
+                    fs::remove_file(slot.join(filename)).map_err(|_|store_error("account metadata removed but managed key cleanup failed"))?;
+                }
+                return sync_directory(&slot);
             }
             fs::rename(&slot, &hidden).map_err(|_| store_error("cannot isolate account for removal"))?;
             sync_directory(parent)?;

@@ -1,4 +1,5 @@
 //! Input, method selection, response derivation and solver contract boundary tests.
+use aster_acme_protocol::order::{WireChallengeKind, WireIdentifier};
 
 use base64::Engine as _;
 use serde_json::json;
@@ -154,7 +155,7 @@ fn known_and_unknown_challenge_methods_use_exact_wire_strings() {
         ("tls-alpn-01", ChallengeKind::TlsAlpn01),
     ] {
         let parsed: WireChallengeKind = serde_json::from_value(json!(wire)).unwrap();
-        assert_eq!(parsed.known(), Some(kind));
+        assert_eq!(crate::challenge::known_method(&parsed), Some(kind));
         assert_eq!(serde_json::to_value(parsed).unwrap(), json!(wire));
         assert_eq!(serde_json::to_value(kind).unwrap(), json!(wire));
         assert_eq!(
@@ -164,7 +165,7 @@ fn known_and_unknown_challenge_methods_use_exact_wire_strings() {
     }
     for wire in ["dns-02", "DNS-01", "", "http01"] {
         let parsed: WireChallengeKind = serde_json::from_value(json!(wire)).unwrap();
-        assert_eq!(parsed.known(), None);
+        assert_eq!(crate::challenge::known_method(&parsed), None);
         assert_eq!(serde_json::to_value(parsed).unwrap(), json!(wire));
         assert!(serde_json::from_value::<ChallengeKind>(json!(wire)).is_err());
     }
