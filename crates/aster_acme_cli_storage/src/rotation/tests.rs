@@ -41,6 +41,8 @@ async fn setup(endpoint: bool, timeout: Duration) -> Fixture {
                     new_order: None,
                     new_nonce: url("/nonce"),
                     new_account: url("/unused"),
+                    renewal_info: None,
+                    revoke_cert: None,
                     key_change: endpoint.then(|| url("/vendor/rollover")),
                     meta: DirectoryMeta::default(),
                 }),

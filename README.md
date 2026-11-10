@@ -29,7 +29,7 @@
 
 AsterACME implements ACME account operations and manual DNS-01 certificate issuance as a Rust library and command-line application. You request a certificate; the library creates the order, tracks authorizations, submits the fixed CSR, downloads the issued chain, and persists the result. The CLI supplies terminal interaction and local storage.
 
-The project is under active development and has not released its ACME packages. Manual issuance and recovery are implemented. Automated DNS providers, HTTP/TLS validation, scheduled renewal, ARI, revocation, and deployment hooks remain planned.
+The project is under active development and has not released its ACME packages. Manual issuance and recovery, ARI renewal planning, and account-signed certificate revocation are implemented. Automated DNS providers, HTTP/TLS validation, automatic renewal, daemon scheduling, and deployment hooks remain planned.
 
 ## Where it fits
 
@@ -93,6 +93,7 @@ aster-acme account switch default --data-dir ./data
 
 ```sh
 aster-acme cert issue \
+  -n example-cert \
   -a default \
   -d example.com \
   -d '*.example.com' \
@@ -105,24 +106,37 @@ Publish every requested TXT value, keeping unrelated existing records. Several v
 If you need to finish later:
 
 ```sh
-aster-acme cert issue --resume example.com --data-dir ./data
+aster-acme cert issue --resume example-cert --data-dir ./data
 aster-acme cert list --data-dir ./data
-aster-acme cert show example.com --data-dir ./data
-aster-acme cert show example.com --verify --data-dir ./data
+aster-acme cert show example-cert --data-dir ./data
+aster-acme cert show example-cert --verify --data-dir ./data
 ```
 
-The first normalized domain is the default certificate name; `-n/--name` overrides it. A name can have several requests: the terminal lets you choose by primary domain, request time, and state. Scripts must supply `--operation <ID>` when the selection is ambiguous. New `issue` creates a new request; `--resume` continues an existing one.
+Each new issue creates an independent managed certificate. Default names combine the primary domain with a random suffix; collisions retry automatically. Explicit `-n/--name` names must be unused. Stable cert.toml definitions retain domains, account, CA and validation method; subsequent renewal generations stay under that same name. `--resume` continues an existing operation. List/show default to current, `list --history` expands versions, and `show --history` or `--operation` selects historical requests. Only current has an active renewal schedule.
 
 `cert show` without a name guides terminal selection. Certificate listing and inspection do not advance validation or issuance. Expired requests remain visible but cannot continue validation or finalization.
+
+## Renewal planning and revocation
+
+After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. Automatic renewal and periodic wakeups remain future daemon work.
+
+```sh
+aster-acme cert revoke example-cert --reason key-compromise --yes
+aster-acme cert remove example-cert --history --yes
+aster-acme cert remove example-cert --revoked --yes
+aster-acme cert remove example-cert --all --yes
+```
+
+Revocation uses the bound issuing account and requires confirmation. Select the exact generation when ambiguous. Local files remain; a timeout is recorded as unconfirmed. `cert remove` defaults to one exact request. `--history` cleans issued non-current versions, `--revoked` matches saved revocation confirmations, and `--all` explicitly deletes the whole group. Clearing current never promotes an old version. Extra user files and the lock carrier remain; no CA request is made. See the [renewal and revocation contract](docs/certificate-lifecycle.md).
 
 ## Scripts and confirmation
 
 ```sh
 # First call returns JSON with status=action_required and the TXT requirements.
-aster-acme cert issue -d example.com -c manual_dns --json --data-dir ./data
+aster-acme cert issue -n script-cert -d example.com -c manual_dns --json --data-dir ./data
 
 # After publishing the TXT values, resume without the manual confirmation.
-aster-acme cert issue --resume example.com --yes --json --data-dir ./data
+aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
 ```
 
 An `action_required` result exits successfully but is not an issued certificate; inspect the JSON `status`.
@@ -148,7 +162,7 @@ First automated/manual-DNS requests expose their fresh TXT instructions even wit
 │   ├── account.toml
 │   ├── account-key.pk8
 │   └── account.lock
-└── certs/example.com/
+└── certs/example-cert/
     ├── cert.toml
     ├── cert.lock
     ├── current -> 20261111T010851Z-9YowFEL2/

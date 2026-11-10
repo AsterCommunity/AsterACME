@@ -40,8 +40,10 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
     if let Some(issue) = error.downcast_ref::<aster_acme::issuance::IssueError>() {
         use aster_acme::issuance::IssueError;
         return match issue {
+            IssueError::NameAlreadyExists(name)=>(issue.to_string(),Some(format!("Choose another --name, or inspect cert show '{}'. To continue its unfinished request use cert issue --resume '{}'.",name.as_str(),name.as_str()))),
+            IssueError::RevocationUncertain(error)=>(format!("Certificate revocation outcome is unconfirmed. {}", transport_diagnostic(error).0),Some("Inspect cert show <NAME>. Rerun cert revoke <NAME> --yes with the same reason to request revocation again; local files are retained.".into())),
             IssueError::Transport(error)=>transport_diagnostic(error),
-            IssueError::Store(error)=>storage_message(&error.message),
+            IssueError::Store(error)=>(format!("Could not access certificate storage: {}", error.message),Some("Check --data-dir, managed files and permissions. Retain any .removing marker and remaining files for inspection.".into())),
             IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; --force never bypasses CA expiry.".into())),
             IssueError::CreationUncertain=>(issue.to_string(),Some("Use cert list to inspect the retained request. Keep its key/CSR; a missing Location cannot be reconstructed safely and no new order will be created automatically.".into())),
             IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Manual TXT records remain under your control.".into())),

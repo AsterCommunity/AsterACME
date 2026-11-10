@@ -18,6 +18,8 @@ pub mod crypto;
 mod http_client;
 pub mod identifier;
 pub mod issuance;
+pub mod renewal;
+pub mod revocation;
 pub mod solver;
 pub mod transport;
 

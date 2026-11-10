@@ -478,3 +478,41 @@ async fn discovery_timeout_malformed_json_and_insecure_endpoints_are_errors() {
         assert!(AcmeClient::discover(AcmeUrl::new(&format!("{}/directory",server.uri())).unwrap(),TransportOptions{request_timeout:Duration::from_millis(100),..local_options()}).await.is_err());
     }
 }
+
+#[tokio::test]
+async fn successful_post_without_usable_nonce_keeps_location_and_fetches_fresh_nonce_next_time() {
+    for header in [None, Some("invalid nonce")] {
+        let (server, client) = server(local_options()).await;
+        let mut response = ResponseTemplate::new(201)
+            .insert_header("Location", format!("{}/created", server.uri()))
+            .set_body_json(serde_json::json!({"status":"valid"}));
+        if let Some(header) = header {
+            response = response.insert_header("Replay-Nonce", header);
+        }
+        Mock::given(method("POST"))
+            .and(path("/account"))
+            .respond_with(response)
+            .expect(2)
+            .mount(&server)
+            .await;
+        let key = AccountKey::generate().unwrap();
+        for _ in 0..2 {
+            let response = client
+                .signed(&client.directory.new_account, &key, None, b"{}")
+                .await
+                .unwrap();
+            assert_eq!(response.status, StatusCode::CREATED);
+            assert_eq!(
+                client.account_location(&response).unwrap().as_str(),
+                format!("{}/created", server.uri())
+            );
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.iter().filter(|r| r.method == "HEAD").count(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.headers.get("Replay-Nonce").is_none())
+        );
+    }
+}

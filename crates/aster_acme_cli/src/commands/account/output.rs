@@ -38,8 +38,7 @@ pub(super) struct SavedAccount<'a> {
     #[serde(flatten)]
     times: aster_acme::account::AccountTimes,
     name: &'a str,
-    source: &'static str,
-    verified: bool,
+    ca_query: AccountQuery,
     directory: &'a AcmeUrl,
     key_thumbprint: &'a str,
     account_id: Option<&'a str>,
@@ -51,6 +50,11 @@ pub(super) struct SavedAccount<'a> {
     contacts: &'a [String],
     server_contacts: Option<&'a [String]>,
     accepted_terms_url: Option<&'a AcmeUrl>,
+}
+
+#[derive(Serialize)]
+struct AccountQuery {
+    account_refreshed: bool,
 }
 
 #[derive(Serialize)]
@@ -147,8 +151,9 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                             record.times
                         }),
                     name: &local.name,
-                    source: if local.verified { "remote" } else { "local" },
-                    verified: local.verified,
+                    ca_query: AccountQuery {
+                        account_refreshed: local.verified,
+                    },
                     directory: &local.directory,
                     key_thumbprint: &local.key_thumbprint,
                     account_id: record.map(|record| record.account_id.as_str()),

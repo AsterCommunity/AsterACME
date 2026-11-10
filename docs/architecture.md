@@ -1,6 +1,6 @@
 # AsterACME 架构设计
 
-状态：架构基线；账户与手动 DNS-01 签发、持久化恢复及只读订单查看已实现；自动 DNS provider、续期、吊销和部署仍为设计目标。日期：2026-11-11。
+状态：架构基线；账户与手动 DNS-01 签发、持久化恢复及只读订单查看已实现；ARI 续期计划及账户签名吊销也已实现；自动 DNS provider、自动续期、daemon 和部署仍为设计目标。日期：2026-11-11。
 
 规范依据见 [ACME RFC 参考](rfc-reference.md)。本文确定职责、依赖方向与可靠性契约；Rust 代码均为接口示意，不承诺最终签名。
 
@@ -288,7 +288,7 @@ Core 纯决策返回 SendKeyChange / ReconcileKeyChange / FinalizeKeyChange。�
 
 用户写入口为 `cert issue`，一次表达完整证书需求；cert list/show 只读及显式 --verify，根 order 命令删除。内部 Order/Authorization/Challenge 由 protocol 模型和 core 动作推进，不把 newOrder/finalize 分成用户必须手动调用的命令。网络路径全部来自 directory、Location 或资源字段。
 
-本地名称默认首个规范化域名，可用 -n 指定。名称不是操作 ID：certs/<name>/<UTC-time>-<random8> 保存多轮申请，created_at 是本地请求时间。resume <name> 唯一候选直接恢复，多候选交互仅显示主域名、时间和状态；JSON/无终端多候选要求 --operation。没有候选不创建申请，过期候选可见但不重新验证。OrderStatus 不增加 expired wire 变体；订单 expires、授权 expires、证书 notAfter 单独保存和显示。pending/valid 订单与 valid 授权按 RFC 检查必需 expires；未知状态不执行。
+本地名称默认主域名加随机后缀，碰撞重试；-n 显式名称已存在则拒绝。托管定义拥有固定域名集合/账户/CA/验证方式，续期版本沿用身份；名称不是操作 ID：certs/<name>/<UTC-time>-<random8> 保存多轮申请，created_at 是本地请求时间。resume <name> 唯一候选直接恢复，多候选交互仅显示主域名、时间和状态；JSON/无终端多候选要求 --operation。没有候选不创建申请，过期候选可见但不重新验证。OrderStatus 不增加 expired wire 变体；订单 expires、授权 expires、证书 notAfter 单独保存和显示。pending/valid 订单与 valid 授权按 RFC 检查必需 expires；未知状态不执行。
 
 IssueService 注入 `dyn IssueSession` 与 `dyn DnsReadiness`。当前 solver_id 固定 manual_dns，人工 TXT 发布/确认由 CLI 负责，DNS crate 只检查可见性；通用自动 ChallengeSolver 的 provider 发布/receipt 生命周期尚待实现，不将人工操作伪装成自动 DNS provider。force 只跳过本地查询，不跳过用户操作、CA 验证、状态机、有效期或证书检查。首次非交互执行总是 yield action_required，用户添加 TXT 后显式 resume；同名 TXT 多值一起准备才允许通知任一 challenge。
 
@@ -298,7 +298,7 @@ newOrder 的持久化创建意图先于 POST；201 的 Location 先存，再解�
 
 固定 P-256 证书私钥与 CSR 在首次网络提交前落盘，与账户私钥独立；material.sha256 绑定原始字节，恢复不重签 CSR。fullchain 完成解析、公钥/SAN/有效期/相邻签名检查后落盘，再原子切换 cert.toml.current，最后标记 Completed。中途失败保留旧 current 或已验证的新版本；Downloading 可重新下载同一订单产物，不重下单。手动清理作为独立待办返回，不执行删除。历史世代暂不自动回收。
 
-各 crate 的 package.version 独立声明，workspace 只继承作者、许可、edition 等公共元数据；依赖版本/source/features 仍唯一归根 workspace.dependencies。Forge HTTP/utils/macros 使用 =0.1.0-alpha.1，AsterFs 使用 =0.1.0，直接 base64 使用 0.23.1。独立 0.0.1 发布准备 worktree 已按用户要求删除；ACME 包发布仍暂停。
+各 crate 的 package.version 独立声明，workspace 只继承作者、许可、edition 等公共元数据；依赖版本/source/features 仍唯一归根 workspace.dependencies。Forge HTTP 使用 =0.1.0-alpha.2（json、rustls-aws-lc-rs、system-proxy），utils/macros 保持 =0.1.0-alpha.1，AsterFs 使用 =0.1.0，直接 base64 使用 0.23.1。独立 0.0.1 发布准备 worktree 已按用户要求删除；ACME 包发布仍暂停。
 
 IssueSession.record 异步读取最新 durable 状态，不返回创建会话时的静态快照。IssueService::run/inspect 使用独占可变借用阻止同一 session 的并发推进；文件适配器另以每会话 I/O 队列序列化读写，OwnedMutexGuard 与文件租约一起进入阻塞任务。被取消的 future 不释放已经启动的持久化许可，后续同会话恢复读取不会越过前次写入。支持同一嵌入会话重复等待人工操作，也支持丢弃会话后跨进程恢复。
 
@@ -316,6 +316,12 @@ IssueSession.record 异步读取最新 durable 状态，不返回创建会话时
 
 ## 发布构建、参数合同与 registry 依赖
 
-根 profile.release 设为 opt-level="z"、lto=true、codegen-units=1、debug=0、panic="unwind"、strip="debuginfo"，对 CLI 与依赖生效；保留函数符号不代表任意 panic 都可恢复。直接依赖均来自 registry 或本地 workspace，不再保留四个 Git 来源；Forge alpha 版本明确锁定，避免 prerelease 选择漂移。HTTP feature 精简由 [Forge #63](https://github.com/AsterCommunity/AsterForge/issues/63) 跟踪；panic 输出/私有文件机制由 [Forge #62](https://github.com/AsterCommunity/AsterForge/issues/62) 跟踪，下游接入为 [ACME #1](https://github.com/AsterCommunity/AsterACME/issues/1)，目前不安装全局 hook。
+根 profile.release 设为 opt-level="z"、lto=true、codegen-units=1、debug=0、panic="unwind"、strip="debuginfo"，对 CLI 与依赖生效；保留函数符号不代表任意 panic 都可恢复。直接依赖均来自 registry 或本地 workspace，不再保留四个 Git 来源；Forge alpha 版本明确锁定，避免 prerelease 选择漂移。HTTP feature 精简已通过 [Forge #64](https://github.com/AsterCommunity/AsterForge/pull/64) 和已发布 alpha.2 接入（原问题为 [Forge #63](https://github.com/AsterCommunity/AsterForge/issues/63)）；panic 输出/私有文件机制由 [Forge #62](https://github.com/AsterCommunity/AsterForge/issues/62) 跟踪，下游接入为 [ACME #1](https://github.com/AsterCommunity/AsterACME/issues/1)，目前不安装全局 hook。
 
 公共 LocalArgs/HttpArgs 归 common/args.rs，不再由 account 模块拥有供 cert 导入。--yes 确认当前明确操作，不等于关闭交互，--force/--accept-terms/--verify/--json 各有独立语义；见 [CLI 合同](cli-contract.md)。manual_dns 恢复时 --yes 绕过人工确认后仍调用同一 dyn DnsReadiness，第一次自动化调用保持 action_required。联系人 register/update-contact 都使用 -m；cert show 的位置 NAME 与 -n/--name 互斥；证书名称、账户名称、完整 operation ID 统一在解析边界校验。
+
+## 续期计划与吊销的当前实现
+
+见 [生命周期契约](certificate-lifecycle.md)。core::renewal/revocation 负责纯动作决策，protocol 持有 renewalInfo/revokeCert 发现字段与 wire struct，aster_acme::renewal/revocation 执行无签名 GET/账户签名 POST，存储在同一 IssueSession 下保存计划和状态。首次签发提交回退计划后立即查询 ARI；后续定时唤醒留给统一 daemon。CLI 增加 cert revoke，与 show 共用目标参数和账户→证书锁执行路径；不实现自动续期或额外 watch 命令。
+
+默认 list/show 选择托管证书的 current，list --history / show --history / --operation 显式访问历史；只有 current 可作为活跃续期计划，历史计划不再调度。证书分组和删除范围见生命周期契约。

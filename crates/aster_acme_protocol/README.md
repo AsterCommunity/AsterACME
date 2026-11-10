@@ -25,3 +25,5 @@ MIT OR Apache-2.0.
 账户更新的 AccountUpdateRequest 与 §7.3.5 的泛型 KeyChangePayload / KeyChangeHeader 是独立线上模型；目录 key_change 可缺省。内层 header 不具备 nonce/kid 字段；FlattenedJws 本身就是外层 payload，不添加仅透传的包装类型。签名与文件事务留在上层。
 
 `order` 拥有 RFC 8555 订单、授权和 challenge 模型，以及 NewOrderRequest、FinalizeRequest 和空对象 AcknowledgeRequest；DNS 标识符线上类型和 WireChallengeKind 从客户端直接迁入此处，不保留转发导出。Directory.new_order 从 CA 获取；所有资源使用发现的 URL。expires 严格解析 RFC3339，缺省是否合法由客户端按资源状态判断；证书有效期不是订单 expires。
+
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。

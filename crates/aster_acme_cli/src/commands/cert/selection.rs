@@ -20,42 +20,102 @@ pub(super) fn certificate_name(
             .ok_or_else(|| "No saved certificate request matches --operation.".into());
     }
     if !terminal::interactive(json) {
-        return Err("Specify cert show <NAME> or --operation <ID>, or use an interactive terminal to select a certificate.".into());
+        return Err("Specify a certificate NAME or --operation <ID>, or use an interactive terminal to select a certificate.".into());
     }
-    let mut names = records
-        .iter()
-        .map(|record| record.name.as_str())
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names.dedup();
-    if names.is_empty() {
+    let certificates = managed_records(records.to_vec())?;
+    if certificates.is_empty() {
         return Err("No saved certificates. Use cert issue -d <DOMAIN> to request one.".into());
     }
-    let choices = names
+    let choices = certificates
         .iter()
-        .map(|name| output::safe(name))
+        .map(|record| {
+            format!(
+                "{} | {}",
+                output::safe(record.name.as_str()),
+                super::render::domain_summary(record)
+            )
+        })
         .collect::<Vec<_>>();
     let index = terminal::select_index("Choose a certificate:", &choices, 0)?;
-    Ok(CertificateName::new(
-        names.get(index).ok_or("Invalid certificate selection.")?,
-    )?)
+    Ok(certificates
+        .get(index)
+        .ok_or("Invalid certificate selection.")?
+        .name
+        .clone())
+}
+
+/// Selection intent prevents an inactive historical version becoming an implicit current.
+#[derive(Clone, Copy)]
+pub(super) enum RequestSelection {
+    Unfinished,
+    Current,
+    Any,
+}
+
+/// One visible row per managed certificate. Inactive fallback rows are inventory only;
+/// they are never promoted or scheduled, and show still requires explicit history selection.
+pub(super) fn managed_records(records: Vec<IssueRecord>) -> CliResult<Vec<IssueRecord>> {
+    let mut grouped = std::collections::BTreeMap::<String, Vec<IssueRecord>>::new();
+    for record in records {
+        grouped
+            .entry(record.name.as_str().into())
+            .or_default()
+            .push(record);
+    }
+    grouped
+        .into_values()
+        .map(|mut records| {
+            if records.iter().filter(|record| record.is_current).count() > 1 {
+                return Err("Multiple current versions found for one managed certificate.".into());
+            }
+            records.sort_by(|a, b| {
+                b.is_current
+                    .cmp(&a.is_current)
+                    .then_with(|| b.unfinished().cmp(&a.unfinished()))
+                    .then(b.created_at.cmp(&a.created_at))
+                    .then(a.operation_id.cmp(&b.operation_id))
+            });
+            records
+                .into_iter()
+                .next()
+                .ok_or_else(|| "Empty certificate inventory group.".into())
+        })
+        .collect()
 }
 
 pub(super) fn choose(
     records: Vec<IssueRecord>,
     name: &CertificateName,
     id: Option<&str>,
-    unfinished: bool,
+    mode: RequestSelection,
     json: bool,
 ) -> CliResult<IssueRecord> {
-    let candidates = records
+    let mut candidates = records
         .into_iter()
         .filter(|record| {
             record.name == *name
-                && (!unfinished || record.unfinished())
+                && match mode {
+                    RequestSelection::Unfinished => record.unfinished(),
+                    RequestSelection::Current | RequestSelection::Any => true,
+                }
                 && id.is_none_or(|id| id == record.operation_id)
         })
         .collect::<Vec<_>>();
+    if matches!(mode, RequestSelection::Current) && id.is_none() {
+        let current_count = candidates.iter().filter(|record| record.is_current).count();
+        match current_count {
+            0 => candidates.retain(IssueRecord::unfinished),
+            1 => candidates.retain(|record| record.is_current),
+            _ => {
+                return Err(
+                    "Multiple current versions found; inspect local certificate storage.".into(),
+                );
+            }
+        }
+        if candidates.is_empty() {
+            return Err("No current or unfinished request is selected. Use cert show --history or --operation <ID> to inspect retained versions.".into());
+        }
+    }
     match candidates.as_slice() {
         [] => Err("No matching saved request. Use cert list to inspect existing requests; a new request must be started explicitly.".into()),
         [record] => Ok(record.clone()),
@@ -69,19 +129,12 @@ pub(super) fn choose(
 }
 
 fn choice_label(record: &IssueRecord) -> String {
-    let primary = record.identifiers.first().map_or_else(
-        || record.name.as_str().to_owned(),
-        aster_acme::identifier::DnsIdentifier::value,
-    );
-    let status = if record.expired(time::OffsetDateTime::now_utc()) {
-        "expired"
-    } else {
-        super::render::phase_label(record.phase)
-    };
+    let status = super::render::request_status(record, time::OffsetDateTime::now_utc());
     format!(
-        "{} | {} | {status}",
-        output::safe(&primary),
-        crate::common::time::timestamp(Some(record.created_at))
+        "{} | {} | {status}{}",
+        super::render::domain_summary(record),
+        crate::common::time::timestamp(Some(record.created_at)),
+        if record.is_current { " | current" } else { "" },
     )
 }
 

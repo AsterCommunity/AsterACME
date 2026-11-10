@@ -17,6 +17,8 @@
 pub mod account;
 pub mod machine;
 pub mod protocol;
+pub mod renewal;
+pub mod revocation;
 pub mod workflow;
 
 #[cfg(test)]

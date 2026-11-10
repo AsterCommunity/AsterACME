@@ -55,28 +55,61 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
     let name = aster_acme::issuance::CertificateName::new("example.com").unwrap();
     let first = record('a', "2026-01-01T00:00:00Z");
     let mut second = record('b', "2026-02-01T00:00:00Z");
-    assert!(super::choose(vec![first.clone(), second.clone()], &name, None, true, true).is_err());
+    assert!(
+        super::choose(
+            vec![first.clone(), second.clone()],
+            &name,
+            None,
+            super::RequestSelection::Unfinished,
+            true
+        )
+        .is_err()
+    );
     assert_eq!(
         super::choose(
             vec![first.clone(), second.clone()],
             &name,
             Some(&first.operation_id),
-            true,
+            super::RequestSelection::Unfinished,
             true
         )
         .unwrap()
         .operation_id,
         first.operation_id
     );
-    assert!(super::choose(vec![first.clone()], &name, Some("missing"), true, true).is_err());
+    assert!(
+        super::choose(
+            vec![first.clone()],
+            &name,
+            Some("missing"),
+            super::RequestSelection::Unfinished,
+            true
+        )
+        .is_err()
+    );
     second.phase = aster_acme_core::workflow::IssuancePhase::Completed;
     assert_eq!(
-        super::choose(vec![first.clone(), second], &name, None, true, true)
-            .unwrap()
-            .operation_id,
+        super::choose(
+            vec![first.clone(), second],
+            &name,
+            None,
+            super::RequestSelection::Unfinished,
+            true
+        )
+        .unwrap()
+        .operation_id,
         first.operation_id
     );
-    assert!(super::choose(vec![], &name, None, true, true).is_err());
+    assert!(
+        super::choose(
+            vec![],
+            &name,
+            None,
+            super::RequestSelection::Unfinished,
+            true
+        )
+        .is_err()
+    );
     let text = super::super::render::show(std::slice::from_ref(&first), false, false).unwrap();
     assert!(
         text.split_whitespace()
@@ -261,26 +294,42 @@ fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
 
 #[test]
 fn verification_source_is_explicit_in_text_and_json() {
-    let record = record('a', "2026-01-01T00:00:00Z");
-    for verified in [false, true] {
-        let text =
-            super::super::render::show(std::slice::from_ref(&record), false, verified).unwrap();
-        assert!(
-            text.split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .contains(if verified {
-                    "Remote status: verified with CA"
-                } else {
-                    "Remote status: not verified."
-                })
-        );
-        assert!(!text.contains("unless --verify"));
-        let json =
-            super::super::render::show(std::slice::from_ref(&record), true, verified).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(json[0]["verified"], verified);
-        assert_eq!(json[0]["source"], if verified { "remote" } else { "local" });
+    use aster_acme_core::revocation::RevocationState;
+    let mut record = record('a', "2026-01-01T00:00:00Z");
+    for state in [
+        RevocationState::NotRequested,
+        RevocationState::Pending,
+        RevocationState::Confirmed,
+    ] {
+        record.revocation.state = state;
+        for verified in [false, true] {
+            let text =
+                super::super::render::show(std::slice::from_ref(&record), false, verified).unwrap();
+            let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(normalized.contains(if verified {
+                "CA query: order and authorizations refreshed"
+            } else {
+                "CA query: not performed (local data only)"
+            }));
+            let (source, label) = match state {
+                RevocationState::Confirmed => {
+                    ("saved_ca_response", "Revocation source: saved CA response")
+                }
+                RevocationState::NotRequested | RevocationState::Pending => {
+                    ("local_state", "Revocation source: local state")
+                }
+            };
+            assert!(normalized.contains(label));
+            assert!(!text.contains("verified with CA"));
+            let json =
+                super::super::render::show(std::slice::from_ref(&record), true, verified).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(json[0]["ca_query"]["order_refreshed"], verified);
+            assert_eq!(json[0]["ca_query"]["authorizations_refreshed"], verified);
+            assert_eq!(json[0]["revocation_source"], source);
+            assert!(json[0].get("verified").is_none());
+            assert!(json[0].get("source").is_none());
+        }
     }
 }
 
@@ -309,4 +358,140 @@ fn certificate_yes_has_short_and_long_forms_without_implying_force_or_other_perm
     for command in ["list", "show"] {
         assert!(Args::try_parse_from(["aster-acme", "cert", command, "--yes"]).is_err());
     }
+}
+
+#[test]
+fn selectors_distinguish_revoked_and_unconfirmed_certificate_generations() {
+    let mut request = record('a', "2026-01-01T00:00:00Z");
+    request.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+    request.revocation.state = aster_acme_core::revocation::RevocationState::Pending;
+    assert!(super::choice_label(&request).contains("revocation pending"));
+    request.revocation.state = aster_acme_core::revocation::RevocationState::Confirmed;
+    assert!(super::choice_label(&request).contains("revoked"));
+}
+
+#[test]
+fn selectors_and_table_share_san_summary_and_current_marker_with_full_details_retained() {
+    let mut request = record('a', "2026-01-01T00:00:00Z");
+    request.identifiers = [
+        "example.com",
+        "*.example.com",
+        "api.example.com",
+        "unrelated.example.net",
+        "extra.example.org",
+    ]
+    .map(|name| aster_acme::identifier::DnsIdentifier::new(name).unwrap())
+    .to_vec();
+    request.is_current = true;
+    let label = super::choice_label(&request);
+    assert!(label.contains("example.com, *.example.com, api.example.com, +2"));
+    assert!(label.ends_with(" | current"));
+    assert!(!label.contains("unrelated.example.net"));
+    let table = super::super::render::list(std::slice::from_ref(&request), false).unwrap();
+    assert!(table.contains("DOMAINS"));
+    assert!(table.contains("CURRENT"));
+    assert!(table.contains("example.com, *.example.com, api.example.com, +2"));
+    let details = super::super::render::show(std::slice::from_ref(&request), false, false).unwrap();
+    assert!(details.contains("unrelated.example.net"));
+    assert!(details.contains("extra.example.org"));
+    let machine: serde_json::Value =
+        serde_json::from_str(&super::super::render::show(&[request], true, false).unwrap())
+            .unwrap();
+    assert_eq!(machine[0]["current"], true);
+    assert_eq!(machine[0]["identifiers"].as_array().unwrap().len(), 5);
+}
+
+#[test]
+fn managed_inventory_and_default_show_prefer_current_without_scheduling_history() {
+    let mut old = record('a', "2026-01-01T00:00:00Z");
+    old.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+    let mut current = old.clone();
+    current.operation_id = "b".repeat(43);
+    current.is_current = true;
+    let pending = record('c', "2026-03-01T00:00:00Z");
+    let records = vec![pending.clone(), old.clone(), current.clone()];
+    let grouped = super::managed_records(records.clone()).unwrap();
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0].operation_id, current.operation_id);
+    let name = current.name.clone();
+    assert_eq!(
+        super::choose(
+            records.clone(),
+            &name,
+            None,
+            super::RequestSelection::Current,
+            true
+        )
+        .unwrap()
+        .operation_id,
+        current.operation_id
+    );
+    assert_eq!(
+        super::choose(
+            records,
+            &name,
+            None,
+            super::RequestSelection::Unfinished,
+            true
+        )
+        .unwrap()
+        .operation_id,
+        pending.operation_id
+    );
+    assert!(
+        super::choose(
+            vec![old.clone()],
+            &name,
+            None,
+            super::RequestSelection::Current,
+            true
+        )
+        .is_err()
+    );
+    assert_eq!(
+        super::choose(
+            vec![old.clone()],
+            &name,
+            Some(&old.operation_id),
+            super::RequestSelection::Current,
+            true
+        )
+        .unwrap()
+        .operation_id,
+        old.operation_id
+    );
+    assert_eq!(
+        super::choose(
+            vec![old, pending.clone()],
+            &name,
+            None,
+            super::RequestSelection::Current,
+            true
+        )
+        .unwrap()
+        .operation_id,
+        pending.operation_id
+    );
+    let mut duplicate = current.clone();
+    duplicate.operation_id = "d".repeat(43);
+    assert!(super::managed_records(vec![current, duplicate]).is_err());
+}
+
+#[test]
+fn historical_list_and_show_are_explicit_and_do_not_conflict_with_exact_operation() {
+    assert!(Args::try_parse_from(["aster-acme", "cert", "list", "--history"]).is_ok());
+    assert!(
+        Args::try_parse_from(["aster-acme", "cert", "show", "example.com", "--history"]).is_ok()
+    );
+    assert!(
+        Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "show",
+            "--history",
+            "--operation",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ])
+        .is_err()
+    );
 }

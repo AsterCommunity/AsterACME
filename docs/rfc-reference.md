@@ -111,3 +111,5 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 - 使用真实 CA staging 验证互操作，避免以生产签发作为开发测试循环。
 - 按 CA 记录 EAB、ARI、challenge、标识符类型和草案扩展的实际支持情况。
 - 分开报告本地测试、staging 签发、真实 DNS 清理及部署结果；任何单项成功均不代表全部完成。
+
+当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户 kid 签名、DER 叶子、reason 和 alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 留给后续 renew 操作，尚未实现。

@@ -44,12 +44,30 @@ impl CertificateName {
         }
         Ok(Self(value.into()))
     }
+    /// Generate an independent management name; truncate only its display prefix,
+    /// never the requested DNS identifier. Callers retry typed allocation collisions.
+    ///
+    /// # Errors
+    /// Reports OS randomness failure or an unsafe generated component.
+    pub fn generated(primary: &DnsIdentifier) -> Result<Self, IssueError> {
+        let mut random = [0; 4];
+        aws_lc_rs::rand::fill(&mut random).map_err(|_| crate::crypto::CryptoError::Randomness)?;
+        let prefix = primary.value().chars().take(244).collect::<String>();
+        Self::new(&format!("{prefix}-{:08x}", u32::from_be_bytes(random)))
+    }
+
     /// Stable user-facing name.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
+impl std::fmt::Display for CertificateName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 impl TryFrom<String> for CertificateName {
     type Error = IssueError;
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -102,6 +120,9 @@ pub struct AuthorizationRecord {
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueRecord {
+    /// Adapter-provided current selection snapshot; never persisted in the journal.
+    #[serde(skip)]
+    pub is_current: bool,
     /// Publication adapter identity, retained so resume never selects a different method.
     pub solver_id: String,
     /// Internal opaque unique ID, selectable explicitly for scripts.
@@ -138,6 +159,12 @@ pub struct IssueRecord {
     /// Earliest next query, respecting CA Retry-After across process restart.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub next_poll_at: Option<time::OffsetDateTime>,
+    /// Certificate revocation is independent of issuance completion.
+    #[serde(default)]
+    pub revocation: crate::revocation::RevocationRecord,
+    /// Durable renewal schedule, available only after certificate validation.
+    #[serde(default)]
+    pub renewal: Option<crate::renewal::RenewalPlan>,
     /// Leaf certificate expiry, distinct from order and authorization expiry.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub certificate_not_after: Option<time::OffsetDateTime>,
@@ -209,7 +236,14 @@ pub trait IssueSession: Send + Sync {
     /// # Errors
     /// Missing, unsafe or corrupt CSR is an error.
     async fn csr(&self) -> Result<Vec<u8>, IssueError>;
-    /// Persist a validated chain then atomically select this generation.
+    /// Read the issued leaf as DER; no private key is exposed to revocation orchestration.
+    ///
+    /// # Errors
+    /// Rejects missing, corrupt or unsafe certificate artifacts.
+    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError>;
+    /// Persist a validated chain then atomically select this generation. Populate the
+    /// returned record's `renewal` with `RenewalPlan::from_certificate` before promotion
+    /// so every adapter durably establishes a fallback independently of ARI availability.
     ///
     /// # Errors
     /// Failure must retain the previous current generation and recoverable checkpoint.
@@ -220,13 +254,24 @@ pub trait IssueSession: Send + Sync {
 /// Object-safe generation storage contract for files, databases and embedded services.
 #[async_trait]
 pub trait IssueStore: Send + Sync {
-    /// Create a unique generation and fixed key/CSR durably before network side effects.
+    /// Create a new managed certificate and its first fixed key/CSR generation.
+    /// Existing managed names are rejected atomically; this never appends a version.
     ///
     /// # Errors
     /// Rejects unsafe names, storage errors and incomplete local initialization.
     async fn create(
         &self,
         request: &IssueRequest,
+        account: &AccountRecord,
+    ) -> Result<Box<dyn IssueSession>, IssueError>;
+    /// Prepare another generation using the existing certificate's immutable definition.
+    /// This is storage groundwork for renewal, not a CA request or a scheduler.
+    ///
+    /// # Errors
+    /// Rejects missing definitions, changed account bindings and persistence failures.
+    async fn renew(
+        &self,
+        name: &CertificateName,
         account: &AccountRecord,
     ) -> Result<Box<dyn IssueSession>, IssueError>;
     /// Open one exact generation and acquire an exclusive execution lease.
@@ -251,6 +296,9 @@ pub enum IssueError {
     /// Input invariant or CA resource mismatch.
     #[error("{0}")]
     InvalidInput(&'static str),
+    /// A managed certificate already owns this name; only automatic names may be retried.
+    #[error("a managed certificate named '{0}' already exists")]
+    NameAlreadyExists(CertificateName),
     /// Remote order creation may already have happened; never create another automatically.
     #[error(
         "order creation outcome is uncertain; no saved Location URL is available; inspect this operation before creating a new request"
@@ -261,6 +309,9 @@ pub enum IssueError {
         "{0}; query again later or consult the CA; this operation will not be replayed automatically"
     )]
     MutationUncertain(&'static str),
+    /// A revocation request may have taken effect; explicit retry retains certificate/reason.
+    #[error("certificate revocation outcome is unconfirmed: {0}")]
+    RevocationUncertain(#[source] crate::transport::TransportError),
     /// Order/authorization expiry prevents further validation/finalization.
     #[error("the order or required authorization has expired; start a new issuance explicitly")]
     Expired,
@@ -317,4 +368,34 @@ pub struct IssueIdentity {
     pub account: AccountRecord,
     /// Signing boundary; may be backed by an HSM or remote service.
     pub signer: Arc<dyn AccountSigner>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_management_names_keep_a_bounded_prefix_and_lowercase_random_suffix() {
+        let long = format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        for value in ["example.com", "*.example.com", long.as_str()] {
+            let domain = DnsIdentifier::new(value).unwrap();
+            let name = CertificateName::generated(&domain).unwrap();
+            let (prefix, suffix) = name.as_str().rsplit_once('-').unwrap();
+            assert_eq!(suffix.len(), 8);
+            assert!(
+                suffix
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            );
+            assert!(domain.value().starts_with(prefix));
+            assert!(name.as_str().len() <= 253);
+            assert_eq!(domain.value(), value);
+        }
+    }
 }

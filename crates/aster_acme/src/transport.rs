@@ -171,8 +171,16 @@ impl AcmeClient {
         let directory: Directory = serde_json::from_slice(&response.body)?;
         check_transport(&directory.new_nonce, &options)?;
         check_transport(&directory.new_account, &options)?;
-        if let Some(key_change) = &directory.key_change {
-            check_transport(key_change, &options)?;
+        for endpoint in [
+            directory.new_order.as_ref(),
+            directory.key_change.as_ref(),
+            directory.renewal_info.as_ref(),
+            directory.revoke_cert.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            check_transport(endpoint, &options)?;
         }
         let client = Self {
             http,
@@ -194,6 +202,23 @@ impl AcmeClient {
     #[must_use]
     pub fn directory_url(&self) -> &AcmeUrl {
         &self.directory_url
+    }
+
+    /// Unauthenticated bounded GET for RFC 9773; no JWS or replay nonce is required.
+    pub(crate) async fn get(&self, url: &AcmeUrl) -> Result<AcmeResponse, TransportError> {
+        check_transport(url, &self.options)?;
+        let response = read_response(
+            self.http
+                .request(Method::GET, url.as_str())
+                .header(reqwest::header::ACCEPT, "application/json")
+                .send()
+                .await?,
+        )
+        .await?;
+        if response.status != StatusCode::OK {
+            return Err(response_error(&response));
+        }
+        Ok(response)
     }
 
     async fn remember_nonce(&self, nonce: Option<String>) {
@@ -248,9 +273,9 @@ impl AcmeClient {
             .await?;
             let fresh = nonce(&response.headers);
             if response.status.is_success() {
-                if fresh.is_none() {
-                    return Err(TransportError::MissingNonce);
-                }
+                // RFC 8555 section 6.5.1: ignore invalid Replay-Nonce values.
+                // Preserve a successful mutation response (especially its Location);
+                // the next signed request can acquire a fresh nonce with HEAD.
                 self.remember_nonce(fresh).await;
                 return Ok(response);
             }

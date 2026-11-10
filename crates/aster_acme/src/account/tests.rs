@@ -36,6 +36,8 @@ async fn account_requests_follow_custom_directory_and_location_urls() {
         .and(path("/entry-point"))
         .respond_with(ResponseTemplate::new(200).set_body_json(Directory {
             new_order: None,
+            renewal_info: None,
+            revoke_cert: None,
             key_change: None,
             new_nonce: resource("/vendor/replay"),
             new_account: new_account.clone(),

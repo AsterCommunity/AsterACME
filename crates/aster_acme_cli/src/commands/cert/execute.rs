@@ -60,7 +60,7 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
             store.list().await?,
             &CertificateName::new(name)?,
             args.operation.as_deref(),
-            true,
+            selection::RequestSelection::Unfinished,
             options.json,
         )?),
         None => None,
@@ -268,7 +268,29 @@ impl DnsReadiness for ManualDns {
 pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
     match command {
         CertCommand::Issue(args) => issue(args).await,
-        CertCommand::List { name, local } => {
+        CertCommand::Remove {
+            target,
+            all,
+            history,
+            revoked,
+            yes,
+            local,
+        } => {
+            use super::removal::RemovalFilter;
+            let filter = match (all, history, revoked) {
+                (false, false, false) => RemovalFilter::Request,
+                (true, false, false) => RemovalFilter::All,
+                (false, true, false) => RemovalFilter::History,
+                (false, false, true) => RemovalFilter::Revoked,
+                _ => return Err("--all, --history and --revoked are mutually exclusive.".into()),
+            };
+            super::removal::execute(target, filter, yes, local).await
+        }
+        CertCommand::List {
+            name,
+            history,
+            local,
+        } => {
             let options = AccountArgs {
                 data_dir: local.data_dir.clone(),
                 json: local.json,
@@ -283,49 +305,147 @@ pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
                 .into_iter()
                 .filter(|record| filter.as_ref().is_none_or(|name| record.name == *name))
                 .collect::<Vec<_>>();
+            let records = if history {
+                records
+            } else {
+                selection::managed_records(records)?
+            };
             println!("{}", render::list(&records, local.json)?);
             Ok(())
         }
         CertCommand::Show {
-            name,
-            named_name,
-            operation,
+            target,
+            history,
             verify,
             http,
             local,
-        } => {
-            let options = options(&local, &http, None);
-            let settings = CliSettings::load(&options).await?;
-            let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-            let records = store.list().await?;
-            let name = selection::certificate_name(
-                &records,
-                name.as_deref().or(named_name.as_deref()),
-                operation.as_deref(),
-                local.json,
-            )?;
-            let mut record =
-                selection::choose(records, &name, operation.as_deref(), false, local.json)?;
-            if verify {
-                let context = settings
-                    .account(&AccountArgs {
-                        name: Some(record.account_name.clone()),
-                        ..options
-                    })
-                    .await?;
-                record = verify_order(context, &http, &record, &store).await?;
-            }
-            println!("{}", render::show(&[record], local.json, verify)?);
-            Ok(())
-        }
+        } => show(target, history, verify, http, local).await,
+        CertCommand::Revoke {
+            target,
+            reason,
+            yes,
+            http,
+            local,
+        } => revoke(target, reason, yes, http, local).await,
     }
 }
 
-async fn verify_order(
+async fn show(
+    target: super::args::SavedTargetArgs,
+    history: bool,
+    verify: bool,
+    http: HttpArgs,
+    local: LocalArgs,
+) -> CliResult<()> {
+    let options = options(&local, &http, None);
+    let settings = CliSettings::load(&options).await?;
+    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
+    let mut record = selected_record(
+        &store,
+        &target,
+        local.json,
+        if history {
+            selection::RequestSelection::Any
+        } else {
+            selection::RequestSelection::Current
+        },
+    )
+    .await?;
+    if verify {
+        let context = settings
+            .account(&AccountArgs {
+                name: Some(record.account_name.clone()),
+                ..options
+            })
+            .await?;
+        record =
+            remote_operation(context, &http, &record, &store, RemoteOperation::Inspect).await?;
+    }
+    println!("{}", render::show(&[record], local.json, verify)?);
+    Ok(())
+}
+
+async fn revoke(
+    target: super::args::SavedTargetArgs,
+    reason: Option<super::args::RevocationReason>,
+    yes: bool,
+    http: HttpArgs,
+    local: LocalArgs,
+) -> CliResult<()> {
+    let options = options(&local, &http, None);
+    let settings = CliSettings::load(&options).await?;
+    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
+    let record = selected_record(
+        &store,
+        &target,
+        local.json,
+        selection::RequestSelection::Any,
+    )
+    .await?;
+    // A confirmed local outcome needs neither an account key nor HTTP.
+    let record = match record.revocation.state {
+        aster_acme_core::revocation::RevocationState::Confirmed => record,
+        aster_acme_core::revocation::RevocationState::NotRequested
+        | aster_acme_core::revocation::RevocationState::Pending => {
+            let context = settings
+                .account(&AccountArgs {
+                    name: Some(record.account_name.clone()),
+                    ..options
+                })
+                .await?;
+            remote_operation(
+                context,
+                &http,
+                &record,
+                &store,
+                RemoteOperation::Revoke {
+                    reason: reason.map(super::args::RevocationReason::code),
+                    yes,
+                    json: local.json,
+                },
+            )
+            .await?
+        }
+    };
+    println!("{}", render::revoked(&record, local.json)?);
+    Ok(())
+}
+
+async fn selected_record(
+    store: &CliIssueStore,
+    target: &super::args::SavedTargetArgs,
+    json: bool,
+    mode: selection::RequestSelection,
+) -> CliResult<IssueRecord> {
+    let records = store.list().await?;
+    let name = selection::certificate_name(
+        &records,
+        target
+            .identity
+            .name
+            .as_deref()
+            .or(target.identity.named_name.as_deref()),
+        target.operation.as_deref(),
+        json,
+    )?;
+    selection::choose(records, &name, target.operation.as_deref(), mode, json)
+}
+
+enum RemoteOperation {
+    Inspect,
+    Revoke {
+        reason: Option<u8>,
+        yes: bool,
+        json: bool,
+    },
+}
+
+async fn remote_operation(
     context: CliContext,
     http: &HttpArgs,
     record: &IssueRecord,
     store: &CliIssueStore,
+    operation: RemoteOperation,
 ) -> CliResult<IssueRecord> {
     let signer = context
         .store
@@ -342,27 +462,80 @@ async fn verify_order(
         .await?
         .ok_or("Account metadata missing.")?;
     let mut session = store.open(&record.name, &record.operation_id).await?;
+    match &operation {
+        RemoteOperation::Inspect => {}
+        RemoteOperation::Revoke { reason, yes, json } => {
+            use aster_acme_core::revocation::{RevocationAction, revocation_action};
+            let current = session.record().await?;
+            match revocation_action(
+                matches!(
+                    current.phase,
+                    aster_acme_core::workflow::IssuancePhase::Completed
+                ),
+                current.revocation.state,
+                current.revocation.reason == reason.or(current.revocation.reason),
+            ) {
+                RevocationAction::NotIssued => {
+                    return Err("Only an issued certificate can be revoked.".into());
+                }
+                RevocationAction::ReasonConflict => {
+                    return Err("An unconfirmed revocation must retain its original reason.".into());
+                }
+                RevocationAction::AlreadyConfirmed => return Ok(current),
+                RevocationAction::Submit => {}
+            }
+            let reason = reason
+                .or(current.revocation.reason)
+                .map_or_else(|| "not specified".into(), |reason| reason.to_string());
+            terminal::confirm_action(
+                &format!(
+                    "Permanently revoke certificate\n  Name: {}\n  Request: {}\n  Domains: {}\n  CA: {}\n  Reason: {}\n\nThis cannot be undone. Local certificate files will be retained.\nA deployed copy must be replaced separately.",
+                    current.name.as_str(),
+                    current.operation_id,
+                    current
+                        .identifiers
+                        .iter()
+                        .map(DnsIdentifier::value)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    current.directory.as_str(),
+                    reason
+                ),
+                "Revoke this certificate?",
+                *yes,
+                *json,
+            )?;
+        }
+    }
     let transport = context.transport_options(&AccountArgs {
         user_agent: http.user_agent.clone(),
         timeout: http.timeout,
         ..AccountArgs::default()
     })?;
     let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
-    Ok(
-        IssueService::new(client, IssueIdentity { account, signer })?
+    let identity = IssueIdentity { account, signer };
+    match operation {
+        RemoteOperation::Inspect => Ok(IssueService::new(client, identity)?
             .inspect(session.as_mut())
-            .await?,
-    )
+            .await?),
+        RemoteOperation::Revoke { reason, .. } => Ok(
+            aster_acme::revocation::RevocationService::new(client, identity)
+                .revoke(session.as_mut(), reason)
+                .await?,
+        ),
+    }
 }
 
 fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
     let identifiers = args.domain.clone();
     let primary = identifiers
         .first()
-        .ok_or("At least one domain is required.")?
-        .value();
+        .ok_or("At least one domain is required.")?;
     Ok(IssueRequest {
-        name: CertificateName::new(args.name.as_deref().unwrap_or(&primary))?,
+        name: match args.name.as_deref() {
+            Some(name) => CertificateName::new(name)?,
+            None => CertificateName::generated(primary)?,
+        },
         identifiers,
         account_name: account.into(),
     })
@@ -404,9 +577,50 @@ async fn prepare_session(
         progress
             .log
             .line(Level::Info, "Creating certificate key and fixed CSR");
-        store.create(&request, account).await?
+        allocate_certificate(
+            store,
+            request,
+            account,
+            if args.name.is_some() {
+                Naming::Explicit
+            } else {
+                Naming::Automatic
+            },
+        )
+        .await?
     };
     Ok(session)
+}
+
+/// Only automatic naming retries a typed allocation collision; other failures propagate.
+#[derive(Clone, Copy)]
+enum Naming {
+    Explicit,
+    Automatic,
+}
+
+async fn allocate_certificate(
+    store: &dyn IssueStore,
+    mut request: IssueRequest,
+    account: &aster_acme::account::AccountRecord,
+    naming: Naming,
+) -> Result<Box<dyn IssueSession>, IssueError> {
+    for _ in 0..16 {
+        match store.create(&request, account).await {
+            Err(IssueError::NameAlreadyExists(_)) if matches!(naming, Naming::Automatic) => {
+                request.name = CertificateName::generated(
+                    request
+                        .identifiers
+                        .first()
+                        .ok_or(IssueError::InvalidInput("missing primary domain"))?,
+                )?;
+            }
+            result => return result,
+        }
+    }
+    Err(IssueError::InvalidInput(
+        "automatic certificate name allocation exceeded its collision budget",
+    ))
 }
 
 #[cfg(test)]
@@ -492,5 +706,67 @@ mod tests {
             assert!(!manual.ready(&[], true, &execution).await.unwrap());
             assert_eq!(check.calls.load(Ordering::SeqCst), 0);
         }
+    }
+    fn allocation_account() -> aster_acme::account::AccountRecord {
+        serde_json::from_value(serde_json::json!({
+            "account_id":"test-account","directory_url":"https://ca.example/directory","account_url":"https://ca.example/account",
+            "key_thumbprint":"test-key","contacts":[],"server_contacts":null,"last_status":"valid","deactivation":"not_requested",
+            "key_rotation":null,"accepted_terms_url":null,"state":"registered"
+        })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn automatic_allocation_retries_only_name_collisions_while_explicit_names_refuse_reuse() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
+        let account = allocation_account();
+        let request = IssueRequest {
+            name: CertificateName::new("example.com-collision").unwrap(),
+            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            account_name: "default".into(),
+        };
+        let initial = store.create(&request, &account).await.unwrap();
+        let initial_record = initial.record().await.unwrap();
+        drop(initial);
+        assert!(matches!(
+            allocate_certificate(&store, request.clone(), &account, Naming::Explicit).await,
+            Err(IssueError::NameAlreadyExists(_))
+        ));
+        let generated = allocate_certificate(&store, request, &account, Naming::Automatic)
+            .await
+            .unwrap();
+        let actual = generated.record().await.unwrap();
+        assert_ne!(actual.name, initial_record.name);
+        assert!(actual.name.as_str().starts_with("example.com-"));
+        assert_eq!(actual.name.as_str().len(), "example.com-".len() + 8);
+        assert_eq!(store.list().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn allocation_propagates_unsafe_storage_errors_without_creating_another_random_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
+        let account = allocation_account();
+        let request = IssueRequest {
+            name: CertificateName::new("example.com-existing").unwrap(),
+            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            account_name: "default".into(),
+        };
+        drop(store.create(&request, &account).await.unwrap());
+        let config = temp.path().join("certs/example.com-existing/cert.toml");
+        let before = std::fs::read(&config).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            allocate_certificate(&store, request, &account, Naming::Automatic).await,
+            Err(IssueError::Store(_))
+        ));
+        assert_eq!(
+            std::fs::read_dir(temp.path().join("certs"))
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(std::fs::read(config).unwrap(), before);
     }
 }

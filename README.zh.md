@@ -29,7 +29,7 @@
 
 AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与手动 DNS-01 证书签发。用户声明证书需求，库负责创建订单、跟踪授权、提交固定 CSR、下载证书链并持久化结果；CLI 提供终端交互和本地存储。
 
-项目正在开发，ACME 包尚未正式发布。手动签发与恢复已经实现；自动 DNS provider、HTTP/TLS 验证、定时续期、ARI、吊销和部署 hook 仍是计划能力。
+项目正在开发，ACME 包尚未正式发布。手动签发与恢复、ARI 续期计划及账户签名证书吊销已经实现；自动 DNS provider、HTTP/TLS 验证、自动续期、daemon 和部署 hook 仍是计划能力。
 
 ## 适用场景
 
@@ -93,6 +93,7 @@ aster-acme account switch default --data-dir ./data
 
 ```sh
 aster-acme cert issue \
+  -n example-cert \
   -a default \
   -d example.com \
   -d '*.example.com' \
@@ -105,24 +106,37 @@ aster-acme cert issue \
 如果暂时无法完成，可以稍后继续：
 
 ```sh
-aster-acme cert issue --resume example.com --data-dir ./data
+aster-acme cert issue --resume example-cert --data-dir ./data
 aster-acme cert list --data-dir ./data
-aster-acme cert show example.com --data-dir ./data
-aster-acme cert show example.com --verify --data-dir ./data
+aster-acme cert show example-cert --data-dir ./data
+aster-acme cert show example-cert --verify --data-dir ./data
 ```
 
-证书名称默认使用第一个规范化域名，也可用 `-n/--name` 指定。同名证书可以有多次申请：终端中按主域名、申请时间、状态选择；脚本遇到歧义时必须用 `--operation <ID>` 指定。普通 `issue` 创建新申请，`--resume` 继续已有申请。
+每次新的 issue 创建独立托管证书，默认名为主域名加随机后缀，碰撞时自动换串重试；显式 -n/--name 必须尚未使用。cert.toml 保存域名集合、账户、CA、验证方式等稳定定义，后续续期版本沿用该名称。--resume 继续已有操作。list/show 默认围绕 current，list --history 展开版本，show --history 或 --operation 查看具体历史；只有 current 的续期计划参与活跃调度。
 
 不带名称的 `cert show` 会在终端引导选择。列举和查看证书不会推进验证或签发。过期申请仍可见，但不能继续验证或提交 finalize。
+
+## 续期计划与吊销
+
+签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。实际自动续期与周期唤醒留给后续 daemon。
+
+```sh
+aster-acme cert revoke example-cert --reason key-compromise --yes
+aster-acme cert remove example-cert --history --yes
+aster-acme cert remove example-cert --revoked --yes
+aster-acme cert remove example-cert --all --yes
+```
+
+吊销使用绑定账户，默认需要确认；多版本必须明确选择。成功后保留本地文件，超时保留未确认状态。`cert remove` 默认精确删除一次申请；--history 清理非当前的已签发版本，--revoked 匹配已保存的吊销确认，--all 才删除整个分组。清空 current 不自动切回旧版本，不访问 CA，保留用户额外内容和锁文件。详见 [续期与吊销契约](docs/certificate-lifecycle.md)。
 
 ## 脚本与确认
 
 ```sh
 # 首次执行返回 status=action_required 的 JSON，以及需要添加的 TXT。
-aster-acme cert issue -d example.com -c manual_dns --json --data-dir ./data
+aster-acme cert issue -n script-cert -d example.com -c manual_dns --json --data-dir ./data
 
 # 发布 TXT 后恢复，不再询问人工确认。
-aster-acme cert issue --resume example.com --yes --json --data-dir ./data
+aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
 ```
 
 `action_required` 正常退出，但不代表证书已经签出；脚本需要检查 JSON 的 `status`。
@@ -148,7 +162,7 @@ aster-acme cert issue --resume example.com --yes --json --data-dir ./data
 │   ├── account.toml
 │   ├── account-key.pk8
 │   └── account.lock
-└── certs/example.com/
+└── certs/example-cert/
     ├── cert.toml
     ├── cert.lock
     ├── current -> 20261111T010851Z-9YowFEL2/

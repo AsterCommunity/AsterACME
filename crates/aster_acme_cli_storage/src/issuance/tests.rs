@@ -206,6 +206,7 @@ fn leaf_for(generation: &Path, identifiers: &[DnsIdentifier]) -> String {
     )
     .unwrap();
     params.distinguished_name = DistinguishedName::new();
+    params.use_authority_key_identifier_extension = true;
     let ca_key = KeyPair::generate().unwrap();
     let ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
     let issuer = Issuer::new(ca_params, ca_key);
@@ -412,7 +413,7 @@ async fn names_generations_locks_and_material_tampering_have_explicit_boundaries
     drop(first);
     let second = fixture
         .store
-        .create(&request(), &fixture.account)
+        .renew(&request().name, &fixture.account)
         .await
         .unwrap();
     assert_ne!(
@@ -504,7 +505,7 @@ async fn failed_artifact_checks_never_replace_current_certificate() {
         .current;
     let second = fixture
         .store
-        .create(&request(), &fixture.account)
+        .renew(&request().name, &fixture.account)
         .await
         .unwrap();
     let mut new = second.record().await.unwrap();
@@ -1151,7 +1152,7 @@ async fn leaf_only_exports_empty_ca_and_failed_artifact_write_keeps_previous_cur
     );
     let second = fixture
         .store
-        .create(&request(), &fixture.account)
+        .renew(&request().name, &fixture.account)
         .await
         .unwrap();
     let mut next = second.record().await.unwrap();
@@ -1180,12 +1181,19 @@ async fn current_link_atomically_selects_readable_generations_and_preserves_hist
     let fixture = fixture().await;
     let mut ids = Vec::new();
     let mut generations = Vec::new();
-    for _ in 0..2 {
-        let session = fixture
-            .store
-            .create(&request(), &fixture.account)
-            .await
-            .unwrap();
+    for index in 0..2 {
+        let session = match index {
+            0 => fixture
+                .store
+                .create(&request(), &fixture.account)
+                .await
+                .unwrap(),
+            _ => fixture
+                .store
+                .renew(&request().name, &fixture.account)
+                .await
+                .unwrap(),
+        };
         let mut record = session.record().await.unwrap();
         let slot = fixture.store.slot(&record.name);
         let generation = slot.join(record.generation_name());
@@ -1258,4 +1266,882 @@ async fn current_promotion_refuses_foreign_targets_and_keeps_user_entries() {
     assert!(session.complete(&record, chain.as_bytes()).await.is_err());
     assert_eq!(fs::read(&pending).unwrap(), b"retain");
     assert!(selection(&slot).unwrap().cert.current.is_none());
+}
+
+#[tokio::test]
+async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_key_changes() {
+    use aster_acme::renewal::{RenewalService, RenewalSource};
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    let key_bytes = fs::read(generation.join("private-key.pk8")).unwrap();
+    let leaf = leaf_for(&generation, &record.identifiers);
+    record.phase = IssuancePhase::Completed;
+    let saved = session.complete(&record, leaf.as_bytes()).await.unwrap();
+    let fallback = saved.renewal.as_ref().unwrap();
+    assert_eq!(fallback.source, RenewalSource::Fallback);
+    assert_eq!(
+        fallback.renew_at,
+        fallback.not_before + (fallback.not_after - fallback.not_before) * 2 / 3
+    );
+    let id = fallback.certificate_id.as_ref().unwrap();
+    Mock::given(method("GET")).and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
+            "renewalInfo":format!("{}/vendor/renewal",fixture.server.uri())
+        }))).with_priority(1).mount(&fixture.server).await;
+    let now = time::OffsetDateTime::now_utc();
+    let info = aster_acme_protocol::renewal::RenewalInfo {
+        suggested_window: aster_acme_protocol::renewal::SuggestedWindow {
+            start: now + time::Duration::days(1),
+            end: now + time::Duration::days(2),
+        },
+        explanation_url: None,
+    };
+    Mock::given(method("GET"))
+        .and(path(format!("/vendor/renewal/{id}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Retry-After", "21600")
+                .set_body_json(info),
+        )
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let client = AcmeClient::discover(
+        record.directory.clone(),
+        TransportOptions {
+            allow_loopback_http: true,
+            ..TransportOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let service = RenewalService::new(Arc::new(client));
+    drop(session);
+    let mut reopened = fixture
+        .store
+        .open(&record.name, &record.operation_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.record().await.unwrap().renewal.unwrap().renew_at,
+        fallback.renew_at
+    );
+    let refreshed = service
+        .refresh(reopened.as_mut(), &execution().context)
+        .await
+        .unwrap();
+    let ari = refreshed.renewal.unwrap();
+    assert_eq!(ari.source, RenewalSource::Ari);
+    drop(reopened);
+    let mut reopened = fixture
+        .store
+        .open(&record.name, &record.operation_id)
+        .await
+        .unwrap();
+    let durable = service
+        .refresh(reopened.as_mut(), &execution().context)
+        .await
+        .unwrap()
+        .renewal
+        .unwrap();
+    assert_eq!(durable.renew_at, ari.renew_at);
+    assert_eq!(durable.next_check_at, ari.next_check_at);
+    assert_eq!(
+        fs::read(generation.join("private-key.pk8")).unwrap(),
+        key_bytes
+    );
+    let text = fs::read_to_string(generation.join("operation.toml")).unwrap();
+    assert!(text.contains("[operation.renewal]"));
+    assert!(text.contains("source = \"ari\""));
+}
+
+#[tokio::test]
+async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewal_queries() {
+    use aster_acme::revocation::RevocationService;
+    use aster_acme_core::revocation::RevocationState;
+    let fixture = fixture().await;
+    let mut session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    let slot = fixture.store.slot(&record.name);
+    let generation = slot.join(record.generation_name());
+    let chain = leaf_for(&generation, &record.identifiers);
+    record.phase = IssuancePhase::Completed;
+    let record = session.complete(&record, chain.as_bytes()).await.unwrap();
+    assert_eq!(
+        session.certificate_der().await.unwrap(),
+        certificate::leaf_der(chain.as_bytes()).unwrap()
+    );
+    let key_before = fs::read(generation.join("private-key.pk8")).unwrap();
+    Mock::given(method("GET")).and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
+            "revokeCert":format!("{}/vendor/revoke",fixture.server.uri()),"renewalInfo":format!("{}/ari",fixture.server.uri())
+        }))).with_priority(1).mount(&fixture.server).await;
+    Mock::given(method("POST"))
+        .and(path("/vendor/revoke"))
+        .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "revoked"))
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let client = Arc::new(
+        AcmeClient::discover(
+            record.directory.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let accounts =
+        super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
+            .unwrap();
+    let signer = accounts
+        .signer(&record.directory, "default", false)
+        .await
+        .unwrap();
+    let service = RevocationService::new(
+        client.clone(),
+        IssueIdentity {
+            account: fixture.account.clone(),
+            signer,
+        },
+    );
+    service.revoke(session.as_mut(), Some(4)).await.unwrap();
+    drop(session);
+    let mut reopened = fixture
+        .store
+        .open(&record.name, &record.operation_id)
+        .await
+        .unwrap();
+    let durable = reopened.record().await.unwrap();
+    assert_eq!(durable.revocation.state, RevocationState::Confirmed);
+    assert_eq!(durable.revocation.reason, Some(4));
+    assert!(durable.revocation.confirmed_at.is_some());
+    service.revoke(reopened.as_mut(), None).await.unwrap();
+    aster_acme::renewal::RenewalService::new(client)
+        .refresh(reopened.as_mut(), &execution().context)
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(generation.join("fullchain.pem")).unwrap(),
+        chain
+    );
+    assert_eq!(
+        fs::read(generation.join("private-key.pk8")).unwrap(),
+        key_before
+    );
+    assert_eq!(
+        fs::read_link(slot.join("current")).unwrap(),
+        PathBuf::from(record.generation_name())
+    );
+    let calls = fixture.server.received_requests().await.unwrap();
+    assert!(
+        calls
+            .iter()
+            .all(|request| !request.url.path().starts_with("/ari/"))
+    );
+    assert!(
+        fixture
+            .service
+            .run(reopened.as_mut(), &Dns(true), &execution())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_without_http() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    let slot = fixture.store.slot(&record.name);
+    let generation = slot.join(record.generation_name());
+    let chain = leaf_for(&generation, &record.identifiers);
+    record.phase = IssuancePhase::Completed;
+    session.complete(&record, chain.as_bytes()).await.unwrap();
+    drop(session);
+    let other = fixture
+        .store
+        .renew(&request().name, &fixture.account)
+        .await
+        .unwrap();
+    let other_record = other.record().await.unwrap();
+    drop(other);
+    let inode = fs::metadata(slot.join("cert.lock")).unwrap().ino();
+    let account_path = fixture.temp.path().join("accounts/default/account.toml");
+    let account_before = fs::read(&account_path).unwrap();
+    let removal = fixture
+        .store
+        .prepare_removal(&record.name, removal::RemovalScope::All)
+        .await
+        .unwrap();
+    assert_eq!(removal.generations(), 2);
+    assert_eq!(removal.name(), &record.name);
+    removal.remove().await.unwrap();
+    assert_eq!(fixture.store.list().await.unwrap().len(), 0);
+    assert!(!generation.exists());
+    assert!(!slot.join(other_record.generation_name()).exists());
+    assert!(!slot.join("current").exists());
+    assert!(!slot.join("cert.toml").exists());
+    assert!(!slot.join(".removing").exists());
+    assert_eq!(fs::metadata(slot.join("cert.lock")).unwrap().ino(), inode);
+    assert_eq!(fs::read(account_path).unwrap(), account_before);
+    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
+    // Retaining the lock carrier permits a later explicit fresh issuance.
+    let new = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    assert_ne!(
+        new.record().await.unwrap().operation_id,
+        record.operation_id
+    );
+}
+
+#[tokio::test]
+async fn certificate_removal_preserves_extra_content_in_place_and_never_follows_unknown_links() {
+    use std::os::unix::fs::symlink;
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    drop(session);
+    let slot = fixture.store.slot(&record.name);
+    let generation = slot.join(record.generation_name());
+    fs::write(slot.join("notes.txt"), "keep root").unwrap();
+    fs::write(generation.join("notes.txt"), "keep generation").unwrap();
+    fs::create_dir(slot.join("user-data")).unwrap();
+    let external = fixture.temp.path().join("external.txt");
+    fs::write(&external, "untouched").unwrap();
+    symlink(&external, generation.join("user-link")).unwrap();
+    fixture
+        .store
+        .prepare_removal(&record.name, removal::RemovalScope::All)
+        .await
+        .unwrap()
+        .remove()
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(slot.join("notes.txt")).unwrap(),
+        "keep root"
+    );
+    assert_eq!(
+        fs::read_to_string(generation.join("notes.txt")).unwrap(),
+        "keep generation"
+    );
+    assert!(slot.join("user-data").is_dir());
+    assert_eq!(
+        fs::read_link(generation.join("user-link")).unwrap(),
+        external
+    );
+    assert_eq!(fs::read_to_string(external).unwrap(), "untouched");
+    assert!(!generation.join("operation.toml").exists());
+    assert!(!generation.join("private-key.pk8").exists());
+    assert_eq!(fixture.store.list().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn removal_drop_missing_target_and_lock_contention_leave_saved_material_unchanged() {
+    let fixture = fixture().await;
+    let missing = CertificateName::new("missing.example").unwrap();
+    assert!(
+        fixture
+            .store
+            .prepare_removal(&missing, removal::RemovalScope::All)
+            .await
+            .is_err()
+    );
+    assert!(!fixture.store.slot(&missing).exists());
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    let key = fs::read(generation.join("private-key.pk8")).unwrap();
+    assert!(
+        fixture
+            .store
+            .prepare_removal(&record.name, removal::RemovalScope::All)
+            .await
+            .is_err()
+    );
+    drop(session);
+    let removal = fixture
+        .store
+        .prepare_removal(&record.name, removal::RemovalScope::All)
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .store
+            .open(&record.name, &record.operation_id)
+            .await
+            .is_err()
+    );
+    drop(removal); // Rejected/cancelled confirmation only releases the lease.
+    assert_eq!(fs::read(generation.join("private-key.pk8")).unwrap(), key);
+    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    fixture
+        .store
+        .open(&record.name, &record.operation_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn removal_rejects_unsafe_managed_files_links_and_interrupted_markers_before_deleting() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for case in 0..6 {
+        let fixture = fixture().await;
+        let session = fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .unwrap();
+        let record = session.record().await.unwrap();
+        drop(session);
+        let slot = fixture.store.slot(&record.name);
+        let generation = slot.join(record.generation_name());
+        let key = generation.join("private-key.pk8");
+        let metadata = fs::read(slot.join("cert.toml")).unwrap();
+        let external = fixture.temp.path().join("outside");
+        fs::write(&external, "keep").unwrap();
+        match case {
+            0 => {
+                fs::remove_file(&key).unwrap();
+                symlink(&external, &key).unwrap();
+            }
+            1 => fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap(),
+            2 => {
+                fs::remove_file(&key).unwrap();
+                fs::create_dir(&key).unwrap();
+            }
+            3 => symlink(&external, slot.join("current")).unwrap(),
+            4 => fs::write(slot.join("current"), "user owned").unwrap(),
+            5 => fs::create_dir(slot.join(".removing")).unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(
+            fixture
+                .store
+                .prepare_removal(&record.name, removal::RemovalScope::All)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), metadata);
+        assert_eq!(fs::read_to_string(&external).unwrap(), "keep");
+        assert!(generation.join("operation.toml").is_file());
+        if case == 5 {
+            assert!(
+                fixture
+                    .store
+                    .create(&request(), &fixture.account)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn removal_can_delete_corrupt_key_bytes_without_generating_or_decoding_a_key() {
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    drop(session);
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    fs::write(
+        generation.join("private-key.pk8"),
+        b"corrupt but safely owned",
+    )
+    .unwrap();
+    fixture
+        .store
+        .prepare_removal(&record.name, removal::RemovalScope::All)
+        .await
+        .unwrap()
+        .remove()
+        .await
+        .unwrap();
+    assert!(!generation.exists());
+}
+
+#[tokio::test]
+async fn removal_cleanup_failure_retains_marker_and_blocks_reusing_leftover_generations() {
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    drop(session);
+    let slot = fixture.store.slot(&record.name);
+    let key = slot.join(record.generation_name()).join("private-key.pk8");
+    let removal = fixture
+        .store
+        .prepare_removal(&record.name, removal::RemovalScope::All)
+        .await
+        .unwrap();
+    // Inject a filesystem change after preflight; deletion must fail without recursion.
+    fs::remove_file(&key).unwrap();
+    fs::create_dir(&key).unwrap();
+    fs::write(key.join("user.txt"), "retain").unwrap();
+    assert!(removal.remove().await.is_err());
+    assert!(slot.join(".removing").is_dir());
+    assert_eq!(fs::read_to_string(key.join("user.txt")).unwrap(), "retain");
+    assert!(
+        fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .is_err()
+    );
+}
+
+async fn completed_generation(fixture: &Fixture) -> IssueRecord {
+    let session = if fixture.store.list().await.unwrap().is_empty() {
+        fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .unwrap()
+    } else {
+        fixture
+            .store
+            .renew(&request().name, &fixture.account)
+            .await
+            .unwrap()
+    };
+    let mut record = session.record().await.unwrap();
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    let chain = leaf_for(&generation, &record.identifiers);
+    record.phase = IssuancePhase::Completed;
+    session.complete(&record, chain.as_bytes()).await.unwrap()
+}
+
+#[tokio::test]
+async fn single_historical_removal_preserves_current_unfinished_requests_and_other_links() {
+    use removal::RemovalScope;
+    use std::os::unix::fs::symlink;
+    let fixture = fixture().await;
+    let old = completed_generation(&fixture).await;
+    let current = completed_generation(&fixture).await;
+    let pending = fixture
+        .store
+        .renew(&request().name, &fixture.account)
+        .await
+        .unwrap();
+    let pending_record = pending.record().await.unwrap();
+    drop(pending);
+    let slot = fixture.store.slot(&old.name);
+    let current_link = fs::read_link(slot.join("current")).unwrap();
+    let config = fs::read(slot.join("cert.toml")).unwrap();
+    let current_temp = slot.join(format!(".current-{}", current.operation_id));
+    let old_temp = slot.join(format!(".current-{}", old.operation_id));
+    symlink(current.generation_name(), &current_temp).unwrap();
+    symlink(old.generation_name(), &old_temp).unwrap();
+    let removal = fixture
+        .store
+        .prepare_removal(&old.name, RemovalScope::Operation(old.operation_id.clone()))
+        .await
+        .unwrap();
+    assert_eq!(removal.generations(), 1);
+    assert!(!removal.removes_current());
+    removal.remove().await.unwrap();
+    assert!(!slot.join(old.generation_name()).exists());
+    assert!(!old_temp.exists());
+    assert_eq!(
+        fs::read_link(current_temp).unwrap(),
+        PathBuf::from(current.generation_name())
+    );
+    assert_eq!(fs::read_link(slot.join("current")).unwrap(), current_link);
+    assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), config);
+    let remaining = fixture.store.list().await.unwrap();
+    assert_eq!(remaining.len(), 2);
+    assert!(
+        remaining
+            .iter()
+            .any(|r| r.operation_id == current.operation_id && r.is_current)
+    );
+    assert!(
+        remaining
+            .iter()
+            .any(|r| r.operation_id == pending_record.operation_id && !r.is_current)
+    );
+}
+
+#[tokio::test]
+async fn removing_current_clears_selection_without_promoting_any_historical_version() {
+    use removal::RemovalScope;
+    let fixture = fixture().await;
+    let old = completed_generation(&fixture).await;
+    let current = completed_generation(&fixture).await;
+    let slot = fixture.store.slot(&current.name);
+    let removal = fixture
+        .store
+        .prepare_removal(
+            &current.name,
+            RemovalScope::Operation(current.operation_id.clone()),
+        )
+        .await
+        .unwrap();
+    assert!(removal.removes_current());
+    removal.remove().await.unwrap();
+    assert!(fs::symlink_metadata(slot.join("current")).is_err());
+    assert!(selection(&slot).unwrap().cert.current.is_none());
+    assert!(
+        slot.join(old.generation_name())
+            .join("private-key.pk8")
+            .exists()
+    );
+    assert!(!slot.join(current.generation_name()).exists());
+    let remaining = fixture.store.list().await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert!(!remaining[0].is_current);
+    fixture
+        .store
+        .prepare_removal(&old.name, RemovalScope::Operation(old.operation_id.clone()))
+        .await
+        .unwrap()
+        .remove()
+        .await
+        .unwrap();
+    assert!(!slot.join("cert.toml").exists());
+    assert_eq!(fixture.store.list().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn history_cleanup_preserves_current_pending_and_is_repeatable_without_side_effects() {
+    use removal::RemovalScope;
+    let fixture = fixture().await;
+    let old = completed_generation(&fixture).await;
+    let other_old = completed_generation(&fixture).await;
+    let current = completed_generation(&fixture).await;
+    let session = fixture
+        .store
+        .renew(&request().name, &fixture.account)
+        .await
+        .unwrap();
+    let pending = session.record().await.unwrap();
+    drop(session);
+    let slot = fixture.store.slot(&current.name);
+    let config = fs::read(slot.join("cert.toml")).unwrap();
+    let current_key =
+        fs::read(slot.join(current.generation_name()).join("private-key.pk8")).unwrap();
+    let removal = fixture
+        .store
+        .prepare_removal(&current.name, RemovalScope::History)
+        .await
+        .unwrap();
+    assert_eq!(removal.generations(), 2);
+    assert!(!removal.removes_current());
+    removal.remove().await.unwrap();
+    for old in [old, other_old] {
+        assert!(!slot.join(old.generation_name()).exists());
+    }
+    assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), config);
+    assert_eq!(
+        fs::read(slot.join(current.generation_name()).join("private-key.pk8")).unwrap(),
+        current_key
+    );
+    assert!(
+        slot.join(pending.generation_name())
+            .join("private-key.pk8")
+            .exists()
+    );
+    let empty = fixture
+        .store
+        .prepare_removal(&current.name, RemovalScope::History)
+        .await
+        .unwrap();
+    assert_eq!(empty.generations(), 0);
+    empty.remove().await.unwrap();
+    assert!(!slot.join(".removing").exists());
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn history_without_consistent_current_and_unknown_operation_delete_nothing() {
+    use removal::RemovalScope;
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let pending = session.record().await.unwrap();
+    drop(session);
+    assert!(
+        fixture
+            .store
+            .prepare_removal(&pending.name, RemovalScope::History)
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .store
+            .prepare_removal(&pending.name, RemovalScope::Operation("missing".into()))
+            .await
+            .is_err()
+    );
+    let current = completed_generation(&fixture).await;
+    let slot = fixture.store.slot(&current.name);
+    fs::remove_file(slot.join("current")).unwrap();
+    assert!(
+        fixture
+            .store
+            .prepare_removal(&current.name, RemovalScope::History)
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert!(
+        slot.join(current.generation_name())
+            .join("private-key.pk8")
+            .exists()
+    );
+    assert!(!slot.join(".removing").exists());
+}
+
+#[tokio::test]
+async fn revoked_cleanup_matches_only_confirmed_versions_and_can_clear_revoked_current() {
+    use aster_acme_core::revocation::RevocationState;
+    use removal::RemovalScope;
+    let fixture = fixture().await;
+    let valid = completed_generation(&fixture).await;
+    let uncertain = completed_generation(&fixture).await;
+    let revoked = completed_generation(&fixture).await;
+    for (record, state) in [
+        (&uncertain, RevocationState::Pending),
+        (&revoked, RevocationState::Confirmed),
+    ] {
+        let session = fixture
+            .store
+            .open(&record.name, &record.operation_id)
+            .await
+            .unwrap();
+        let mut saved = session.record().await.unwrap();
+        saved.revocation.state = state;
+        session.save(&saved).await.unwrap();
+    }
+    let slot = fixture.store.slot(&revoked.name);
+    let cleanup = fixture
+        .store
+        .prepare_removal(&revoked.name, RemovalScope::Revoked)
+        .await
+        .unwrap();
+    assert_eq!(cleanup.generations(), 1);
+    assert!(cleanup.removes_current());
+    cleanup.remove().await.unwrap();
+    assert!(!slot.join(revoked.generation_name()).exists());
+    assert!(
+        slot.join(uncertain.generation_name())
+            .join("private-key.pk8")
+            .exists()
+    );
+    assert!(
+        slot.join(valid.generation_name())
+            .join("private-key.pk8")
+            .exists()
+    );
+    assert!(selection(&slot).unwrap().cert.current.is_none());
+    assert!(fs::symlink_metadata(slot.join("current")).is_err());
+    let no_op = fixture
+        .store
+        .prepare_removal(&revoked.name, RemovalScope::Revoked)
+        .await
+        .unwrap();
+    assert_eq!(no_op.generations(), 0);
+    no_op.remove().await.unwrap();
+    assert!(!slot.join(".removing").exists());
+}
+
+#[tokio::test]
+async fn revoked_cleanup_preserves_unrevoked_current_and_incomplete_requests() {
+    use aster_acme_core::revocation::RevocationState;
+    use removal::RemovalScope;
+    let fixture = fixture().await;
+    let revoked = completed_generation(&fixture).await;
+    let session = fixture
+        .store
+        .open(&revoked.name, &revoked.operation_id)
+        .await
+        .unwrap();
+    let mut saved = session.record().await.unwrap();
+    saved.revocation.state = RevocationState::Confirmed;
+    session.save(&saved).await.unwrap();
+    drop(session);
+    let current = completed_generation(&fixture).await;
+    let session = fixture
+        .store
+        .renew(&request().name, &fixture.account)
+        .await
+        .unwrap();
+    let pending = session.record().await.unwrap();
+    drop(session);
+    let cleanup = fixture
+        .store
+        .prepare_removal(&current.name, RemovalScope::Revoked)
+        .await
+        .unwrap();
+    assert!(!cleanup.removes_current());
+    cleanup.remove().await.unwrap();
+    let slot = fixture.store.slot(&current.name);
+    assert_eq!(
+        fs::read_link(slot.join("current")).unwrap(),
+        PathBuf::from(current.generation_name())
+    );
+    assert!(
+        slot.join(pending.generation_name())
+            .join("private-key.pk8")
+            .exists()
+    );
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn new_managed_name_is_exclusive_and_duplicate_new_issue_preserves_definition_and_keys() {
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    let slot = fixture.store.slot(&record.name);
+    let key_path = slot.join(record.generation_name()).join("private-key.pk8");
+    let key = fs::read(&key_path).unwrap();
+    let definition = fs::read(slot.join("cert.toml")).unwrap();
+    drop(session);
+    assert!(
+        matches!(fixture.store.create(&request(),&fixture.account).await,Err(IssueError::NameAlreadyExists(name)) if name==record.name)
+    );
+    assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), definition);
+    assert_eq!(fs::read(&key_path).unwrap(), key);
+    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    let mut other = request();
+    other.name = CertificateName::new("example.com-other").unwrap();
+    fixture
+        .store
+        .create(&other, &fixture.account)
+        .await
+        .unwrap();
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn concurrent_new_issue_claims_exactly_one_managed_name_under_the_certificate_lock() {
+    let fixture = fixture().await;
+    let store = Arc::new(CliIssueStore::new(
+        fixture.temp.path().into(),
+        Duration::from_secs(3),
+    ));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let store = store.clone();
+        let account = fixture.account.clone();
+        handles.push(tokio::spawn(async move {
+            match store.create(&request(), &account).await {
+                Ok(session) => {
+                    let record = session.record().await.unwrap();
+                    drop(session);
+                    Ok(record.operation_id)
+                }
+                Err(error) => Err(error),
+            }
+        }));
+    }
+    let mut created = 0;
+    let mut collisions = 0;
+    for handle in handles {
+        match handle.await.unwrap() {
+            Ok(_) => created += 1,
+            Err(IssueError::NameAlreadyExists(_)) => collisions += 1,
+            Err(error) => panic!("unexpected allocation error: {error}"),
+        }
+    }
+    assert_eq!((created, collisions), (1, 1));
+    assert_eq!(store.list().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn renewed_generation_keeps_the_managed_definition_and_rejects_changed_account_bindings() {
+    let fixture = fixture().await;
+    let initial = completed_generation(&fixture).await;
+    let slot = fixture.store.slot(&initial.name);
+    let definition = fs::read(slot.join("cert.toml")).unwrap();
+    let old_key = fs::read(slot.join(initial.generation_name()).join("private-key.pk8")).unwrap();
+    let session = fixture
+        .store
+        .renew(&initial.name, &fixture.account)
+        .await
+        .unwrap();
+    let next = session.record().await.unwrap();
+    assert_eq!(next.name, initial.name);
+    assert_eq!(next.identifiers, initial.identifiers);
+    assert_eq!(next.account_name, initial.account_name);
+    assert_eq!(next.account_id, initial.account_id);
+    assert_ne!(next.operation_id, initial.operation_id);
+    assert!(!next.is_current);
+    assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), definition);
+    assert_ne!(
+        fs::read(slot.join(next.generation_name()).join("private-key.pk8")).unwrap(),
+        old_key
+    );
+    drop(session);
+    for change in ["account", "directory"] {
+        let mut other = fixture.account.clone();
+        match change {
+            "account" => other.account_id = "another".into(),
+            _ => other.directory_url = AcmeUrl::new("https://other.example/directory").unwrap(),
+        }
+        assert!(fixture.store.renew(&initial.name, &other).await.is_err());
+    }
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    let config = selection(&slot).unwrap();
+    assert_eq!(config.cert.identifiers, initial.identifiers);
+    assert_eq!(config.cert.solver_id, "manual_dns");
 }

@@ -3,5 +3,6 @@ pub(crate) mod args;
 pub(crate) mod execute;
 mod interaction;
 mod progress;
+mod removal;
 mod render;
 mod selection;

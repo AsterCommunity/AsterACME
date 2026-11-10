@@ -90,10 +90,10 @@ git diff HEAD --check
 
 - 账户状态由 core::account 的显式纯决策驱动；本地注册/停用状态类型归 core，客户端按 AccountAction 执行 I/O，CLI 调用相同规则，不重复写业务条件。字段校验保留普通 if，不把业务转换藏在布尔判断中。AccountTimes 的三个 UTC RFC3339 字段仅在成功权威账户观察处更新，registered_at 首次不变，失败/离线不更新，未知不猜测；AccountClock 可注入。
 
-- HTTP 连接池构造和执行复用明确 registry 版本的 aster_forge_http，ACME 持有 User-Agent、deadline 和协议重试策略；reqwest 保留响应/错误/状态/header 类型依赖。User-Agent 优先级：本次参数 > 账户显式设置 > 内置默认；register 的显式值写 account.toml，默认值和 config.toml 不写此字段。其他命令覆盖不持久化。
+- HTTP 连接池构造和执行复用 registry 的 aster_forge_http =0.1.0-alpha.2，根 workspace 只启用 json/rustls-aws-lc-rs/system-proxy，显式 TlsBackend::Rustls；reqwest 类型依赖不另启用 features。ACME 持有 User-Agent、deadline 和协议重试策略；reqwest 保留响应/错误/状态/header 类型依赖。User-Agent 优先级：本次参数 > 账户显式设置 > 内置默认；register 的显式值写 account.toml，默认值和 config.toml 不写此字段。其他命令覆盖不持久化。
 - update-contact 按 RFC 8555 §7.3.2 只 POST contact 到原账户 URL；清空必须显式，成功观察与本地意图分开。rotate-key 按 §7.3.5 双层 JWS，内层新钥 jwk/无 nonce，外层旧钥 kid，URL 一致，200 可空 body。事务租约覆盖双钥持久化、pending/confirmed、对账和本地提交；pending 不自动重放，confirmed 不再发 keyChange。CLI bin 禁用 rustdoc 输出以避免与库同名目录碰撞，二进制名不变。
 
-- cert issue 是完整签发入口，cert list/show 只读/显式刷新，删除根 order 命令；不保留旧 order 参数或别名。默认名称为首个规范化域名，通配符保留；内部 ID 区分世代。恢复同名多候选必须交互选择并显示申请时间，脚本显式 --operation，不猜最新。
+- cert issue 是完整签发入口，cert list/show 只读/显式刷新，删除根 order 命令；不保留旧 order 参数或别名。默认名称为主域名加随机后缀，碰撞重试；显式已有名称拒绝；内部 ID 区分世代。恢复同名多候选必须交互选择并显示申请时间，脚本显式 --operation，不猜最新。
 - 当前只执行 manual_dns，人工确认属于 CLI，DNS 查询属于 aster_acme_validation，dyn DnsReadiness 不发布/删除记录。--force 仅跳过本地 DNS 可见性，不跳过首次非交互待办、CA 验证、过期或证书检查。order/auth expires 与证书 notAfter 分开，不捏造远端 expired order 状态。
 - Issuance 使用账户→证书锁序，阻塞持久化保留租约；generation 固定密钥/CSR。先保存意图再 newOrder/ack/finalize，Location 先存后解析 body；响应丢失不自动下新单，Submitted 的 pending/ready 只轮询。保存验证后的 fullchain，再切换 current，最后 Completed；失败保留旧有效版本，人工 TXT 清理独立提示。
 
@@ -105,3 +105,9 @@ git diff HEAD --check
 
 - 公共 LocalArgs/HttpArgs 位于 common/args.rs；参数语义以 docs/cli-contract.md 为准。--yes 仅确认当前操作，不隐含 force、accept-terms 或关闭选择；cert resume 可跳过 TXT 确认但继续 DNS 检查，首次自动化申请必须先 yield TXT 指令。account contact 统一 -m，cert show 位置与 --name 互斥。
 - README.md / README.zh.md、CHANGELOG.md / CHANGELOG.zh.md 配对维护；官网为 https://acme.astercosm.com。release 体积配置在根 profile，不在成员声明被 Cargo 忽略的 profile。
+
+- ARI 对照 RFC 9773：签发提交前保存原有效期 2/3 回退，提交后立即尝试 RenewalInfo，无签名 GET；窗口随机选时持久化且相同窗口不重抽，按 Retry-After 保存重查期限；失败保留计划，超时/5xx 有限退避，周期唤醒留给未来 daemon。吊销按 RFC 8555 §7.6 独立状态：pending 不是成功，200/alreadyRevoked 才确认；显式同证书同原因重试安全，网络不自动重放，已确认不发 HTTP，文件/current 保留。
+
+- cert remove 默认精确删除一次申请，--history 清理非当前已签发、--revoked 匹配确认吊销、--all 删除分组；默认否确认、脚本 --yes；共享证书锁覆盖预检/确认/清理，不依赖账户或 CA。保留用户额外内容和 cert.lock inode，清理中断保留 .removing 并阻止新建复用。account/cert show 的 JSON 查询观察按 ca_query.account_refreshed/order_refreshed/authorizations_refreshed 区分；吊销来源独立，不能把整条记录标为 verified。
+
+- 托管证书身份独立于主域名/订单；cert.toml 保存稳定域名集合、账户、CA 和验证定义。IssueStore::create 只原子新建，NameAlreadyExists 是唯一可重试的自动分配错误（上限16次）；renew 只准备同定义新版本，不代表 CLI renew/daemon 已实现。list/show 默认 current，显式历史不参与活跃续期，删除 current 不回退旧证书。

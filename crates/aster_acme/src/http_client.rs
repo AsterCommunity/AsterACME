@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use aster_forge_http::HttpClient;
+use aster_forge_http::{HttpClient, TlsBackend};
 
 use crate::transport::{TransportError, TransportOptions};
 
@@ -21,6 +21,7 @@ pub(crate) fn build(options: &TransportOptions) -> Result<HttpClient, TransportE
         .unwrap_or(concat!("AsterACME/", env!("CARGO_PKG_VERSION")));
     validate_user_agent(user_agent)?;
     HttpClient::builder()
+        .tls_backend(TlsBackend::Rustls)
         .without_read_timeout()
         .timeout(options.request_timeout)
         .connect_timeout(options.request_timeout.min(Duration::from_secs(10)))

@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS-01 证书申请、恢复和只读订单查看已实现；自动续期与吊销尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS-01 证书申请、恢复和只读订单查看已实现；ARI 续期计划和账户签名吊销已实现；自动续期及 daemon 尚未实现。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -198,7 +198,7 @@ aster-acme cert show example.com
 aster-acme cert show example.com --operation <ID> --verify
 ```
 
-`-n/--name` 指定证书名称，不指定使用首个规范化域名（通配符保留）；`-a` 账户、`-d` 域名可重复、`-c` 验证实现、`-f` 跳过本地 DNS 检查。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
+`-n/--name` 指定证书名称，不指定使用主域名加随机后缀，自动碰撞重试；显式名称已存在则拒绝；`-a` 账户、`-d` 域名可重复、`-c` 验证实现、`-f` 跳过本地 DNS 检查。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
 
 只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 --force 不允许绕过过期/失效状态或重新下单。
 
@@ -211,7 +211,7 @@ aster-acme cert show example.com --operation <ID> --verify
 
 ## 统一展示和产物
 
-当前根命令为 account、cert、version；证书命令只有 cert issue/list/show，不提供旧 order 别名。只用 `-c manual_dns` 选择验证方案，删除 --solver 和 -c dns-01。无域名的 cert issue 在终端询问，脚本要求 -d/--resume；无名称的 cert show 在终端先选证书，多次申请再选主域名/时间/状态，--operation 可直接定位申请。相同显示标签通过独立行索引选中，不靠文本匹配。
+当前根命令为 account、cert、version；证书命令为 cert issue/list/show/revoke/remove，不提供旧 order 别名。只用 `-c manual_dns` 选择验证方案，删除 --solver 和 -c dns-01。无域名的 cert issue 在终端询问，脚本要求 -d/--resume；无名称的 cert show 在终端先选证书，多次申请再选主域名/时间/状态，--operation 可直接定位申请。相同显示标签通过独立行索引选中，不靠文本匹配。
 
 common/output 统一字段、颜色、Tips 和转义；common/time 统一所有人类 UTC 时间（秒级），common/log 统一阶段日志/级别对齐，common/table 统一 Unicode 列宽。颜色遵守 TTY/NO_COLOR，JSON 无 ANSI/阶段日志。cert list 使用紧凑表格，蓝色 Tips: 指向 cert show；account/cert show 详情使用同样的标签宽度。account show 的离线/verify 使用同一完整快照模板；成功查询后末行 Remote status: verified with CA，离线 not verified。cert show 的 source/verified 与实际请求一致，不再输出固定的 unless --verify 文案。
 
@@ -226,3 +226,9 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 
 
 cert issue 支持 -y/--yes：恢复已有申请时仅跳过 TXT 人工确认，正常执行 DNS 检查；-f/--force 仅控制本地 DNS 查询。首次自动化申请即使同时带两个选项，也先返回 action_required 和新 TXT 值，发布后显式 resume。--yes 不关闭域名/证书名称选择、不接受条款，也不隐含 --json。公共存储与 HTTP 参数组位于 common/args.rs，各命令领取自己适用的组；完整范围和后续扩展约定见 [CLI 参数契约](../../docs/cli-contract.md)。
+
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+
+cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容及原锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
+
+托管身份、稳定定义、默认 current 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；本轮未提供 cert renew 命令或后台调度。

@@ -62,6 +62,12 @@ pub struct Directory {
     /// Optional RFC 8555 keyChange endpoint; absent means rotation is unsupported.
     #[serde(default)]
     pub key_change: Option<AcmeUrl>,
+    /// RFC 8555 certificate revocation endpoint.
+    #[serde(default)]
+    pub revoke_cert: Option<AcmeUrl>,
+    /// RFC 9773 unauthenticated renewal information endpoint.
+    #[serde(default)]
+    pub renewal_info: Option<AcmeUrl>,
     /// Optional server metadata.
     #[serde(default)]
     pub meta: DirectoryMeta,

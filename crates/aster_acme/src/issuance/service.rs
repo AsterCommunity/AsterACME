@@ -67,7 +67,7 @@ impl IssueService {
         }
     }
 
-    /// Refresh only existing order/authorization resources; no challenge acknowledgement/finalize.
+    /// Refresh existing order/authorization resources and due ARI; no challenge acknowledgement/finalize.
     ///
     /// # Errors
     /// Reports binding, HTTP and malformed-resource failures.
@@ -93,7 +93,11 @@ impl IssueService {
             self.authorization(&mut record, &url).await?;
         }
         session.save(&record).await?;
-        Ok(record)
+        let execution = crate::solver::ExecutionContext {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: std::time::Instant::now() + Duration::from_secs(30),
+        };
+        self.plan_renewal(session, &execution).await
     }
 
     /// Drive one saved issuance using explicit core actions and bounded cancellation-aware I/O.
@@ -112,8 +116,18 @@ impl IssueService {
         let mut record = session.record().await?;
         let mut last_order_status = None;
         self.check_identity(&record)?;
+        if !matches!(
+            record.revocation.state,
+            aster_acme_core::revocation::RevocationState::NotRequested
+        ) {
+            return Err(IssueError::InvalidInput(
+                "cannot resume an issuance whose certificate revocation is pending or confirmed",
+            ));
+        }
         if matches!(record.phase, IssuancePhase::Completed) {
-            return Ok(completed(record));
+            return Ok(completed(
+                self.plan_renewal(session, &execution.context).await?,
+            ));
         }
         if record.order_url.is_none() {
             self.create(session, &mut record, execution).await?;
@@ -179,29 +193,58 @@ impl IssueService {
                     let url = order.certificate.as_ref().ok_or(IssueError::InvalidInput(
                         "valid order omitted certificate URL",
                     ))?;
-                    self.observe(&IssueEvent::Downloading);
-                    record.phase = IssuancePhase::Downloading;
-                    session.save(&record).await?;
-                    let response = bounded(execution, self.post(url, b"")).await?;
-                    if response.status != reqwest::StatusCode::OK
-                        || response
-                            .headers
-                            .get(reqwest::header::CONTENT_TYPE)
-                            .and_then(|value| value.to_str().ok())
-                            .is_none_or(|value| {
-                                value.split(';').next() != Some("application/pem-certificate-chain")
-                            })
-                    {
-                        return Err(IssueError::InvalidInput(
-                            "CA returned an invalid certificate media type or status",
-                        ));
-                    }
-                    record.phase = IssuancePhase::Completed;
-                    record = session.complete(&record, &response.body).await?;
-                    self.observe(&IssueEvent::CertificateSaved);
+                    record = self.download(session, &mut record, url, execution).await?;
                     return Ok(completed(record));
                 }
             }
+        }
+    }
+
+    // Download, validate and promote as one workflow stage, then enrich its saved
+    // fallback with ARI. No renewal query occurs before certificate commitment.
+    async fn download(
+        &self,
+        session: &mut dyn IssueSession,
+        record: &mut IssueRecord,
+        url: &AcmeUrl,
+        execution: &IssueExecution,
+    ) -> Result<IssueRecord, IssueError> {
+        self.observe(&IssueEvent::Downloading);
+        record.phase = IssuancePhase::Downloading;
+        session.save(record).await?;
+        let response = bounded(execution, self.post(url, b"")).await?;
+        if response.status != reqwest::StatusCode::OK
+            || response
+                .headers
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_none_or(|value| {
+                    value.split(';').next() != Some("application/pem-certificate-chain")
+                })
+        {
+            return Err(IssueError::InvalidInput(
+                "CA returned an invalid certificate media type or status",
+            ));
+        }
+        record.phase = IssuancePhase::Completed;
+        session.complete(record, &response.body).await?;
+        self.observe(&IssueEvent::CertificateSaved);
+        self.plan_renewal(session, &execution.context).await
+    }
+
+    // A cancelled ARI lookup must not turn an already committed issuance into failure.
+    // Its six-hour query deadline is saved before GET; expose the latest durable plan.
+    async fn plan_renewal(
+        &self,
+        session: &mut dyn IssueSession,
+        execution: &crate::solver::ExecutionContext,
+    ) -> Result<IssueRecord, IssueError> {
+        match crate::renewal::RenewalService::new(self.client.clone())
+            .refresh(session, execution)
+            .await
+        {
+            Err(IssueError::Interrupted) => session.record().await,
+            result => result,
         }
     }
 

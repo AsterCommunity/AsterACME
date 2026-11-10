@@ -92,8 +92,14 @@ certs/<certificate-name>/
     private-key.pem                 # 同一证书私钥的 PEM PKCS#8
 ```
 
-证书默认名是首个规范化域名，通配符保留 `*.`；显式名称仍需满足单目录组件规则。每次申请有独立 ID 和 UTC created_at，同名可有多个未完成申请；current 只指向已经校验并落盘的版本，失败不覆盖旧版。operation 保存 CA expires、原始 Location、授权/通知阶段、全部手动 TXT 和待清理标记，不含凭据。
+证书默认名是主域名加随机后缀，碰撞重试；显式已有名称拒绝；显式名称仍需满足单目录组件规则。每次申请有独立 ID 和 UTC created_at，同名可有多个未完成申请；current 只指向已经校验并落盘的版本，失败不覆盖旧版。operation 保存 CA expires、原始 Location、授权/通知阶段、全部手动 TXT 和待清理标记，不含凭据。
 
 锁顺序为账户→证书。后台阻塞写任务保留 Arc 租约，调用 future 取消也不会提前解锁。初始化先写可列举的 journal，再写私钥/CSR/哈希，缺失材料拒绝恢复、不静默生成新身份。落盘按 完整产物集合→Downloading journal→原子 current 链接→cert.toml 选择→Completed journal 完成；任一中间失败可重新下载同一订单证书，不重新签发。普通读取不加载私钥，执行恢复会验证材料/路径/权限/版本/数量上限；未知版本和损坏不迁移。保留旧世代，目前不自动清理历史证书。
 
 目录扫描仅以 cert.toml/operation.toml 识别托管对象，忽略 .DS_Store、笔记、额外目录和未识别链接；已识别托管文件仍严格检查类型、身份、schema、权限和尺寸。current 是唯一显式托管的相对 symlink，只可指向同级且身份匹配的世代；不覆盖用户同名普通文件或指向外部的链接。版本名为 UTC 秒级创建时间 + 8 位随机后缀，完整 operation ID 留在 journal，不保留旧目录布局读取。
+
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+
+cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容及原锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
+
+托管身份、稳定定义、默认 current 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；本轮未提供 cert renew 命令或后台调度。

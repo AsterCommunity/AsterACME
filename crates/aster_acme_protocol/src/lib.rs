@@ -17,6 +17,8 @@ pub mod directory;
 pub mod jws;
 pub mod order;
 pub mod problem;
+pub mod renewal;
+pub mod revocation;
 pub mod url;
 
 #[cfg(test)]

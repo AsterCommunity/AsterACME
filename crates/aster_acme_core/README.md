@@ -28,3 +28,5 @@ cargo test -p aster_acme_core --locked
 账户 Update/RotateKey 也由纯决策驱动；轮换 Pending 只允许 ReconcileKeyChange、Confirmed 只允许 FinalizeKeyChange，并阻止其他活跃操作/远端观察。Inspect 独立于注册资格，允许对停用意图做权威查询；不绕过轮换的双钥恢复。Core 不持有密钥或决定文件事务。
 
 `SubmissionState::NotSubmitted/Submitted` 是本地持久化通知意图，区别于 CA 状态。order_action 接收 finalize 提交状态，ready + Submitted 返回 PollOrder；challenge_action 接收 acknowledgement 状态，pending + Submitted 返回 PollChallenge。只有未提交的动作允许上层保存意图后通知 CA，不能根据仍未变化的远端状态重放 mutation。
+
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。

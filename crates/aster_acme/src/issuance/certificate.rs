@@ -176,3 +176,21 @@ fn encode_certificate(der: &[u8]) -> String {
     pem.push_str("-----END CERTIFICATE-----\n");
     pem
 }
+
+/// Extract the first PEM certificate as DER for RFC 8555 section 7.6.
+///
+/// # Errors
+/// Rejects missing, non-certificate or malformed leaf data.
+pub fn leaf_der(chain: &[u8]) -> Result<Vec<u8>, IssueError> {
+    let (_, pem) =
+        parse_x509_pem(chain).map_err(|_| IssueError::InvalidInput("invalid leaf PEM"))?;
+    if pem.label != "CERTIFICATE" {
+        return Err(IssueError::InvalidInput("invalid leaf PEM label"));
+    }
+    let (rest, _) = x509_parser::certificate::X509Certificate::from_der(&pem.contents)
+        .map_err(|_| IssueError::InvalidInput("invalid leaf DER"))?;
+    if !rest.is_empty() {
+        return Err(IssueError::InvalidInput("trailing leaf DER data"));
+    }
+    Ok(pem.contents)
+}

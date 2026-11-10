@@ -276,12 +276,12 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
         }
     }
     lines.push(field(
-        "Remote status:",
+        "CA query:",
         &styled(
             if local.verified {
-                "verified with CA"
+                "account refreshed"
             } else {
-                "not verified. Use account show --verify to query the CA."
+                "not performed (local data only)"
             },
             if local.verified { "32" } else { "33" },
             color,
@@ -466,7 +466,7 @@ pub(super) mod tests {
         let colored = local_text(&account, true);
         assert!(colored.contains("\x1b[36mCA:\x1b[0m"));
         assert!(colored.contains("\x1b[33mkey_only\x1b[0m"));
-        assert!(colored.contains("\x1b[33mnot verified."));
+        assert!(colored.contains("\x1b[33mnot performed"));
         let plain = local_text(&account, false);
         assert!(!plain.contains('\x1b'));
         assert!(
@@ -529,15 +529,16 @@ pub(super) mod tests {
                     .collect::<Vec<_>>()
                     .join(" ")
                     .contains(if verified {
-                        "Remote status: verified with CA"
+                        "CA query: account refreshed"
                     } else {
-                        "Remote status: not verified"
+                        "CA query: not performed (local data only)"
                     })
             );
             let report = AccountReport::Local(local);
             let json = json_value(&report);
-            assert_eq!(json["verified"], verified);
-            assert_eq!(json["source"], if verified { "remote" } else { "local" });
+            assert_eq!(json["ca_query"]["account_refreshed"], verified);
+            assert!(json.get("verified").is_none());
+            assert!(json.get("source").is_none());
             assert_eq!(json["key_thumbprint"], "thumbprint");
             assert_eq!(json["contacts"][0], "mailto:a@example.com");
         }

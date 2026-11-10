@@ -936,14 +936,15 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
         assert!(matches!(report, AccountReport::Local(_)));
         let value = render::tests::json_value(&report);
         assert_eq!(value["local_state"], expected);
-        assert_eq!(value["verified"], false);
-        assert_eq!(value["source"], "local");
+        assert_eq!(value["ca_query"]["account_refreshed"], false);
+        assert!(value.get("verified").is_none());
+        assert!(value.get("source").is_none());
         assert!(value["status"].is_null());
         assert!(!render::render(&report, true).unwrap().contains('\x1b'));
         assert!(
             render::render(&report, false)
                 .unwrap()
-                .contains("not verified")
+                .contains("not performed (local data only)")
         );
         assert_eq!(store.load(&directory, &thumbprint).await.unwrap(), before);
     }

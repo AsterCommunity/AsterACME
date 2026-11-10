@@ -21,6 +21,8 @@ use std::{
     time::Duration,
 };
 
+pub mod removal;
+
 const MAX_JOURNAL: u64 = 1024 * 1024;
 
 /// Local certificate catalog. Names and operation IDs are validated before joining paths.
@@ -65,6 +67,11 @@ struct CertificateConfig {
 #[derive(Serialize, Deserialize)]
 struct CertificateSelection {
     name: CertificateName,
+    identifiers: Vec<aster_acme::identifier::DnsIdentifier>,
+    account_name: String,
+    account_id: String,
+    directory: aster_acme_protocol::url::AcmeUrl,
+    solver_id: String,
     current: Option<String>,
 }
 
@@ -306,53 +313,36 @@ fn promote_current(_slot: &Path, _record: &IssueRecord) -> Result<(), IssueError
     Err(failure("current certificate links require Unix"))
 }
 
-#[async_trait]
-impl IssueStore for CliIssueStore {
-    async fn create(
+impl CliIssueStore {
+    async fn initialize(
         &self,
-        request: &IssueRequest,
+        input: Initialization,
         account: &AccountRecord,
     ) -> Result<Box<dyn IssueSession>, IssueError> {
-        if request.identifiers.is_empty()
-            || request.identifiers.len() > 100
-            || request
-                .identifiers
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != request.identifiers.len()
-            || !account.is_usable()
-        {
-            return Err(failure(
-                "issuance requires unique domains and an active account",
-            ));
+        match &input {
+            Initialization::New(request) => validate_request(request, account)?,
+            Initialization::Renewal(_) if !account.is_usable() => {
+                return Err(failure("renewal requires an active account"));
+            }
+            Initialization::Renewal(_) => {}
         }
-        let lease = self.lease(&request.name).await?;
-        let slot = self.slot(&request.name);
-        let request = request.clone();
+        let name = match &input {
+            Initialization::New(request) => &request.name,
+            Initialization::Renewal(name) => name,
+        };
+        let lease = self.lease(name).await?;
+        let slot = self.slot(name);
         let account = account.clone();
         tokio::task::spawn_blocking(move || {
-            let config = match read_private(&slot.join("cert.toml"), 64 * 1024) {
-                Ok(_) => selection(&slot)?,
-                Err(StorageError::NotFound) => CertificateConfig {
-                    version: 1,
-                    cert: CertificateSelection {
-                        name: request.name.clone(),
-                        current: None,
-                    },
-                },
-                Err(_) => return Err(failure("unsafe certificate configuration")),
-            };
-            if config.cert.name != request.name {
-                return Err(failure("certificate name mismatch"));
-            }
-            write_selection(&slot, &config)?;
+            removal::ensure_idle(&slot)?;
+            let request = initialize_definition(&slot, input, &account)?;
             if read_generations(&slot, &request.name)?.len() >= 1024 {
                 return Err(failure("certificate generation limit reached"));
             }
             let operation_id = AccountKey::generate()?.jwk()?.thumbprint()?;
             let material = certificate::generate(&request.identifiers)?;
             let record = IssueRecord {
+                is_current: false,
                 solver_id: "manual_dns".into(),
                 operation_id,
                 name: request.name,
@@ -373,6 +363,8 @@ impl IssueStore for CliIssueStore {
                 finalize_submitted: SubmissionState::NotSubmitted,
                 next_poll_at: None,
                 certificate_not_after: None,
+                renewal: None,
+                revocation: aster_acme::revocation::RevocationRecord::default(),
             };
             let generation = slot.join(record.generation_name());
             fs::create_dir(&generation)
@@ -401,6 +393,119 @@ impl IssueStore for CliIssueStore {
         })
         .await
         .map_err(|_| failure("issuance initialization worker failed"))?
+    }
+}
+
+enum Initialization {
+    New(IssueRequest),
+    Renewal(CertificateName),
+}
+
+fn validate_request(request: &IssueRequest, account: &AccountRecord) -> Result<(), IssueError> {
+    if request.identifiers.is_empty()
+        || request.identifiers.len() > 100
+        || request
+            .identifiers
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != request.identifiers.len()
+        || !account.is_usable()
+    {
+        return Err(failure(
+            "issuance requires unique domains and an active account",
+        ));
+    }
+    Ok(())
+}
+
+// The certificate lease covers definition lookup, name claiming and generation writes.
+fn initialize_definition(
+    slot: &Path,
+    input: Initialization,
+    account: &AccountRecord,
+) -> Result<IssueRequest, IssueError> {
+    match input {
+        Initialization::New(request) => {
+            match read_private(&slot.join("cert.toml"), 64 * 1024) {
+                Ok(_) => {
+                    selection(slot)?;
+                    return Err(IssueError::NameAlreadyExists(request.name));
+                }
+                Err(StorageError::NotFound) => {}
+                Err(_) => return Err(failure("unsafe certificate configuration")),
+            }
+            if !read_generations(slot, &request.name)?.is_empty() {
+                return Err(IssueError::NameAlreadyExists(request.name));
+            }
+            write_selection(
+                slot,
+                &CertificateConfig {
+                    version: 1,
+                    cert: CertificateSelection {
+                        name: request.name.clone(),
+                        identifiers: request.identifiers.clone(),
+                        account_name: request.account_name.clone(),
+                        account_id: account.account_id.clone(),
+                        directory: account.directory_url.clone(),
+                        solver_id: "manual_dns".into(),
+                        current: None,
+                    },
+                },
+            )?;
+            Ok(request)
+        }
+        Initialization::Renewal(name) => {
+            let config = selection(slot)?;
+            if config.cert.name != name
+                || config.cert.account_id != account.account_id
+                || config.cert.directory != account.directory_url
+                || config.cert.solver_id != "manual_dns"
+            {
+                return Err(failure(
+                    "renewal definition does not match the selected account",
+                ));
+            }
+            if read_generations(slot, &name)?.iter().any(|record| {
+                record.identifiers != config.cert.identifiers
+                    || record.account_id != config.cert.account_id
+                    || record.directory != config.cert.directory
+                    || record.account_name != config.cert.account_name
+                    || record.solver_id != config.cert.solver_id
+            }) {
+                return Err(failure(
+                    "saved generations do not match the managed certificate definition",
+                ));
+            }
+            let request = IssueRequest {
+                name,
+                identifiers: config.cert.identifiers,
+                account_name: config.cert.account_name,
+            };
+            validate_request(&request, account)?;
+            Ok(request)
+        }
+    }
+}
+
+#[async_trait]
+impl IssueStore for CliIssueStore {
+    async fn create(
+        &self,
+        request: &IssueRequest,
+        account: &AccountRecord,
+    ) -> Result<Box<dyn IssueSession>, IssueError> {
+        self.initialize(Initialization::New(request.clone()), account)
+            .await
+    }
+
+    async fn renew(
+        &self,
+        name: &CertificateName,
+        account: &AccountRecord,
+    ) -> Result<Box<dyn IssueSession>, IssueError> {
+        self.initialize(Initialization::Renewal(name.clone()), account)
+            .await
     }
 
     async fn open(
@@ -485,7 +590,15 @@ impl IssueStore for CliIssueStore {
                     return Err(failure("certificate catalog name mismatch"));
                 }
                 ensure_real_dir(&slot)?;
-                records.extend(read_generations(&slot, &name)?);
+                records.extend(
+                    read_generations(&slot, &name)?
+                        .into_iter()
+                        .map(|mut record| {
+                            record.is_current = config.cert.current.as_deref()
+                                == Some(record.operation_id.as_str());
+                            record
+                        }),
+                );
                 if records.len() > 4096 {
                     return Err(failure("issuance listing exceeds 4096 records"));
                 }
@@ -508,11 +621,15 @@ impl IssueSession for Session {
     async fn record(&self) -> Result<IssueRecord, IssueError> {
         let permit = self.io.clone().lock_owned().await;
         let generation = self.generation.clone();
+        let slot = self.slot.clone();
         let lease = self.lease.clone();
         let record = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let _lease = lease;
-            read_journal(&generation.join("operation.toml"))
+            let mut record = read_journal(&generation.join("operation.toml"))?;
+            record.is_current =
+                selection(&slot)?.cert.current.as_deref() == Some(record.operation_id.as_str());
+            Ok::<_, IssueError>(record)
         })
         .await
         .map_err(|_| failure("issuance snapshot worker failed"))??;
@@ -551,6 +668,21 @@ impl IssueSession for Session {
         .map_err(|_| failure("CSR worker failed"))?
     }
 
+    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError> {
+        let generation = self.generation.clone();
+        let lease = self.lease.clone();
+        let permit = self.io.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lease = lease;
+            let chain = read_private(&generation.join("fullchain.pem"), 1024 * 1024)
+                .map_err(|_| failure("issued certificate missing or unsafe"))?;
+            certificate::leaf_der(&chain)
+        })
+        .await
+        .map_err(|_| failure("certificate read worker failed"))?
+    }
+
     async fn complete(
         &self,
         record: &IssueRecord,
@@ -573,6 +705,11 @@ impl IssueSession for Session {
             );
             record.certificate_not_after =
                 Some(certificate::validate(&chain, &key, &record.identifiers)?);
+            // Establish a durable fallback before promotion; ARI network failures cannot
+            // invalidate a successfully issued certificate or erase its renewal plan.
+            if record.renewal.is_none() {
+                record.renewal = Some(aster_acme::renewal::RenewalPlan::from_certificate(&chain)?);
+            }
             if !matches!(record.phase, IssuancePhase::Completed) {
                 return Err(failure("cannot promote incomplete issuance"));
             }
@@ -595,6 +732,7 @@ impl IssueSession for Session {
             config.cert.current = Some(record.operation_id.clone());
             write_selection(&slot, &config)?;
             record.phase = IssuancePhase::Completed;
+            record.is_current = true;
             write_journal(&generation.join("operation.toml"), &record)?;
             Ok(record)
         })

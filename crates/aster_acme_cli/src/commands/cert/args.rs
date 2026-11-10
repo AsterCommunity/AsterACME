@@ -7,8 +7,11 @@ use clap::{Args, Subcommand, ValueEnum};
 pub(crate) enum CertCommand {
     /// Issue a certificate with manual DNS publication, or resume a saved request.
     Issue(IssueArgs),
-    /// List saved certificate requests without HTTP.
+    /// List managed certificates; use --history to include every saved request.
     List {
+        /// Include historical versions and unfinished requests instead of one row per certificate.
+        #[arg(long)]
+        history: bool,
         /// Restrict the list to one certificate name.
         #[arg(short = 'n', long,value_parser=parse_certificate_name)]
         name: Option<String>,
@@ -18,16 +21,12 @@ pub(crate) enum CertCommand {
     /// Show a local certificate request, or explicitly refresh its CA resources without advancing it.
     #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","timeout"]).multiple(true).requires("verify")))]
     Show {
-        /// Certificate name; omit to select interactively.
-        #[arg(value_parser=parse_certificate_name,conflicts_with="named_name")]
-        name: Option<String>,
-        /// Local certificate name; equivalent to the positional NAME.
-        #[arg(short='n',long="name",value_name="NAME",conflicts_with="name",value_parser=parse_certificate_name)]
-        named_name: Option<String>,
-        /// Exact request ID when the name has multiple generations.
-        #[arg(long,value_parser=parse_operation)]
-        operation: Option<String>,
-        /// Query existing order and authorizations; never submit validation or finalize.
+        #[command(flatten)]
+        target: SavedTargetArgs,
+        /// Select a historical request rather than defaulting to current.
+        #[arg(long, conflicts_with = "operation")]
+        history: bool,
+        /// Query existing order/authorizations and refresh due ARI; never advance issuance.
         #[arg(long)]
         verify: bool,
         #[command(flatten)]
@@ -35,6 +34,88 @@ pub(crate) enum CertCommand {
         #[command(flatten)]
         local: LocalArgs,
     },
+    /// Permanently revoke one issued certificate at its CA; local files are retained.
+    Revoke {
+        #[command(flatten)]
+        target: SavedTargetArgs,
+        /// Permanent revocation reason; omitted by default, or retained from an unconfirmed request.
+        #[arg(long, value_enum)]
+        reason: Option<RevocationReason>,
+        /// Confirm revocation without an interactive prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        #[command(flatten)]
+        http: HttpArgs,
+        #[command(flatten)]
+        local: LocalArgs,
+    },
+    /// Remove one local request, or explicitly select history/all; does not revoke certificates.
+    Remove {
+        #[command(flatten)]
+        target: SavedTargetArgs,
+        /// Remove every local request and key under this certificate name.
+        #[arg(long, conflicts_with_all = ["operation", "history", "revoked"])]
+        all: bool,
+        /// Remove issued historical versions; retain current and unfinished requests.
+        #[arg(long, conflicts_with_all = ["operation", "all", "revoked"])]
+        history: bool,
+        /// Remove versions with a saved CA revocation confirmation, including current if matched.
+        #[arg(long, conflicts_with_all = ["operation", "all", "history"])]
+        revoked: bool,
+        /// Confirm deletion of local certificate material without prompting.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        #[command(flatten)]
+        local: LocalArgs,
+    },
+}
+
+/// One saved generation, shared by read-only inspection and revocation.
+#[derive(Args)]
+pub(crate) struct SavedTargetArgs {
+    #[command(flatten)]
+    pub identity: CertificateNameArgs,
+    /// Exact request ID when the name has multiple generations.
+    #[arg(long,value_parser=parse_operation)]
+    pub operation: Option<String>,
+}
+
+/// A local certificate name, independent of generation selection.
+#[derive(Args)]
+pub(crate) struct CertificateNameArgs {
+    /// Certificate name; omit to select interactively.
+    #[arg(value_parser=parse_certificate_name,conflicts_with="named_name")]
+    pub name: Option<String>,
+    /// Local certificate name; equivalent to the positional NAME.
+    #[arg(short='n',long="name",value_name="NAME",conflicts_with="name",value_parser=parse_certificate_name)]
+    pub named_name: Option<String>,
+}
+
+/// Common permanent revocation reasons from RFC 5280; CA policy may reject a reason.
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum RevocationReason {
+    /// No specific reason (0).
+    Unspecified,
+    /// Certificate private key compromised (1).
+    KeyCompromise,
+    /// Subject affiliation changed (3).
+    AffiliationChanged,
+    /// Replaced by another certificate (4).
+    Superseded,
+    /// Certificate is no longer used (5).
+    CessationOfOperation,
+}
+
+impl RevocationReason {
+    pub(crate) const fn code(self) -> u8 {
+        match self {
+            Self::Unspecified => 0,
+            Self::KeyCompromise => 1,
+            Self::AffiliationChanged => 3,
+            Self::Superseded => 4,
+            Self::CessationOfOperation => 5,
+        }
+    }
 }
 
 /// User-facing verification implementation; the ACME wire method stays internal.
@@ -48,7 +129,7 @@ pub(crate) enum Challenge {
 
 #[derive(Args)]
 pub(crate) struct IssueArgs {
-    /// Local certificate name; default is the first normalized domain (wildcard retained).
+    /// Local certificate name; default is the primary domain plus a random suffix.
     #[arg(short = 'n', long, conflicts_with = "resume",value_parser=parse_certificate_name)]
     pub name: Option<String>,
     /// DNS identifier; repeat for SANs. First is the primary domain.
@@ -90,7 +171,10 @@ impl CertCommand {
     pub(crate) fn json(&self) -> bool {
         match self {
             Self::Issue(args) => args.local.json,
-            Self::List { local, .. } | Self::Show { local, .. } => local.json,
+            Self::List { local, .. }
+            | Self::Show { local, .. }
+            | Self::Revoke { local, .. }
+            | Self::Remove { local, .. } => local.json,
         }
     }
 }
@@ -110,5 +194,124 @@ fn parse_operation(value: &str) -> Result<String, String> {
         Ok(value.to_owned())
     } else {
         Err("Use the complete saved request ID shown by cert show.".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Args, Command};
+    use clap::Parser;
+
+    #[test]
+    fn revoke_supports_interaction_names_exact_requests_and_script_confirmation() {
+        for target in [
+            vec![],
+            vec!["example.com"],
+            vec!["-n", "example.com"],
+            vec!["--operation", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        ] {
+            let args = Args::try_parse_from(
+                ["aster-acme", "cert", "revoke"]
+                    .into_iter()
+                    .chain(target)
+                    .chain([
+                        "-y",
+                        "--reason",
+                        "key-compromise",
+                        "--json",
+                        "--data-dir",
+                        "/tmp/acme-test",
+                    ]),
+            )
+            .unwrap();
+            let Command::Cert { command } = args.command else {
+                panic!("certificate command expected")
+            };
+            assert!(matches!(
+                *command,
+                CertCommand::Revoke {
+                    yes: true,
+                    reason: Some(RevocationReason::KeyCompromise),
+                    ..
+                }
+            ));
+        }
+        for args in [
+            vec!["example.com", "-n", "other.com"],
+            vec!["--force"],
+            vec!["--accept-terms"],
+            vec!["--verify"],
+            vec!["--reason", "7"],
+            vec!["--reason", "certificate-hold"],
+            vec!["--operation", "short"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "revoke"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn remove_accepts_only_name_confirmation_and_local_options() {
+        for target in [vec![], vec!["example.com"], vec!["-n", "example.com"]] {
+            let args = Args::try_parse_from(
+                ["aster-acme", "cert", "remove"]
+                    .into_iter()
+                    .chain(target)
+                    .chain(["-y", "--json", "--data-dir", "/tmp/acme-remove-test"]),
+            )
+            .unwrap();
+            let Command::Cert { command } = args.command else {
+                panic!("certificate command expected")
+            };
+            assert!(matches!(*command, CertCommand::Remove { yes: true, .. }));
+        }
+        for scope in [
+            vec!["--all"],
+            vec!["--history"],
+            vec!["--revoked"],
+            vec!["--operation", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        ] {
+            assert!(
+                Args::try_parse_from(
+                    ["aster-acme", "cert", "remove", "example.com", "--yes"]
+                        .into_iter()
+                        .chain(scope)
+                )
+                .is_ok()
+            );
+        }
+        for args in [
+            vec!["--revoked", "--all"],
+            vec!["--revoked", "--history"],
+            vec![
+                "--revoked",
+                "--operation",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+            vec!["example.com", "-n", "other.com"],
+            vec!["--all", "--history"],
+            vec![
+                "--all",
+                "--operation",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+            vec![
+                "--history",
+                "--operation",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+            vec!["--verify"],
+            vec!["--force"],
+            vec!["--timeout", "30"],
+            vec!["--reason", "key-compromise"],
+            vec!["--accept-terms"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "remove"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
     }
 }

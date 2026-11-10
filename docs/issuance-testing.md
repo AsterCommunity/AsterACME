@@ -16,7 +16,7 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。续期调度、ARI、HTTP/TLS solver、外部 CSR、吊销和部署尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI 续期计划与账户签名吊销已实现并有本地 mock/存储验收；周期调度、HTTP/TLS solver、外部 CSR、自动续期和部署尚未实现。
 
 ## 常规验证
 
@@ -52,3 +52,25 @@ cargo doc --workspace --no-deps --locked
 
 
 Registry/参数与 release 收尾：200 项 workspace 测试和严格 Clippy 通过。以 opt-level=z、lto=true、codegen-units=1、debug=0、panic=unwind、strip=debuginfo 构建实际 macOS arm64 release CLI 成功；version --json 确认 profile=release，nm 确认函数符号保留。二进制约 7.6 MB（7,605,024 字节，此构建/平台样本，不作为跨平台体积保证）。--help 和 cert issue --help 的 release 进程确认产品版本与 -y/--yes；本轮仍无公网 CA mutation。
+
+## ARI 与证书吊销验收（2026-11-11）
+
+本轮 228 项 workspace 测试通过，严格 Clippy、workspace 依赖/TLS 策略、格式和文档构建通过。新增覆盖 RFC 9773 附录证书的 DER 序列号前导零、原有效期 2/3 回退、窗口随机边界/相同窗口不重抽、Retry-After delta/date/缺省及限值、无端点/无 AKI、短请求超时和 5xx 有限指数退避、取消和重启后请求期限保留。真实文件会话验证 fallback/ARI 选时落 TOML、重新打开保持计划和密钥，首次网络失败不撤回产物。
+
+吊销测试核验账户 kid/精确 URL/nonce/真实 ES256 签名、DER 叶子和可选 reason、200 空 body/alreadyRevoked、未签发/身份不符/无端点/保存失败零提交、明确拒绝、未知状态/5xx/超时/取消/确认写失败保留 pending，显式重试保留原原因、已确认重复不请求。文件集/current 不变，confirmed 不再查询 ARI 或恢复签发。CLI 检查名称/ID、原因和参数作用域、JSON、缺失目标零账户/证书写入；人工输出统一 Next renewal，吊销后 disabled、未确认 suspended。Nonce 回归确认成功 POST 缺少/非法 Replay-Nonce 仍保存结果，下一次 HEAD 取新 nonce。
+
+没有执行真实 CA 吊销或新的公网签发，不声称周期唤醒/实际自动续期已完成；daemon 和 newOrder.replaces 留给后续实现。
+
+## 托管身份与删除范围验收
+
+默认名称改为主域名加八位随机后缀，显式重名拒绝，自动分配只对 NameAlreadyExists 换串重试。存储竞争测试证明同名并发只有一次成功声明；CLI 分配测试实际制造名称碰撞，并核对另一名称被分配、原文件不变及权限错误不触发重试。极限域名只截短管理名称前缀，不改原 SAN。
+
+续期存储入口固定从 cert.toml 定义读取域名/账户/CA/验证配置，拒绝不匹配账户；新版本固定独立密钥/CSR且失败保留旧 current。默认列表每个托管证书一行，默认 show 选 current，不将历史当作当前；历史可显式展开并保留完整 SAN，只有 current 的计划参与活跃查询/调度。分别测试单次/history/revoked/all 清理、未确认吊销不匹配、保留 pending、清空 current 不回退、无匹配零副作用、未知文件/链接/锁 inode 保留和中断标记。历史证书仍可按精确 ID 查询订单，但不因此激活其续期计划。
+
+本轮全量 252 项测试通过；不含公网 CA 请求。250 ms 的 HTTP 超时测试在并行负载下出现请求尚未到达 loopback server 就超时的调度问题，已改为一秒请求预算与三秒服务端延迟，仍严格验证三次有界重试或 mutation 不重放。本轮不声称 CLI renew/daemon 已实现，旧存储 schema 不自动兼容或迁移。
+
+## Forge HTTP alpha.2 feature 边界验收
+
+HTTP 单独升级到 registry 的 =0.1.0-alpha.2，utils/macros 保持 alpha.1。workspace 只启用 json、rustls-aws-lc-rs、system-proxy；直接 reqwest 依赖关闭默认且不另选 features，HttpClient 显式选择 TlsBackend::Rustls。生产 normal/build feature 图确认无 form/query/multipart/stream/charset/http2/default 入口；系统代理与 rustls 平台根行为保留。
+
+同一 macOS target、normal+build、去重包口径从 258 降至 246；全平台/测试 Cargo.lock 条目从 334 降至 326。被移除的可选依赖包括 encoding_rs、mime_guess、serde_urlencoded 和 wasm-streams。252 项 workspace 测试及严格 Clippy 通过，TLS 守卫继续拒绝 native-tls/OpenSSL；没有真实 CA mutation。
