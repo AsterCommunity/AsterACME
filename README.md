@@ -13,6 +13,10 @@ A Rust ACME client for automated certificate issuance and lifecycle management.
 
 These are planned capabilities, not currently available features.
 
+## Documentation
+
+- [ACME RFC reference and implementation considerations (中文)](docs/rfc-reference.md)
+
 ## License
 
 Licensed under either of

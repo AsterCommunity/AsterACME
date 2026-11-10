@@ -1,0 +1,113 @@
+# ACME 协议规范与实现参考
+
+本项目计划使用 Rust 实现 ACME 客户端及证书生命周期自动化。本文是规范索引和设计检查表，不表示所列能力已经实现，也不以摘要替代 RFC 原文中的 MUST、SHOULD 和 MAY。
+
+规范目录核对日期：2026-11-10。协议解释以 RFC 原文、勘误和后续更新为准；CA 的实际支持范围另行验证。
+
+## 1. 核心规范与阅读顺序
+
+| 优先级 | 规范 | 范围与用途 |
+| --- | --- | --- |
+| 必读 | [RFC 8555 — Automatic Certificate Management Environment (ACME)](https://www.rfc-editor.org/rfc/rfc8555.html) | ACME v2 主协议：服务发现、账户、订单、授权、challenge、签发、吊销与账户密钥轮换；HTTP-01、DNS-01、External Account Binding (EAB) 均在其中 |
+| 必读 | [RFC 9773 — ACME Renewal Information (ARI) Extension](https://www.rfc-editor.org/rfc/rfc9773.html) | 续期信息查询、建议续期窗口与替换证书关联；设计续期调度时一并考虑 |
+| 按需 | [RFC 8737 — ACME TLS Application-Layer Protocol Negotiation (ALPN) Challenge Extension](https://www.rfc-editor.org/rfc/rfc8737.html) | TLS-ALPN-01、专用 ALPN 协议与验证证书 |
+| 按需 | [RFC 8738 — ACME IP Identifier Validation Extension](https://www.rfc-editor.org/rfc/rfc8738.html) | IP 地址证书标识符与 HTTP/TLS 验证扩展；DNS-01 不用于 IP 标识符验证 |
+| 诊断参考 | [RFC 8657 — CAA Record Extensions for Account URI and ACME Method Binding](https://www.rfc-editor.org/rfc/rfc8657.html) | CAA 中对 ACME 账户和验证方法的约束 |
+
+建议顺序：RFC 8555 的术语与状态机 → JWS/JWK → 账户与订单 → DNS-01/HTTP-01 → CSR 与证书下载 → RFC 9773 → 其他扩展。
+
+### RFC 8555 实现定位
+
+| 章节 | 实现关注点 |
+| --- | --- |
+| §6 | HTTPS、JWS 请求、nonce、防重放、错误、速率限制及版本演进 |
+| §7.1–7.2 | Directory、资源模型、状态转换与 newNonce |
+| §7.3 | 账户创建、更新、EAB、密钥轮换与停用 |
+| §7.4 | 订单创建、CSR finalize、证书下载与证书链 |
+| §7.5 | 获取授权、响应 challenge、授权停用 |
+| §7.6 | 证书吊销及可用签名身份 |
+| §8.1 | Key authorization 计算 |
+| §8.3 | HTTP-01 |
+| §8.4 | DNS-01 |
+| §10 | 协议安全考虑 |
+
+## 2. 密码学、证书与传输配套规范
+
+这些规范是 ACME 的组成基础或实现参考，不要求客户端自行实现底层密码学。
+
+| 规范 | 用途 |
+| --- | --- |
+| [RFC 7515 — JSON Web Signature (JWS)](https://www.rfc-editor.org/rfc/rfc7515.html) | ACME 请求签名与 base64url 表示 |
+| [RFC 7517 — JSON Web Key (JWK)](https://www.rfc-editor.org/rfc/rfc7517.html) | 账户公钥表示 |
+| [RFC 7518 — JSON Web Algorithms (JWA)](https://www.rfc-editor.org/rfc/rfc7518.html) | JOSE 签名算法与密钥参数 |
+| [RFC 7638 — JSON Web Key (JWK) Thumbprint](https://www.rfc-editor.org/rfc/rfc7638.html) | Key authorization 所需账户公钥指纹 |
+| [RFC 2986 — PKCS #10: Certification Request Syntax Specification Version 1.7](https://www.rfc-editor.org/rfc/rfc2986.html) | CSR 结构；结合 RFC 8555 的标识符要求使用 |
+| [RFC 5280 — Internet X.509 Public Key Infrastructure Certificate and CRL Profile](https://www.rfc-editor.org/rfc/rfc5280.html) | X.509、扩展及证书链基础 |
+| [RFC 7468 — Textual Encodings of PKIX, PKCS, and CMS Structures](https://www.rfc-editor.org/rfc/rfc7468.html) | PEM 等文本封装 |
+| [RFC 8659 — DNS Certification Authority Authorization (CAA) Resource Record](https://www.rfc-editor.org/rfc/rfc8659.html) | CAA 基础规范，替代 RFC 6844；配合 RFC 8657 阅读 |
+| [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110.html) | HTTP 状态、Retry-After 与响应语义 |
+| [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html) | 现代 HTTP problem details；ACME 错误仍遵守 RFC 8555 §6.7 的具体约束与类型 |
+
+RFC 8555 引用的是当时的 HTTP 和 problem details 规范。新基础规范不能被用于悄悄改变 ACME 的线格式或必需字段。
+
+## 3. 其他已发布的 ACME 扩展
+
+以下规范纳入索引，暂不作为普通 Web TLS 证书客户端的默认实现范围。
+
+| 规范 | 用途 |
+| --- | --- |
+| [RFC 8739](https://www.rfc-editor.org/rfc/rfc8739.html) | Support for Short-Term, Automatically Renewed (STAR) Certificates in ACME：短期自动续期证书 |
+| [RFC 9115](https://www.rfc-editor.org/rfc/rfc9115.html) | An ACME Profile for Generating Delegated Certificates：委托签发 |
+| [RFC 8823](https://www.rfc-editor.org/rfc/rfc8823.html) | Extensions to ACME for End-User S/MIME Certificates：终端用户 S/MIME |
+| [RFC 9444](https://www.rfc-editor.org/rfc/rfc9444.html) | ACME for Subdomains：子域名授权 |
+| [RFC 9447](https://www.rfc-editor.org/rfc/rfc9447.html) | ACME Challenges Using an Authority Token |
+| [RFC 9448](https://www.rfc-editor.org/rfc/rfc9448.html) | TNAuthList Profile of ACME Authority Token：电话身份相关 profile |
+| [RFC 9799](https://www.rfc-editor.org/rfc/rfc9799.html) | ACME Extensions for ".onion" Special-Use Domain Names |
+| [RFC 9891](https://www.rfc-editor.org/rfc/rfc9891.html) | ACME Delay-Tolerant Networking (DTN) Node ID Validation Extension |
+
+## 4. 草案与非通用能力
+
+以下链接指向动态更新的 Internet-Draft。草案可能变更、失效或发布为 RFC；实现前重新确认状态、版本和 CA 支持，不把草案当作所有 ACME 服务端的必需能力。
+
+- [ACME Profiles Extension](https://datatracker.ietf.org/doc/draft-ietf-acme-profiles/)：证书 profile 选择。
+- [ACME Challenge for Persistent DNS TXT Record Validation](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-persist/)：持久 DNS TXT 验证。
+- [ACME DNS Labeled With ACME Account ID Challenge](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-account-label/)：按账户区分 DNS challenge 名称。
+- [ACME Scoped DNS Challenges](https://datatracker.ietf.org/doc/draft-ietf-acme-scoped-dns-challenges/)：限定范围的 DNS challenge。
+
+完整追踪入口：[IETF ACME 工作组文档](https://datatracker.ietf.org/wg/acme/documents/)、[ACME IANA 注册表](https://www.iana.org/assignments/acme/acme.xhtml)、[RFC 8555 勘误](https://www.rfc-editor.org/errata/rfc8555)。
+
+## 5. 客户端设计检查表
+
+### 协议与持久化
+
+- 区分账户密钥与证书私钥；保留账户 URL、CA directory 和恢复所需状态。
+- 实现 JWS 的 jwk/kid、nonce、url 和 POST-as-GET；区分空 payload 与 JSON 空对象。
+- 正确处理 badNonce、Retry-After、速率限制、problem document 与 subproblems；重试必须考虑副作用和状态恢复。
+- 按订单、授权和 challenge 各自的状态机推进，不假定一次请求即完成签发。
+- 支持 SAN、DNS 通配符、EAB、账户密钥轮换和吊销，并验证 CA 的实际能力。
+- ARI 可用时遵循建议窗口并分散调度；不可用或失败时有明确的本地续期策略。
+- 证书原子落盘、私钥权限、部署 hook、进程重启恢复属于产品可靠性要求，需在协议之外设计。
+
+### DNS-01 自动化
+
+- `_acme-challenge` TXT 内容来自 key authorization 的 SHA-256 摘要及 base64url 编码，遵守 RFC 8555 §8.4。
+- 处理 zone 发现及 DNS 委托；不要假定最后两个域名标签就是 zone，也不要盲目写入未经配置允许的 CNAME 目标。
+- 同名 TXT 值允许并存，裸域名与通配符可能同时使用同一 challenge 名称。
+- 记录创建结果和所有权；清理仅删除本次创建的记录，不能清空整个 TXT RRset，也不能删除预先存在的共享记录。
+- 检查预期 TXT 值而非答案一致率；考虑权威 DNS、递归缓存、负缓存、超时和取消。
+- 本地传播检查通过不代表 CA 验证成功；以授权与订单状态作为签发进度依据。
+
+## 6. DNS provider 复用来源
+
+优先评估 [AptS-1547/dns-orchestrator](https://github.com/AptS-1547/dns-orchestrator) 中独立的 `dns-orchestrator-provider` crate。调查时本地 manifest 为 0.1.2、MIT，支持 Cloudflare、阿里云、DNSPod 和华为云，并提供记录查询、创建、删除等接口。
+
+依赖落地前确认已发布版本、feature、错误语义及 TXT 多值行为；此处记录不保证 crates.io 发布状态。DNS-01 编排由本项目负责，供应商 API 和签名逻辑优先复用，避免复制维护。
+
+原项目 toolbox 的传播检测统计公共解析器答案一致率，可参考查询机制，不直接作为 ACME 就绪判定。
+
+## 7. 互操作验证方向
+
+- 使用 [Pebble](https://github.com/letsencrypt/pebble) 验证协议交互、失败路径和 challenge 流程。
+- 使用真实 CA staging 验证互操作，避免以生产签发作为开发测试循环。
+- 按 CA 记录 EAB、ARI、challenge、标识符类型和草案扩展的实际支持情况。
+- 分开报告本地测试、staging 签发、真实 DNS 清理及部署结果；任何单项成功均不代表全部完成。
