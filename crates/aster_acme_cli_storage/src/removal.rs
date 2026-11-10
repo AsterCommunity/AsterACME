@@ -20,7 +20,7 @@ impl CliAccountStore {
         let slot = self.account_slot();
         ensure_real_dir(&slot)?;
         let lease = self
-            .acquire(slot.join("account.lock"))
+            .acquire(self.lock_path()?)
             .await
             .map_err(|error| store_error(&error.to_string()))?;
         let name = self.name.clone();
@@ -58,7 +58,7 @@ impl CliAccountStore {
                     sync_directory(&slot)?;
                 }
                 for filename in files {
-                    if filename=="account.lock" || filename=="account.toml" {continue;}
+                    if filename=="account.toml" {continue;}
                     fs::remove_file(slot.join(filename)).map_err(|_|store_error("account metadata removed but managed key cleanup failed"))?;
                 }
                 return sync_directory(&slot);

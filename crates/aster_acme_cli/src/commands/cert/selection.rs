@@ -1,5 +1,4 @@
 //! Deterministic name-to-generation selection; scripts never silently pick the newest.
-use crate::common::output;
 use crate::common::{error::CliResult, terminal};
 use aster_acme::issuance::{CertificateName, IssueRecord};
 
@@ -28,13 +27,7 @@ pub(super) fn certificate_name(
     }
     let choices = certificates
         .iter()
-        .map(|record| {
-            format!(
-                "{} | {}",
-                output::safe(record.name.as_str()),
-                super::render::domain_summary(record)
-            )
-        })
+        .map(certificate_label)
         .collect::<Vec<_>>();
     let index = terminal::select_index("Choose a certificate:", &choices, 0)?;
     Ok(certificates
@@ -44,11 +37,25 @@ pub(super) fn certificate_name(
         .clone())
 }
 
-/// Selection intent prevents an inactive historical version becoming an implicit current.
+fn certificate_label(record: &IssueRecord) -> String {
+    crate::common::selection::ChoiceLabel {
+        name: record.name.as_str(),
+        summary: Some(&super::render::domain_summary(record)),
+        at: Some(record.created_at),
+        status: Some(super::render::request_status(
+            record,
+            time::OffsetDateTime::now_utc(),
+        )),
+        marker: None,
+    }
+    .to_string()
+}
+
+/// Selection intent prevents an inactive historical version becoming an implicit `in_use`.
 #[derive(Clone, Copy)]
 pub(super) enum RequestSelection {
     Unfinished,
-    Current,
+    InUse,
     Any,
 }
 
@@ -65,12 +72,12 @@ pub(super) fn managed_records(records: Vec<IssueRecord>) -> CliResult<Vec<IssueR
     grouped
         .into_values()
         .map(|mut records| {
-            if records.iter().filter(|record| record.is_current).count() > 1 {
-                return Err("Multiple current versions found for one managed certificate.".into());
+            if records.iter().filter(|record| record.is_in_use).count() > 1 {
+                return Err("Multiple in_use versions found for one managed certificate.".into());
             }
             records.sort_by(|a, b| {
-                b.is_current
-                    .cmp(&a.is_current)
+                b.is_in_use
+                    .cmp(&a.is_in_use)
                     .then_with(|| b.unfinished().cmp(&a.unfinished()))
                     .then(b.created_at.cmp(&a.created_at))
                     .then(a.operation_id.cmp(&b.operation_id))
@@ -96,24 +103,24 @@ pub(super) fn choose(
             record.name == *name
                 && match mode {
                     RequestSelection::Unfinished => record.unfinished(),
-                    RequestSelection::Current | RequestSelection::Any => true,
+                    RequestSelection::InUse | RequestSelection::Any => true,
                 }
                 && id.is_none_or(|id| id == record.operation_id)
         })
         .collect::<Vec<_>>();
-    if matches!(mode, RequestSelection::Current) && id.is_none() {
-        let current_count = candidates.iter().filter(|record| record.is_current).count();
-        match current_count {
+    if matches!(mode, RequestSelection::InUse) && id.is_none() {
+        let in_use_count = candidates.iter().filter(|record| record.is_in_use).count();
+        match in_use_count {
             0 => candidates.retain(IssueRecord::unfinished),
-            1 => candidates.retain(|record| record.is_current),
+            1 => candidates.retain(|record| record.is_in_use),
             _ => {
                 return Err(
-                    "Multiple current versions found; inspect local certificate storage.".into(),
+                    "Multiple in_use versions found; inspect local certificate storage.".into(),
                 );
             }
         }
         if candidates.is_empty() {
-            return Err("No current or unfinished request is selected. Use cert show --history or --operation <ID> to inspect retained versions.".into());
+            return Err("No in_use or unfinished request is selected. Use cert show --history or --operation <ID> to inspect retained versions.".into());
         }
     }
     match candidates.as_slice() {
@@ -129,13 +136,21 @@ pub(super) fn choose(
 }
 
 fn choice_label(record: &IssueRecord) -> String {
-    let status = super::render::request_status(record, time::OffsetDateTime::now_utc());
-    format!(
-        "{} | {} | {status}{}",
-        super::render::domain_summary(record),
-        crate::common::time::timestamp(Some(record.created_at)),
-        if record.is_current { " | current" } else { "" },
-    )
+    crate::common::selection::ChoiceLabel {
+        name: &super::render::domain_summary(record),
+        summary: None,
+        at: Some(record.created_at),
+        status: Some(super::render::request_status(
+            record,
+            time::OffsetDateTime::now_utc(),
+        )),
+        marker: if record.is_in_use {
+            Some("in use")
+        } else {
+            None
+        },
+    }
+    .to_string()
 }
 
 #[cfg(test)]

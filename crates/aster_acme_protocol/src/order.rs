@@ -31,6 +31,9 @@ pub struct WireIdentifier {
 pub struct NewOrderRequest<'a> {
     /// Requested DNS identifiers, preserving primary-domain order.
     pub identifiers: &'a [WireIdentifier],
+    /// RFC 9773 predecessor; only sent to servers advertising renewalInfo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<&'a str>,
 }
 
 /// CSR encoded as unpadded base64url DER (RFC 8555 section 7.4).
@@ -61,6 +64,9 @@ pub struct OrderObject {
     pub finalize: AcmeUrl,
     /// Issued certificate URL when available.
     pub certificate: Option<AcmeUrl>,
+    /// RFC 9773 replacement acknowledgement; required to echo a submitted replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
     /// Optional CA explanation for an invalid order.
     pub error: Option<Problem>,
 }

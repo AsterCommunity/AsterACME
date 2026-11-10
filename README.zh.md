@@ -46,7 +46,7 @@ AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与手动 DNS-01
 - **协议有明确归属**：线上模型集中在 `aster_acme_protocol`。资源 URL 来自 CA，客户端不拼固定 ACME 路径。
 - **状态决策显式可测**：纯 core 根据 CA 观察和本地提交状态返回动作，服务执行 HTTP、计时和副作用。
 - **操作可以恢复**：提交 mutation 前保存意图；结果未确定时，不静默重下单或重复提交 finalize。
-- **产物路径稳定**：每次申请独立保存到时间版本目录，校验完整文件集合后原子切换 `current`。
+- **产物路径稳定**：每次申请独立保存到时间版本目录，校验完整文件集合后原子切换 `in_use`。
 - **共用基础机制**：Forge HTTP、AsterFs 锁、rustls 和 AWS-LC 提供传输与密码学能力，业务规则保留在 ACME。
 
 ## 快速开始
@@ -112,7 +112,7 @@ aster-acme cert show example-cert --data-dir ./data
 aster-acme cert show example-cert --verify --data-dir ./data
 ```
 
-每次新的 issue 创建独立托管证书，默认名为主域名加随机后缀，碰撞时自动换串重试；显式 -n/--name 必须尚未使用。cert.toml 保存域名集合、账户、CA、验证方式等稳定定义，后续续期版本沿用该名称。--resume 继续已有操作。list/show 默认围绕 current，list --history 展开版本，show --history 或 --operation 查看具体历史；只有 current 的续期计划参与活跃调度。
+每次新的 issue 创建独立托管证书，默认名为主域名加随机后缀，碰撞时自动换串重试；显式 -n/--name 必须尚未使用。cert.toml 保存域名集合、账户、CA、验证方式等稳定定义，后续续期版本沿用该名称。--resume 继续已有操作。list/show 默认围绕 in_use，list --history 展开版本，show --history 或 --operation 查看具体历史；只有 in_use 的续期计划参与活跃调度。
 
 不带名称的 `cert show` 会在终端引导选择。列举和查看证书不会推进验证或签发。过期申请仍可见，但不能继续验证或提交 finalize。
 
@@ -122,16 +122,18 @@ aster-acme cert show example-cert --verify --data-dir ./data
 
 ## 续期计划与吊销
 
-签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。实际自动续期与周期唤醒留给后续 daemon。
+签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。cert renew 已支持单次到期续期（--now 提前），周期唤醒留给后续 daemon。
 
 ```sh
+aster-acme cert renew example-cert
+aster-acme cert renew example-cert --now
 aster-acme cert revoke example-cert --reason key-compromise --yes
 aster-acme cert remove example-cert --history --yes
 aster-acme cert remove example-cert --revoked --yes
 aster-acme cert remove example-cert --all --yes
 ```
 
-吊销使用绑定账户，默认需要确认；多版本必须明确选择。成功后保留本地文件，超时保留未确认状态。`cert remove` 默认精确删除一次申请；--history 清理非当前的已签发版本，--revoked 匹配已保存的吊销确认，--all 才删除整个分组。清空 current 不自动切回旧版本，不访问 CA，保留用户额外内容和锁文件。详见 [续期与吊销契约](docs/certificate-lifecycle.md)。
+吊销使用绑定账户，默认需要确认；多版本必须明确选择。成功后保留本地文件，超时保留未确认状态。`cert remove` 默认精确删除一次申请；--history 清理非当前的已签发版本，--revoked 匹配已保存的吊销确认，--all 才删除整个分组。清空 in_use 不自动切回旧版本，不访问 CA，仅保留非 AsterACME 管理的文件，无其他内容时删除证书目录。详见 [续期与吊销契约](docs/certificate-lifecycle.md)。
 
 ## 脚本与确认
 
@@ -149,11 +151,11 @@ aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
 | --- | --- |
 | `-y`、`--yes` | 确认当前命令的操作；证书恢复时跳过 TXT 发布确认。不关闭名称选择，不代替同意条款，不跳过 DNS 检查。 |
 | `--accept-terms` | 注册时明确同意所选 CA 当前公布的条款。 |
-| `-f`、`--force` | 只跳过本地 DNS 可见性检查；CA 验证、过期判断、产物校验照常执行。 |
+| `--skip-dns-check` | 只跳过本地 DNS 可见性检查；CA 验证、过期判断、产物校验照常执行。 |
 | `--json` | 结构化输出，不弹交互、不输出颜色和人类进度日志。 |
 | `--verify` | 显式查询已有资源的 CA 状态；默认查看仍离线。 |
 
-首次自动化手动 DNS 申请，即使带 `--yes` 和 `--force`，仍先给出新 TXT 待办，发布后再恢复。`--yes` 不猜测缺失输入。HTTP 的 `--timeout`、前台执行的 `--wait-timeout` 与 CA 过期时间分别生效。完整参数范围与短参数见 [CLI 参数契约](docs/cli-contract.md)。
+首次自动化手动 DNS 申请，即使带 `--yes` 和 `--skip-dns-check`，仍先给出新 TXT 待办，发布后再恢复。`--yes` 不猜测缺失输入。HTTP 的 `--timeout`、前台执行的 `--wait-timeout` 与 CA 过期时间分别生效。完整参数范围与短参数见 [CLI 参数契约](docs/cli-contract.md)。
 
 ## 数据与证书文件
 
@@ -162,14 +164,13 @@ aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
 ```text
 <data-dir>/
 ├── config.toml
+├── .locks/{accounts,certificates}/<name>.lock
 ├── accounts/<name>/
 │   ├── account.toml
-│   ├── account-key.pk8
-│   └── account.lock
+│   └── account-key.pk8
 └── certs/example-cert/
     ├── cert.toml
-    ├── cert.lock
-    ├── current -> 20261111T010851Z-9YowFEL2/
+    ├── in_use -> 20261111T010851Z-9YowFEL2/
     └── 20261111T010851Z-9YowFEL2/
         ├── operation.toml
         ├── private-key.pk8
@@ -181,7 +182,7 @@ aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
         └── private-key.pem
 ```
 
-部署读取 `current/fullchain.pem`、`current/cert.pem`、`current/ca.pem`、`current/private-key.pem`。PEM 与内部 DER 是同一把证书私钥，与账户密钥独立。`ca.pem` 仅保存 CA 返回链中叶子以外的部分；只返回叶子时为空，客户端不自行追加或安装根证书。
+部署读取 `in_use/fullchain.pem`、`in_use/cert.pem`、`in_use/ca.pem`、`in_use/private-key.pem`。PEM 与内部 DER 是同一把证书私钥，与账户密钥独立。`ca.pem` 仅保存 CA 返回链中叶子以外的部分；只返回叶子时为空，客户端不自行追加或安装根证书。
 
 新申请失败时，已有版本仍可使用。额外用户文件会保留，正确性检查只针对托管记录和产物。尚未发布的格式直接演进，不增加兼容读取或自动迁移。
 

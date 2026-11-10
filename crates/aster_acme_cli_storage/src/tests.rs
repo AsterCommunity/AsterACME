@@ -471,7 +471,8 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
     store.remove().await.unwrap();
     assert_eq!(fs::read(slot.join("notes.txt")).unwrap(), b"user notes");
     assert_eq!(fs::read(slot.join("backup/own-file")).unwrap(), b"retain");
-    assert!(slot.join("account.lock").exists());
+    assert!(store.lock_path().unwrap().exists());
+    assert!(!slot.join("account.lock").exists());
     assert!(!slot.join("account.toml").exists());
     assert!(!slot.join("account-key.pk8").exists());
     assert!(accounts(temp.path().into()).await.unwrap().is_empty());
@@ -479,4 +480,22 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
     // use the retained lock without touching user contents.
     store.signer(&directory, "work", true).await.unwrap();
     assert_eq!(fs::read(slot.join("notes.txt")).unwrap(), b"user notes");
+}
+
+#[tokio::test]
+async fn account_removal_leaves_no_empty_object_directory_and_reuses_external_lock_after_recreation()
+ {
+    use std::os::unix::fs::MetadataExt;
+    let temp = tempfile::tempdir().unwrap();
+    let store = CliAccountStore::open(temp.path(), "clean", Duration::from_secs(1)).unwrap();
+    let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
+    store.signer(&ca, "clean", true).await.unwrap();
+    let lock = store.lock_path().unwrap();
+    let inode = fs::metadata(&lock).unwrap().ino();
+    store.remove().await.unwrap();
+    assert!(!store.account_slot().exists());
+    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    store.signer(&ca, "clean", true).await.unwrap();
+    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    assert!(!store.account_slot().join("account.lock").exists());
 }

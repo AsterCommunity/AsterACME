@@ -64,7 +64,7 @@ pub(super) async fn execute(
         .iter()
         .map(|record| record.operation_id.clone())
         .collect::<Vec<_>>();
-    let current_removed = removal.removes_current();
+    let in_use_removed = removal.removes_in_use();
     if !ids.is_empty() || matches!(scope, RemovalScope::All) {
         terminal::confirm_action(
             &confirmation_details(&removal),
@@ -76,7 +76,7 @@ pub(super) async fn execute(
     removal.remove().await?;
     println!(
         "{}",
-        super::render::removed(name.as_str(), &scope, &ids, current_removed, local.json)?
+        super::render::removed(name.as_str(), &scope, &ids, in_use_removed, local.json)?
     );
     Ok(())
 }
@@ -94,7 +94,7 @@ fn confirmation_details(removal: &CertificateRemoval) -> String {
         ),
         RemovalScope::History => (
             "Remove historical certificate versions",
-            "Only issued non-current versions will be deleted. Current and unfinished requests are retained.",
+            "Only issued non-selected versions will be deleted. InUse and unfinished requests are retained.",
         ),
         RemovalScope::All => (
             "Remove all local certificate requests",
@@ -126,14 +126,14 @@ fn confirmation_details(removal: &CertificateRemoval) -> String {
         }
     }
     lines.extend([String::new(), scope.into()]);
-    if removal.removes_current() {
-        lines.push("Current will be cleared; no old version will be selected automatically. Deployments using current will lose access to these files.".into());
+    if removal.removes_in_use() {
+        lines.push("In-use selection will be cleared; no old version will be selected automatically. Deployments using the in_use certificate paths will lose access to these files.".into());
     }
     lines.extend([
         "This does not revoke certificates at the CA or remove deployed copies or DNS records."
             .into(),
         "Without a backup, deleted private keys cannot be recovered.".into(),
-        "Extra user files and the lock file will be retained.".into(),
+        "Files not managed by AsterACME will be kept.".into(),
     ]);
     lines.join("\n")
 }

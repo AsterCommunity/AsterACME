@@ -188,7 +188,7 @@ impl RenewalService {
         if record.directory != *self.client.directory_url() {
             return Err(IssueError::InvalidInput("renewal directory mismatch"));
         }
-        if !record.is_current
+        if !record.is_in_use
             || record.unfinished()
             || !matches!(
                 record.revocation.state,

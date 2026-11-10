@@ -15,9 +15,9 @@ use std::{
 pub enum RemovalScope {
     /// One exact local request and its artifacts.
     Operation(String),
-    /// Completed historical versions only; retain current and unfinished requests.
+    /// Completed historical versions only; retain `in_use` and unfinished requests.
     History,
-    /// Versions whose revocation was confirmed by a saved CA response, including current.
+    /// Versions whose revocation was confirmed by a saved CA response, including `in_use`.
     Revoked,
     /// All requests and artifacts under this local name.
     All,
@@ -31,7 +31,7 @@ pub struct CertificateRemoval {
     files: Vec<PathBuf>,
     links: Vec<PathBuf>,
     remove_catalog: bool,
-    remove_current: bool,
+    remove_in_use: bool,
     scope: RemovalScope,
     lease: Arc<FileLease>,
 }
@@ -40,7 +40,7 @@ impl CliIssueStore {
     /// Validate the selected scope before confirmation, without decoding private keys.
     ///
     /// # Errors
-    /// Rejects missing identity, unsafe managed paths, invalid current, interrupted cleanup or contention.
+    /// Rejects missing identity, unsafe managed paths, invalid `in_use`, interrupted cleanup or contention.
     pub async fn prepare_removal(
         &self,
         name: &CertificateName,
@@ -58,20 +58,18 @@ impl CliIssueStore {
                 return Err(failure("certificate removal identity mismatch"));
             }
             let inventory = read_generations(&slot, &name)?;
-            let records =
-                select_records(&slot, &inventory, config.cert.current.as_deref(), &scope)?;
+            let records = select_records(&slot, &inventory, config.cert.in_use.as_deref(), &scope)?;
             let remove_catalog = matches!(scope, RemovalScope::All)
                 || (!records.is_empty() && records.len() == inventory.len());
             let links = managed_links(&slot, &inventory, &records)?;
-            let remove_current = config
+            let remove_in_use = config
                 .cert
-                .current
+                .in_use
                 .as_ref()
                 .is_some_and(|id| records.iter().any(|r| &r.operation_id == id))
                 || links
                     .iter()
-                    .any(|path| path.file_name().is_some_and(|name| name == "current"));
-            validate_file(&slot.join("cert.lock"))?;
+                    .any(|path| path.file_name().is_some_and(|name| name == "in_use"));
             validate_file(&slot.join("cert.toml"))?;
             let files = artifact_paths(&slot, &records)?;
             Ok(CertificateRemoval {
@@ -81,7 +79,7 @@ impl CliIssueStore {
                 files,
                 links,
                 remove_catalog,
-                remove_current,
+                remove_in_use,
                 scope,
                 lease,
             })
@@ -122,10 +120,10 @@ impl CertificateRemoval {
         self.records.len()
     }
 
-    /// Whether current will be cleared. Historical versions are never automatically promoted.
+    /// Whether `in_use` will be cleared. Historical versions are never automatically promoted.
     #[must_use]
-    pub fn removes_current(&self) -> bool {
-        self.remove_current
+    pub fn removes_in_use(&self) -> bool {
+        self.remove_in_use
     }
 
     /// Delete the prepared scope. No network, account mutation or DNS cleanup.
@@ -142,9 +140,9 @@ impl CertificateRemoval {
             sync_directory(&self.slot)?;
             if self.remove_catalog {
                 fs::remove_file(self.slot.join("cert.toml")).map_err(|_|failure("cannot remove certificate catalog; inspect .removing marker"))?;
-            } else if self.remove_current {
+            } else if self.remove_in_use {
                 let mut config=selection(&self.slot)?;
-                config.cert.current=None;
+                config.cert.in_use=None;
                 write_selection(&self.slot,&config)?;
             }
             for link in self.links {fs::remove_file(link).map_err(|_|failure("cannot remove managed certificate link; inspect .removing marker"))?;}
@@ -159,7 +157,15 @@ impl CertificateRemoval {
             }
             sync_directory(&self.slot)?;
             fs::remove_dir(marker).map_err(|_|failure("cannot finish certificate removal marker"))?;
-            sync_directory(&self.slot)
+            sync_directory(&self.slot)?;
+            if self.remove_catalog {
+                match fs::remove_dir(&self.slot) {
+                    Ok(()) => sync_directory(self.slot.parent().ok_or_else(|| failure("missing certificate parent"))?)?,
+                    Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {},
+                    Err(_) => return Err(failure("certificate files removed but empty directory cleanup failed")),
+                }
+            }
+            Ok(())
         }).await.map_err(|_|failure("certificate removal worker failed"))?
     }
 }
@@ -167,7 +173,7 @@ impl CertificateRemoval {
 fn select_records(
     slot: &Path,
     records: &[IssueRecord],
-    current: Option<&str>,
+    in_use: Option<&str>,
     scope: &RemovalScope,
 ) -> Result<Vec<IssueRecord>, IssueError> {
     match scope {
@@ -189,22 +195,22 @@ fn select_records(
             .map(|r| vec![r])
             .ok_or_else(|| failure("saved certificate request not found")),
         RemovalScope::History => {
-            let current = current
+            let in_use = in_use
                 .and_then(|id| records.iter().find(|r| r.operation_id == id))
                 .ok_or_else(|| {
-                    failure("no current certificate is selected; use an exact request or --all")
+                    failure("no in_use certificate is selected; use an exact request or --all")
                 })?;
-            if current.unfinished()
-                || fs::read_link(slot.join("current")).ok().as_deref()
-                    != Some(Path::new(&current.generation_name()))
+            if in_use.unfinished()
+                || fs::read_link(slot.join("in_use")).ok().as_deref()
+                    != Some(Path::new(&in_use.generation_name()))
             {
                 return Err(failure(
-                    "current certificate selection is inconsistent; refusing history cleanup",
+                    "in_use certificate selection is inconsistent; refusing history cleanup",
                 ));
             }
             Ok(records
                 .iter()
-                .filter(|r| r.operation_id != current.operation_id && !r.unfinished())
+                .filter(|r| r.operation_id != in_use.operation_id && !r.unfinished())
                 .cloned()
                 .collect())
         }
@@ -265,10 +271,10 @@ fn managed_links(
     selected: &[IssueRecord],
 ) -> Result<Vec<PathBuf>, IssueError> {
     let mut links = Vec::new();
-    for filename in std::iter::once("current".to_owned()).chain(
+    for filename in std::iter::once("in_use".to_owned()).chain(
         inventory
             .iter()
-            .map(|r| format!(".current-{}", r.operation_id)),
+            .map(|r| format!(".in_use-{}", r.operation_id)),
     ) {
         let path = slot.join(&filename);
         match fs::symlink_metadata(&path) {
@@ -279,8 +285,8 @@ fn managed_links(
                     || target.components().count() != 1
                     || !inventory.iter().any(|r| {
                         target == Path::new(&r.generation_name())
-                            && (filename == "current"
-                                || filename == format!(".current-{}", r.operation_id))
+                            && (filename == "in_use"
+                                || filename == format!(".in_use-{}", r.operation_id))
                     })
                 {
                     return Err(failure(

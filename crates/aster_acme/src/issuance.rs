@@ -120,12 +120,24 @@ pub struct AuthorizationRecord {
     pub acknowledgement: SubmissionState,
 }
 
+/// Immutable predecessor linking a renewal generation to its original `in_use` certificate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenewalPredecessor {
+    /// Exact previous local generation, not a DNS name or CA order identifier.
+    pub operation_id: String,
+    /// RFC 9773 identifier, absent when the certificate cannot provide one.
+    pub certificate_id: Option<String>,
+}
+
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueRecord {
-    /// Adapter-provided current selection snapshot; never persisted in the journal.
+    /// Adapter-provided `in_use` selection snapshot; never persisted in the journal.
     #[serde(skip)]
-    pub is_current: bool,
+    pub is_in_use: bool,
+    /// Previous `in_use` generation; retained across retries and restart.
+    #[serde(default)]
+    pub renewal_of: Option<RenewalPredecessor>,
     /// Publication adapter identity, retained so resume never selects a different method.
     pub solver_id: String,
     /// Internal opaque unique ID, selectable explicitly for scripts.
@@ -153,6 +165,10 @@ pub struct IssueRecord {
     pub phase: IssuancePhase,
     /// Saved before newOrder; missing URL afterwards is an uncertain creation.
     pub creation_submitted: bool,
+    /// Actual RFC 9773 replaces value selected before newOrder; a refreshed directory
+    /// cannot change the submitted request identity during recovery.
+    #[serde(default)]
+    pub submitted_replaces: Option<String>,
     /// Exact Location returned by newOrder.
     pub order_url: Option<AcmeUrl>,
     /// Most recent CA snapshot.
@@ -215,14 +231,14 @@ impl IssueRecord {
 #[async_trait]
 pub trait DnsReadiness: Send + Sync {
     /// All required values must coexist, including wildcard/base-domain authorization pairs.
-    /// Return false to yield `action_required`; force bypasses only local DNS lookup.
+    /// Return false to yield `action_required`; `skip_dns_check` bypasses only local DNS lookup.
     ///
     /// # Errors
     /// Reports cancellation, deadline and sanitized resolver/adapter failures.
     async fn ready(
         &self,
         records: &[DnsRequirement],
-        force: bool,
+        skip_dns_check: bool,
         execution: &ExecutionContext,
     ) -> Result<bool, IssueError>;
 }
@@ -255,7 +271,7 @@ pub trait IssueSession: Send + Sync {
     /// so every adapter durably establishes a fallback independently of ARI availability.
     ///
     /// # Errors
-    /// Failure must retain the previous current generation and recoverable checkpoint.
+    /// Failure must retain the previous `in_use` generation and recoverable checkpoint.
     async fn complete(&self, record: &IssueRecord, chain: &[u8])
     -> Result<IssueRecord, IssueError>;
 }
@@ -352,7 +368,7 @@ pub struct IssueExecution {
     /// Cancellation and overall execution budget.
     pub context: ExecutionContext,
     /// Bypass only local DNS visibility checks, never CA validation or expiry.
-    pub force: bool,
+    pub skip_dns_check: bool,
     /// Default polling delay when the CA omits Retry-After.
     pub poll_interval: Duration,
 }

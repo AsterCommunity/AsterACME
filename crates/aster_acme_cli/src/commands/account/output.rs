@@ -23,7 +23,7 @@ pub(super) enum Output<'a> {
         name: &'a str,
         directory: &'a AcmeUrl,
         removed_locally: bool,
-        ca_deactivated: bool,
+        ca_request_performed: bool,
     },
     Switched {
         default_account: &'a str,
@@ -105,11 +105,38 @@ pub(super) struct Deactivated<'a> {
 
 #[derive(Serialize)]
 pub(super) struct List<'a> {
-    source: &'static str,
-    verified: bool,
+    ca_query: AccountListQuery,
     default_account: &'a str,
     verification: Option<&'a [super::report::AccountVerification]>,
     accounts: Vec<ListEntry<'a>>,
+}
+
+/// Counts describe successful resource refreshes without marking local fields remote.
+#[derive(Serialize)]
+struct AccountListQuery {
+    requested: bool,
+    refreshed: usize,
+    failed: usize,
+}
+
+impl AccountListQuery {
+    fn from_results(results: Option<&[super::report::AccountVerification]>) -> Self {
+        let (refreshed, failed) =
+            results
+                .unwrap_or_default()
+                .iter()
+                .fold((0, 0), |(ok, failed), result| {
+                    match (&result.status, &result.error) {
+                        (Some(_), None) => (ok + 1, failed),
+                        (_, Some(_)) | (None, None) => (ok, failed + 1),
+                    }
+                });
+        Self {
+            requested: results.is_some(),
+            refreshed,
+            failed,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -139,7 +166,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 name,
                 directory,
                 removed_locally: true,
-                ca_deactivated: false,
+                ca_request_performed: false,
             },
             AccountReport::Local(local) => {
                 let record = local.record.as_ref();
@@ -200,14 +227,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 default,
                 verification,
             } => Self::List(List {
-                source: if verification.is_some() {
-                    "remote"
-                } else {
-                    "local"
-                },
-                verified: verification
-                    .as_ref()
-                    .is_some_and(|results| results.iter().all(|result| result.error.is_none())),
+                ca_query: AccountListQuery::from_results(verification.as_deref()),
                 default_account: default,
                 verification: verification.as_deref(),
                 accounts: accounts

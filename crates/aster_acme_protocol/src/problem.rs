@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 aster_forge_macros::wire_enum! {
     /// RFC 8555 section 6.7 problem types; future extensions remain lossless.
     pub enum ProblemKind {
+        /// RFC 9773: predecessor was already replaced by another order.
+        AlreadyReplaced => "urn:ietf:params:acme:error:alreadyReplaced",
         /// Account identity does not exist.
         AccountDoesNotExist => "urn:ietf:params:acme:error:accountDoesNotExist",
         /// Certificate was already revoked.

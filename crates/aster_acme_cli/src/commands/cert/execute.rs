@@ -45,14 +45,14 @@ fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String>) -> Accou
 }
 
 async fn issue(mut args: IssueArgs) -> CliResult<()> {
-    let progress = Arc::new(Progress::new(args.local.json));
-    let interactive = terminal::interactive(args.local.json);
+    let progress = Arc::new(Progress::new(args.run.local.json));
+    let interactive = terminal::interactive(args.run.local.json);
     super::interaction::complete(
         &mut args,
         interactive,
         &mut super::interaction::TerminalDomains,
     )?;
-    let mut options = options(&args.local, &args.http, args.account.clone());
+    let mut options = options(&args.run.local, &args.run.http, args.account.clone());
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
     let selected = match &args.resume {
@@ -68,6 +68,78 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
     if let Some(record) = &selected {
         options.name = Some(record.account_name.clone());
     }
+    let run = args.run.clone();
+    transact(
+        settings,
+        options,
+        &store,
+        Start::Issue {
+            selected: selected.map(Box::new),
+            args,
+        },
+        &run,
+        progress,
+    )
+    .await
+}
+
+async fn renew(args: super::args::RenewArgs) -> CliResult<()> {
+    let progress = Arc::new(Progress::new(args.run.local.json));
+    let mut options = options(&args.run.local, &args.run.http, None);
+    let settings = CliSettings::load(&options).await?;
+    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
+    let records = store.list().await?;
+    let name = selection::certificate_name(
+        &records,
+        args.target
+            .name
+            .as_deref()
+            .or(args.target.named_name.as_deref()),
+        None,
+        options.json,
+    )?;
+    let in_use = records
+        .iter()
+        .find(|record| record.name == name && record.is_in_use)
+        .ok_or(
+            "No in-use certificate is selected. Complete an initial issuance before renewing.",
+        )?;
+    options.name = Some(in_use.account_name.clone());
+    transact(
+        settings,
+        options,
+        &store,
+        Start::Renew {
+            name,
+            expected_in_use: in_use.operation_id.clone(),
+            now: args.now,
+        },
+        &args.run,
+        progress,
+    )
+    .await
+}
+
+enum Start {
+    Issue {
+        selected: Option<Box<IssueRecord>>,
+        args: IssueArgs,
+    },
+    Renew {
+        name: CertificateName,
+        expected_in_use: String,
+        now: bool,
+    },
+}
+
+async fn transact(
+    settings: CliSettings,
+    options: AccountArgs,
+    store: &CliIssueStore,
+    start: Start,
+    run: &super::args::RunArgs,
+    progress: Arc<Progress>,
+) -> CliResult<()> {
     let context = settings.account(&options).await?;
     progress.log.line(
         Level::Info,
@@ -96,28 +168,44 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
     if !account.is_usable() {
         return Err("Issuance requires a registered active account.".into());
     }
-    let mut session =
-        prepare_session(&store, selected, &args, &context.name, &account, &progress).await?;
+    let mut session = match start {
+        Start::Issue { selected, args } => {
+            prepare_session(
+                store,
+                selected.map(|record| *record),
+                &args,
+                &context.name,
+                &account,
+                &progress,
+            )
+            .await?
+        }
+        Start::Renew {
+            name,
+            expected_in_use,
+            now,
+        } => {
+            match store
+                .prepare_renewal(&name, &expected_in_use, now, &account)
+                .await
+            {
+                Ok(aster_acme_cli_storage::issuance::RenewalPreparation::Ready(session)) => session,
+                Ok(aster_acme_cli_storage::issuance::RenewalPreparation::NotDue(record)) => {
+                    println!("{}", render::not_due(&record, options.json)?);
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    };
     let record = session.record().await?;
-    let root = context
-        .config_path
-        .parent()
-        .ok_or("Missing data directory.")?;
-    let generation = root
-        .join("certs")
-        .join(record.name.as_str())
-        .join(record.generation_name());
-    progress.log.line(
-        Level::Info,
-        &format!(
-            "Certificate key: {}",
-            generation.join("private-key.pk8").display()
-        ),
-    );
+    let publication = PublicationState::from_record(&record);
+    report_material(&context, &record, &progress)?;
     let foreground = Foreground {
         context: &context,
         options: &options,
-        args: &args,
+        args: run,
+        publication,
         progress: progress.clone(),
     };
     let outcome = match foreground
@@ -147,10 +235,44 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
     Ok(())
 }
 
+fn report_material(
+    context: &CliContext,
+    record: &IssueRecord,
+    progress: &Progress,
+) -> CliResult<()> {
+    if record.renewal_of.is_some() {
+        progress.log.line(
+            Level::Info,
+            &format!(
+                "Renewing {} with {}",
+                record.name.as_str(),
+                record.key_algorithm.name()
+            ),
+        );
+    }
+    let root = context
+        .config_path
+        .parent()
+        .ok_or("Missing data directory.")?;
+    let generation = root
+        .join("certs")
+        .join(record.name.as_str())
+        .join(record.generation_name());
+    progress.log.line(
+        Level::Info,
+        &format!(
+            "Certificate key: {}",
+            generation.join("private-key.pk8").display()
+        ),
+    );
+    Ok(())
+}
+
 struct Foreground<'a> {
     context: &'a CliContext,
     options: &'a AccountArgs,
-    args: &'a IssueArgs,
+    args: &'a super::args::RunArgs,
+    publication: PublicationState,
     progress: Arc<Progress>,
 }
 impl Foreground<'_> {
@@ -170,6 +292,8 @@ impl Foreground<'_> {
             )
             .await?,
         );
+        self.progress
+            .protocol(client.directory(), &session.record().await?);
         let service = IssueService::new(client, identity)?.with_observer(self.progress.clone());
         let cancellation = CancellationToken::new();
         let signal = tokio::spawn({
@@ -185,13 +309,13 @@ impl Foreground<'_> {
                 cancellation,
                 deadline: Instant::now() + Duration::from_secs(self.args.wait_timeout),
             },
-            force: self.args.force,
+            skip_dns_check: self.args.skip_dns_check,
             poll_interval: Duration::from_secs(2),
         };
-        let dns = match self.args.challenge {
+        let dns = match super::args::Challenge::ManualDns {
             super::args::Challenge::ManualDns => ManualDns {
                 interactive: terminal::interactive(self.options.json),
-                resuming: self.args.resume.is_some(),
+                publication: self.publication,
                 yes: self.args.yes,
                 checker: Arc::new(aster_acme_validation::dns01::visibility::DnsVisibility),
                 progress: self.progress.clone(),
@@ -203,9 +327,29 @@ impl Foreground<'_> {
     }
 }
 
+/// Existing CLI flags do not prove that manual validation material was ever saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationState {
+    Fresh,
+    SavedRequirements,
+}
+
+impl PublicationState {
+    fn from_record(record: &IssueRecord) -> Self {
+        match record
+            .authorizations
+            .iter()
+            .find_map(|authorization| authorization.dns.as_ref())
+        {
+            Some(_) => Self::SavedRequirements,
+            None => Self::Fresh,
+        }
+    }
+}
+
 struct ManualDns {
     interactive: bool,
-    resuming: bool,
+    publication: PublicationState,
     yes: bool,
     checker: Arc<dyn DnsReadiness>,
     progress: Arc<Progress>,
@@ -215,13 +359,13 @@ impl DnsReadiness for ManualDns {
     async fn ready(
         &self,
         records: &[DnsRequirement],
-        force: bool,
+        skip_dns_check: bool,
         execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
         // A new scripted invocation must expose its fresh TXT values before any
         // acknowledgement. --yes only removes human confirmation, not publication.
-        if !self.resuming && (self.yes || !self.interactive) {
+        if matches!(self.publication, PublicationState::Fresh) && (self.yes || !self.interactive) {
             return Ok(false);
         }
         if self.interactive && !self.yes {
@@ -250,14 +394,21 @@ impl DnsReadiness for ManualDns {
             }
         }
         self.progress.log.line(
-            if force { Level::Warning } else { Level::Info },
-            if force {
-                "Skipping local DNS lookup (--force); proceeding to CA validation"
+            if skip_dns_check {
+                Level::Warning
+            } else {
+                Level::Info
+            },
+            if skip_dns_check {
+                "Skipping local DNS lookup (--skip-dns-check); proceeding to CA validation"
             } else {
                 "Checking all required DNS TXT values"
             },
         );
-        let ready = self.checker.ready(records, force, execution).await?;
+        let ready = self
+            .checker
+            .ready(records, skip_dns_check, execution)
+            .await?;
         if !ready {
             self.progress.log.line(
                 Level::Warning,
@@ -271,6 +422,7 @@ impl DnsReadiness for ManualDns {
 pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
     match command {
         CertCommand::Issue(args) => issue(args).await,
+        CertCommand::Renew(args) => renew(args).await,
         CertCommand::Remove {
             target,
             all,
@@ -350,7 +502,7 @@ async fn show(
         if history {
             selection::RequestSelection::Any
         } else {
-            selection::RequestSelection::Current
+            selection::RequestSelection::InUse
         },
     )
     .await?;
@@ -364,7 +516,12 @@ async fn show(
         record =
             remote_operation(context, &http, &record, &store, RemoteOperation::Inspect).await?;
     }
-    println!("{}", render::show(&[record], local.json, verify)?);
+    let view = if history || target.operation.is_some() {
+        render::DetailView::Version
+    } else {
+        render::DetailView::InUse
+    };
+    println!("{}", render::show(&[record], local.json, verify, view)?);
     Ok(())
 }
 
@@ -469,14 +626,14 @@ async fn remote_operation(
         RemoteOperation::Inspect => {}
         RemoteOperation::Revoke { reason, yes, json } => {
             use aster_acme_core::revocation::{RevocationAction, revocation_action};
-            let current = session.record().await?;
+            let in_use = session.record().await?;
             match revocation_action(
                 matches!(
-                    current.phase,
+                    in_use.phase,
                     aster_acme_core::workflow::IssuancePhase::Completed
                 ),
-                current.revocation.state,
-                current.revocation.reason == reason.or(current.revocation.reason),
+                in_use.revocation.state,
+                in_use.revocation.reason == reason.or(in_use.revocation.reason),
             ) {
                 RevocationAction::NotIssued => {
                     return Err("Only an issued certificate can be revoked.".into());
@@ -484,24 +641,24 @@ async fn remote_operation(
                 RevocationAction::ReasonConflict => {
                     return Err("An unconfirmed revocation must retain its original reason.".into());
                 }
-                RevocationAction::AlreadyConfirmed => return Ok(current),
+                RevocationAction::AlreadyConfirmed => return Ok(in_use),
                 RevocationAction::Submit => {}
             }
             let reason = reason
-                .or(current.revocation.reason)
+                .or(in_use.revocation.reason)
                 .map_or_else(|| "not specified".into(), |reason| reason.to_string());
             terminal::confirm_action(
                 &format!(
                     "Permanently revoke certificate\n  Name: {}\n  Request: {}\n  Domains: {}\n  CA: {}\n  Reason: {}\n\nThis cannot be undone. Local certificate files will be retained.\nA deployed copy must be replaced separately.",
-                    current.name.as_str(),
-                    current.operation_id,
-                    current
+                    in_use.name.as_str(),
+                    in_use.operation_id,
+                    in_use
                         .identifiers
                         .iter()
                         .map(DnsIdentifier::value)
                         .collect::<Vec<_>>()
                         .join(", "),
-                    current.directory.as_str(),
+                    in_use.directory.as_str(),
                     reason
                 ),
                 "Revoke this certificate?",
@@ -653,25 +810,25 @@ mod tests {
         async fn ready(
             &self,
             _records: &[DnsRequirement],
-            force: bool,
+            skip_dns_check: bool,
             execution: &ExecutionContext,
         ) -> Result<bool, IssueError> {
             execution.check().map_err(|_| IssueError::Interrupted)?;
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.forced.store(force, Ordering::SeqCst);
+            self.forced.store(skip_dns_check, Ordering::SeqCst);
             // Represent a TXT value which has not propagated: --yes must preserve it.
-            Ok(force)
+            Ok(skip_dns_check)
         }
     }
 
     #[tokio::test]
     async fn yes_bypasses_terminal_confirmation_but_not_dns_readiness() {
         for interactive in [false, true] {
-            for force in [false, true] {
+            for skip_dns_check in [false, true] {
                 let check = Arc::new(Check::default());
                 let manual = ManualDns {
                     interactive,
-                    resuming: true,
+                    publication: PublicationState::SavedRequirements,
                     yes: true,
                     checker: check.clone(),
                     progress: Arc::new(Progress::new(true)),
@@ -686,17 +843,17 @@ mod tests {
                 }];
                 let result = tokio::time::timeout(
                     Duration::from_secs(1),
-                    manual.ready(&records, force, &execution),
+                    manual.ready(&records, skip_dns_check, &execution),
                 )
                 .await
                 .unwrap()
                 .unwrap();
-                assert_eq!(result, force);
+                assert_eq!(result, skip_dns_check);
                 assert_eq!(check.calls.load(Ordering::SeqCst), 1);
-                assert_eq!(check.forced.load(Ordering::SeqCst), force);
+                assert_eq!(check.forced.load(Ordering::SeqCst), skip_dns_check);
                 execution.cancellation.cancel();
                 assert!(matches!(
-                    manual.ready(&records, force, &execution).await,
+                    manual.ready(&records, skip_dns_check, &execution).await,
                     Err(IssueError::Interrupted)
                 ));
             }
@@ -709,7 +866,7 @@ mod tests {
             let check = Arc::new(Check::default());
             let manual = ManualDns {
                 interactive,
-                resuming: false,
+                publication: PublicationState::Fresh,
                 yes,
                 checker: check.clone(),
                 progress: Arc::new(Progress::new(true)),
@@ -743,6 +900,20 @@ mod tests {
         };
         let initial = store.create(&request, &account).await.unwrap();
         let initial_record = initial.record().await.unwrap();
+        let mut observation = initial_record.clone();
+        observation.creation_submitted = true;
+        assert_eq!(
+            PublicationState::from_record(&observation),
+            PublicationState::Fresh
+        );
+        observation.authorizations.push(serde_json::from_value(serde_json::json!({
+            "url":"https://ca.example/authz","resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
+            "challenge_url":"https://ca.example/challenge","dns":{"name":"_acme-challenge.example.com","value":"saved"},"cleanup_pending":true,"acknowledgement":"not_submitted"
+        })).unwrap());
+        assert_eq!(
+            PublicationState::from_record(&observation),
+            PublicationState::SavedRequirements
+        );
         drop(initial);
         assert!(matches!(
             allocate_certificate(&store, request.clone(), &account, Naming::Explicit).await,
@@ -785,5 +956,81 @@ mod tests {
             1
         );
         assert_eq!(std::fs::read(config).unwrap(), before);
+    }
+    #[tokio::test]
+    async fn renew_not_due_uses_saved_definition_and_never_contacts_ca_or_creates_a_generation() {
+        use rcgen::{CertificateParams, Issuer, KeyPair};
+        let temp = tempfile::tempdir().unwrap();
+        let ca = aster_acme_protocol::url::AcmeUrl::new("https://127.0.0.1:1/directory").unwrap();
+        let accounts = aster_acme_cli_storage::CliAccountStore::open(
+            temp.path(),
+            "default",
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let signer = accounts.signer(&ca, "default", true).await.unwrap();
+        let thumb = signer.jwk().unwrap().thumbprint().unwrap();
+        let mut account = accounts.load(&ca, &thumb).await.unwrap().unwrap();
+        account.state = aster_acme_core::account::AccountRecordState::Registered;
+        account.last_status = Some(aster_acme_core::protocol::AccountStatus::Valid);
+        account.account_url =
+            Some(aster_acme_protocol::url::AcmeUrl::new("https://127.0.0.1:1/account").unwrap());
+        accounts.save(&account).await.unwrap();
+        let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
+        let request = IssueRequest {
+            name: CertificateName::new("web").unwrap(),
+            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP384,
+            account_name: "default".into(),
+        };
+        let session = store.create(&request, &account).await.unwrap();
+        let mut record = session.record().await.unwrap();
+        let generation = temp.path().join("certs/web").join(record.generation_name());
+        let key_bytes = std::fs::read(generation.join("private-key.pk8")).unwrap();
+        let key = KeyPair::try_from(key_bytes.as_slice()).unwrap();
+        let issuer = Issuer::new(
+            CertificateParams::new(Vec::<String>::new()).unwrap(),
+            KeyPair::generate().unwrap(),
+        );
+        let mut params = CertificateParams::new(vec!["example.com".to_owned()]).unwrap();
+        params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+        params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(89);
+        record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+        let chain = params.signed_by(&key, &issuer).unwrap().pem();
+        session.complete(&record, chain.as_bytes()).await.unwrap();
+        drop(session);
+        let journal = std::fs::read(generation.join("operation.toml")).unwrap();
+        let definition = std::fs::read(temp.path().join("certs/web/cert.toml")).unwrap();
+        let args = super::super::args::RenewArgs {
+            target: super::super::args::CertificateNameArgs {
+                name: Some("web".into()),
+                named_name: None,
+            },
+            now: false,
+            run: super::super::args::RunArgs {
+                yes: false,
+                skip_dns_check: false,
+                wait_timeout: 2,
+                http: HttpArgs::default(),
+                local: LocalArgs {
+                    data_dir: Some(temp.path().into()),
+                    json: true,
+                },
+            },
+        };
+        renew(args).await.unwrap();
+        assert_eq!(store.list().await.unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read(generation.join("operation.toml")).unwrap(),
+            journal
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("certs/web/cert.toml")).unwrap(),
+            definition
+        );
+        assert_eq!(
+            std::fs::read(generation.join("private-key.pk8")).unwrap(),
+            key_bytes
+        );
     }
 }

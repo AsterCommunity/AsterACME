@@ -33,7 +33,7 @@ pub(super) fn request_status(record: &IssueRecord, now: time::OffsetDateTime) ->
             "failed (CSR rejected)"
         }
         RevocationState::NotRequested if record.expired(now) => "expired locally",
-        RevocationState::NotRequested if !record.unfinished() && !record.is_current => {
+        RevocationState::NotRequested if !record.unfinished() && !record.is_in_use => {
             "completed (historical)"
         }
         RevocationState::NotRequested => phase_label(record.phase),
@@ -64,7 +64,7 @@ struct OrderView<'a> {
     operation: &'a IssueRecord,
     expired_locally: bool,
     renewal_due: bool,
-    current: bool,
+    in_use: bool,
     ca_query: CaQuery,
     revocation_source: RevocationSource,
 }
@@ -103,7 +103,7 @@ impl RevocationSource {
 
 pub(super) fn list(records: &[IssueRecord], json: bool) -> CliResult<String> {
     if json {
-        return show(records, true, false);
+        return show(records, true, false, DetailView::InUse);
     }
     if records.is_empty() {
         return Ok("No saved certificate requests.".into());
@@ -138,7 +138,7 @@ pub(super) fn list(records: &[IssueRecord], json: bool) -> CliResult<String> {
                     .renewal
                     .as_ref()
                     .filter(|_| {
-                        record.is_current
+                        record.is_in_use
                             && matches!(record.revocation.state, RevocationState::NotRequested)
                     })
                     .map(|plan| plan.renew_at),
@@ -191,7 +191,19 @@ fn order_status_style(status: Option<&aster_acme_core::protocol::OrderStatus>) -
     }
 }
 
-pub(super) fn show(records: &[IssueRecord], json: bool, verified: bool) -> CliResult<String> {
+/// Human detail scope; `in_use` is shown only when choosing an explicit version.
+#[derive(Clone, Copy)]
+pub(super) enum DetailView {
+    InUse,
+    Version,
+}
+
+pub(super) fn show(
+    records: &[IssueRecord],
+    json: bool,
+    verified: bool,
+    view: DetailView,
+) -> CliResult<String> {
     let now = time::OffsetDateTime::now_utc();
     if json {
         let views = records
@@ -199,13 +211,13 @@ pub(super) fn show(records: &[IssueRecord], json: bool, verified: bool) -> CliRe
             .map(|operation| OrderView {
                 operation,
                 expired_locally: operation.expired(now),
-                renewal_due: operation.is_current
+                renewal_due: operation.is_in_use
                     && matches!(operation.revocation.state, RevocationState::NotRequested)
                     && operation
                         .renewal
                         .as_ref()
                         .is_some_and(|plan| plan.renew_at <= now),
-                current: operation.is_current,
+                in_use: operation.is_in_use,
                 ca_query: CaQuery {
                     order_refreshed: verified,
                     authorizations_refreshed: verified,
@@ -221,7 +233,18 @@ pub(super) fn show(records: &[IssueRecord], json: bool, verified: bool) -> CliRe
     let color = output::colors(io::stdout().is_terminal());
     Ok(records
         .iter()
-        .map(|record| show_text(record, now, color, verified))
+        .map(|record| {
+            let mut text = show_text(record, now, color, verified);
+            if let DetailView::Version = view {
+                text.push('\n');
+                text.push_str(&field(
+                    "In use:",
+                    if record.is_in_use { "yes" } else { "no" },
+                    color,
+                ));
+            }
+            text
+        })
         .collect::<Vec<_>>()
         .join("\n\n"))
 }
@@ -233,7 +256,7 @@ fn show_text(
     verified: bool,
 ) -> String {
     let expired = record.expired(now);
-    let mut lines = request_lines(record, expired, color);
+    let mut lines = request_lines(record, now, color);
     let (status, status_style) = record.order.as_ref().map_or_else(
         || ("not observed".into(), Style::Yellow),
         |order| {
@@ -314,22 +337,10 @@ fn show_text(
 }
 
 // Immutable request identity and local progress, shared by offline and refreshed details.
-fn request_lines(record: &IssueRecord, expired: bool, color: bool) -> Vec<String> {
-    let phase_style = if record.finalize_rejection.is_some() {
-        Style::Red
-    } else if !expired && !record.unfinished() {
-        Style::Green
-    } else {
-        Style::Yellow
-    };
+fn request_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -> Vec<String> {
     vec![
         output::styled(&output::safe(record.name.as_str()), Style::BoldCyan, color),
         field("Request:", &record.operation_id, color),
-        field(
-            "Current:",
-            if record.is_current { "yes" } else { "no" },
-            color,
-        ),
         field("Key type:", record.key_algorithm.name(), color),
         field("Requested:", &timestamp(Some(record.created_at)), color),
         field(
@@ -343,16 +354,10 @@ fn request_lines(record: &IssueRecord, expired: bool, color: bool) -> Vec<String
             color,
         ),
         field(
-            "Phase:",
+            "Status:",
             &output::styled(
-                if record.finalize_rejection.is_some() {
-                    "failed (CSR rejected)"
-                } else if expired {
-                    "expired locally"
-                } else {
-                    phase_label(record.phase)
-                },
-                phase_style,
+                request_status(record, now),
+                local_status_style(record, now),
                 color,
             ),
             color,
@@ -411,7 +416,7 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
     let Some(plan) = &record.renewal else {
         return Vec::new();
     };
-    if !record.is_current {
+    if !record.is_in_use {
         return vec![
             field("Next renewal:", "not scheduled (historical version)", color),
             field(
@@ -481,7 +486,11 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
     use aster_acme_core::protocol::AuthorizationStatus;
     let mut lines = Vec::new();
     for authorization in &record.authorizations {
-        let domain = output::safe(&authorization.resource.identifier.value);
+        let domain = if authorization.resource.wildcard {
+            output::safe(&format!("*.{}", authorization.resource.identifier.value))
+        } else {
+            output::safe(&authorization.resource.identifier.value)
+        };
         let style = match &authorization.resource.status {
             AuthorizationStatus::Valid => Style::Green,
             AuthorizationStatus::Pending => Style::Yellow,
@@ -513,13 +522,23 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
     lines
 }
 
+/// A result cannot simultaneously expose pending instructions and completed artifacts.
 #[derive(Serialize)]
-struct ResultOutput<'a> {
-    status: &'static str,
-    operation: &'a IssueRecord,
-    records: &'a [DnsRequirement],
-    resume: Option<String>,
-    artifacts: Option<ArtifactPaths>,
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ResultOutput<'a> {
+    ActionRequired {
+        operation: &'a IssueRecord,
+        records: &'a [DnsRequirement],
+        resume: String,
+    },
+    Completed {
+        operation: &'a IssueRecord,
+        records: &'a [DnsRequirement],
+        artifacts: ArtifactPaths,
+    },
+    NotDue {
+        operation: &'a IssueRecord,
+    },
 }
 
 #[derive(Serialize)]
@@ -530,52 +549,73 @@ struct ArtifactPaths {
     private_key: std::path::PathBuf,
 }
 
+fn artifact_lines(paths: &ArtifactPaths) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "  Full chain: {}",
+        output::safe(&paths.fullchain.display().to_string())
+    ));
+    lines.push(format!(
+        "  Certificate: {}",
+        output::safe(&paths.certificate.display().to_string())
+    ));
+    lines.push(format!(
+        "  CA chain: {}",
+        output::safe(&paths.ca_chain.display().to_string())
+    ));
+    lines.push(format!(
+        "  Private key: {}",
+        output::safe(&paths.private_key.display().to_string())
+    ));
+    lines
+}
+
 pub(super) fn outcome(
     outcome: &IssueOutcome,
     json: bool,
     data_dir: &std::path::Path,
 ) -> CliResult<String> {
-    let (status, record, records) = match outcome {
-        IssueOutcome::ActionRequired { record, records } => {
-            ("action_required", record.as_ref(), records.as_slice())
-        }
-        IssueOutcome::Completed { record, cleanup } => {
-            ("completed", record.as_ref(), cleanup.as_slice())
-        }
+    let (record, records) = match outcome {
+        IssueOutcome::ActionRequired { record, records } => (record.as_ref(), records.as_slice()),
+        IssueOutcome::Completed { record, cleanup } => (record.as_ref(), cleanup.as_slice()),
     };
-    let resume = matches!(outcome, IssueOutcome::ActionRequired { .. }).then(|| {
-        format!(
-            "aster-acme cert issue --resume '{}' --operation {}",
-            record.name.as_str(),
-            record.operation_id
-        )
-    });
-    let artifacts = matches!(outcome, IssueOutcome::Completed { .. }).then(|| {
-        let generation = data_dir
-            .join("certs")
-            .join(record.name.as_str())
-            .join("current");
-        ArtifactPaths {
-            fullchain: generation.join("fullchain.pem"),
-            certificate: generation.join("cert.pem"),
-            ca_chain: generation.join("ca.pem"),
-            private_key: generation.join("private-key.pem"),
-        }
-    });
-    if json {
-        return Ok(serde_json::to_string_pretty(&ResultOutput {
-            status,
+    let result = match outcome {
+        IssueOutcome::ActionRequired { .. } => ResultOutput::ActionRequired {
             operation: record,
             records,
-            resume,
-            artifacts,
-        })?);
+            resume: format!(
+                "aster-acme cert issue --resume '{}' --operation {}",
+                record.name.as_str(),
+                record.operation_id
+            ),
+        },
+        IssueOutcome::Completed { .. } => {
+            let generation = data_dir
+                .join("certs")
+                .join(record.name.as_str())
+                .join("in_use");
+            ResultOutput::Completed {
+                operation: record,
+                records,
+                artifacts: ArtifactPaths {
+                    fullchain: generation.join("fullchain.pem"),
+                    certificate: generation.join("cert.pem"),
+                    ca_chain: generation.join("ca.pem"),
+                    private_key: generation.join("private-key.pem"),
+                },
+            }
+        }
+    };
+    if json {
+        return Ok(serde_json::to_string_pretty(&result)?);
     }
     let color = output::colors(io::stdout().is_terminal());
-    let (label, style, message) = if resume.is_some() {
-        ("[WARN]", Style::BoldYellow, "Action required for")
-    } else {
-        ("[DONE]", Style::BoldGreen, "Issued certificate")
+    let (label, style, message) = match outcome {
+        IssueOutcome::ActionRequired { .. } => ("[WARN]", Style::BoldYellow, "Action required for"),
+        IssueOutcome::Completed { record, .. } => match &record.renewal_of {
+            Some(_) => ("[DONE]", Style::BoldGreen, "Renewed certificate"),
+            None => ("[DONE]", Style::BoldGreen, "Issued certificate"),
+        },
     };
     let mut lines = vec![format!(
         "{} {message} {}",
@@ -583,25 +623,10 @@ pub(super) fn outcome(
         output::safe(record.name.as_str())
     )];
     lines.push(format!("  Request: {}", record.operation_id));
-    if let Some(paths) = artifacts {
-        lines.push(format!(
-            "  Full chain: {}",
-            output::safe(&paths.fullchain.display().to_string())
-        ));
-        lines.push(format!(
-            "  Certificate: {}",
-            output::safe(&paths.certificate.display().to_string())
-        ));
-        lines.push(format!(
-            "  CA chain: {}",
-            output::safe(&paths.ca_chain.display().to_string())
-        ));
-        lines.push(format!(
-            "  Private key: {}",
-            output::safe(&paths.private_key.display().to_string())
-        ));
+    if let ResultOutput::Completed { artifacts, .. } = &result {
+        lines.extend(artifact_lines(artifacts));
     }
-    if resume.is_none() {
+    if let IssueOutcome::Completed { .. } = outcome {
         lines.extend(renewal_lines(
             record,
             time::OffsetDateTime::now_utc(),
@@ -610,10 +635,13 @@ pub(super) fn outcome(
     }
     if !records.is_empty() {
         lines.push(
-            if resume.is_some() {
-                "Add every TXT value below. Values at the same name must coexist:"
-            } else {
-                "Validation finished. You may remove these specific manual TXT values:"
+            match outcome {
+                IssueOutcome::ActionRequired { .. } => {
+                    "Add every TXT value below. Values at the same name must coexist:"
+                }
+                IssueOutcome::Completed { .. } => {
+                    "Validation finished. You may remove these specific manual TXT values:"
+                }
             }
             .into(),
         );
@@ -625,7 +653,7 @@ pub(super) fn outcome(
             ));
         }
     }
-    if resume.is_some() {
+    if let IssueOutcome::ActionRequired { .. } = outcome {
         lines.push(format!(
             "To resume, run:\n  aster-acme cert issue --resume '{}'",
             record.name.as_str()
@@ -634,11 +662,35 @@ pub(super) fn outcome(
     Ok(lines.join("\n"))
 }
 
+pub(super) fn not_due(record: &IssueRecord, json: bool) -> CliResult<String> {
+    if json {
+        return Ok(serde_json::to_string_pretty(&ResultOutput::NotDue {
+            operation: record,
+        })?);
+    }
+    let color = output::colors(io::stdout().is_terminal());
+    let mut lines = vec![format!(
+        "{} Certificate {} is not due for renewal.",
+        output::styled("[INFO]", Style::Cyan, color),
+        output::safe(record.name.as_str())
+    )];
+    lines.extend(renewal_lines(
+        record,
+        time::OffsetDateTime::now_utc(),
+        color,
+    ));
+    lines.push(output::tips(
+        "Use cert renew <NAME> --now to renew early.",
+        color,
+    ));
+    Ok(lines.join("\n"))
+}
+
 pub(super) fn removed(
     name: &str,
     scope: &aster_acme_cli_storage::issuance::removal::RemovalScope,
     ids: &[String],
-    current_removed: bool,
+    in_use_removed: bool,
     json: bool,
 ) -> CliResult<String> {
     use aster_acme_cli_storage::issuance::removal::RemovalScope;
@@ -649,7 +701,7 @@ pub(super) fn removed(
         operation_ids: &'a [String],
         removed_locally: bool,
         generations: usize,
-        current_removed: bool,
+        in_use_removed: bool,
         ca_request_performed: bool,
     }
     let scope_label = match scope {
@@ -665,7 +717,7 @@ pub(super) fn removed(
             operation_ids: ids,
             removed_locally: !ids.is_empty() || matches!(scope, RemovalScope::All),
             generations: ids.len(),
-            current_removed,
+            in_use_removed,
             ca_request_performed: false,
         })?);
     }
@@ -702,9 +754,9 @@ pub(super) fn removed(
         "{} {message}",
         output::styled("[OK]", Style::BoldGreen, color)
     )];
-    if current_removed {
+    if in_use_removed {
         lines.push(field(
-            "Current:",
+            "In use:",
             "cleared; no historical version selected",
             color,
         ));
@@ -717,6 +769,15 @@ pub(super) fn revoked(record: &IssueRecord, json: bool) -> CliResult<String> {
     struct RevokedOutput<'a> {
         status: &'static str,
         operation: &'a IssueRecord,
+    }
+    match record.revocation.state {
+        RevocationState::Confirmed => {}
+        RevocationState::NotRequested | RevocationState::Pending => {
+            return Err(
+                "Cannot report certificate revocation as successful without CA confirmation."
+                    .into(),
+            );
+        }
     }
     if json {
         return Ok(serde_json::to_string_pretty(&RevokedOutput {
@@ -752,7 +813,7 @@ mod tests {
             "authorizations":[],"certificate_not_after":"2099-01-01T00:00:00Z"
         })).unwrap();
         let mut record = record;
-        record.is_current = true;
+        record.is_in_use = true;
         record.renewal = Some(serde_json::from_value(serde_json::json!({
             "certificate_id":"a.b","not_before":"2026-01-01T00:00:00Z","not_after":"2099-01-01T00:00:00Z",
             "renew_at":"2026-02-01T00:00:00Z","source":"fallback","suggested_window":null,"explanation_url":null,
@@ -780,7 +841,13 @@ mod tests {
                 .unwrap()
                 .contains("NEXT RENEWAL (UTC)")
         );
-        let machine = show(std::slice::from_ref(&record), true, false).unwrap();
+        let machine = show(
+            std::slice::from_ref(&record),
+            true,
+            false,
+            DetailView::InUse,
+        )
+        .unwrap();
         assert!(machine.contains("2026-01-01T00:00:00.123456Z"));
         assert!(!machine.contains('\x1b'));
         let result = IssueOutcome::Completed {
@@ -801,7 +868,7 @@ mod tests {
         ] {
             assert_eq!(
                 fields["artifacts"][key],
-                format!("/data/certs/example.com/current/{file}")
+                format!("/data/certs/example.com/in_use/{file}")
             );
         }
         let IssueOutcome::Completed { record, .. } = &result else {
@@ -817,9 +884,16 @@ mod tests {
                 RevocationState::NotRequested => unreachable!(),
             }));
             assert!(!human.contains("2026-02-01 00:00:00 UTC"));
-            let json: serde_json::Value =
-                serde_json::from_str(&show(std::slice::from_ref(&record), true, false).unwrap())
-                    .unwrap();
+            let json: serde_json::Value = serde_json::from_str(
+                &show(
+                    std::slice::from_ref(&record),
+                    true,
+                    false,
+                    DetailView::InUse,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             assert_eq!(json[0]["renewal_due"], false);
             if matches!(state, RevocationState::Confirmed) {
                 assert!(revoked(&record, false).unwrap().contains("Next renewal:"));
@@ -892,7 +966,63 @@ mod tests {
         assert!(details.contains("\x1b[31mfailed (CSR rejected)\x1b[0m"));
         assert!(details.contains("\x1b[34mready\x1b[0m"));
         let json: serde_json::Value =
-            serde_json::from_str(&show(&[record], true, false).unwrap()).unwrap();
+            serde_json::from_str(&show(&[record], true, false, DetailView::InUse).unwrap())
+                .unwrap();
         assert_eq!(json[0]["order"]["status"], "ready");
+    }
+    #[test]
+    fn final_output_variants_cannot_mix_manual_actions_artifacts_or_not_due_results() {
+        let record:IssueRecord=serde_json::from_value(serde_json::json!({
+            "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","creation_submitted":true,"authorizations":[],"finalize_submitted":"not_submitted"
+        })).unwrap();
+        let pending = IssueOutcome::ActionRequired {
+            record: Box::new(record.clone()),
+            records: vec![DnsRequirement {
+                name: "_acme-challenge.example.com".into(),
+                value: "txt-value".into(),
+            }],
+        };
+        let root = std::path::Path::new("/data");
+        let json: serde_json::Value =
+            serde_json::from_str(&outcome(&pending, true, root).unwrap()).unwrap();
+        assert_eq!(json["status"], "action_required");
+        assert!(json.get("artifacts").is_none());
+        assert!(outcome(&pending, false, root).unwrap().contains("[WARN]"));
+        assert!(!outcome(&pending, false, root).unwrap().contains("[DONE]"));
+        for renewal in [false, true] {
+            let mut complete = record.clone();
+            complete.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+            if renewal {
+                complete.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+                    operation_id: "old".into(),
+                    certificate_id: None,
+                });
+            }
+            let completed = IssueOutcome::Completed {
+                record: Box::new(complete),
+                cleanup: vec![],
+            };
+            let human = outcome(&completed, false, root).unwrap();
+            assert!(human.contains(if renewal {
+                "Renewed certificate"
+            } else {
+                "Issued certificate"
+            }));
+            let json: serde_json::Value =
+                serde_json::from_str(&outcome(&completed, true, root).unwrap()).unwrap();
+            assert_eq!(json["status"], "completed");
+            assert!(json.get("resume").is_none());
+            assert!(json.get("artifacts").is_some());
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&not_due(&record, true).unwrap()).unwrap();
+        assert_eq!(json["status"], "not_due");
+        assert!(json.get("resume").is_none());
+        assert!(json.get("artifacts").is_none());
+        for state in [RevocationState::NotRequested, RevocationState::Pending] {
+            let mut record = record.clone();
+            record.revocation.state = state;
+            assert!(revoked(&record, true).is_err());
+        }
     }
 }

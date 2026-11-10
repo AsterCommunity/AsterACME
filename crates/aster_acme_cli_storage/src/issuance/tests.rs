@@ -98,7 +98,7 @@ fn execution() -> IssueExecution {
             cancellation: CancellationToken::new(),
             deadline: Instant::now() + Duration::from_secs(5),
         },
-        force: false,
+        skip_dns_check: false,
         poll_interval: Duration::from_millis(100),
     }
 }
@@ -304,7 +304,7 @@ async fn manual_dns_yields_then_resumes_to_validated_certificate_without_recreat
         selection(&fixture.store.slot(&initial.name))
             .unwrap()
             .cert
-            .current,
+            .in_use,
         Some(initial.operation_id)
     );
     let saved = restarted.list().await.unwrap();
@@ -333,7 +333,7 @@ async fn expired_order_is_retained_and_force_cannot_advance_it() {
         .await
         .unwrap();
     let mut execution = execution();
-    execution.force = true;
+    execution.skip_dns_check = true;
     assert!(matches!(
         fixture
             .service
@@ -484,7 +484,7 @@ async fn malformed_order_and_wrong_identifier_keep_location_but_never_notify_cha
 }
 
 #[tokio::test]
-async fn failed_artifact_checks_never_replace_current_certificate() {
+async fn failed_artifact_checks_never_replace_in_use_certificate() {
     let fixture = fixture().await;
     let first = fixture
         .store
@@ -500,10 +500,10 @@ async fn failed_artifact_checks_never_replace_current_certificate() {
     record.phase = IssuancePhase::Completed;
     first.complete(&record, chain.as_bytes()).await.unwrap();
     drop(first);
-    let current = selection(&fixture.store.slot(&record.name))
+    let in_use = selection(&fixture.store.slot(&record.name))
         .unwrap()
         .cert
-        .current;
+        .in_use;
     let second = fixture
         .store
         .renew(&request().name, &fixture.account)
@@ -522,8 +522,8 @@ async fn failed_artifact_checks_never_replace_current_certificate() {
         selection(&fixture.store.slot(&new.name))
             .unwrap()
             .cert
-            .current,
-        current
+            .in_use,
+        in_use
     );
     assert!(
         !fixture
@@ -855,7 +855,7 @@ async fn expiry_during_manual_publication_is_rechecked_before_ca_notification() 
         .unwrap();
     let dns = DelayedPublication(std::sync::atomic::AtomicBool::new(false));
     let mut execution = execution();
-    execution.force = true;
+    execution.skip_dns_check = true;
     assert!(matches!(
         fixture
             .service
@@ -1111,7 +1111,7 @@ async fn complete_persists_leaf_ca_fullchain_and_same_pem_key_before_promoting()
         selection(&fixture.store.slot(&record.name))
             .unwrap()
             .cert
-            .current,
+            .in_use,
         Some(record.operation_id)
     );
     #[cfg(unix)]
@@ -1131,7 +1131,7 @@ async fn complete_persists_leaf_ca_fullchain_and_same_pem_key_before_promoting()
 }
 
 #[tokio::test]
-async fn leaf_only_exports_empty_ca_and_failed_artifact_write_keeps_previous_current() {
+async fn leaf_only_exports_empty_ca_and_failed_artifact_write_keeps_previous_in_use() {
     let fixture = fixture().await;
     let first = fixture
         .store
@@ -1166,7 +1166,7 @@ async fn leaf_only_exports_empty_ca_and_failed_artifact_write_keeps_previous_cur
         selection(&fixture.store.slot(&record.name))
             .unwrap()
             .cert
-            .current,
+            .in_use,
         Some(record.operation_id)
     );
     assert!(!matches!(
@@ -1177,7 +1177,7 @@ async fn leaf_only_exports_empty_ca_and_failed_artifact_write_keeps_previous_cur
 
 #[cfg(unix)]
 #[tokio::test]
-async fn current_link_atomically_selects_readable_generations_and_preserves_history() {
+async fn in_use_link_atomically_selects_readable_generations_and_preserves_history() {
     use std::os::unix::fs::symlink;
     let fixture = fixture().await;
     let mut ids = Vec::new();
@@ -1207,20 +1207,20 @@ async fn current_link_atomically_selects_readable_generations_and_preserves_hist
         // Exercise restart after temporary symlink creation but before atomic promotion.
         symlink(
             record.generation_name(),
-            slot.join(format!(".current-{}", record.operation_id)),
+            slot.join(format!(".in_use-{}", record.operation_id)),
         )
         .unwrap();
         session.complete(&record, chain.as_bytes()).await.unwrap();
         assert_eq!(
-            fs::read_link(slot.join("current")).unwrap(),
+            fs::read_link(slot.join("in_use")).unwrap(),
             PathBuf::from(record.generation_name())
         );
         assert_eq!(
-            fs::read_to_string(slot.join("current/fullchain.pem")).unwrap(),
+            fs::read_to_string(slot.join("in_use/fullchain.pem")).unwrap(),
             chain
         );
         assert_eq!(
-            fs::read(slot.join("current/private-key.pem")).unwrap(),
+            fs::read(slot.join("in_use/private-key.pem")).unwrap(),
             fs::read(generation.join("private-key.pem")).unwrap()
         );
         ids.push(record.operation_id.clone());
@@ -1239,7 +1239,7 @@ async fn current_link_atomically_selects_readable_generations_and_preserves_hist
 
 #[cfg(unix)]
 #[tokio::test]
-async fn current_promotion_refuses_foreign_targets_and_keeps_user_entries() {
+async fn in_use_promotion_refuses_foreign_targets_and_keeps_user_entries() {
     use std::os::unix::fs::symlink;
     let fixture = fixture().await;
     let session = fixture
@@ -1251,22 +1251,22 @@ async fn current_promotion_refuses_foreign_targets_and_keeps_user_entries() {
     let slot = fixture.store.slot(&record.name);
     let chain = leaf_for(&slot.join(record.generation_name()), &record.identifiers);
     record.phase = IssuancePhase::Completed;
-    fs::write(slot.join("current"), b"user file").unwrap();
+    fs::write(slot.join("in_use"), b"user file").unwrap();
     assert!(session.complete(&record, chain.as_bytes()).await.is_err());
-    assert_eq!(fs::read(slot.join("current")).unwrap(), b"user file");
-    fs::remove_file(slot.join("current")).unwrap();
-    symlink("../outside", slot.join("current")).unwrap();
+    assert_eq!(fs::read(slot.join("in_use")).unwrap(), b"user file");
+    fs::remove_file(slot.join("in_use")).unwrap();
+    symlink("../outside", slot.join("in_use")).unwrap();
     assert!(session.complete(&record, chain.as_bytes()).await.is_err());
     assert_eq!(
-        fs::read_link(slot.join("current")).unwrap(),
+        fs::read_link(slot.join("in_use")).unwrap(),
         PathBuf::from("../outside")
     );
-    fs::remove_file(slot.join("current")).unwrap();
-    let pending = slot.join(format!(".current-{}", record.operation_id));
+    fs::remove_file(slot.join("in_use")).unwrap();
+    let pending = slot.join(format!(".in_use-{}", record.operation_id));
     fs::write(&pending, b"retain").unwrap();
     assert!(session.complete(&record, chain.as_bytes()).await.is_err());
     assert_eq!(fs::read(&pending).unwrap(), b"retain");
-    assert!(selection(&slot).unwrap().cert.current.is_none());
+    assert!(selection(&slot).unwrap().cert.in_use.is_none());
 }
 
 #[tokio::test]
@@ -1367,7 +1367,7 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
 }
 
 #[tokio::test]
-async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewal_queries() {
+async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal_queries() {
     use aster_acme::revocation::RevocationService;
     use aster_acme_core::revocation::RevocationState;
     use aster_acme_protocol::revocation::RevocationReason;
@@ -1451,7 +1451,7 @@ async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewa
         key_before
     );
     assert_eq!(
-        fs::read_link(slot.join("current")).unwrap(),
+        fs::read_link(slot.join("in_use")).unwrap(),
         PathBuf::from(record.generation_name())
     );
     let calls = fixture.server.received_requests().await.unwrap();
@@ -1492,7 +1492,13 @@ async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_with
         .unwrap();
     let other_record = other.record().await.unwrap();
     drop(other);
-    let inode = fs::metadata(slot.join("cert.lock")).unwrap().ino();
+    let lock_path = toml_file::object_lock(
+        &fixture.store.root,
+        toml_file::ObjectKind::Certificate,
+        record.name.as_str(),
+    )
+    .unwrap();
+    let inode = fs::metadata(&lock_path).unwrap().ino();
     let account_path = fixture.temp.path().join("accounts/default/account.toml");
     let account_before = fs::read(&account_path).unwrap();
     let removal = fixture
@@ -1506,10 +1512,10 @@ async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_with
     assert_eq!(fixture.store.list().await.unwrap().len(), 0);
     assert!(!generation.exists());
     assert!(!slot.join(other_record.generation_name()).exists());
-    assert!(!slot.join("current").exists());
+    assert!(!slot.join("in_use").exists());
     assert!(!slot.join("cert.toml").exists());
     assert!(!slot.join(".removing").exists());
-    assert_eq!(fs::metadata(slot.join("cert.lock")).unwrap().ino(), inode);
+    assert_eq!(fs::metadata(&lock_path).unwrap().ino(), inode);
     assert_eq!(fs::read(account_path).unwrap(), account_before);
     assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
     // Retaining the lock carrier permits a later explicit fresh issuance.
@@ -1651,8 +1657,8 @@ async fn removal_rejects_unsafe_managed_files_links_and_interrupted_markers_befo
                 fs::remove_file(&key).unwrap();
                 fs::create_dir(&key).unwrap();
             }
-            3 => symlink(&external, slot.join("current")).unwrap(),
-            4 => fs::write(slot.join("current"), "user owned").unwrap(),
+            3 => symlink(&external, slot.join("in_use")).unwrap(),
+            4 => fs::write(slot.join("in_use"), "user owned").unwrap(),
             5 => fs::create_dir(slot.join(".removing")).unwrap(),
             _ => unreachable!(),
         }
@@ -1766,12 +1772,12 @@ async fn completed_generation(fixture: &Fixture) -> IssueRecord {
 }
 
 #[tokio::test]
-async fn single_historical_removal_preserves_current_unfinished_requests_and_other_links() {
+async fn single_historical_removal_preserves_in_use_unfinished_requests_and_other_links() {
     use removal::RemovalScope;
     use std::os::unix::fs::symlink;
     let fixture = fixture().await;
     let old = completed_generation(&fixture).await;
-    let current = completed_generation(&fixture).await;
+    let in_use = completed_generation(&fixture).await;
     let pending = fixture
         .store
         .renew(&request().name, &fixture.account)
@@ -1780,11 +1786,11 @@ async fn single_historical_removal_preserves_current_unfinished_requests_and_oth
     let pending_record = pending.record().await.unwrap();
     drop(pending);
     let slot = fixture.store.slot(&old.name);
-    let current_link = fs::read_link(slot.join("current")).unwrap();
+    let in_use_link = fs::read_link(slot.join("in_use")).unwrap();
     let config = fs::read(slot.join("cert.toml")).unwrap();
-    let current_temp = slot.join(format!(".current-{}", current.operation_id));
-    let old_temp = slot.join(format!(".current-{}", old.operation_id));
-    symlink(current.generation_name(), &current_temp).unwrap();
+    let in_use_temp = slot.join(format!(".in_use-{}", in_use.operation_id));
+    let old_temp = slot.join(format!(".in_use-{}", old.operation_id));
+    symlink(in_use.generation_name(), &in_use_temp).unwrap();
     symlink(old.generation_name(), &old_temp).unwrap();
     let removal = fixture
         .store
@@ -1792,58 +1798,58 @@ async fn single_historical_removal_preserves_current_unfinished_requests_and_oth
         .await
         .unwrap();
     assert_eq!(removal.generations(), 1);
-    assert!(!removal.removes_current());
+    assert!(!removal.removes_in_use());
     removal.remove().await.unwrap();
     assert!(!slot.join(old.generation_name()).exists());
     assert!(!old_temp.exists());
     assert_eq!(
-        fs::read_link(current_temp).unwrap(),
-        PathBuf::from(current.generation_name())
+        fs::read_link(in_use_temp).unwrap(),
+        PathBuf::from(in_use.generation_name())
     );
-    assert_eq!(fs::read_link(slot.join("current")).unwrap(), current_link);
+    assert_eq!(fs::read_link(slot.join("in_use")).unwrap(), in_use_link);
     assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), config);
     let remaining = fixture.store.list().await.unwrap();
     assert_eq!(remaining.len(), 2);
     assert!(
         remaining
             .iter()
-            .any(|r| r.operation_id == current.operation_id && r.is_current)
+            .any(|r| r.operation_id == in_use.operation_id && r.is_in_use)
     );
     assert!(
         remaining
             .iter()
-            .any(|r| r.operation_id == pending_record.operation_id && !r.is_current)
+            .any(|r| r.operation_id == pending_record.operation_id && !r.is_in_use)
     );
 }
 
 #[tokio::test]
-async fn removing_current_clears_selection_without_promoting_any_historical_version() {
+async fn removing_in_use_clears_selection_without_promoting_any_historical_version() {
     use removal::RemovalScope;
     let fixture = fixture().await;
     let old = completed_generation(&fixture).await;
-    let current = completed_generation(&fixture).await;
-    let slot = fixture.store.slot(&current.name);
+    let in_use = completed_generation(&fixture).await;
+    let slot = fixture.store.slot(&in_use.name);
     let removal = fixture
         .store
         .prepare_removal(
-            &current.name,
-            RemovalScope::Operation(current.operation_id.clone()),
+            &in_use.name,
+            RemovalScope::Operation(in_use.operation_id.clone()),
         )
         .await
         .unwrap();
-    assert!(removal.removes_current());
+    assert!(removal.removes_in_use());
     removal.remove().await.unwrap();
-    assert!(fs::symlink_metadata(slot.join("current")).is_err());
-    assert!(selection(&slot).unwrap().cert.current.is_none());
+    assert!(fs::symlink_metadata(slot.join("in_use")).is_err());
+    assert!(selection(&slot).unwrap().cert.in_use.is_none());
     assert!(
         slot.join(old.generation_name())
             .join("private-key.pk8")
             .exists()
     );
-    assert!(!slot.join(current.generation_name()).exists());
+    assert!(!slot.join(in_use.generation_name()).exists());
     let remaining = fixture.store.list().await.unwrap();
     assert_eq!(remaining.len(), 1);
-    assert!(!remaining[0].is_current);
+    assert!(!remaining[0].is_in_use);
     fixture
         .store
         .prepare_removal(&old.name, RemovalScope::Operation(old.operation_id.clone()))
@@ -1857,12 +1863,12 @@ async fn removing_current_clears_selection_without_promoting_any_historical_vers
 }
 
 #[tokio::test]
-async fn history_cleanup_preserves_current_pending_and_is_repeatable_without_side_effects() {
+async fn history_cleanup_preserves_in_use_pending_and_is_repeatable_without_side_effects() {
     use removal::RemovalScope;
     let fixture = fixture().await;
     let old = completed_generation(&fixture).await;
     let other_old = completed_generation(&fixture).await;
-    let current = completed_generation(&fixture).await;
+    let in_use = completed_generation(&fixture).await;
     let session = fixture
         .store
         .renew(&request().name, &fixture.account)
@@ -1870,25 +1876,24 @@ async fn history_cleanup_preserves_current_pending_and_is_repeatable_without_sid
         .unwrap();
     let pending = session.record().await.unwrap();
     drop(session);
-    let slot = fixture.store.slot(&current.name);
+    let slot = fixture.store.slot(&in_use.name);
     let config = fs::read(slot.join("cert.toml")).unwrap();
-    let current_key =
-        fs::read(slot.join(current.generation_name()).join("private-key.pk8")).unwrap();
+    let in_use_key = fs::read(slot.join(in_use.generation_name()).join("private-key.pk8")).unwrap();
     let removal = fixture
         .store
-        .prepare_removal(&current.name, RemovalScope::History)
+        .prepare_removal(&in_use.name, RemovalScope::History)
         .await
         .unwrap();
     assert_eq!(removal.generations(), 2);
-    assert!(!removal.removes_current());
+    assert!(!removal.removes_in_use());
     removal.remove().await.unwrap();
     for old in [old, other_old] {
         assert!(!slot.join(old.generation_name()).exists());
     }
     assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), config);
     assert_eq!(
-        fs::read(slot.join(current.generation_name()).join("private-key.pk8")).unwrap(),
-        current_key
+        fs::read(slot.join(in_use.generation_name()).join("private-key.pk8")).unwrap(),
+        in_use_key
     );
     assert!(
         slot.join(pending.generation_name())
@@ -1897,7 +1902,7 @@ async fn history_cleanup_preserves_current_pending_and_is_repeatable_without_sid
     );
     let empty = fixture
         .store
-        .prepare_removal(&current.name, RemovalScope::History)
+        .prepare_removal(&in_use.name, RemovalScope::History)
         .await
         .unwrap();
     assert_eq!(empty.generations(), 0);
@@ -1907,7 +1912,7 @@ async fn history_cleanup_preserves_current_pending_and_is_repeatable_without_sid
 }
 
 #[tokio::test]
-async fn history_without_consistent_current_and_unknown_operation_delete_nothing() {
+async fn history_without_consistent_in_use_and_unknown_operation_delete_nothing() {
     use removal::RemovalScope;
     let fixture = fixture().await;
     let session = fixture
@@ -1931,19 +1936,19 @@ async fn history_without_consistent_current_and_unknown_operation_delete_nothing
             .await
             .is_err()
     );
-    let current = completed_generation(&fixture).await;
-    let slot = fixture.store.slot(&current.name);
-    fs::remove_file(slot.join("current")).unwrap();
+    let in_use = completed_generation(&fixture).await;
+    let slot = fixture.store.slot(&in_use.name);
+    fs::remove_file(slot.join("in_use")).unwrap();
     assert!(
         fixture
             .store
-            .prepare_removal(&current.name, RemovalScope::History)
+            .prepare_removal(&in_use.name, RemovalScope::History)
             .await
             .is_err()
     );
     assert_eq!(fixture.store.list().await.unwrap().len(), 2);
     assert!(
-        slot.join(current.generation_name())
+        slot.join(in_use.generation_name())
             .join("private-key.pk8")
             .exists()
     );
@@ -1951,7 +1956,7 @@ async fn history_without_consistent_current_and_unknown_operation_delete_nothing
 }
 
 #[tokio::test]
-async fn revoked_cleanup_matches_only_confirmed_versions_and_can_clear_revoked_current() {
+async fn revoked_cleanup_matches_only_confirmed_versions_and_can_clear_revoked_in_use() {
     use aster_acme_core::revocation::RevocationState;
     use removal::RemovalScope;
     let fixture = fixture().await;
@@ -1978,7 +1983,7 @@ async fn revoked_cleanup_matches_only_confirmed_versions_and_can_clear_revoked_c
         .await
         .unwrap();
     assert_eq!(cleanup.generations(), 1);
-    assert!(cleanup.removes_current());
+    assert!(cleanup.removes_in_use());
     cleanup.remove().await.unwrap();
     assert!(!slot.join(revoked.generation_name()).exists());
     assert!(
@@ -1991,8 +1996,8 @@ async fn revoked_cleanup_matches_only_confirmed_versions_and_can_clear_revoked_c
             .join("private-key.pk8")
             .exists()
     );
-    assert!(selection(&slot).unwrap().cert.current.is_none());
-    assert!(fs::symlink_metadata(slot.join("current")).is_err());
+    assert!(selection(&slot).unwrap().cert.in_use.is_none());
+    assert!(fs::symlink_metadata(slot.join("in_use")).is_err());
     let no_op = fixture
         .store
         .prepare_removal(&revoked.name, RemovalScope::Revoked)
@@ -2004,7 +2009,7 @@ async fn revoked_cleanup_matches_only_confirmed_versions_and_can_clear_revoked_c
 }
 
 #[tokio::test]
-async fn revoked_cleanup_preserves_unrevoked_current_and_incomplete_requests() {
+async fn revoked_cleanup_preserves_unrevoked_in_use_and_incomplete_requests() {
     use aster_acme_core::revocation::RevocationState;
     use removal::RemovalScope;
     let fixture = fixture().await;
@@ -2018,7 +2023,7 @@ async fn revoked_cleanup_preserves_unrevoked_current_and_incomplete_requests() {
     saved.revocation.state = RevocationState::Confirmed;
     session.save(&saved).await.unwrap();
     drop(session);
-    let current = completed_generation(&fixture).await;
+    let in_use = completed_generation(&fixture).await;
     let session = fixture
         .store
         .renew(&request().name, &fixture.account)
@@ -2028,15 +2033,15 @@ async fn revoked_cleanup_preserves_unrevoked_current_and_incomplete_requests() {
     drop(session);
     let cleanup = fixture
         .store
-        .prepare_removal(&current.name, RemovalScope::Revoked)
+        .prepare_removal(&in_use.name, RemovalScope::Revoked)
         .await
         .unwrap();
-    assert!(!cleanup.removes_current());
+    assert!(!cleanup.removes_in_use());
     cleanup.remove().await.unwrap();
-    let slot = fixture.store.slot(&current.name);
+    let slot = fixture.store.slot(&in_use.name);
     assert_eq!(
-        fs::read_link(slot.join("current")).unwrap(),
-        PathBuf::from(current.generation_name())
+        fs::read_link(slot.join("in_use")).unwrap(),
+        PathBuf::from(in_use.generation_name())
     );
     assert!(
         slot.join(pending.generation_name())
@@ -2129,7 +2134,7 @@ async fn renewed_generation_keeps_the_managed_definition_and_rejects_changed_acc
     assert_eq!(next.account_name, initial.account_name);
     assert_eq!(next.account_id, initial.account_id);
     assert_ne!(next.operation_id, initial.operation_id);
-    assert!(!next.is_current);
+    assert!(!next.is_in_use);
     assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), definition);
     assert_ne!(
         fs::read(slot.join(next.generation_name()).join("private-key.pk8")).unwrap(),
@@ -2329,7 +2334,7 @@ async fn rejected_fixed_csr_survives_restart_even_when_another_request_completes
         selection(&fixture.store.slot(&initial.name))
             .unwrap()
             .cert
-            .current
+            .in_use
             .is_none()
     );
 }
@@ -2411,4 +2416,455 @@ async fn complete_shared_order_with_p384(
     };
     assert_eq!(completed.order_url.as_ref(), Some(expected_order));
     drop(second);
+}
+
+async fn renewal_client(fixture: &Fixture, ari: bool) -> Arc<IssueService> {
+    Mock::given(method("GET")).and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
+            "newOrder":format!("{}/vendor/create",fixture.server.uri()),"renewalInfo":ari.then(||format!("{}/renewal-info",fixture.server.uri()))
+        }))).with_priority(1).mount(&fixture.server).await;
+    let client = AcmeClient::discover(
+        fixture.account.directory_url.clone(),
+        TransportOptions {
+            allow_loopback_http: true,
+            ..TransportOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let accounts =
+        super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
+            .unwrap();
+    let signer = accounts
+        .signer(&fixture.account.directory_url, "default", false)
+        .await
+        .unwrap();
+    Arc::new(
+        IssueService::new(
+            Arc::new(client),
+            IssueIdentity {
+                account: fixture.account.clone(),
+                signer,
+            },
+        )
+        .unwrap(),
+    )
+}
+
+async fn mount_renewal_order(fixture: &Fixture, replacement: Option<String>, chain: String) {
+    let valid = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let expected = replacement.clone();
+    let mut ready = order(&fixture.server, "ready", Some("2099-01-01T00:00:00Z"));
+    let mut issued = order(&fixture.server, "valid", Some("2099-01-01T00:00:00Z"));
+    if let Some(replaces) = &replacement {
+        ready["replaces"] = serde_json::json!(replaces);
+        issued["replaces"] = serde_json::json!(replaces);
+    }
+    let created = ready.clone();
+    Mock::given(method("POST"))
+        .and(path("/vendor/create"))
+        .respond_with(move |request: &wiremock::Request| {
+            let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
+            let payload: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
+            assert_eq!(
+                payload.get("replaces").and_then(serde_json::Value::as_str),
+                expected.as_deref()
+            );
+            ResponseTemplate::new(201)
+                .insert_header("Replay-Nonce", "renewal_created")
+                .insert_header(
+                    "Location",
+                    created["finalize"]
+                        .as_str()
+                        .unwrap()
+                        .replace("/finalize/custom", "/order/renewal"),
+                )
+                .insert_header("Retry-After", "0")
+                .set_body_json(created.clone())
+        })
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let observed = valid.clone();
+    let ready_poll = ready.clone();
+    let valid_poll = issued.clone();
+    Mock::given(method("POST"))
+        .and(path("/order/renewal"))
+        .respond_with(move |_: &wiremock::Request| {
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "renewal_poll")
+                .insert_header("Retry-After", "0")
+                .set_body_json(if observed.load(Ordering::SeqCst) {
+                    valid_poll.clone()
+                } else {
+                    ready_poll.clone()
+                })
+        })
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/finalize/custom"))
+        .respond_with(move |_: &wiremock::Request| {
+            valid.store(true, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "renewal_finalized")
+                .insert_header("Retry-After", "0")
+                .set_body_json(issued.clone())
+        })
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/certificate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "renewed_cert")
+                .set_body_raw(chain, "application/pem-certificate-chain"),
+        )
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+}
+
+#[tokio::test]
+async fn scheduled_renewal_keeps_name_definition_and_promotes_new_key_with_and_without_ari() {
+    for ari in [false, true] {
+        let fixture = fixture().await;
+        let in_use = completed_generation(&fixture).await;
+        let slot = fixture.store.slot(&in_use.name);
+        let old_key =
+            fs::read(slot.join(in_use.generation_name()).join("private-key.pk8")).unwrap();
+        assert!(matches!(
+            fixture
+                .store
+                .prepare_renewal(&in_use.name, &in_use.operation_id, false, &fixture.account)
+                .await,
+            Ok(RenewalPreparation::NotDue(_))
+        ));
+        assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+        let RenewalPreparation::Ready(session) = fixture
+            .store
+            .prepare_renewal(&in_use.name, &in_use.operation_id, true, &fixture.account)
+            .await
+            .unwrap()
+        else {
+            panic!("renewal session expected")
+        };
+        let record = session.record().await.unwrap();
+        let previous = record.renewal_of.as_ref().unwrap();
+        assert_eq!(previous.operation_id, in_use.operation_id);
+        assert_eq!(record.name, in_use.name);
+        let chain = leaf_for(&slot.join(record.generation_name()), &record.identifiers);
+        mount_renewal_order(
+            &fixture,
+            if ari {
+                previous.certificate_id.clone()
+            } else {
+                None
+            },
+            chain,
+        )
+        .await;
+        drop(session);
+        // A subsequent command, even without --now, resumes the same durable operation.
+        let RenewalPreparation::Ready(mut resumed) = fixture
+            .store
+            .prepare_renewal(&in_use.name, &in_use.operation_id, false, &fixture.account)
+            .await
+            .unwrap()
+        else {
+            panic!("renewal session expected")
+        };
+        assert_eq!(
+            resumed.record().await.unwrap().operation_id,
+            record.operation_id
+        );
+        assert_eq!(
+            fs::read_link(slot.join("in_use")).unwrap(),
+            PathBuf::from(in_use.generation_name())
+        );
+        let service = renewal_client(&fixture, ari).await;
+        let result = service
+            .run(resumed.as_mut(), &Dns(true), &execution())
+            .await
+            .unwrap();
+        let IssueOutcome::Completed {
+            record: completed, ..
+        } = result
+        else {
+            panic!("expected completed renewal")
+        };
+        assert_eq!(completed.name, in_use.name);
+        assert_eq!(completed.identifiers, in_use.identifiers);
+        assert_eq!(completed.key_algorithm, in_use.key_algorithm);
+        assert_eq!(
+            fs::read_link(slot.join("in_use")).unwrap(),
+            PathBuf::from(record.generation_name())
+        );
+        assert_eq!(
+            fs::read(slot.join(in_use.generation_name()).join("private-key.pk8")).unwrap(),
+            old_key
+        );
+        assert_ne!(
+            fs::read(slot.join(record.generation_name()).join("private-key.pk8")).unwrap(),
+            old_key
+        );
+        assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn scheduled_renewal_checks_due_time_stale_in_use_and_revocation_before_creating_material() {
+    use aster_acme_core::revocation::RevocationState;
+    let fixture = fixture().await;
+    let in_use = completed_generation(&fixture).await;
+    assert!(
+        fixture
+            .store
+            .prepare_renewal(&in_use.name, "stale", true, &fixture.account)
+            .await
+            .is_err()
+    );
+    let session = fixture
+        .store
+        .open(&in_use.name, &in_use.operation_id)
+        .await
+        .unwrap();
+    let mut saved = session.record().await.unwrap();
+    saved.revocation.state = RevocationState::Pending;
+    session.save(&saved).await.unwrap();
+    drop(session);
+    assert!(
+        fixture
+            .store
+            .prepare_renewal(&in_use.name, &in_use.operation_id, true, &fixture.account)
+            .await
+            .is_err()
+    );
+    let session = fixture
+        .store
+        .open(&in_use.name, &in_use.operation_id)
+        .await
+        .unwrap();
+    let mut saved = session.record().await.unwrap();
+    saved.revocation.state = RevocationState::NotRequested;
+    saved.renewal.as_mut().unwrap().renew_at =
+        time::OffsetDateTime::now_utc() - time::Duration::seconds(1);
+    session.save(&saved).await.unwrap();
+    drop(session);
+    let RenewalPreparation::Ready(renewal) = fixture
+        .store
+        .prepare_renewal(&in_use.name, &in_use.operation_id, false, &fixture.account)
+        .await
+        .unwrap()
+    else {
+        panic!("renewal session expected")
+    };
+    assert!(renewal.record().await.unwrap().renewal_of.is_some());
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn interrupted_manual_renewal_retains_old_in_use_and_resumes_the_same_order_and_material() {
+    let fixture = fixture().await;
+    let in_use = completed_generation(&fixture).await;
+    let slot = fixture.store.slot(&in_use.name);
+    let stage = mount_flow(&fixture).await;
+    let RenewalPreparation::Ready(mut session) = fixture
+        .store
+        .prepare_renewal(&in_use.name, &in_use.operation_id, true, &fixture.account)
+        .await
+        .unwrap()
+    else {
+        panic!("renewal session expected")
+    };
+    let initial = session.record().await.unwrap();
+    let generation = slot.join(initial.generation_name());
+    let key = fs::read(generation.join("private-key.pk8")).unwrap();
+    let csr = fs::read(generation.join("request.der")).unwrap();
+    let outcome = fixture
+        .service
+        .run(session.as_mut(), &Dns(false), &execution())
+        .await
+        .unwrap();
+    assert!(matches!(outcome, IssueOutcome::ActionRequired { .. }));
+    assert_eq!(stage.load(Ordering::SeqCst), 0);
+    drop(session);
+    let RenewalPreparation::Ready(mut restored) = fixture
+        .store
+        .prepare_renewal(&in_use.name, &in_use.operation_id, false, &fixture.account)
+        .await
+        .unwrap()
+    else {
+        panic!("renewal session expected")
+    };
+    assert_eq!(
+        restored.record().await.unwrap().operation_id,
+        initial.operation_id
+    );
+    let cancelled = execution();
+    cancelled.context.cancellation.cancel();
+    assert!(matches!(
+        fixture
+            .service
+            .run(restored.as_mut(), &Dns(true), &cancelled)
+            .await,
+        Err(IssueError::Interrupted)
+    ));
+    assert_eq!(
+        fs::read_link(slot.join("in_use")).unwrap(),
+        PathBuf::from(in_use.generation_name())
+    );
+    assert_eq!(fs::read(generation.join("private-key.pk8")).unwrap(), key);
+    assert_eq!(restored.csr().await.unwrap(), csr);
+    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/vendor/create")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn renewal_rejects_missing_or_changed_replaces_echo_without_redoing_new_order() {
+    for echo in [None, Some("different.identifier")] {
+        let fixture = fixture().await;
+        let in_use = completed_generation(&fixture).await;
+        let RenewalPreparation::Ready(mut session) = fixture
+            .store
+            .prepare_renewal(&in_use.name, &in_use.operation_id, true, &fixture.account)
+            .await
+            .unwrap()
+        else {
+            panic!("renewal session expected")
+        };
+        let record = session.record().await.unwrap();
+        let mut created = order(&fixture.server, "ready", Some("2099-01-01T00:00:00Z"));
+        if let Some(echo) = echo {
+            created["replaces"] = serde_json::json!(echo);
+        }
+        mount_creation(&fixture, created.clone()).await;
+        Mock::given(method("POST"))
+            .and(path("/order/custom"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Replay-Nonce", "query")
+                    .insert_header("Retry-After", "0")
+                    .set_body_json(created),
+            )
+            .expect(1)
+            .mount(&fixture.server)
+            .await;
+        let service = renewal_client(&fixture, true).await;
+        assert!(
+            service
+                .run(session.as_mut(), &Dns(true), &execution())
+                .await
+                .is_err()
+        );
+        let saved = session.record().await.unwrap();
+        assert!(saved.order_url.is_some());
+        assert!(saved.submitted_replaces.is_some());
+        drop(session);
+        let RenewalPreparation::Ready(mut session) = fixture
+            .store
+            .prepare_renewal(&in_use.name, &in_use.operation_id, false, &fixture.account)
+            .await
+            .unwrap()
+        else {
+            panic!("renewal session expected")
+        };
+        assert_eq!(
+            session.record().await.unwrap().operation_id,
+            record.operation_id
+        );
+        assert!(
+            service
+                .run(session.as_mut(), &Dns(true), &execution())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_link(fixture.store.slot(&in_use.name).join("in_use")).unwrap(),
+            PathBuf::from(in_use.generation_name())
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_renewal_cannot_promote_an_old_result_after_in_use_changes() {
+    let fixture = fixture().await;
+    let first = completed_generation(&fixture).await;
+    let RenewalPreparation::Ready(session) = fixture
+        .store
+        .prepare_renewal(&first.name, &first.operation_id, true, &fixture.account)
+        .await
+        .unwrap()
+    else {
+        panic!("renewal session expected")
+    };
+    let mut pending = session.record().await.unwrap();
+    drop(session);
+    // Simulate an independent replacement already selected by a previous executor.
+    let slot = fixture.store.slot(&first.name);
+    let mut config = selection(&slot).unwrap();
+    config.cert.in_use = None;
+    write_selection(&slot, &config).unwrap();
+    let session = fixture
+        .store
+        .open(&pending.name, &pending.operation_id)
+        .await
+        .unwrap();
+    let generation = slot.join(pending.generation_name());
+    let chain = leaf_for(&generation, &pending.identifiers);
+    pending.phase = IssuancePhase::Completed;
+    assert!(session.complete(&pending, chain.as_bytes()).await.is_err());
+    assert!(!generation.join("fullchain.pem").exists());
+    assert!(selection(&slot).unwrap().cert.in_use.is_none());
+}
+
+#[tokio::test]
+async fn complete_removal_cleans_object_directories_and_keeps_shared_lock_inodes_stable() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    drop(session);
+    let lock = toml_file::object_lock(
+        &fixture.store.root,
+        toml_file::ObjectKind::Certificate,
+        record.name.as_str(),
+    )
+    .unwrap();
+    let inode = fs::metadata(&lock).unwrap().ino();
+    fixture
+        .store
+        .prepare_removal(&record.name, removal::RemovalScope::All)
+        .await
+        .unwrap()
+        .remove()
+        .await
+        .unwrap();
+    assert!(!fixture.store.slot(&record.name).exists());
+    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    drop(
+        fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
 }

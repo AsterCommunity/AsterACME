@@ -124,7 +124,18 @@ pub(super) fn resolve(
                     super::report::state_label(account.state)
                 }
             };
-            format!("{} — {state}", safe(&account.name))
+            crate::common::selection::ChoiceLabel {
+                name: &account.name,
+                summary: None,
+                at: account.times.registered_at,
+                status: Some(state),
+                marker: if Some(account.name.as_str()) == default_name {
+                    Some("default")
+                } else {
+                    None
+                },
+            }
+            .to_string()
         })
         .collect();
     let default = candidates

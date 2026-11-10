@@ -39,14 +39,14 @@ The project is under active development and has not released its ACME packages. 
 - Embed the protocol service in an application with injected storage, signing, readiness, and progress interfaces.
 - Use either terminal prompts or explicit arguments and structured JSON in scripts.
 
-An unattended certificate lifecycle still needs automated publication and renewal support, which is not available yet. The current private filesystem adapter supports Unix; library consumers can provide other adapters.
+An unattended certificate lifecycle still needs automated publication and renewal support, which is not available yet. The in_use private filesystem adapter supports Unix; library consumers can provide other adapters.
 
 ## Design focus
 
 - **Protocol ownership** — Typed ACME models live in `aster_acme_protocol`. Resource URLs come from the CA; client code does not construct fixed ACME paths.
 - **Explicit decisions** — The pure core returns actions from CA observations and saved submission state. The service owns HTTP, timers, and execution.
 - **Recoverable operations** — Mutation intent is durable before submission. Pending responses do not authorize silently creating another order or repeating finalization.
-- **Stable artifacts** — Each request has a separate timestamped version. A validated complete artifact set is promoted through an atomic `current` link.
+- **Stable artifacts** — Each request has a separate timestamped version. A validated complete artifact set is promoted through an atomic `in_use` link.
 - **Shared mechanisms** — Forge HTTP, AsterFs locks, rustls, and AWS-LC provide transport and crypto foundations; application rules remain in ACME.
 
 ## Quick start
@@ -112,7 +112,7 @@ aster-acme cert show example-cert --data-dir ./data
 aster-acme cert show example-cert --verify --data-dir ./data
 ```
 
-Each new issue creates an independent managed certificate. Default names combine the primary domain with a random suffix; collisions retry automatically. Explicit `-n/--name` names must be unused. Stable cert.toml definitions retain domains, account, CA and validation method; subsequent renewal generations stay under that same name. `--resume` continues an existing operation. List/show default to current, `list --history` expands versions, and `show --history` or `--operation` selects historical requests. Only current has an active renewal schedule.
+Each new issue creates an independent managed certificate. Default names combine the primary domain with a random suffix; collisions retry automatically. Explicit `-n/--name` names must be unused. Stable cert.toml definitions retain domains, account, CA and validation method; subsequent renewal generations stay under that same name. `--resume` continues an existing operation. List/show default to in_use, `list --history` expands versions, and `show --history` or `--operation` selects historical requests. Only in_use has an active renewal schedule.
 
 `cert show` without a name guides terminal selection. Certificate listing and inspection do not advance validation or issuance. Expired requests remain visible but cannot continue validation or finalization.
 
@@ -122,16 +122,18 @@ Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed
 
 ## Renewal planning and revocation
 
-After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. Automatic renewal and periodic wakeups remain future daemon work.
+After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Periodic wakeups remain future daemon work.
 
 ```sh
+aster-acme cert renew example-cert
+aster-acme cert renew example-cert --now
 aster-acme cert revoke example-cert --reason key-compromise --yes
 aster-acme cert remove example-cert --history --yes
 aster-acme cert remove example-cert --revoked --yes
 aster-acme cert remove example-cert --all --yes
 ```
 
-Revocation uses the bound issuing account and requires confirmation. Select the exact generation when ambiguous. Local files remain; a timeout is recorded as unconfirmed. `cert remove` defaults to one exact request. `--history` cleans issued non-current versions, `--revoked` matches saved revocation confirmations, and `--all` explicitly deletes the whole group. Clearing current never promotes an old version. Extra user files and the lock carrier remain; no CA request is made. See the [renewal and revocation contract](docs/certificate-lifecycle.md).
+Revocation uses the bound issuing account and requires confirmation. Select the exact generation when ambiguous. Local files remain; a timeout is recorded as unconfirmed. `cert remove` defaults to one exact request. `--history` cleans issued non-in_use versions, `--revoked` matches saved revocation confirmations, and `--all` explicitly deletes the whole group. Clearing in_use never promotes an old version. Files not managed by AsterACME are preserved; an otherwise empty certificate directory is removed. No CA request is made. See the [renewal and revocation contract](docs/certificate-lifecycle.md).
 
 ## Scripts and confirmation
 
@@ -147,13 +149,13 @@ An `action_required` result exits successfully but is not an issued certificate;
 
 | Option | Contract |
 | --- | --- |
-| `-y`, `--yes` | Confirm the current command's action; on certificate resume, skip the TXT publication question. It does not disable name selection, accept CA terms, or bypass DNS checks. |
+| `-y`, `--yes` | Confirm the in_use command's action; on certificate resume, skip the TXT publication question. It does not disable name selection, accept CA terms, or bypass DNS checks. |
 | `--accept-terms` | Explicitly accept the selected CA's current terms during registration. |
-| `-f`, `--force` | Skip only the local DNS visibility check; CA validation, expiry, and artifact checks still apply. |
+| `-f`, `--skip-dns-check` | Skip only the local DNS visibility check; CA validation, expiry, and artifact checks still apply. |
 | `--json` | Structured output; no prompts, terminal styling, or human progress messages. |
 | `--verify` | Explicitly query the CA for an existing resource. Offline reads remain the default. |
 
-First automated/manual-DNS requests expose their fresh TXT instructions even with `--yes` and `--force`; resume after publication. `--yes` never guesses missing inputs. HTTP `--timeout` and foreground `--wait-timeout` are independent of the CA's expiry times. See the [CLI contract](docs/cli-contract.md) for command scopes and short options.
+First automated/manual-DNS requests expose their fresh TXT instructions even with `--yes` and `--skip-dns-check`; resume after publication. `--yes` never guesses missing inputs. HTTP `--timeout` and foreground `--wait-timeout` are independent of the CA's expiry times. See the [CLI contract](docs/cli-contract.md) for command scopes and short options.
 
 ## Data and certificate files
 
@@ -162,14 +164,13 @@ First automated/manual-DNS requests expose their fresh TXT instructions even wit
 ```text
 <data-dir>/
 ├── config.toml
+├── .locks/{accounts,certificates}/<name>.lock
 ├── accounts/<name>/
 │   ├── account.toml
-│   ├── account-key.pk8
-│   └── account.lock
+│   └── account-key.pk8
 └── certs/example-cert/
     ├── cert.toml
-    ├── cert.lock
-    ├── current -> 20261111T010851Z-9YowFEL2/
+    ├── in_use -> 20261111T010851Z-9YowFEL2/
     └── 20261111T010851Z-9YowFEL2/
         ├── operation.toml
         ├── private-key.pk8
@@ -181,7 +182,7 @@ First automated/manual-DNS requests expose their fresh TXT instructions even wit
         └── private-key.pem
 ```
 
-Deploy from `current/fullchain.pem`, `current/cert.pem`, `current/ca.pem`, and `current/private-key.pem`. The PEM and internal DER keys represent the same certificate key, separate from the account key. `ca.pem` contains only the rest of the chain returned by the CA and is empty for a leaf-only response. The client does not append or install roots.
+Deploy from `in_use/fullchain.pem`, `in_use/cert.pem`, `in_use/ca.pem`, and `in_use/private-key.pem`. The PEM and internal DER keys represent the same certificate key, separate from the account key. `ca.pem` contains only the rest of the chain returned by the CA and is empty for a leaf-only response. The client does not append or install roots.
 
 Existing versions remain available when a new request fails. Extra user files are preserved; correctness checks apply to managed records and artifacts. Pre-release formats change directly without compatibility readers or automatic migration.
 

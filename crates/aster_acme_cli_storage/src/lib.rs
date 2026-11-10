@@ -171,6 +171,10 @@ impl CliAccountStore {
         self.root.join("accounts").join(self.name.as_ref())
     }
 
+    fn lock_path(&self) -> Result<PathBuf, AccountStoreError> {
+        toml_file::object_lock(&self.root, toml_file::ObjectKind::Account, &self.name)
+    }
+
     async fn acquire(&self, path: PathBuf) -> Result<FileLease, StorageError> {
         let timeout = self.lock_timeout;
         tokio::task::spawn_blocking(move || toml_file::lock(&path, timeout))
@@ -220,7 +224,7 @@ impl AccountStore for CliAccountStore {
         _thumbprint: &str,
     ) -> Result<Box<dyn AccountLease>, AccountStoreError> {
         Ok(Box::new(
-            self.acquire(self.account_slot().join("account.lock"))
+            self.acquire(self.lock_path()?)
                 .await
                 .map_err(|error| store_error(&error.to_string()))?,
         ))
@@ -280,12 +284,14 @@ impl AccountKeyStore for CliAccountStore {
         }
         let slot = self.account_slot();
         let lease = self
-            .acquire(slot.join("account.lock"))
+            .acquire(self.lock_path()?)
             .await
             .map_err(|error| store_error(&error.to_string()))?;
         let directory = directory.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            if create { fs::create_dir_all(&slot).map_err(|_|store_error("cannot create account directory"))?; }
+            if slot.exists() {ensure_real_dir(&slot)?;private_dir(&slot)?;}
             let metadata = slot.join("account.toml");
             let previous = read_record(&metadata)?;
             if let Some(record) = &previous

@@ -9,6 +9,8 @@ use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
 pub(crate) enum CertCommand {
     /// Issue a certificate with manual DNS publication, or resume a saved request.
     Issue(IssueArgs),
+    /// Renew the `in_use` certificate using its saved definition, or resume its renewal.
+    Renew(RenewArgs),
     /// List managed certificates; use --history to include every saved request.
     List {
         /// Include historical versions and unfinished requests instead of one row per certificate.
@@ -25,7 +27,7 @@ pub(crate) enum CertCommand {
     Show {
         #[command(flatten)]
         target: SavedTargetArgs,
-        /// Select a historical request rather than defaulting to current.
+        /// Select a historical request rather than defaulting to `in_use`.
         #[arg(long, conflicts_with = "operation")]
         history: bool,
         /// Query existing order/authorizations and refresh due ARI; never advance issuance.
@@ -58,10 +60,10 @@ pub(crate) enum CertCommand {
         /// Remove every local request and key under this certificate name.
         #[arg(long, conflicts_with_all = ["operation", "history", "revoked"])]
         all: bool,
-        /// Remove issued historical versions; retain current and unfinished requests.
+        /// Remove issued historical versions; retain `in_use` and unfinished requests.
         #[arg(long, conflicts_with_all = ["operation", "all", "revoked"])]
         history: bool,
-        /// Remove versions with a saved CA revocation confirmation, including current if matched.
+        /// Remove versions with a saved CA revocation confirmation, including `in_use` if matched.
         #[arg(long, conflicts_with_all = ["operation", "all", "history"])]
         revoked: bool,
         /// Confirm deletion of local certificate material without prompting.
@@ -148,12 +150,19 @@ pub(crate) struct IssueArgs {
     /// Exact saved request ID; required for ambiguous noninteractive recovery.
     #[arg(long, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
     pub operation: Option<String>,
-    /// Skip the manual TXT confirmation when resuming; DNS checks still run.
+    #[command(flatten)]
+    pub run: RunArgs,
+}
+
+/// Foreground validation policy shared by initial issuance and renewal.
+#[derive(Args, Clone)]
+pub(crate) struct RunArgs {
+    /// Confirm manual TXT publication when continuing; DNS checks still run.
     #[arg(short = 'y', long)]
     pub yes: bool,
     /// Skip only local DNS visibility checks; the CA still validates the challenge.
-    #[arg(short = 'f', long)]
-    pub force: bool,
+    #[arg(long)]
+    pub skip_dns_check: bool,
     /// Overall invocation budget in seconds; expiry is an independent CA deadline.
     #[arg(long,default_value="600",value_parser=clap::value_parser!(u64).range(1..=86400))]
     pub wait_timeout: u64,
@@ -163,10 +172,22 @@ pub(crate) struct IssueArgs {
     pub local: LocalArgs,
 }
 
+#[derive(Args)]
+pub(crate) struct RenewArgs {
+    #[command(flatten)]
+    pub target: CertificateNameArgs,
+    /// Renew before the saved renewal time; does not bypass validation or confirmation.
+    #[arg(long)]
+    pub now: bool,
+    #[command(flatten)]
+    pub run: RunArgs,
+}
+
 impl CertCommand {
     pub(crate) fn json(&self) -> bool {
         match self {
-            Self::Issue(args) => args.local.json,
+            Self::Issue(args) => args.run.local.json,
+            Self::Renew(args) => args.run.local.json,
             Self::List { local, .. }
             | Self::Show { local, .. }
             | Self::Revoke { local, .. }
@@ -235,7 +256,7 @@ mod tests {
         }
         for args in [
             vec!["example.com", "-n", "other.com"],
-            vec!["--force"],
+            vec!["--skip-dns-check"],
             vec!["--accept-terms"],
             vec!["--verify"],
             vec!["--reason", "7"],
@@ -299,7 +320,7 @@ mod tests {
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ],
             vec!["--verify"],
-            vec!["--force"],
+            vec!["--skip-dns-check"],
             vec!["--timeout", "30"],
             vec!["--reason", "key-compromise"],
             vec!["--accept-terms"],
@@ -374,5 +395,49 @@ mod tests {
             };
             assert_eq!(actual, Some(reason));
         }
+    }
+    #[test]
+    fn renew_reuses_saved_definition_and_has_distinct_timing_dns_and_confirmation_flags() {
+        for args in [
+            vec![],
+            vec!["web"],
+            vec!["-n", "web", "--now", "--skip-dns-check", "--yes", "--json"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "renew"].into_iter().chain(args))
+                    .is_ok()
+            );
+        }
+        for args in [
+            vec!["--force"],
+            vec!["-f"],
+            vec!["--key-type", "rsa-2048"],
+            vec!["-d", "example.com"],
+            vec!["-a", "other"],
+            vec!["--resume", "web"],
+            vec!["--operation", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            vec!["web", "-n", "other"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "renew"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
+        for flag in ["--force", "-f"] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "issue", "-d", "example.com", flag])
+                    .is_err()
+            );
+        }
+        let parsed = Args::try_parse_from(["aster-acme", "cert", "renew", "web", "--now"]).unwrap();
+        let Command::Cert { command } = parsed.command else {
+            panic!("cert expected")
+        };
+        let CertCommand::Renew(args) = *command else {
+            panic!("renew expected")
+        };
+        assert!(args.now);
+        assert!(!args.run.yes);
+        assert!(!args.run.skip_dns_check);
     }
 }

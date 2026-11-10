@@ -165,7 +165,7 @@ aster-acme account remove personal --yes --json
 
 list --verify 逐个读取密钥、按绑定 CA 查询并保存真实状态；单个失败仍继续后续账户。输出保留完整清单和 verification 数组（每项 name/status/error），全部成功才 verified=true；部分失败时先输出报告再以非零退出码和 stderr 诊断结束。默认 list 零 HTTP。已停用账户验证可能返回 401/403，该错误不伪装成验证成功。
 
-remove 仅删除本地托管账户元数据与密钥；有用户内容时保留目录和锁载体，不停用 CA、不吊销证书。先多行展示名称、CA、目录及丢失密钥意味着无法访问 CA 账户的说明，再默认否确认。无需解码私钥，损坏密钥也可移除；额外用户文件会保留；不安全的托管文件会阻止删除。删除与账户操作共用锁，先原子移动到隐藏 .<name>.removing 目录再清理；异常清理保留该目录供检查，不静默删除未知文件。当前默认被移除时条件清理配置，保留并发切换到其他账户的选择。
+remove 仅删除本地托管账户元数据与密钥；有用户内容时保留其目录，无额外内容时清空对象目录；对象锁在根.locks维护，不停用 CA、不吊销证书。先多行展示名称、CA、目录及丢失密钥意味着无法访问 CA 账户的说明，再默认否确认。无需解码私钥，损坏密钥也可移除；额外用户文件会保留；不安全的托管文件会阻止删除。删除与账户操作共用锁，先原子移动到隐藏 .<name>.removing 目录再清理；异常清理保留该目录供检查，不静默删除未知文件。当前默认被移除时条件清理配置，保留并发切换到其他账户的选择。
 
 修改命令的成功文本只给摘要，例如 [OK] Deactivated account personal.；完整账户信息留给 show，JSON 保留完整结果。确认说明在短问题上方逐行展示，脚本无确认时仍能得到完整对象信息。
 
@@ -192,7 +192,7 @@ CLI bin 的 `doc = false` 避免 `aster-acme` 与库 `aster_acme` 生成相同 r
 ```sh
 aster-acme cert issue -a default -d example.com -d '*.example.com' -c manual_dns
 aster-acme cert issue --resume example.com
-aster-acme cert issue --resume example.com --operation <ID> --force
+aster-acme cert issue --resume example.com --operation <ID> --skip-dns-check
 aster-acme cert list
 aster-acme cert show example.com
 aster-acme cert show example.com --operation <ID> --verify
@@ -200,9 +200,9 @@ aster-acme cert show example.com --operation <ID> --verify
 
 `-n/--name` 指定证书名称，不指定使用主域名加随机后缀，自动碰撞重试；显式名称已存在则拒绝；`-a` 账户、`-d` 域名可重复、`-c` 验证实现、`-f` 跳过本地 DNS 检查。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
 
-只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 --force 不允许绕过过期/失效状态或重新下单。
+只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 --skip-dns-check 不允许绕过过期/失效状态或重新下单。
 
-手动模式展示所有 TXT 值，同名记录必须共存；交互确认后用 Hickory 检查本地 DNS 可见性再通知 CA。--force 仅跳过本地可见性检查，CA 必须照常验证。首次 JSON/非交互执行返回 status=action_required 和记录/恢复命令，不因 -f 直接通知 CA；添加记录后再 --resume。action_required 正常退出 0，脚本应检查 status，不能将它当作已签出。完成后明确提示删除本次具体 TXT，客户端不自动改动用户 DNS。
+手动模式展示所有 TXT 值，同名记录必须共存；交互确认后用 Hickory 检查本地 DNS 可见性再通知 CA。--skip-dns-check 仅跳过本地可见性检查，CA 必须照常验证。首次 JSON/非交互执行返回 status=action_required 和记录/恢复命令，不因 -f 直接通知 CA；添加记录后再 --resume。action_required 正常退出 0，脚本应检查 status，不能将它当作已签出。完成后明确提示删除本次具体 TXT，客户端不自动改动用户 DNS。
 
 --timeout 是单次 HTTP 限制，--wait-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 2 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前仅 manual_dns 可执行（内部使用 DNS-01）；自动 DNS、HTTP/TLS、续期、吊销、部署命令未开放。
 
@@ -217,7 +217,7 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 
 人工待办使用 [WARN]，最终签发使用 [DONE]；恢复说明与命令分行便于复制。签发阶段事件通过库的 dyn IssueObserver 注入，CLI 翻译为阶段文字、限频等待，不将人类日志硬编码进协议层。账户选择项仅名称/状态；危险确认详情和字段使用共享样式，默认否的问题保持明确。
 
-新产物布局为 `certs/<name>/<UTC-time>-<random8>/`，`current` 相对链接在完整文件落盘后原子切换。成功输出固定指向 current/fullchain.pem、cert.pem、ca.pem、private-key.pem。DER 私钥与固定 CSR 是内部恢复资料；PEM 私钥和 DER 是同一把钥。CA 文件只包含服务端返回的剩余链，不自行追加根证书；只有叶子时 ca.pem 为空。旧未发布目录格式不兼容或迁移。
+新产物布局为 `certs/<name>/<UTC-time>-<random8>/`，`in_use` 相对链接在完整文件落盘后原子切换。成功输出固定指向 in_use/fullchain.pem、cert.pem、ca.pem、private-key.pem。DER 私钥与固定 CSR 是内部恢复资料；PEM 私钥和 DER 是同一把钥。CA 文件只包含服务端返回的剩余链，不自行追加根证书；只有叶子时 ca.pem 为空。旧未发布目录格式不兼容或迁移。
 
 
 账户写入前检查本地身份。注册成功后仅在最新配置没有 default_account 时补为本次名称；注册失败/取消不设默认，已有默认或并发切换不覆盖。remove 默认会清除同名选择，随后成功注册可补回；switch 对合法缺省字段安全插入，重复同一值不改变已有字符串格式。缺账户主错误与 Hint 分开显示，提示核对 --name / --data-dir。
@@ -225,12 +225,14 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 --help 统一显示 AsterACME <CLI version>、描述和 usage，所有子命令使用相同布局；version 文本按共享表格对齐产品版本与 Revision 等值列。构建时间的人类显示也使用统一 UTC 秒级格式，JSON 保留构建时 RFC3339。
 
 
-cert issue 支持 -y/--yes：恢复已有申请时仅跳过 TXT 人工确认，正常执行 DNS 检查；-f/--force 仅控制本地 DNS 查询。首次自动化申请即使同时带两个选项，也先返回 action_required 和新 TXT 值，发布后显式 resume。--yes 不关闭域名/证书名称选择、不接受条款，也不隐含 --json。公共存储与 HTTP 参数组位于 common/args.rs，各命令领取自己适用的组；完整范围和后续扩展约定见 [CLI 参数契约](../../docs/cli-contract.md)。
+cert issue 支持 -y/--yes：恢复已有申请时仅跳过 TXT 人工确认，正常执行 DNS 检查；-f/--skip-dns-check 仅控制本地 DNS 查询。首次自动化申请即使同时带两个选项，也先返回 action_required 和新 TXT 值，发布后显式 resume。--yes 不关闭域名/证书名称选择、不接受条款，也不隐含 --json。公共存储与 HTTP 参数组位于 common/args.rs，各命令领取自己适用的组；完整范围和后续扩展约定见 [CLI 参数契约](../../docs/cli-contract.md)。
 
 续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
 
-cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容及原锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
+cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容，根目录 .locks 保持稳定锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
 
-托管身份、稳定定义、默认 current 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；本轮未提供 cert renew 命令或后台调度。
+托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 已提供单次执行，后台调度仍未实现。
 
 证书 key_algorithm 使用公共 CertificateKeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
+
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。

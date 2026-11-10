@@ -26,6 +26,16 @@ impl Progress {
         }
     }
 
+    pub(super) fn protocol(
+        &self,
+        directory: &aster_acme_protocol::directory::Directory,
+        record: &aster_acme::issuance::IssueRecord,
+    ) {
+        for message in protocol_messages(directory, record) {
+            self.log.line(Level::Info, &message);
+        }
+    }
+
     fn should_display(&self, event: &IssueEvent) -> bool {
         if !self.log.enabled {
             return false;
@@ -101,7 +111,8 @@ impl IssueObserver for Progress {
             ),
             IssueEvent::DnsReady { forced: true } => (
                 Level::Warning,
-                "Local DNS check skipped (--force); CA validation is still required".into(),
+                "Local DNS check skipped (--skip-dns-check); CA validation is still required"
+                    .into(),
             ),
             IssueEvent::DnsReady { forced: false } => (
                 Level::Success,
@@ -134,6 +145,59 @@ impl IssueObserver for Progress {
     }
 }
 
+fn protocol_messages(
+    directory: &aster_acme_protocol::directory::Directory,
+    record: &aster_acme::issuance::IssueRecord,
+) -> Vec<String> {
+    let mut capabilities = vec!["RFC 8555 account/nonce"];
+    for (available, name) in [
+        (directory.new_order.is_some(), "RFC 8555 orders"),
+        (directory.key_change.is_some(), "RFC 8555 keyChange"),
+        (directory.revoke_cert.is_some(), "RFC 8555 revokeCert"),
+        (directory.renewal_info.is_some(), "RFC 9773 ARI"),
+    ] {
+        if available {
+            capabilities.push(name);
+        }
+    }
+    let strategy = match (
+        &record.renewal_of,
+        record.creation_submitted,
+        record.submitted_replaces.as_ref(),
+        directory.renewal_info.as_ref(),
+    ) {
+        (None, _, _, _) => "Issuance strategy: RFC 8555 newOrder/finalize",
+        (Some(_), true, Some(_), _) => {
+            "Renewal strategy: resume RFC 8555 order with saved RFC 9773 replaces"
+        }
+        (Some(_), true, None, _) => {
+            "Renewal strategy: resume saved RFC 8555 order without replaces"
+        }
+        (Some(previous), false, _, Some(_)) if previous.certificate_id.is_some() => {
+            "Renewal strategy: RFC 8555 issuance with RFC 9773 replaces"
+        }
+        (Some(_), false, _, Some(_)) => {
+            "Renewal strategy: RFC 8555 issuance; no usable certificate identifier for RFC 9773 replaces"
+        }
+        (Some(_), false, _, None) => {
+            "Renewal strategy: RFC 8555 issuance; CA does not advertise RFC 9773 ARI/replaces"
+        }
+    };
+    let timing = match directory.renewal_info {
+        Some(_) => {
+            "Renewal timing: RFC 9773 ARI when available; failed queries retain the saved plan, otherwise fallback to 2/3 of certificate validity"
+        }
+        None => {
+            "Renewal timing: local fallback at 2/3 of certificate validity (no advertised RFC 9773 ARI)"
+        }
+    };
+    vec![
+        format!("CA capabilities (advertised): {}", capabilities.join(", ")),
+        strategy.into(),
+        timing.into(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +221,29 @@ mod tests {
             identifier: "example.com".into(),
             status: AuthorizationStatus::Valid
         }));
+    }
+    #[test]
+    fn advertised_capabilities_are_distinct_from_the_selected_renewal_strategy() {
+        let mut directory:aster_acme_protocol::directory::Directory=serde_json::from_value(serde_json::json!({"newNonce":"https://ca.example/nonce","newAccount":"https://ca.example/account","newOrder":"https://ca.example/order"})).unwrap();
+        let mut record:aster_acme::issuance::IssueRecord=serde_json::from_value(serde_json::json!({
+            "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"creating_order","creation_submitted":false,"authorizations":[],"finalize_submitted":"not_submitted"
+        })).unwrap();
+        assert!(protocol_messages(&directory, &record)[1].contains("Issuance strategy: RFC 8555"));
+        record.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+            operation_id: "old".into(),
+            certificate_id: Some("a.b".into()),
+        });
+        let messages = protocol_messages(&directory, &record);
+        assert!(messages[1].contains("does not advertise"));
+        assert!(messages[2].contains("2/3"));
+        directory.renewal_info =
+            Some(aster_acme_protocol::url::AcmeUrl::new("https://ca.example/ari").unwrap());
+        let messages = protocol_messages(&directory, &record);
+        assert!(messages[0].contains("RFC 9773 ARI"));
+        assert!(messages[1].contains("RFC 9773 replaces"));
+        record.renewal_of.as_mut().unwrap().certificate_id = None;
+        assert!(
+            protocol_messages(&directory, &record)[1].contains("no usable certificate identifier")
+        );
     }
 }

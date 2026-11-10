@@ -90,7 +90,7 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
         "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted","authorizations":[]
     })).unwrap();
     record.renewal = Some(plan());
-    record.is_current = true;
+    record.is_in_use = true;
     (
         server,
         RenewalService::new(Arc::new(client)),

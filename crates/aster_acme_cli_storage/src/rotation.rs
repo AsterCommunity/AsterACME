@@ -59,7 +59,7 @@ impl AccountRotationStore for CliAccountStore {
     ) -> Result<Box<dyn AccountRotation>, AccountStoreError> {
         let slot = self.account_slot();
         let lease = Arc::new(
-            self.acquire(slot.join("account.lock"))
+            self.acquire(self.lock_path()?)
                 .await
                 .map_err(|error| store_error(&error.to_string()))?,
         );

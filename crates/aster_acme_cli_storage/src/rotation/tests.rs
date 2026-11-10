@@ -145,7 +145,7 @@ async fn empty_success_commits_both_keys_preserving_account_identity_and_status_
             .unwrap(),
         Some(result)
     );
-    assert_eq!(fs::read_dir(restarted.account_slot()).unwrap().count(), 3);
+    assert_eq!(fs::read_dir(restarted.account_slot()).unwrap().count(), 2);
     let requests = fixture.server.received_requests().await.unwrap();
     let post = requests
         .iter()

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `-y / --yes` | 对当前命令已经明确的操作作肯定确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
 | `--accept-terms` | 注册时同意所选 CA 当前实际公布的条款 | 不确认复用已有账户，不作为永久自动接受配置 |
-| `-f / --force` | 目前仅在 cert issue 跳过本地 DNS 可见性检查 | 不免除 CA 验证，不忽略过期/身份/密钥/CSR/证书检查，不覆盖用户文件 |
+| `--skip-dns-check` | 在 cert issue/renew 跳过本地 DNS 可见性检查 | 不免除 CA 验证，不忽略过期/身份/密钥/CSR/证书检查，不覆盖用户文件 |
 | `--verify` | 查询已有资源的 CA 状态，更新观察快照 | 不启动验证、不 finalize、不新建订单 |
 | `--json` | 输出结构化命令结果/诊断，禁止提示、ANSI 和人类阶段日志 | 不隐含确认或强制，不猜测歧义目标 |
 
@@ -27,7 +27,7 @@
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
 | `cert issue --resume <NAME>` | 跳过“Have you published these TXT values?”，然后正常检查 DNS |
 
-首次手动 DNS 自动化申请必须先让用户/脚本取得新 TXT 值；即使传 --yes/--force 也返回 action_required，不因“确认”假设记录已发布。首次终端申请未带 --yes 时仍可以现场输入和继续。发布后 resume，仍由 CA 完成实际验证。没有 --yes 的非 TTY/JSON resume 也不弹提示，按已有脚本行为直接检查 DNS；--yes 是显式确认语义，保持非终端一律不提示的统一规则。
+首次手动 DNS 自动化申请必须先让用户/脚本取得新 TXT 值；即使传 --yes/--skip-dns-check 也返回 action_required，不因“确认”假设记录已发布。首次终端申请未带 --yes 时仍可以现场输入和继续。发布后 resume，仍由 CA 完成实际验证。没有 --yes 的非 TTY/JSON resume 也不弹提示，按已有脚本行为直接检查 DNS；--yes 是显式确认语义，保持非终端一律不提示的统一规则。
 
 --yes 不出现在 list/show/switch/recover/version；这些命令没有相同的危险操作确认。后续 renew 等命令按这里的确认语义扩展，不让 --yes 获得额外隐式权限。
 
@@ -54,7 +54,7 @@
 | `-c` | `--challenge` | 验证实现，目前只有 manual_dns |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
-| `-f` | `--force` | cert issue 的本地 DNS 检查覆盖 |
+| — | `--skip-dns-check` | cert issue 的本地 DNS 检查覆盖 |
 
 其他参数保留明确长名称，不为每个选项硬配短字母。删除的 order、--solver、-c dns-01、--config 不保留兼容别名。
 
@@ -73,9 +73,10 @@
 | account rotate-key | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account remove | [NAME] / -n、-y；仅本地操作 |
-| cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、-f、HTTP、--wait-timeout |
+| cert renew | [NAME] / -n、--now、-y、--skip-dns-check、HTTP、--wait-timeout；定义固定，未到期返回 not_due |
+| cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、--skip-dns-check、HTTP、--wait-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
-| cert show | [NAME] / -n、--operation 或 --history、--verify；默认 current，HTTP 参数要求 verify |
+| cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
 | cert remove | [NAME] / -n、--operation 或 --history/--revoked/--all、-y；纯本地，无 HTTP 参数 |
 | version | 仅 --json，不读取配置或初始化状态 |
@@ -102,3 +103,5 @@
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
 
 证书密钥和吊销原因共用库/协议枚举产生 CLI 选项；支持算法与 RFC 原因码、CA 可拒绝边界见生命周期契约。账户 key/rotate-key 仍使用 ES256，不因证书 -k 改变。
+
+--now 只在 cert renew 提前执行，不隐含 --yes/--skip-dns-check。--force/-f 已移除，无兼容别名。issue/renew 共享 RunArgs，但续期不暴露定义覆盖参数。账户list JSON使用ca_query.requested/refreshed/failed，remove仅描述本次ca_request_performed。

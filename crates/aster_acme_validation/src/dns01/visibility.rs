@@ -16,11 +16,11 @@ impl DnsReadiness for DnsVisibility {
     async fn ready(
         &self,
         records: &[DnsRequirement],
-        force: bool,
+        skip_dns_check: bool,
         execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
-        if force {
+        if skip_dns_check {
             return Ok(true);
         }
         let resolver = Resolver::builder_tokio()
@@ -44,7 +44,7 @@ impl DnsReadiness for DnsVisibility {
                 }
                 Err(_) => {
                     return Err(IssueError::InvalidInput(
-                        "DNS TXT lookup failed; retry or explicitly bypass local visibility with --force",
+                        "DNS TXT lookup failed; retry or explicitly bypass local visibility with --skip-dns-check",
                     ));
                 }
             }

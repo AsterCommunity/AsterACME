@@ -56,6 +56,7 @@ fn guidance(kind: &ProblemKind, instance: Option<&str>, retry: Option<&RetryAfte
         ProblemKind::BadNonce=>"The bounded nonce retry budget was exhausted or a usable replacement nonce was missing. Keep the saved operation; do not assume the mutation succeeded.".into(),
         ProblemKind::BadPublicKey|ProblemKind::BadSignatureAlgorithm=>"Check the CA's supported account signing algorithms and key requirements; retain the saved account identity.".into(),
         ProblemKind::BadRevocationReason=>"Choose a revocation --reason accepted by this CA, or omit it for a new request. An unconfirmed prior revocation must retain its original reason.".into(),
+        ProblemKind::AlreadyReplaced=>"The predecessor already has another replacement order. Resume the saved renewal; do not silently drop replaces or create another order.".into(),
         ProblemKind::AlreadyRevoked=>"The CA reports that this certificate has already been revoked; this does not reactivate it or revoke its account.".into(),
         ProblemKind::RateLimited=>super::retry_hint(retry),
         ProblemKind::UserActionRequired=>format!("The CA requires user action: {}",instance.unwrap_or("see your CA account portal")),

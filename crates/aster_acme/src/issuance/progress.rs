@@ -29,7 +29,7 @@ pub enum IssueEvent {
     Finalizing,
     /// The issued certificate is being downloaded and inspected.
     Downloading,
-    /// Artifact validation, persistence and current-generation promotion finished.
+    /// Artifact validation, persistence and `in_use`-generation promotion finished.
     CertificateSaved,
 }
 

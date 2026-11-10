@@ -9,6 +9,37 @@ use std::{
     time::Duration,
 };
 
+/// Stable synchronization identity lives outside deletable product directories.
+#[derive(Clone, Copy)]
+pub(crate) enum ObjectKind {
+    Account,
+    Certificate,
+}
+
+pub(crate) fn object_lock(
+    root: &Path,
+    kind: ObjectKind,
+    name: &str,
+) -> Result<PathBuf, AccountStoreError> {
+    let category = match kind {
+        ObjectKind::Account => "accounts",
+        ObjectKind::Certificate => "certificates",
+    };
+    for directory in [
+        root.to_path_buf(),
+        root.join(".locks"),
+        root.join(".locks").join(category),
+    ] {
+        fs::create_dir_all(&directory).map_err(|_| store_error("cannot create lock directory"))?;
+        ensure_real_dir(&directory)?;
+        private_dir(&directory)?;
+    }
+    Ok(root
+        .join(".locks")
+        .join(category)
+        .join(format!("{name}.lock")))
+}
+
 pub(crate) struct FileLease(pub(crate) File);
 impl Drop for FileLease {
     fn drop(&mut self) {

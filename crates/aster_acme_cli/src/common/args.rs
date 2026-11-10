@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-#[derive(clap::Args, Default)]
+#[derive(clap::Args, Default, Clone)]
 pub(crate) struct LocalArgs {
     /// Unified state root (default: system directory for com.astercosm.acme).
     #[arg(long, value_name = "PATH", help_heading = "Storage and output")]
@@ -12,7 +12,7 @@ pub(crate) struct LocalArgs {
     pub(crate) json: bool,
 }
 
-#[derive(clap::Args, Default)]
+#[derive(clap::Args, Default, Clone)]
 pub(crate) struct HttpArgs {
     /// HTTP User-Agent override; an explicit value during registration is saved for this account.
     #[arg(long)]
@@ -54,7 +54,7 @@ mod tests {
                     "remove",
                 ],
             ),
-            ("cert", vec!["issue", "list", "show"]),
+            ("cert", vec!["issue", "renew", "list", "show"]),
         ] {
             for name in commands {
                 let command = root
@@ -73,11 +73,14 @@ mod tests {
                         (
                             "account",
                             "register" | "update-contact" | "rotate-key" | "deactivate" | "remove"
-                        ) | ("cert", "issue")
+                        ) | ("cert", "issue" | "renew")
                     ),
                     "{group} {name}"
                 );
-                assert_eq!(longs.contains(&"force"), (group, name) == ("cert", "issue"));
+                assert_eq!(
+                    longs.contains(&"skip-dns-check"),
+                    matches!((group, name), ("cert", "issue" | "renew"))
+                );
                 assert_eq!(
                     longs.contains(&"accept-terms"),
                     (group, name) == ("account", "register")
@@ -176,7 +179,7 @@ mod tests {
         let crate::commands::cert::args::CertCommand::Issue(args) = *command else {
             panic!("expected issue");
         };
-        assert!(!args.yes);
-        assert!(!args.force);
+        assert!(!args.run.yes);
+        assert!(!args.run.skip_dns_check);
     }
 }

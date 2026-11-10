@@ -312,8 +312,16 @@ impl IssueService {
                 value: dns.value(),
             })
             .collect::<Vec<_>>();
+        record.submitted_replaces = match self.client.directory().renewal_info.as_ref() {
+            Some(_) => record
+                .renewal_of
+                .as_ref()
+                .and_then(|previous| previous.certificate_id.clone()),
+            None => None,
+        };
         let body = json_payload(&NewOrderRequest {
             identifiers: &identifiers,
+            replaces: record.submitted_replaces.as_deref(),
         })?;
         record.creation_submitted = true;
         record.phase = IssuancePhase::CreatingOrder;
@@ -423,14 +431,14 @@ impl IssueService {
             });
             if !bounded(
                 execution,
-                dns.ready(&outstanding, execution.force, &execution.context),
+                dns.ready(&outstanding, execution.skip_dns_check, &execution.context),
             )
             .await?
             {
                 return Ok(Some(outstanding));
             }
             self.observe(&IssueEvent::DnsReady {
-                forced: execution.force,
+                forced: execution.skip_dns_check,
             });
         }
         self.acknowledge(session, record, execution).await?;
@@ -558,7 +566,8 @@ impl IssueService {
                     }
                     // Other problem types do not establish permanent rejection of
                     // this immutable CSR; preserve their existing transport policy.
-                    ProblemKind::AccountDoesNotExist
+                    ProblemKind::AlreadyReplaced
+                    | ProblemKind::AccountDoesNotExist
                     | ProblemKind::AlreadyRevoked
                     | ProblemKind::BadNonce
                     | ProblemKind::BadPublicKey
@@ -659,6 +668,15 @@ fn parse_order(response: &AcmeResponse, record: &IssueRecord) -> Result<OrderObj
     {
         return Err(IssueError::InvalidInput(
             "order's immutable resource URLs changed",
+        ));
+    }
+    // RFC 9773 section 5 requires the exact submitted predecessor on every order
+    // observation. Use durable request identity even if directory capabilities change.
+    if let Some(expected) = &record.submitted_replaces
+        && order.replaces.as_ref() != Some(expected)
+    {
+        return Err(IssueError::InvalidInput(
+            "CA order omitted or changed the renewal replaces identifier",
         ));
     }
     Ok(order)

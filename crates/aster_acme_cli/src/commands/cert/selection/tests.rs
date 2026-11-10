@@ -13,7 +13,7 @@ fn issue_arguments_keep_resume_and_new_requests_separate() {
             "issue",
             "-d",
             "example.com",
-            "-f",
+            "--skip-dns-check",
             "-a",
             "work",
             "-n",
@@ -33,7 +33,7 @@ fn issue_arguments_keep_resume_and_new_requests_separate() {
         ],
         vec!["cert", "issue", "-d", "example.com", "--operation", "id"],
         vec!["order", "create"],
-        vec!["order", "show", "example.com", "--force"],
+        vec!["order", "show", "example.com", "--skip-dns-check"],
     ] {
         let parsed = Args::try_parse_from(std::iter::once("aster-acme").chain(arguments.clone()));
         assert!(parsed.is_err(), "unexpectedly accepted {arguments:?}");
@@ -110,7 +110,13 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
         )
         .is_err()
     );
-    let text = super::super::render::show(std::slice::from_ref(&first), false, false).unwrap();
+    let text = super::super::render::show(
+        std::slice::from_ref(&first),
+        false,
+        false,
+        super::super::render::DetailView::InUse,
+    )
+    .unwrap();
     assert!(
         text.split_whitespace()
             .collect::<Vec<_>>()
@@ -119,7 +125,13 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
-            &super::super::render::show(&[first], true, false).unwrap()
+            &super::super::render::show(
+                &[first],
+                true,
+                false,
+                super::super::render::DetailView::InUse
+            )
+            .unwrap()
         )
         .unwrap()[0]["created_at"],
         "2026-01-01T00:00:00Z"
@@ -232,9 +244,14 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
     assert!(!text.contains(&first.operation_id));
     assert!(!text.contains("  Request:"));
     assert!(
-        super::super::render::show(std::slice::from_ref(&first), false, false)
-            .unwrap()
-            .contains(&first.operation_id)
+        super::super::render::show(
+            std::slice::from_ref(&first),
+            false,
+            false,
+            super::super::render::DetailView::InUse
+        )
+        .unwrap()
+        .contains(&first.operation_id)
     );
     let json = super::super::render::list(&[first, second], true).unwrap();
     assert!(
@@ -252,6 +269,15 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
 fn selection_labels_only_show_primary_domain_fixed_time_and_status() {
     let first = record('a', "2026-01-01T00:00:00.123456Z");
     let second = record('b', "2026-01-01T00:00:00.999999Z");
+    let name_label = super::certificate_label(&first);
+    assert_eq!(
+        name_label,
+        "example.com | example.com | 2026-01-01 00:00:00 UTC | creating order"
+    );
+    let mut in_use = first.clone();
+    in_use.is_in_use = true;
+    assert!(!super::certificate_label(&in_use).ends_with(" | in use"));
+    assert!(super::choice_label(&in_use).ends_with(" | in use"));
     let label = super::choice_label(&first);
     assert_eq!(
         label,
@@ -303,8 +329,13 @@ fn verification_source_is_explicit_in_text_and_json() {
     ] {
         record.revocation.state = state;
         for verified in [false, true] {
-            let text =
-                super::super::render::show(std::slice::from_ref(&record), false, verified).unwrap();
+            let text = super::super::render::show(
+                std::slice::from_ref(&record),
+                false,
+                verified,
+                super::super::render::DetailView::InUse,
+            )
+            .unwrap();
             let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(normalized.contains(if verified {
                 "CA query: order and authorizations refreshed"
@@ -321,8 +352,13 @@ fn verification_source_is_explicit_in_text_and_json() {
             };
             assert!(normalized.contains(label));
             assert!(!text.contains("verified with CA"));
-            let json =
-                super::super::render::show(std::slice::from_ref(&record), true, verified).unwrap();
+            let json = super::super::render::show(
+                std::slice::from_ref(&record),
+                true,
+                verified,
+                super::super::render::DetailView::InUse,
+            )
+            .unwrap();
             let json: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert_eq!(json[0]["ca_query"]["order_refreshed"], verified);
             assert_eq!(json[0]["ca_query"]["authorizations_refreshed"], verified);
@@ -351,9 +387,9 @@ fn certificate_yes_has_short_and_long_forms_without_implying_force_or_other_perm
         let super::super::args::CertCommand::Issue(args) = *command else {
             panic!("expected issue");
         };
-        assert!(args.yes);
-        assert!(!args.force);
-        assert!(!args.local.json);
+        assert!(args.run.yes);
+        assert!(!args.run.skip_dns_check);
+        assert!(!args.run.local.json);
     }
     for command in ["list", "show"] {
         assert!(Args::try_parse_from(["aster-acme", "cert", command, "--yes"]).is_err());
@@ -371,7 +407,7 @@ fn selectors_distinguish_revoked_and_unconfirmed_certificate_generations() {
 }
 
 #[test]
-fn selectors_and_table_share_san_summary_and_current_marker_with_full_details_retained() {
+fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_retained() {
     let mut request = record('a', "2026-01-01T00:00:00Z");
     request.identifiers = [
         "example.com",
@@ -382,49 +418,62 @@ fn selectors_and_table_share_san_summary_and_current_marker_with_full_details_re
     ]
     .map(|name| aster_acme::identifier::DnsIdentifier::new(name).unwrap())
     .to_vec();
-    request.is_current = true;
+    request.is_in_use = true;
     let label = super::choice_label(&request);
     assert!(label.contains("example.com, *.example.com, api.example.com, +2"));
-    assert!(label.ends_with(" | current"));
+    assert!(label.ends_with(" | in use"));
     assert!(!label.contains("unrelated.example.net"));
     let table = super::super::render::list(std::slice::from_ref(&request), false).unwrap();
     assert!(table.contains("DOMAINS"));
-    assert!(!table.contains("CURRENT"));
+    assert!(!table.contains("IN_USE"));
     assert!(table.contains("example.com, *.example.com, api.example.com, +2"));
-    let details = super::super::render::show(std::slice::from_ref(&request), false, false).unwrap();
+    let details = super::super::render::show(
+        std::slice::from_ref(&request),
+        false,
+        false,
+        super::super::render::DetailView::InUse,
+    )
+    .unwrap();
     assert!(details.contains("unrelated.example.net"));
     assert!(details.contains("extra.example.org"));
-    let machine: serde_json::Value =
-        serde_json::from_str(&super::super::render::show(&[request], true, false).unwrap())
-            .unwrap();
-    assert_eq!(machine[0]["current"], true);
+    let machine: serde_json::Value = serde_json::from_str(
+        &super::super::render::show(
+            &[request],
+            true,
+            false,
+            super::super::render::DetailView::InUse,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(machine[0]["in_use"], true);
     assert_eq!(machine[0]["identifiers"].as_array().unwrap().len(), 5);
 }
 
 #[test]
-fn managed_inventory_and_default_show_prefer_current_without_scheduling_history() {
+fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history() {
     let mut old = record('a', "2026-01-01T00:00:00Z");
     old.phase = aster_acme_core::workflow::IssuancePhase::Completed;
-    let mut current = old.clone();
-    current.operation_id = "b".repeat(43);
-    current.is_current = true;
+    let mut in_use = old.clone();
+    in_use.operation_id = "b".repeat(43);
+    in_use.is_in_use = true;
     let pending = record('c', "2026-03-01T00:00:00Z");
-    let records = vec![pending.clone(), old.clone(), current.clone()];
+    let records = vec![pending.clone(), old.clone(), in_use.clone()];
     let grouped = super::managed_records(records.clone()).unwrap();
     assert_eq!(grouped.len(), 1);
-    assert_eq!(grouped[0].operation_id, current.operation_id);
-    let name = current.name.clone();
+    assert_eq!(grouped[0].operation_id, in_use.operation_id);
+    let name = in_use.name.clone();
     assert_eq!(
         super::choose(
             records.clone(),
             &name,
             None,
-            super::RequestSelection::Current,
+            super::RequestSelection::InUse,
             true
         )
         .unwrap()
         .operation_id,
-        current.operation_id
+        in_use.operation_id
     );
     assert_eq!(
         super::choose(
@@ -443,7 +492,7 @@ fn managed_inventory_and_default_show_prefer_current_without_scheduling_history(
             vec![old.clone()],
             &name,
             None,
-            super::RequestSelection::Current,
+            super::RequestSelection::InUse,
             true
         )
         .is_err()
@@ -453,7 +502,7 @@ fn managed_inventory_and_default_show_prefer_current_without_scheduling_history(
             vec![old.clone()],
             &name,
             Some(&old.operation_id),
-            super::RequestSelection::Current,
+            super::RequestSelection::InUse,
             true
         )
         .unwrap()
@@ -465,16 +514,16 @@ fn managed_inventory_and_default_show_prefer_current_without_scheduling_history(
             vec![old, pending.clone()],
             &name,
             None,
-            super::RequestSelection::Current,
+            super::RequestSelection::InUse,
             true
         )
         .unwrap()
         .operation_id,
         pending.operation_id
     );
-    let mut duplicate = current.clone();
+    let mut duplicate = in_use.clone();
     duplicate.operation_id = "d".repeat(43);
-    assert!(super::managed_records(vec![current, duplicate]).is_err());
+    assert!(super::managed_records(vec![in_use, duplicate]).is_err());
 }
 
 #[test]
@@ -507,14 +556,57 @@ fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_
         subproblems: vec![],
         extensions: serde_json::Map::new(),
     });
-    let text = super::super::render::show(std::slice::from_ref(&request), false, true).unwrap();
+    let text = super::super::render::show(
+        std::slice::from_ref(&request),
+        false,
+        true,
+        super::super::render::DetailView::InUse,
+    )
+    .unwrap();
     assert!(text.contains("CSR rejected"));
     assert!(text.contains("ECDSA curve P-521 not allowed"));
     assert!(super::choice_label(&request).contains("CSR rejected"));
-    let json: serde_json::Value =
-        serde_json::from_str(&super::super::render::show(&[request], true, true).unwrap()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(
+        &super::super::render::show(
+            &[request],
+            true,
+            true,
+            super::super::render::DetailView::InUse,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         json[0]["finalize_rejection"]["type"],
         "urn:ietf:params:acme:error:badCSR"
     );
+}
+
+#[test]
+fn selected_version_details_show_in_use_only_when_explicitly_requested() {
+    let mut saved = record('a', "2026-01-01T00:00:00Z");
+    for selected in [false, true] {
+        saved.is_in_use = selected;
+        let ordinary = super::super::render::show(
+            std::slice::from_ref(&saved),
+            false,
+            false,
+            super::super::render::DetailView::InUse,
+        )
+        .unwrap();
+        assert!(!ordinary.contains("In use:"));
+        let history = super::super::render::show(
+            std::slice::from_ref(&saved),
+            false,
+            false,
+            super::super::render::DetailView::Version,
+        )
+        .unwrap();
+        let normalized = history.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(normalized.contains(if selected {
+            "In use: yes"
+        } else {
+            "In use: no"
+        }));
+    }
 }

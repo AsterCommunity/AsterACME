@@ -59,7 +59,10 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
         .await
         .unwrap();
     assert_eq!(render::tests::json_value(&report)["removed_locally"], true);
-    assert_eq!(render::tests::json_value(&report)["ca_deactivated"], false);
+    assert_eq!(
+        render::tests::json_value(&report)["ca_request_performed"],
+        false
+    );
     assert!(!temp.path().join("accounts/personal").exists());
     assert_eq!(
         crate::config::load(temp.path())
@@ -140,7 +143,7 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
     }
     assert!(report.has_failures());
     let value = render::tests::json_value(&report);
-    assert_eq!(value["verified"], false);
+    assert_eq!(value["ca_query"]["refreshed"], 0);
     assert_eq!(value["verification"].as_array().unwrap().len(), 2);
     assert_eq!(value["verification"][0]["name"], "alpha");
     assert_eq!(value["verification"][1]["name"], "zebra");
@@ -294,7 +297,7 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
     .await
     .unwrap();
     let value = render::tests::json_value(&report);
-    assert_eq!(value["verified"], false);
+    assert_eq!(value["ca_query"]["refreshed"], 0);
     assert_eq!(value["accounts"][0]["name"], "alpha");
     assert_eq!(value["accounts"][0]["is_default"], true);
     assert_eq!(value["accounts"][1]["local_state"], "registration_pending");

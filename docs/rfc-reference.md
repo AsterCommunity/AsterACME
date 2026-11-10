@@ -112,6 +112,6 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 - 按 CA 记录 EAB、ARI、challenge、标识符类型和草案扩展的实际支持情况。
 - 分开报告本地测试、staging 签发、真实 DNS 清理及部署结果；任何单项成功均不代表全部完成。
 
-当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户 kid 签名、DER 叶子、reason 和 alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 留给后续 renew 操作，尚未实现。
+当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户 kid 签名、DER 叶子、reason 和 alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 已由 cert renew 接入；只向广告 renewalInfo 的 CA 提交。
 
 密钥扩展依据 RFC 8555 §6.2（账户 JWS）与 §7.4（证书 CSR）分离；CSR 算法没有 ACME 固定枚举，客户端生成能力与 CA 接受范围不同。Let’s Encrypt 当前官方范围见 https://letsencrypt.org/docs/integration-guide/ 。吊销原因按 RFC 8555 §7.6 / RFC 5280 §5.3.1 编码，badRevocationReason 由 CA 返回。

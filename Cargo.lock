@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme_core",
  "aster_acme_protocol",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme",
  "aster_acme_cli_storage",
@@ -164,6 +164,7 @@ dependencies = [
  "clap",
  "directories",
  "inquire",
+ "rcgen",
  "serde",
  "serde_json",
  "tempfile",
@@ -180,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_cli_storage"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aster-fs",
  "aster_acme",
@@ -206,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aster_forge_macros",
  "serde",
@@ -216,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_protocol"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme_core",
  "aster_forge_macros",
@@ -229,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_validation"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme",
  "async-trait",
