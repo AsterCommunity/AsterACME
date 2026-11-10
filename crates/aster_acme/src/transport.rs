@@ -18,7 +18,7 @@ use crate::crypto::{AccountSigner, CryptoError, sign_request};
 use aster_acme_protocol::{
     directory::Directory,
     jws::RequestIdentity,
-    problem::{BAD_NONCE, Problem},
+    problem::{Problem, ProblemKind},
     url::AcmeUrl,
 };
 
@@ -90,9 +90,9 @@ pub enum TransportError {
 impl TransportError {
     /// Match a complete ACME problem URI; unknown errors do not trigger known behavior.
     #[must_use]
-    pub fn is_problem(&self, kind: &str) -> bool {
+    pub fn is_problem(&self, kind: &ProblemKind) -> bool {
         match self {
-            Self::Problem { problem, .. } => problem.kind == kind,
+            Self::Problem { problem, .. } => &problem.kind == kind,
             _ => false,
         }
     }
@@ -280,7 +280,8 @@ impl AcmeClient {
                 return Ok(response);
             }
             let error = response_error(&response);
-            if error.is_problem(BAD_NONCE) && attempt < self.options.bad_nonce_retries {
+            if error.is_problem(&ProblemKind::BadNonce) && attempt < self.options.bad_nonce_retries
+            {
                 // RFC 8555 §6.5: retry MUST consume this response's nonce, not a pooled nonce.
                 current_nonce = fresh.ok_or(TransportError::MissingNonce)?;
             } else {

@@ -1,15 +1,16 @@
 //! Structured library errors translated at the process boundary.
 
 use super::output::{colors, safe, styled};
+use crate::common::output::Style;
 use aster_acme::{
     account::AccountError,
     transport::{RetryAfter, TransportError},
 };
 use aster_acme_cli_storage::StorageError;
-use aster_acme_protocol::problem::{
-    ACCOUNT_DOES_NOT_EXIST, EXTERNAL_ACCOUNT_REQUIRED, RATE_LIMITED, USER_ACTION_REQUIRED,
-};
+
 use std::io::{self, IsTerminal};
+
+mod problem;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -148,17 +149,7 @@ fn retry_hint(retry_after: Option<&RetryAfter>) -> String {
 
 fn transport_diagnostic(error: &TransportError) -> (String, Option<String>) {
     match error {
-        TransportError::Problem {problem,..} if problem.kind == ACCOUNT_DOES_NOT_EXIST => missing_account(),
-        TransportError::Problem {status,problem,retry_after} => {
-            let detail = problem.detail.as_deref().unwrap_or("The CA did not provide an explanation.");
-            let hint = match problem.kind.as_str() {
-                RATE_LIMITED => Some(retry_hint(retry_after.as_ref())),
-                USER_ACTION_REQUIRED => Some(format!("The CA requires user action: {}",problem.instance.as_deref().unwrap_or("see your CA account portal"))),
-                EXTERNAL_ACCOUNT_REQUIRED => Some("Supply the EAB credentials issued by this CA.".into()),
-                _ => Some(format!("CA problem type: {}",problem.kind)),
-            };
-            (format!("CA request failed (HTTP {status}): {detail}"),hint)
-        }
+        TransportError::Problem {status,problem,retry_after} => self::problem::diagnostic(*status, problem, retry_after.as_ref()),
         TransportError::Network(network) if network.is_timeout() => ("The CA request timed out.".into(),Some("The remote result may be unknown. Retry with the same account and data directory; its saved key is retained.".into())),
         TransportError::Network(_) => ("Could not connect to the CA securely.".into(),Some("Check the directory URL, network and TLS trust. The saved account key is retained.".into())),
         TransportError::HttpStatus {status,..} => (format!("The CA returned HTTP {status} without a usable ACME response."),Some("Check the directory URL and retry later with the same account.".into())),
@@ -187,9 +178,17 @@ pub(crate) fn error(error: &(dyn std::error::Error + 'static), json: bool) {
         }
     } else {
         let color = colors(io::stderr().is_terminal());
-        eprintln!("{} {}", styled("[ERROR]", "1;31", color), safe(&message));
+        eprintln!(
+            "{} {}",
+            styled("[ERROR]", Style::BoldRed, color),
+            safe(&message)
+        );
         if let Some(hint) = hint {
-            eprintln!("{} {}", styled("  Hint:", "33", color), safe(&hint));
+            eprintln!(
+                "{} {}",
+                styled("  Hint:", Style::Yellow, color),
+                safe(&hint)
+            );
         }
     }
 }
@@ -197,12 +196,13 @@ pub(crate) fn error(error: &(dyn std::error::Error + 'static), json: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aster_acme_protocol::problem::ProblemKind;
     #[test]
     fn missing_account_is_actionable_and_not_a_debug_dump() {
         let error = TransportError::Problem {
             status: 400,
             problem: Box::new(aster_acme_protocol::problem::Problem {
-                kind: ACCOUNT_DOES_NOT_EXIST.into(),
+                kind: ProblemKind::AccountDoesNotExist,
                 detail: Some("No account exists with the provided key".into()),
                 instance: None,
                 subproblems: vec![],
@@ -218,8 +218,8 @@ mod tests {
     #[test]
     fn terminal_controls_are_escaped_and_plain_output_has_no_ansi() {
         assert_eq!(safe("bad\x1b[2J\n"), "bad\\u{1b}[2J\\n");
-        assert_eq!(styled("error", "31", false), "error");
-        assert!(styled("error", "31", true).starts_with('\x1b'));
+        assert_eq!(styled("error", Style::Red, false), "error");
+        assert!(styled("error", Style::Red, true).starts_with('\x1b'));
     }
 
     #[test]

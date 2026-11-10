@@ -126,7 +126,10 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
     {
         Ok(outcome) => outcome,
         Err(error) => {
-            progress.log.line(Level::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id));
+            match session.record().await {
+                Ok(saved) if saved.finalize_rejection.is_some() => progress.log.line(Level::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection."),
+                _ => progress.log.line(Level::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id)),
+            }
             return Err(error);
         }
     };
@@ -367,7 +370,7 @@ async fn show(
 
 async fn revoke(
     target: super::args::SavedTargetArgs,
-    reason: Option<super::args::RevocationReason>,
+    reason: Option<aster_acme_protocol::revocation::RevocationReason>,
     yes: bool,
     http: HttpArgs,
     local: LocalArgs,
@@ -399,7 +402,7 @@ async fn revoke(
                 &record,
                 &store,
                 RemoteOperation::Revoke {
-                    reason: reason.map(super::args::RevocationReason::code),
+                    reason,
                     yes,
                     json: local.json,
                 },
@@ -434,7 +437,7 @@ async fn selected_record(
 enum RemoteOperation {
     Inspect,
     Revoke {
-        reason: Option<u8>,
+        reason: Option<aster_acme_protocol::revocation::RevocationReason>,
         yes: bool,
         json: bool,
     },
@@ -532,6 +535,7 @@ fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
         .first()
         .ok_or("At least one domain is required.")?;
     Ok(IssueRequest {
+        key_algorithm: args.key_algorithm,
         name: match args.name.as_deref() {
             Some(name) => CertificateName::new(name)?,
             None => CertificateName::generated(primary)?,
@@ -559,6 +563,13 @@ async fn prepare_session(
                 crate::common::time::timestamp(Some(record.created_at))
             ),
         );
+        progress.log.line(
+            Level::Info,
+            &format!(
+                "Certificate key type: {} (saved)",
+                record.key_algorithm.name()
+            ),
+        );
         store.open(&record.name, &record.operation_id).await?
     } else {
         let request = request(args, account_name)?;
@@ -573,6 +584,10 @@ async fn prepare_session(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+        );
+        progress.log.line(
+            Level::Info,
+            &format!("Certificate key type: {}", request.key_algorithm.name()),
         );
         progress
             .log
@@ -721,6 +736,7 @@ mod tests {
         let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
         let account = allocation_account();
         let request = IssueRequest {
+            key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
             name: CertificateName::new("example.com-collision").unwrap(),
             identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
             account_name: "default".into(),
@@ -749,6 +765,7 @@ mod tests {
         let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
         let account = allocation_account();
         let request = IssueRequest {
+            key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
             name: CertificateName::new("example.com-existing").unwrap(),
             identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
             account_name: "default".into(),

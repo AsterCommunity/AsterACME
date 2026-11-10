@@ -1,6 +1,7 @@
 //! Shared human CLI logging: fixed UTC timestamps, aligned levels and detail rows.
 //! Structured command results belong to command renderers; JSON disables this sink.
 use super::output;
+use crate::common::output::Style;
 use std::io::{self, IsTerminal};
 
 #[derive(Clone, Copy)]
@@ -53,10 +54,10 @@ fn render(
     color: bool,
 ) -> String {
     let (label, style) = match level {
-        Level::Info => ("[INFO]", "36"),
-        Level::Wait => ("[WAIT]", "33"),
-        Level::Success => ("[OK]", "1;32"),
-        Level::Warning => ("[WARN]", "33"),
+        Level::Info => ("[INFO]", Style::Cyan),
+        Level::Wait => ("[WAIT]", Style::Yellow),
+        Level::Success => ("[OK]", Style::BoldGreen),
+        Level::Warning => ("[WARN]", Style::Yellow),
     };
     let timestamp = crate::common::time::timestamp(Some(at));
     let padding = " ".repeat(6 - label.len());

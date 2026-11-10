@@ -1,6 +1,7 @@
 //! Human and typed JSON presentation; never contains private keys or CSRs.
 use crate::common::error::CliResult;
 use crate::common::output;
+use crate::common::output::Style;
 use crate::common::output::field;
 use crate::common::time::timestamp;
 use aster_acme::issuance::{DnsRequirement, IssueOutcome, IssueRecord};
@@ -28,6 +29,9 @@ pub(super) fn request_status(record: &IssueRecord, now: time::OffsetDateTime) ->
     match record.revocation.state {
         RevocationState::Confirmed => "revoked",
         RevocationState::Pending => "revocation pending",
+        RevocationState::NotRequested if record.finalize_rejection.is_some() => {
+            "failed (CSR rejected)"
+        }
         RevocationState::NotRequested if record.expired(now) => "expired locally",
         RevocationState::NotRequested if !record.unfinished() && !record.is_current => {
             "completed (historical)"
@@ -109,9 +113,9 @@ pub(super) fn list(records: &[IssueRecord], json: bool) -> CliResult<String> {
     let mut rows = vec![[
         "NAME".into(),
         "DOMAINS".into(),
-        "CURRENT".into(),
+        "KEY TYPE".into(),
         "REQUESTED (UTC)".into(),
-        "PHASE".into(),
+        "STATUS".into(),
         "ORDER STATUS".into(),
         "CERT EXPIRES (UTC)".into(),
         "NEXT RENEWAL (UTC)".into(),
@@ -121,7 +125,7 @@ pub(super) fn list(records: &[IssueRecord], json: bool) -> CliResult<String> {
         rows.push([
             output::safe(record.name.as_str()),
             domain_summary(record),
-            if record.is_current { "*" } else { "" }.into(),
+            record.key_algorithm.name().into(),
             timestamp(Some(record.created_at)),
             request_status(record, now).into(),
             record.order.as_ref().map_or_else(
@@ -144,32 +148,47 @@ pub(super) fn list(records: &[IssueRecord], json: bool) -> CliResult<String> {
     }
     let mut lines =
         vec!["Local certificates (CA order status from saved observations; times in UTC):".into()];
-    for (index, line) in crate::common::table::align(&rows).into_iter().enumerate() {
-        let style = if index == 0 {
-            "1;36"
-        } else if matches!(
-            records[index - 1].revocation.state,
-            RevocationState::Confirmed
-        ) {
-            "31"
-        } else if matches!(
-            records[index - 1].revocation.state,
-            RevocationState::Pending
-        ) || records[index - 1].expired(now)
-        {
-            "33"
-        } else if !records[index - 1].unfinished() {
-            "32"
-        } else {
-            ""
-        };
-        lines.push(output::styled(&line, style, color && !style.is_empty()));
-    }
+    lines.extend(crate::common::table::align(
+        &rows,
+        Some(&|row, column, cell| {
+            let style = match (row, column) {
+                (0, _) => Style::BoldCyan,
+                (_, 4) => local_status_style(&records[row - 1], now),
+                (_, 5) => {
+                    order_status_style(records[row - 1].order.as_ref().map(|order| &order.status))
+                }
+                _ => Style::Plain,
+            };
+            output::styled(cell, style, color)
+        }),
+    ));
     lines.push(output::tips(
         "Use cert show <NAME> for request IDs, CA details and TXT records.",
         color,
     ));
     Ok(lines.join("\n"))
+}
+
+fn local_status_style(record: &IssueRecord, now: time::OffsetDateTime) -> Style {
+    match record.revocation.state {
+        RevocationState::Confirmed => Style::Red,
+        RevocationState::Pending => Style::Yellow,
+        RevocationState::NotRequested if record.finalize_rejection.is_some() => Style::Red,
+        RevocationState::NotRequested if record.expired(now) || record.unfinished() => {
+            Style::Yellow
+        }
+        RevocationState::NotRequested => Style::Green,
+    }
+}
+
+fn order_status_style(status: Option<&aster_acme_core::protocol::OrderStatus>) -> Style {
+    use aster_acme_core::protocol::OrderStatus;
+    match status {
+        Some(OrderStatus::Valid) => Style::Green,
+        Some(OrderStatus::Invalid | OrderStatus::Unknown(_)) => Style::Red,
+        Some(OrderStatus::Ready) => Style::Blue,
+        Some(OrderStatus::Pending | OrderStatus::Processing) | None => Style::Yellow,
+    }
 }
 
 pub(super) fn show(records: &[IssueRecord], json: bool, verified: bool) -> CliResult<String> {
@@ -213,17 +232,12 @@ fn show_text(
     color: bool,
     verified: bool,
 ) -> String {
-    use aster_acme_core::protocol::OrderStatus;
     let expired = record.expired(now);
     let mut lines = request_lines(record, expired, color);
     let (status, status_style) = record.order.as_ref().map_or_else(
-        || ("not observed".into(), "33"),
+        || ("not observed".into(), Style::Yellow),
         |order| {
-            let style = match &order.status {
-                OrderStatus::Valid => "32",
-                OrderStatus::Invalid | OrderStatus::Unknown(_) => "31",
-                OrderStatus::Pending | OrderStatus::Ready | OrderStatus::Processing => "33",
-            };
+            let style = order_status_style(Some(&order.status));
             (String::from(order.status.clone()), style)
         },
     );
@@ -235,25 +249,42 @@ fn show_text(
     let deadline_text = timestamp(record.order.as_ref().and_then(|order| order.expires));
     lines.push(field(
         "Order expires:",
-        &output::styled(&deadline_text, "33", color && expired),
+        &output::styled(&deadline_text, Style::Yellow, color && expired),
         color,
     ));
     lines.extend(authorization_lines(record, color));
+    if let Some(problem) = &record.finalize_rejection {
+        lines.push(field(
+            "CSR rejection:",
+            &output::safe(
+                &problem
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| problem.kind.to_string()),
+            ),
+            color,
+        ));
+    }
     if let Some(order) = &record.order
         && let Some(problem) = &order.error
     {
         lines.push(field(
             "CA error:",
             &output::styled(
-                &output::safe(problem.detail.as_deref().unwrap_or(&problem.kind)),
-                "31",
+                &output::safe(
+                    &problem
+                        .detail
+                        .clone()
+                        .unwrap_or_else(|| problem.kind.to_string()),
+                ),
+                Style::Red,
                 color,
             ),
             color,
         ));
     }
     if let Some(at) = record.certificate_not_after {
-        let style = if at <= now { "31" } else { "32" };
+        let style = if at <= now { Style::Red } else { Style::Green };
         lines.push(field(
             "Certificate expires:",
             &output::styled(&timestamp(Some(at)), style, color),
@@ -270,7 +301,11 @@ fn show_text(
             } else {
                 "not performed (local data only)"
             },
-            if verified { "32" } else { "33" },
+            if verified {
+                Style::Green
+            } else {
+                Style::Yellow
+            },
             color,
         ),
         color,
@@ -280,19 +315,22 @@ fn show_text(
 
 // Immutable request identity and local progress, shared by offline and refreshed details.
 fn request_lines(record: &IssueRecord, expired: bool, color: bool) -> Vec<String> {
-    let phase_style = if !expired && !record.unfinished() {
-        "32"
+    let phase_style = if record.finalize_rejection.is_some() {
+        Style::Red
+    } else if !expired && !record.unfinished() {
+        Style::Green
     } else {
-        "33"
+        Style::Yellow
     };
     vec![
-        output::styled(&output::safe(record.name.as_str()), "1;36", color),
+        output::styled(&output::safe(record.name.as_str()), Style::BoldCyan, color),
         field("Request:", &record.operation_id, color),
         field(
             "Current:",
             if record.is_current { "yes" } else { "no" },
             color,
         ),
+        field("Key type:", record.key_algorithm.name(), color),
         field("Requested:", &timestamp(Some(record.created_at)), color),
         field(
             "Domains:",
@@ -307,7 +345,9 @@ fn request_lines(record: &IssueRecord, expired: bool, color: bool) -> Vec<String
         field(
             "Phase:",
             &output::styled(
-                if expired {
+                if record.finalize_rejection.is_some() {
+                    "failed (CSR rejected)"
+                } else if expired {
                     "expired locally"
                 } else {
                     phase_label(record.phase)
@@ -324,13 +364,13 @@ fn request_lines(record: &IssueRecord, expired: bool, color: bool) -> Vec<String
 fn revocation_lines(record: &IssueRecord, color: bool) -> Vec<String> {
     let mut lines = Vec::new();
     let (revocation, style) = match record.revocation.state {
-        RevocationState::NotRequested => ("not requested", ""),
-        RevocationState::Pending => ("pending; CA outcome unconfirmed", "33"),
-        RevocationState::Confirmed => ("confirmed revoked", "31"),
+        RevocationState::NotRequested => ("not requested", Style::Plain),
+        RevocationState::Pending => ("pending; CA outcome unconfirmed", Style::Yellow),
+        RevocationState::Confirmed => ("confirmed revoked", Style::Red),
     };
     lines.push(field(
         "Revocation:",
-        &output::styled(revocation, style, color && !style.is_empty()),
+        &output::styled(revocation, style, color),
         color,
     ));
     lines.push(field(
@@ -355,14 +395,14 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
         RevocationState::Confirmed => {
             return vec![field(
                 "Next renewal:",
-                &output::styled("disabled (revoked)", "31", color),
+                &output::styled("disabled (revoked)", Style::Red, color),
                 color,
             )];
         }
         RevocationState::Pending => {
             return vec![field(
                 "Next renewal:",
-                &output::styled("suspended (revocation unconfirmed)", "33", color),
+                &output::styled("suspended (revocation unconfirmed)", Style::Yellow, color),
                 color,
             )];
         }
@@ -390,7 +430,11 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
             "Next renewal:",
             &output::styled(
                 &timestamp(Some(plan.renew_at)),
-                if plan.renew_at <= now { "33" } else { "32" },
+                if plan.renew_at <= now {
+                    Style::Yellow
+                } else {
+                    Style::Green
+                },
                 color,
             ),
             color,
@@ -421,7 +465,7 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
             "ARI status:",
             &output::styled(
                 "query incomplete or failed; saved renewal time retained",
-                "33",
+                Style::Yellow,
                 color,
             ),
             color,
@@ -439,13 +483,13 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
     for authorization in &record.authorizations {
         let domain = output::safe(&authorization.resource.identifier.value);
         let style = match &authorization.resource.status {
-            AuthorizationStatus::Valid => "32",
-            AuthorizationStatus::Pending => "33",
+            AuthorizationStatus::Valid => Style::Green,
+            AuthorizationStatus::Pending => Style::Yellow,
             AuthorizationStatus::Expired
             | AuthorizationStatus::Deactivated
             | AuthorizationStatus::Revoked
             | AuthorizationStatus::Invalid
-            | AuthorizationStatus::Unknown(_) => "31",
+            | AuthorizationStatus::Unknown(_) => Style::Red,
         };
         let status = output::safe(&String::from(authorization.resource.status.clone()));
         lines.push(field(
@@ -460,7 +504,7 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
         if let Some(dns) = &authorization.dns {
             lines.push(format!(
                 "    {} {} = {}",
-                output::styled("Saved validation TXT:", "33", color),
+                output::styled("Saved validation TXT:", Style::Yellow, color),
                 output::safe(&dns.name),
                 output::safe(&dns.value)
             ));
@@ -529,9 +573,9 @@ pub(super) fn outcome(
     }
     let color = output::colors(io::stdout().is_terminal());
     let (label, style, message) = if resume.is_some() {
-        ("[WARN]", "1;33", "Action required for")
+        ("[WARN]", Style::BoldYellow, "Action required for")
     } else {
-        ("[DONE]", "1;32", "Issued certificate")
+        ("[DONE]", Style::BoldGreen, "Issued certificate")
     };
     let mut lines = vec![format!(
         "{} {message} {}",
@@ -656,7 +700,7 @@ pub(super) fn removed(
     };
     let mut lines = vec![format!(
         "{} {message}",
-        output::styled("[OK]", "1;32", color)
+        output::styled("[OK]", Style::BoldGreen, color)
     )];
     if current_removed {
         lines.push(field(
@@ -683,7 +727,7 @@ pub(super) fn revoked(record: &IssueRecord, json: bool) -> CliResult<String> {
     let color = output::colors(io::stdout().is_terminal());
     let mut lines = vec![format!(
         "{} Revoked certificate {}. Local files retained.",
-        output::styled("[OK]", "1;32", color),
+        output::styled("[OK]", Style::BoldGreen, color),
         output::safe(record.name.as_str())
     )];
     lines.extend(renewal_lines(
@@ -700,7 +744,7 @@ mod tests {
     #[test]
     fn details_style_statuses_and_keep_human_times_fixed_without_altering_json() {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
-            "solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+            "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00.123456Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
             "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
@@ -720,6 +764,13 @@ mod tests {
         assert!(colored.contains("2026-01-01 00:00:00 UTC"));
         assert!(!colored.contains(".123456"));
         let plain = show_text(&record, time::OffsetDateTime::now_utc(), false, false);
+        assert!(plain.contains("Key type:"));
+        assert!(plain.contains("ecdsa-p256"));
+        assert!(
+            list(std::slice::from_ref(&record), false)
+                .unwrap()
+                .contains("KEY TYPE")
+        );
         assert!(!plain.contains('\x1b'));
         assert!(plain.contains("Next renewal:"));
         assert!(plain.contains("2026-02-01 00:00:00 UTC"));
@@ -807,5 +858,41 @@ mod tests {
         .unwrap();
         assert!(human.contains("Removed all local certificate requests for example.com."));
         assert!(!human.contains("Revoked"));
+    }
+    #[test]
+    fn rejected_csr_local_failure_keeps_ready_order_status_and_distinct_colors() {
+        use aster_acme_protocol::problem::{Problem, ProblemKind};
+        let mut record:IssueRecord=serde_json::from_value(serde_json::json!({
+            "key_algorithm":"ecdsa-p521","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+            "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
+            "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
+            "phase":"finalizing","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
+            "order":{"status":"ready","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"},"authorizations":[]
+        })).unwrap();
+        record.finalize_rejection = Some(Problem {
+            kind: ProblemKind::BadCsr,
+            detail: Some("P-521 not allowed".into()),
+            instance: None,
+            subproblems: vec![],
+            extensions: serde_json::Map::new(),
+        });
+        let now = time::OffsetDateTime::now_utc();
+        assert_eq!(request_status(&record, now), "failed (CSR rejected)");
+        assert_eq!(local_status_style(&record, now), Style::Red);
+        assert_eq!(
+            order_status_style(record.order.as_ref().map(|order| &order.status)),
+            Style::Blue
+        );
+        let table = list(std::slice::from_ref(&record), false).unwrap();
+        assert!(table.contains("STATUS"));
+        assert!(!table.contains("PHASE"));
+        assert!(table.contains("failed (CSR rejected)"));
+        assert!(table.contains("ready"));
+        let details = show_text(&record, now, true, false);
+        assert!(details.contains("\x1b[31mfailed (CSR rejected)\x1b[0m"));
+        assert!(details.contains("\x1b[34mready\x1b[0m"));
+        let json: serde_json::Value =
+            serde_json::from_str(&show(&[record], true, false).unwrap()).unwrap();
+        assert_eq!(json[0]["order"]["status"], "ready");
     }
 }

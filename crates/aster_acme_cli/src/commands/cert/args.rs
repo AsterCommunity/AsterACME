@@ -1,7 +1,9 @@
 //! Certificate issuance and read-only order command arguments.
 
 use crate::common::args::{HttpArgs, LocalArgs, parse_account_name};
-use clap::{Args, Subcommand, ValueEnum};
+use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+use aster_acme_protocol::revocation::RevocationReason;
+use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
 
 #[derive(Subcommand)]
 pub(crate) enum CertCommand {
@@ -39,7 +41,7 @@ pub(crate) enum CertCommand {
         #[command(flatten)]
         target: SavedTargetArgs,
         /// Permanent revocation reason; omitted by default, or retained from an unconfirmed request.
-        #[arg(long, value_enum)]
+        #[arg(long, value_parser = revocation_reason_parser())]
         reason: Option<RevocationReason>,
         /// Confirm revocation without an interactive prompt.
         #[arg(short = 'y', long)]
@@ -91,31 +93,22 @@ pub(crate) struct CertificateNameArgs {
     pub named_name: Option<String>,
 }
 
-/// Common permanent revocation reasons from RFC 5280; CA policy may reject a reason.
-#[derive(Clone, Copy, ValueEnum)]
-pub(crate) enum RevocationReason {
-    /// No specific reason (0).
-    Unspecified,
-    /// Certificate private key compromised (1).
-    KeyCompromise,
-    /// Subject affiliation changed (3).
-    AffiliationChanged,
-    /// Replaced by another certificate (4).
-    Superseded,
-    /// Certificate is no longer used (5).
-    CessationOfOperation,
+fn revocation_reason_parser() -> impl clap::builder::TypedValueParser<Value = RevocationReason> {
+    clap::builder::PossibleValuesParser::new(RevocationReason::ALL.map(RevocationReason::name))
+        .try_map(|value: String| {
+            RevocationReason::from_name(&value)
+                .ok_or_else(|| "unknown revocation reason".to_owned())
+        })
 }
 
-impl RevocationReason {
-    pub(crate) const fn code(self) -> u8 {
-        match self {
-            Self::Unspecified => 0,
-            Self::KeyCompromise => 1,
-            Self::AffiliationChanged => 3,
-            Self::Superseded => 4,
-            Self::CessationOfOperation => 5,
-        }
-    }
+fn key_algorithm_parser() -> impl clap::builder::TypedValueParser<Value = CertificateKeyAlgorithm> {
+    clap::builder::PossibleValuesParser::new(
+        CertificateKeyAlgorithm::ALL.map(CertificateKeyAlgorithm::name),
+    )
+    .try_map(|value: String| {
+        CertificateKeyAlgorithm::from_name(&value)
+            .ok_or_else(|| "unknown certificate key algorithm".to_owned())
+    })
 }
 
 /// User-facing verification implementation; the ACME wire method stays internal.
@@ -143,6 +136,9 @@ pub(crate) struct IssueArgs {
     /// Local account; default is the configured default account.
     #[arg(short = 'a', long, conflicts_with = "resume",value_parser=parse_account_name)]
     pub account: Option<String>,
+    /// Certificate key algorithm; CA acceptance varies. Account signing key is unchanged.
+    #[arg(short = 'k', long = "key-type", value_parser = key_algorithm_parser(), default_value = "ecdsa-p256", conflicts_with = "resume")]
+    pub key_algorithm: CertificateKeyAlgorithm,
     /// How to validate domain ownership.
     #[arg(short = 'c', long, value_enum, default_value = "manual_dns")]
     pub challenge: Challenge,
@@ -243,7 +239,7 @@ mod tests {
             vec!["--accept-terms"],
             vec!["--verify"],
             vec!["--reason", "7"],
-            vec!["--reason", "certificate-hold"],
+            vec!["--reason", "unassigned"],
             vec!["--operation", "short"],
         ] {
             assert!(
@@ -312,6 +308,71 @@ mod tests {
                 Args::try_parse_from(["aster-acme", "cert", "remove"].into_iter().chain(args))
                     .is_err()
             );
+        }
+    }
+    #[test]
+    fn all_certificate_key_types_parse_with_default_p256_and_cannot_replace_resumed_material() {
+        for algorithm in CertificateKeyAlgorithm::ALL {
+            let args = Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "-d",
+                "example.com",
+                "-k",
+                algorithm.name(),
+            ])
+            .unwrap();
+            let Command::Cert { command } = args.command else {
+                panic!("certificate command expected")
+            };
+            let CertCommand::Issue(options) = *command else {
+                panic!("issue expected")
+            };
+            assert_eq!(options.key_algorithm, algorithm);
+        }
+        let args =
+            Args::try_parse_from(["aster-acme", "cert", "issue", "-d", "example.com"]).unwrap();
+        let Command::Cert { command } = args.command else {
+            panic!("certificate command expected")
+        };
+        let CertCommand::Issue(options) = *command else {
+            panic!("issue expected")
+        };
+        assert_eq!(options.key_algorithm, CertificateKeyAlgorithm::EcdsaP256);
+        assert!(Args::try_parse_from(["aster-acme", "cert", "issue", "--resume", "web"]).is_ok());
+        for args in [
+            vec!["--resume", "web", "--key-type", "ecdsa-p256"],
+            vec!["-d", "example.com", "-k", "rsa-1024"],
+            vec!["-d", "example.com", "-k", "unknown"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "issue"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn revocation_reason_choices_follow_public_enum_without_a_second_cli_registry() {
+        for reason in RevocationReason::ALL {
+            let args = Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "revoke",
+                "web",
+                "--reason",
+                reason.name(),
+                "--yes",
+            ])
+            .unwrap();
+            let Command::Cert { command } = args.command else {
+                panic!("certificate command expected")
+            };
+            let CertCommand::Revoke { reason: actual, .. } = *command else {
+                panic!("revoke expected")
+            };
+            assert_eq!(actual, Some(reason));
         }
     }
 }

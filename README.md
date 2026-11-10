@@ -116,6 +116,10 @@ Each new issue creates an independent managed certificate. Default names combine
 
 `cert show` without a name guides terminal selection. Certificate listing and inspection do not advance validation or issuance. Expired requests remain visible but cannot continue validation or finalization.
 
+## Certificate key algorithms
+
+Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed25519`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `rsa-8192`. These are client generation capabilities; CA acceptance varies. The choice is persisted and retained on recovery and renewal generations. Account signing remains ES256.
+
 ## Renewal planning and revocation
 
 After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. Automatic renewal and periodic wakeups remain future daemon work.

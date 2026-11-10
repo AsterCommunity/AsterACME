@@ -133,7 +133,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
             .respond_with(
                 ResponseTemplate::new(400)
                     .insert_header("Replay-Nonce", "lookup")
-                    .set_body_json(serde_json::json!({"type":ACCOUNT_DOES_NOT_EXIST})),
+                    .set_body_json(serde_json::json!({"type":ProblemKind::AccountDoesNotExist})),
             )
             .up_to_n_times(1)
             .mount(&server)
@@ -273,7 +273,7 @@ async fn registration_is_recovered_after_lost_response_and_reuses_the_same_ident
         .respond_with(
             ResponseTemplate::new(400)
                 .insert_header("Replay-Nonce", "lookup_nonce")
-                .set_body_json(serde_json::json!({"type":ACCOUNT_DOES_NOT_EXIST})),
+                .set_body_json(serde_json::json!({"type":ProblemKind::AccountDoesNotExist})),
         )
         .up_to_n_times(1)
         .mount(&server)
@@ -416,13 +416,13 @@ async fn eab_requirement_is_explicit_and_only_return_existing_does_not_send_eab(
         .respond_with(
             ResponseTemplate::new(400)
                 .insert_header("Replay-Nonce", "next")
-                .set_body_json(serde_json::json!({"type":ACCOUNT_DOES_NOT_EXIST})),
+                .set_body_json(serde_json::json!({"type":ProblemKind::AccountDoesNotExist})),
         )
         .expect(1)
         .mount(&server)
         .await;
     assert!(
-        matches!(service.recover(&key).await,Err(AccountError::Transport(error)) if error.is_problem(ACCOUNT_DOES_NOT_EXIST))
+        matches!(service.recover(&key).await,Err(AccountError::Transport(error)) if error.is_problem(&ProblemKind::AccountDoesNotExist))
     );
 }
 
@@ -526,7 +526,7 @@ async fn eab_registration_requires_confirmation_and_exact_payload() {
             .respond_with(
                 ResponseTemplate::new(400)
                     .insert_header("Replay-Nonce", "lookup_nonce")
-                    .set_body_json(serde_json::json!({"type":ACCOUNT_DOES_NOT_EXIST})),
+                    .set_body_json(serde_json::json!({"type":ProblemKind::AccountDoesNotExist})),
             )
             .up_to_n_times(1)
             .mount(&server)

@@ -131,7 +131,7 @@ async fn bad_nonce_retries_use_error_nonce_and_resign_exact_payload() {
         .respond_with(
             ResponseTemplate::new(400)
                 .insert_header("Replay-Nonce", "retry_nonce")
-                .set_body_json(serde_json::json!({"type":BAD_NONCE})),
+                .set_body_json(serde_json::json!({"type":ProblemKind::BadNonce})),
         )
         .up_to_n_times(1)
         .mount(&server)
@@ -187,8 +187,8 @@ async fn nonce_retry_is_bounded_and_missing_or_invalid_nonce_is_rejected() {
             ..local_options()
         })
         .await;
-        let mut response =
-            ResponseTemplate::new(400).set_body_json(serde_json::json!({"type":BAD_NONCE}));
+        let mut response = ResponseTemplate::new(400)
+            .set_body_json(serde_json::json!({"type":ProblemKind::BadNonce}));
         if let Some(nonce) = header {
             response = response.insert_header("Replay-Nonce", nonce);
         }
@@ -207,7 +207,7 @@ async fn nonce_retry_is_bounded_and_missing_or_invalid_nonce_is_rejected() {
             .err()
             .unwrap();
         match header {
-            Some("fresh") => assert!(error.is_problem(BAD_NONCE)),
+            Some("fresh") => assert!(error.is_problem(&ProblemKind::BadNonce)),
             _ => assert!(matches!(error, TransportError::MissingNonce)),
         }
         let count = server
@@ -300,7 +300,7 @@ async fn rate_limits_unknown_problems_and_non_json_errors_are_not_retried() {
                 status: 403,
                 problem,
                 retry_after: None,
-            } => assert_eq!(problem.kind, "future-problem"),
+            } => assert_eq!(problem.kind, ProblemKind::Unknown("future-problem".into())),
             TransportError::HttpStatus {
                 status: 503,
                 retry_after: Some(RetryAfter::At(_)),

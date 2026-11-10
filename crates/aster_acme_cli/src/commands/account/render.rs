@@ -1,6 +1,7 @@
 //! Account presentation: distinguish local lifecycle from a fresh CA response.
 
 use super::report::{AccountReport, LocalAccountReport, deactivation_label, state_label};
+use crate::common::output::Style;
 use crate::common::time::timestamp;
 use crate::common::{
     error::CliResult,
@@ -73,7 +74,7 @@ pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<Stri
 }
 
 fn success(message: &str, color: bool) -> String {
-    format!("{} {message}", styled("[OK]", "1;32", color))
+    format!("{} {message}", styled("[OK]", Style::BoldGreen, color))
 }
 
 fn rotation_label(phase: aster_acme_core::account::KeyRotationPhase) -> &'static str {
@@ -144,10 +145,17 @@ fn list_text(
     } else {
         "Local accounts (* = configured default; remote status not verified):".into()
     }];
-    for (index, line) in crate::common::table::align(&rows).into_iter().enumerate() {
+    for (index, line) in crate::common::table::align(&rows, None)
+        .into_iter()
+        .enumerate()
+    {
         lines.push(styled(
             &line,
-            if index == 0 { "1;36" } else { "1;32" },
+            if index == 0 {
+                Style::BoldCyan
+            } else {
+                Style::BoldGreen
+            },
             color && (index == 0 || accounts[index - 1].name == default),
         ));
     }
@@ -195,7 +203,7 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
     let mut lines = vec![
         format!(
             "{} Account {}",
-            styled("[INFO]", "1;36", color),
+            styled("[INFO]", Style::BoldCyan, color),
             safe(&local.name)
         ),
         field("CA:", &safe(local.directory.as_str()), color),
@@ -205,8 +213,8 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
             &styled(
                 local_state(local),
                 match local.record.as_ref().map(|record| record.state) {
-                    Some(AccountRecordState::Registered) => "32",
-                    Some(AccountRecordState::RegistrationPending) | None => "33",
+                    Some(AccountRecordState::Registered) => Style::Green,
+                    Some(AccountRecordState::RegistrationPending) | None => Style::Yellow,
                 },
                 color,
             ),
@@ -225,7 +233,7 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
                         "{}. Use account rotate-key to resume.",
                         rotation_label(rotation.phase)
                     ),
-                    "33",
+                    Style::Yellow,
                     color,
                 ),
                 color,
@@ -241,9 +249,9 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
             ));
         }
         let deactivation_style = match record.deactivation {
-            aster_acme_core::account::DeactivationState::NotRequested => "32",
-            aster_acme_core::account::DeactivationState::Pending => "33",
-            aster_acme_core::account::DeactivationState::Confirmed => "31",
+            aster_acme_core::account::DeactivationState::NotRequested => Style::Green,
+            aster_acme_core::account::DeactivationState::Pending => Style::Yellow,
+            aster_acme_core::account::DeactivationState::Confirmed => Style::Red,
         };
         lines.push(field(
             "Deactivation:",
@@ -275,17 +283,14 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
             lines.push(field("Accepted terms:", &safe(url.as_str()), color));
         }
     }
+    let (query, query_style) = if local.verified {
+        ("account refreshed", Style::Green)
+    } else {
+        ("not performed (local data only)", Style::Yellow)
+    };
     lines.push(field(
         "CA query:",
-        &styled(
-            if local.verified {
-                "account refreshed"
-            } else {
-                "not performed (local data only)"
-            },
-            if local.verified { "32" } else { "33" },
-            color,
-        ),
+        &styled(query, query_style, color),
         color,
     ));
     lines.join("\n")
@@ -294,8 +299,10 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
 fn account_status(status: &aster_acme_core::protocol::AccountStatus, color: bool) -> String {
     use aster_acme_core::protocol::AccountStatus;
     let style = match status {
-        AccountStatus::Valid => "32",
-        AccountStatus::Deactivated | AccountStatus::Revoked | AccountStatus::Unknown(_) => "31",
+        AccountStatus::Valid => Style::Green,
+        AccountStatus::Deactivated | AccountStatus::Revoked | AccountStatus::Unknown(_) => {
+            Style::Red
+        }
     };
     styled(&safe(&String::from(status.clone())), style, color)
 }

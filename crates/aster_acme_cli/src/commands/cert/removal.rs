@@ -166,6 +166,8 @@ mod tests {
         let session = store
             .create(
                 &IssueRequest {
+                    key_algorithm:
+                        aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
                     name: name.clone(),
                     identifiers: vec![
                         aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),

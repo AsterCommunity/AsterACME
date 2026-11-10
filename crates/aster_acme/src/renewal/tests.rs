@@ -84,7 +84,7 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
     .await
     .unwrap();
     let mut record: IssueRecord = serde_json::from_value(serde_json::json!({
-        "solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+        "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
         "directory":directory,"account_url":"https://ca.example/account","identifiers":["example.com"],
         "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted","authorizations":[]

@@ -50,6 +50,7 @@
 | `-n` | `--name` | 账户目标、证书名称/目标/筛选 |
 | `-a` | `--account` | cert issue 的账户选择 |
 | `-d` | `--domain` | cert issue 的域名，可重复 |
+| `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | 验证实现，目前只有 manual_dns |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
@@ -72,7 +73,7 @@
 | account rotate-key | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account remove | [NAME] / -n、-y；仅本地操作 |
-| cert issue | -n、重复 -d、-a、-c manual_dns；或 --resume NAME / --operation ID；-y、-f、HTTP、--wait-timeout |
+| cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、-f、HTTP、--wait-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 current，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
@@ -99,3 +100,5 @@
 续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。周期 ARI 刷新由后续 daemon 唤醒；本轮只有首次签发查询、显式 verify 时到期刷新和嵌入接口。
 
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
+
+证书密钥和吊销原因共用库/协议枚举产生 CLI 选项；支持算法与 RFC 原因码、CA 可拒绝边界见生命周期契约。账户 key/rotate-key 仍使用 ES256，不因证书 -k 改变。

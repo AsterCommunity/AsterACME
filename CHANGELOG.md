@@ -6,6 +6,8 @@
 
 ### Added
 
+- **Certificate key choices and revocation reasons** — Add a shared eight-choice certificate key enum and `-k/--key-type` (ECDSA P-256 default), including P-384/P-521, Ed25519, and RSA 2048/3072/4096/8192. Persist and validate the choice through recovery and renewal preparation; show it in progress and certificate views. Use typed RFC 5280 reason codes without a client CA-policy allowlist; preserve CA rejection details. Account signing stays ES256. Persist explicit badCSR rejections so recovery retains the original failure even if another request completes the same CA order; display a red local failed status separately from the CA order status; typed RFC 8555 problem enums preserve unknown extensions and share actionable CLI diagnostics, including rate-limit hints and identifier subproblems.
+
 - **Renewal planning and certificate revocation** — Fetch RFC 9773 ARI after issuance, persist a uniform random renewal time and Retry-After refresh deadline, retain valid plans on errors, and fall back to two thirds of certificate validity. Add account-signed `cert revoke` with exact-generation selection, optional reason, explicit confirmation, durable uncertain/confirmed states and retained local files. Periodic wakeups and automatic renewal remain future daemon work.
 
 - **ACME account management** — Register and recover named accounts, inspect offline or verify with the CA, update contacts, rotate keys with durable reconciliation, deactivate accounts, and remove local managed files. Support public CA presets, custom directories, explicit terms consent, EAB, account-scoped User-Agent, and default selection without overwriting concurrent changes.

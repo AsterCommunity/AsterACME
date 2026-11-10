@@ -13,13 +13,15 @@ pub struct CertificateMaterial {
     pub csr: Vec<u8>,
 }
 
-/// Generate a separate P-256 certificate key and SAN-only CSR.
+/// Generate a separate selected certificate key and SAN-only CSR.
 ///
 /// # Errors
 /// Rejects generation failures and malformed SAN identifiers.
-pub fn generate(identifiers: &[DnsIdentifier]) -> Result<CertificateMaterial, IssueError> {
-    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-        .map_err(|_| IssueError::InvalidInput("certificate key generation failed"))?;
+pub fn generate(
+    identifiers: &[DnsIdentifier],
+    algorithm: super::key_algorithm::CertificateKeyAlgorithm,
+) -> Result<CertificateMaterial, IssueError> {
+    let key = algorithm.generate()?;
     let mut params = CertificateParams::new(
         identifiers
             .iter()

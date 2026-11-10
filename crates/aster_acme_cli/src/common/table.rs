@@ -2,9 +2,15 @@
 use super::output::safe;
 use unicode_width::UnicodeWidthStr;
 
-/// Render equally shaped rows, preserving Unicode display width and escaping controls.
-/// Callers own headers, row highlighting and column semantics.
-pub(crate) fn align<const N: usize>(rows: &[[String; N]]) -> Vec<String> {
+/// A style callback receives row/column indices and escaped plain cell text.
+type CellStyle<'a> = &'a dyn Fn(usize, usize, &str) -> String;
+
+/// Render equally shaped rows. Styles are applied after escaping and measuring;
+/// None emits plain cells without a forwarding wrapper or a second layout path.
+pub(crate) fn align<const N: usize>(
+    rows: &[[String; N]],
+    style: Option<CellStyle<'_>>,
+) -> Vec<String> {
     let rows = rows
         .iter()
         .map(|row| row.each_ref().map(|cell| safe(cell)))
@@ -16,15 +22,20 @@ pub(crate) fn align<const N: usize>(rows: &[[String; N]]) -> Vec<String> {
             .unwrap_or(0)
     });
     rows.iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(row_index, row)| {
             row.iter()
                 .enumerate()
                 .map(|(column, cell)| {
+                    let styled = match style {
+                        Some(style) => style(row_index, column, cell),
+                        None => cell.clone(),
+                    };
                     if column + 1 == N {
-                        cell.clone()
+                        styled
                     } else {
                         format!(
-                            "{cell}{}",
+                            "{styled}{}",
                             " ".repeat(widths[column].saturating_sub(cell.width()))
                         )
                     }
@@ -38,6 +49,7 @@ pub(crate) fn align<const N: usize>(rows: &[[String; N]]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::output::Style;
     #[test]
     fn unicode_cells_controls_empty_tables_and_last_column_have_consistent_widths() {
         let rows = [
@@ -45,11 +57,31 @@ mod tests {
             ["猫猫".into(), "valid".into()],
             ["x\n".into(), "pending".into()],
         ];
-        let lines = align(&rows);
+        let lines = align(&rows, None);
         assert_eq!(lines[0], "NAME  STATUS");
         assert_eq!(lines[1], "猫猫  valid");
         assert_eq!(lines[2], "x\\n   pending");
-        assert_eq!(align::<2>(&[]), [] as [String; 0]);
-        assert_eq!(align(&[[String::new()]]), [String::new()]);
+        assert_eq!(align::<2>(&[], None), [] as [String; 0]);
+        assert_eq!(align(&[[String::new()]], None), [String::new()]);
+    }
+    #[test]
+    fn cell_colors_preserve_plain_widths_and_independent_semantic_styles() {
+        let rows = [
+            ["STATUS".into(), "ORDER STATUS".into()],
+            ["failed (CSR rejected)".into(), "ready".into()],
+        ];
+        let styled = align(
+            &rows,
+            Some(&|row, column, cell| match (row, column) {
+                (1, 0) => super::super::output::styled(cell, Style::Red, true),
+                (1, 1) => super::super::output::styled(cell, Style::Yellow, true),
+                _ => cell.to_owned(),
+            }),
+        );
+        assert_eq!(
+            styled[1],
+            "\x1b[31mfailed (CSR rejected)\x1b[0m  \x1b[33mready\x1b[0m"
+        );
+        assert_eq!(styled[0], align(&rows, None)[0]);
     }
 }

@@ -111,3 +111,9 @@ git diff HEAD --check
 - cert remove 默认精确删除一次申请，--history 清理非当前已签发、--revoked 匹配确认吊销、--all 删除分组；默认否确认、脚本 --yes；共享证书锁覆盖预检/确认/清理，不依赖账户或 CA。保留用户额外内容和 cert.lock inode，清理中断保留 .removing 并阻止新建复用。account/cert show 的 JSON 查询观察按 ca_query.account_refreshed/order_refreshed/authorizations_refreshed 区分；吊销来源独立，不能把整条记录标为 verified。
 
 - 托管证书身份独立于主域名/订单；cert.toml 保存稳定域名集合、账户、CA 和验证定义。IssueStore::create 只原子新建，NameAlreadyExists 是唯一可重试的自动分配错误（上限16次）；renew 只准备同定义新版本，不代表 CLI renew/daemon 已实现。list/show 默认 current，显式历史不参与活跃续期，删除 current 不回退旧证书。
+
+- CertificateKeyAlgorithm 统一证书生成/CLI/持久化选项（默认 ECDSA P256），恢复必须校验实际密钥算法/位数，续期版本沿用稳定定义；不要将账户 JWS 的 ES256 要求当成证书算法限制。RevocationReason 为 protocol 中已分配 RFC5280 代码，无自设 CA 白名单，无7；removeFromCRL 不作重新激活，CA 拒绝细节保留。
+
+- ACME problem 按 protocol::problem::ProblemKind 分发，24种RFC8555标准值使用现有wire_enum宏，Unknown(String)无损保留；不增加散落的URI常量。固定CSR明确badCSR须保存，恢复优先显示原拒绝，不能把共享订单被别的密钥签出的证书当作自己的产物。
+
+- CLI ANSI 码只归 common/output::Style，调用方使用枚举，不传数字字符串。table::align 是唯一布局入口，可选逐格样式，无 align→align_styled 薄转发；先按纯文本宽度对齐再着色。

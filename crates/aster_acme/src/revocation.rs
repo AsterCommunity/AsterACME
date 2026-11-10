@@ -7,7 +7,10 @@ use aster_acme_core::{
     revocation::{RevocationAction, RevocationState, revocation_action},
     workflow::IssuancePhase,
 };
-use aster_acme_protocol::revocation::{ALREADY_REVOKED, RevocationRequest};
+use aster_acme_protocol::{
+    problem::ProblemKind,
+    revocation::{RevocationReason, RevocationRequest},
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -18,7 +21,7 @@ pub struct RevocationRecord {
     /// Pending is an uncertain remote outcome, not successful revocation.
     pub state: RevocationState,
     /// Exact optional reason retained across explicit retries.
-    pub reason: Option<u8>,
+    pub reason: Option<RevocationReason>,
     /// First submission time; confirmation may happen on a later invocation.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub requested_at: Option<time::OffsetDateTime>,
@@ -50,17 +53,10 @@ impl RevocationService {
     pub async fn revoke(
         &self,
         session: &mut dyn IssueSession,
-        reason: Option<u8>,
+        reason: Option<RevocationReason>,
     ) -> Result<IssueRecord, IssueError> {
         let mut record = session.record().await?;
         let reason = reason.or(record.revocation.reason);
-        // Expose only commonly accepted permanent-revocation reasons. Other RFC 5280
-        // codes (including certificateHold/removeFromCRL) need a separate product policy.
-        if reason.is_some_and(|reason| !matches!(reason, 0 | 1 | 3 | 4 | 5)) {
-            return Err(IssueError::InvalidInput(
-                "unsupported certificate revocation reason",
-            ));
-        }
         match revocation_action(
             matches!(record.phase, IssuancePhase::Completed),
             record.revocation.state,
@@ -126,7 +122,7 @@ impl RevocationService {
                 status: 400,
                 ref problem,
                 ..
-            }) if problem.kind == ALREADY_REVOKED => {}
+            }) if matches!(problem.kind, ProblemKind::AlreadyRevoked) => {}
             Ok(response) => {
                 return Err(IssueError::RevocationUncertain(
                     TransportError::HttpStatus {

@@ -116,6 +116,10 @@ aster-acme cert show example-cert --verify --data-dir ./data
 
 不带名称的 `cert show` 会在终端引导选择。列举和查看证书不会推进验证或签发。过期申请仍可见，但不能继续验证或提交 finalize。
 
+## 证书密钥算法
+
+`-k/--key-type` 支持 ecdsa-p256（默认）、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。这是客户端生成能力，是否接受由 CA 决定。选项持久化并在恢复和续期版本中沿用，账户签名仍为 ES256。issue 进度及 list/show 同时显示实际类型。
+
 ## 续期计划与吊销
 
 签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。实际自动续期与周期唤醒留给后续 daemon。

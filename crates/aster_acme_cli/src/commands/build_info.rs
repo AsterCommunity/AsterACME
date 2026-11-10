@@ -65,7 +65,7 @@ pub(crate) fn render(json: bool) -> CliResult<String> {
             ),
         ],
     ];
-    Ok(table::align(&rows).join("\n"))
+    Ok(table::align(&rows, None).join("\n"))
 }
 
 #[cfg(test)]

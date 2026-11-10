@@ -68,6 +68,7 @@ struct CertificateConfig {
 struct CertificateSelection {
     name: CertificateName,
     identifiers: Vec<aster_acme::identifier::DnsIdentifier>,
+    key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm,
     account_name: String,
     account_id: String,
     directory: aster_acme_protocol::url::AcmeUrl,
@@ -95,6 +96,7 @@ impl Session {
             || record.account_thumbprint != self.initial.account_thumbprint
             || record.solver_id != self.initial.solver_id
             || record.identifiers != self.initial.identifiers
+            || record.key_algorithm != self.initial.key_algorithm
         {
             return Err(failure("immutable issuance identity changed"));
         }
@@ -192,6 +194,7 @@ fn check_material(generation: &Path, record: &IssueRecord) -> Result<(), IssueEr
         read_private(&generation.join("private-key.pk8"), 64 * 1024)
             .map_err(|_| failure("certificate key missing or unsafe"))?,
     );
+    record.key_algorithm.validate_key(&key)?;
     let csr = read_private(&generation.join("request.der"), 64 * 1024)
         .map_err(|_| failure("fixed CSR missing or unsafe"))?;
     // Hash manifest binds the exact immutable key and CSR bytes across restart.
@@ -340,7 +343,7 @@ impl CliIssueStore {
                 return Err(failure("certificate generation limit reached"));
             }
             let operation_id = AccountKey::generate()?.jwk()?.thumbprint()?;
-            let material = certificate::generate(&request.identifiers)?;
+            let material = certificate::generate(&request.identifiers, request.key_algorithm)?;
             let record = IssueRecord {
                 is_current: false,
                 solver_id: "manual_dns".into(),
@@ -354,6 +357,7 @@ impl CliIssueStore {
                     .account_url
                     .ok_or_else(|| failure("missing account URL"))?,
                 account_thumbprint: account.key_thumbprint,
+                key_algorithm: request.key_algorithm,
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
                 creation_submitted: false,
@@ -361,6 +365,7 @@ impl CliIssueStore {
                 order: None,
                 authorizations: Vec::new(),
                 finalize_submitted: SubmissionState::NotSubmitted,
+                finalize_rejection: None,
                 next_poll_at: None,
                 certificate_not_after: None,
                 renewal: None,
@@ -445,6 +450,7 @@ fn initialize_definition(
                     cert: CertificateSelection {
                         name: request.name.clone(),
                         identifiers: request.identifiers.clone(),
+                        key_algorithm: request.key_algorithm,
                         account_name: request.account_name.clone(),
                         account_id: account.account_id.clone(),
                         directory: account.directory_url.clone(),
@@ -468,6 +474,7 @@ fn initialize_definition(
             }
             if read_generations(slot, &name)?.iter().any(|record| {
                 record.identifiers != config.cert.identifiers
+                    || record.key_algorithm != config.cert.key_algorithm
                     || record.account_id != config.cert.account_id
                     || record.directory != config.cert.directory
                     || record.account_name != config.cert.account_name
@@ -480,6 +487,7 @@ fn initialize_definition(
             let request = IssueRequest {
                 name,
                 identifiers: config.cert.identifiers,
+                key_algorithm: config.cert.key_algorithm,
                 account_name: config.cert.account_name,
             };
             validate_request(&request, account)?;

@@ -22,6 +22,7 @@ use aster_acme_protocol::{
         AcknowledgeRequest, AuthorizationObject, ChallengeObject, FinalizeRequest, NewOrderRequest,
         OrderObject, WireChallengeKind, WireIdentifier,
     },
+    problem::ProblemKind,
     url::AcmeUrl,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -116,6 +117,14 @@ impl IssueService {
         let mut record = session.record().await?;
         let mut last_order_status = None;
         self.check_identity(&record)?;
+        if let Some(problem) = &record.finalize_rejection {
+            return Err(crate::transport::TransportError::Problem {
+                status: 400,
+                problem: Box::new(problem.clone()),
+                retry_after: None,
+            }
+            .into());
+        }
         if !matches!(
             record.revocation.state,
             aster_acme_core::revocation::RevocationState::NotRequested
@@ -536,7 +545,53 @@ impl IssueService {
             return Err(IssueError::Expired);
         }
         self.observe(&IssueEvent::Finalizing);
-        let response = bounded(execution, self.post(&url, &body)).await?;
+        let response = match bounded(execution, self.post(&url, &body)).await {
+            Err(IssueError::Transport(crate::transport::TransportError::Problem {
+                status: 400,
+                problem,
+                retry_after,
+            })) => {
+                match &problem.kind {
+                    ProblemKind::BadCsr => {
+                        record.finalize_rejection = Some(*problem.clone());
+                        session.save(record).await?;
+                    }
+                    // Other problem types do not establish permanent rejection of
+                    // this immutable CSR; preserve their existing transport policy.
+                    ProblemKind::AccountDoesNotExist
+                    | ProblemKind::AlreadyRevoked
+                    | ProblemKind::BadNonce
+                    | ProblemKind::BadPublicKey
+                    | ProblemKind::BadRevocationReason
+                    | ProblemKind::BadSignatureAlgorithm
+                    | ProblemKind::Caa
+                    | ProblemKind::Compound
+                    | ProblemKind::Connection
+                    | ProblemKind::Dns
+                    | ProblemKind::ExternalAccountRequired
+                    | ProblemKind::IncorrectResponse
+                    | ProblemKind::InvalidContact
+                    | ProblemKind::Malformed
+                    | ProblemKind::OrderNotReady
+                    | ProblemKind::RateLimited
+                    | ProblemKind::RejectedIdentifier
+                    | ProblemKind::ServerInternal
+                    | ProblemKind::Tls
+                    | ProblemKind::Unauthorized
+                    | ProblemKind::UnsupportedContact
+                    | ProblemKind::UnsupportedIdentifier
+                    | ProblemKind::UserActionRequired
+                    | ProblemKind::Unknown(_) => {}
+                }
+                return Err(crate::transport::TransportError::Problem {
+                    status: 400,
+                    problem,
+                    retry_after,
+                }
+                .into());
+            }
+            result => result?,
+        };
         if response.status != reqwest::StatusCode::OK {
             return Err(IssueError::InvalidInput("finalize must return 200"));
         }

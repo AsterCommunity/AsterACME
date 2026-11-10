@@ -24,7 +24,7 @@ use aster_acme_protocol::{
         AccountObject, AccountStatusRequest, AccountUpdateRequest, FindAccountRequest,
         NewAccountRequest,
     },
-    problem::ACCOUNT_DOES_NOT_EXIST,
+    problem::ProblemKind,
 };
 
 /// Local UTC observations, never a claim about the CA's original account creation time.
@@ -589,7 +589,9 @@ impl AccountService {
                 recovered = true;
                 response
             }
-            Err(AccountError::Transport(error)) if error.is_problem(ACCOUNT_DOES_NOT_EXIST) => {
+            Err(AccountError::Transport(error))
+                if error.is_problem(&ProblemKind::AccountDoesNotExist) =>
+            {
                 self.new_account(signer, &record, &options, false).await?
             }
             Err(error) => return Err(error),

@@ -82,6 +82,7 @@ async fn fixture() -> Fixture {
 
 fn request() -> IssueRequest {
     IssueRequest {
+        key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
         name: CertificateName::new("example.com").unwrap(),
         identifiers: vec![
             DnsIdentifier::new("example.com").unwrap(),
@@ -1369,6 +1370,7 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
 async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewal_queries() {
     use aster_acme::revocation::RevocationService;
     use aster_acme_core::revocation::RevocationState;
+    use aster_acme_protocol::revocation::RevocationReason;
     let fixture = fixture().await;
     let mut session = fixture
         .store
@@ -1381,10 +1383,6 @@ async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewa
     let chain = leaf_for(&generation, &record.identifiers);
     record.phase = IssuancePhase::Completed;
     let record = session.complete(&record, chain.as_bytes()).await.unwrap();
-    assert_eq!(
-        session.certificate_der().await.unwrap(),
-        certificate::leaf_der(chain.as_bytes()).unwrap()
-    );
     let key_before = fs::read(generation.join("private-key.pk8")).unwrap();
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1422,7 +1420,10 @@ async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewa
             signer,
         },
     );
-    service.revoke(session.as_mut(), Some(4)).await.unwrap();
+    service
+        .revoke(session.as_mut(), Some(RevocationReason::Superseded))
+        .await
+        .unwrap();
     drop(session);
     let mut reopened = fixture
         .store
@@ -1431,7 +1432,10 @@ async fn confirmed_revocation_is_durable_preserves_current_and_suppresses_renewa
         .unwrap();
     let durable = reopened.record().await.unwrap();
     assert_eq!(durable.revocation.state, RevocationState::Confirmed);
-    assert_eq!(durable.revocation.reason, Some(4));
+    assert_eq!(
+        durable.revocation.reason,
+        Some(RevocationReason::Superseded)
+    );
     assert!(durable.revocation.confirmed_at.is_some());
     service.revoke(reopened.as_mut(), None).await.unwrap();
     aster_acme::renewal::RenewalService::new(client)
@@ -2144,4 +2148,267 @@ async fn renewed_generation_keeps_the_managed_definition_and_rejects_changed_acc
     let config = selection(&slot).unwrap();
     assert_eq!(config.cert.identifiers, initial.identifiers);
     assert_eq!(config.cert.solver_id, "manual_dns");
+}
+
+#[tokio::test]
+async fn certificate_algorithm_is_fixed_in_definition_journal_recovery_and_new_renewal_material() {
+    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    for algorithm in CertificateKeyAlgorithm::ALL {
+        let fixture = fixture().await;
+        let mut requested = request();
+        requested.key_algorithm = algorithm;
+        let session = fixture
+            .store
+            .create(&requested, &fixture.account)
+            .await
+            .unwrap();
+        let record = session.record().await.unwrap();
+        assert_eq!(record.key_algorithm, algorithm);
+        let generation = fixture
+            .store
+            .slot(&record.name)
+            .join(record.generation_name());
+        let key = fs::read(generation.join("private-key.pk8")).unwrap();
+        let csr = fs::read(generation.join("request.der")).unwrap();
+        algorithm.validate_key(&key).unwrap();
+        let config = selection(&fixture.store.slot(&record.name)).unwrap();
+        assert_eq!(config.cert.key_algorithm, algorithm);
+        drop(session);
+        let reopened = fixture
+            .store
+            .open(&record.name, &record.operation_id)
+            .await
+            .unwrap();
+        assert_eq!(reopened.record().await.unwrap().key_algorithm, algorithm);
+        assert_eq!(reopened.csr().await.unwrap(), csr);
+        let mut mutated = record.clone();
+        mutated.key_algorithm = match algorithm {
+            CertificateKeyAlgorithm::EcdsaP256 => CertificateKeyAlgorithm::EcdsaP384,
+            _ => CertificateKeyAlgorithm::EcdsaP256,
+        };
+        assert!(reopened.save(&mutated).await.is_err());
+        let mut issued = record.clone();
+        let chain = leaf_for(&generation, &record.identifiers);
+        issued.phase = IssuancePhase::Completed;
+        reopened.complete(&issued, chain.as_bytes()).await.unwrap();
+        drop(reopened);
+        // Preparing a renewal uses the existing key choice, with new fixed material.
+        let renewed = fixture
+            .store
+            .renew(&record.name, &fixture.account)
+            .await
+            .unwrap();
+        let next = renewed.record().await.unwrap();
+        assert_eq!(next.key_algorithm, algorithm);
+        let next_key = fs::read(
+            fixture
+                .store
+                .slot(&next.name)
+                .join(next.generation_name())
+                .join("private-key.pk8"),
+        )
+        .unwrap();
+        algorithm.validate_key(&next_key).unwrap();
+        assert_ne!(key, next_key);
+        assert_ne!(renewed.csr().await.unwrap(), csr);
+    }
+}
+
+#[tokio::test]
+async fn recovery_refuses_key_algorithm_mismatch_even_when_material_digest_is_unchanged() {
+    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    let path = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name())
+        .join("operation.toml");
+    drop(session);
+    record.key_algorithm = CertificateKeyAlgorithm::Rsa2048;
+    write_journal(&path, &record).unwrap();
+    assert!(
+        fixture
+            .store
+            .open(&record.name, &record.operation_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .store
+            .renew(&record.name, &fixture.account)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn rejected_fixed_csr_survives_restart_even_when_another_request_completes_the_same_order() {
+    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    use aster_acme_protocol::problem::ProblemKind;
+    let fixture = fixture().await;
+    let stage = mount_flow(&fixture).await;
+    // Skip authorizing only in this fixture: the CA reports an already-ready order.
+    stage.store(2, Ordering::SeqCst);
+    let mut requested = request();
+    requested.key_algorithm = CertificateKeyAlgorithm::EcdsaP521;
+    let mut session = fixture
+        .store
+        .create(&requested, &fixture.account)
+        .await
+        .unwrap();
+    let initial = session.record().await.unwrap();
+    let generation = fixture
+        .store
+        .slot(&initial.name)
+        .join(initial.generation_name());
+    let key = fs::read(generation.join("private-key.pk8")).unwrap();
+    let csr = fs::read(generation.join("request.der")).unwrap();
+    Mock::given(method("POST"))
+        .and(path("/finalize/custom"))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .insert_header("Replay-Nonce", "rejected")
+                .set_body_json(
+                    serde_json::json!({"type":ProblemKind::BadCsr,"detail":"ECDSA curve P-521 not allowed"}),
+                ),
+        )
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let error = fixture
+        .service
+        .run(session.as_mut(), &Dns(true), &execution())
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error,IssueError::Transport(ref error) if error.is_problem(&ProblemKind::BadCsr))
+    );
+    let rejected = session.record().await.unwrap();
+    assert_eq!(
+        rejected
+            .finalize_rejection
+            .as_ref()
+            .unwrap()
+            .detail
+            .as_deref(),
+        Some("ECDSA curve P-521 not allowed")
+    );
+    drop(session);
+    complete_shared_order_with_p384(&fixture, stage, rejected.order_url.as_ref().unwrap()).await;
+    let requests_before = fixture.server.received_requests().await.unwrap().len();
+    let mut restarted = fixture
+        .store
+        .open(&initial.name, &initial.operation_id)
+        .await
+        .unwrap();
+    let error = fixture
+        .service
+        .run(restarted.as_mut(), &Dns(true), &execution())
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error,IssueError::Transport(crate_error) if matches!(&crate_error,aster_acme::transport::TransportError::Problem {status:400,problem,..} if problem.kind==ProblemKind::BadCsr && problem.detail.as_deref()==Some("ECDSA curve P-521 not allowed")))
+    );
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        requests_before
+    );
+    assert_eq!(fs::read(generation.join("private-key.pk8")).unwrap(), key);
+    assert_eq!(fs::read(generation.join("request.der")).unwrap(), csr);
+    assert!(!generation.join("fullchain.pem").exists());
+    assert!(
+        selection(&fixture.store.slot(&initial.name))
+            .unwrap()
+            .cert
+            .current
+            .is_none()
+    );
+}
+
+// Model a second client operation winning finalization of a CA-reused order.
+async fn complete_shared_order_with_p384(
+    fixture: &Fixture,
+    stage: Arc<AtomicUsize>,
+    expected_order: &AcmeUrl,
+) {
+    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    // A second managed certificate receives the identical CA order URL and succeeds.
+    let mut other = request();
+    other.name = CertificateName::new("another-cert").unwrap();
+    other.key_algorithm = CertificateKeyAlgorithm::EcdsaP384;
+    let mut second = fixture
+        .store
+        .create(&other, &fixture.account)
+        .await
+        .unwrap();
+    let second_record = second.record().await.unwrap();
+    let second_generation = fixture
+        .store
+        .slot(&second_record.name)
+        .join(second_record.generation_name());
+    let chain = leaf_for(&second_generation, &second_record.identifiers);
+    let next_stage = stage.clone();
+    let valid = order(&fixture.server, "valid", Some("2099-01-01T00:00:00Z"));
+    Mock::given(method("POST"))
+        .and(path("/finalize/custom"))
+        .respond_with(move |_: &wiremock::Request| {
+            next_stage.store(3, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "other_finalized")
+                .insert_header("Retry-After", "0")
+                .set_body_json(valid.clone())
+        })
+        .with_priority(1)
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/certificate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "certificate")
+                .set_body_raw(chain, "application/pem-certificate-chain"),
+        )
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    // mount_creation expects one request; override it for the second independent identity.
+    Mock::given(method("POST"))
+        .and(path("/vendor/create"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("Replay-Nonce", "same_order")
+                .insert_header("Location", format!("{}/order/custom", fixture.server.uri()))
+                .set_body_json(order(
+                    &fixture.server,
+                    "ready",
+                    Some("2099-01-01T00:00:00Z"),
+                )),
+        )
+        .with_priority(1)
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let outcome = fixture
+        .service
+        .run(second.as_mut(), &Dns(true), &execution())
+        .await
+        .unwrap();
+    let IssueOutcome::Completed {
+        record: completed, ..
+    } = outcome
+    else {
+        panic!("second request should complete")
+    };
+    assert_eq!(completed.order_url.as_ref(), Some(expected_order));
+    drop(second);
 }

@@ -16,6 +16,7 @@ use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 
 pub mod certificate;
+pub mod key_algorithm;
 pub mod progress;
 pub mod service;
 
@@ -87,6 +88,8 @@ pub struct IssueRequest {
     pub name: CertificateName,
     /// Canonical, duplicate-free domains; first is the primary domain.
     pub identifiers: Vec<DnsIdentifier>,
+    /// Certificate key choice, independent of the account signing key.
+    pub key_algorithm: key_algorithm::CertificateKeyAlgorithm,
     /// Stable local account name, never transmitted to the CA.
     pub account_name: String,
 }
@@ -142,6 +145,8 @@ pub struct IssueRecord {
     pub account_url: AcmeUrl,
     /// Thumbprint used to derive the outstanding key authorizations.
     pub account_thumbprint: String,
+    /// Immutable certificate key choice used by this generation.
+    pub key_algorithm: key_algorithm::CertificateKeyAlgorithm,
     /// Ordered canonical DNS identifiers.
     pub identifiers: Vec<DnsIdentifier>,
     /// Local execution stage, independent of order status.
@@ -156,6 +161,10 @@ pub struct IssueRecord {
     pub authorizations: Vec<AuthorizationRecord>,
     /// Saved before finalize; the same CSR is never regenerated or silently replaced.
     pub finalize_submitted: SubmissionState,
+    /// Explicit CA rejection of this fixed CSR. Later changes to a reused order
+    /// cannot turn this generation into a different certificate/key identity.
+    #[serde(default)]
+    pub finalize_rejection: Option<aster_acme_protocol::problem::Problem>,
     /// Earliest next query, respecting CA Retry-After across process restart.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub next_poll_at: Option<time::OffsetDateTime>,

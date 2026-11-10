@@ -38,7 +38,7 @@ aster-acme cert revoke --operation <FULL-ID> --yes --json
 - 未确认的操作默认否确认；脚本必须 `-y/--yes`。它不暗含强制或绕过身份/产物检查。目标、账户和文件先检查，确认前不发现 directory 或提交 HTTP。
 - directory 提供 `revokeCert`，不拼固定路径。提交 struct→JSON，certificate 为叶子 DER 的无填充 base64url，不发送 PEM、fullchain 或证书私钥。
 - 当前仅使用绑定的活动签发账户密钥，JWS 使用 kid/nonce。证书私钥 jwk 签名和其他账户授权模式尚未提供。
-- `--reason` 可选：unspecified (0)、key-compromise (1)、affiliation-changed (3)、superseded (4)、cessation-of-operation (5)。缺省省略 reason；CA 可按自身策略拒绝某个原因。暂不提供 hold/removeFromCRL 等原因。
+- `--reason` 覆盖 RFC 5280 全部已分配代码：unspecified (0)、key-compromise (1)、ca-compromise (2)、affiliation-changed (3)、superseded (4)、cessation-of-operation (5)、certificate-hold (6)、remove-from-crl (8)、privilege-withdrawn (9)、aa-compromise (10)。7 未定义，解析时拒绝。缺省省略 reason；CA 可用 badRevocationReason 拒绝，不设客户端 CA 政策白名单。remove-from-crl 是增量 CRL 的移除条目，不代表 ACME 支持恢复证书；本客户端无论提交何种原因都不会将 confirmed revoked 改回有效。
 - 先保存 pending，再提交请求。只有 HTTP 200 或 HTTP 400 的 alreadyRevoked problem 确认成功，空成功 body 合法。网络、5xx、未知响应或确认写入失败保留未确认状态。
 - 不自动重放超时或 5xx；transport 仅对 badNonce 有限重签。操作员显式再次执行 revoke 时，可使用同一证书和原原因重新请求，以 200/alreadyRevoked 确认。pending 不允许换原因；省略时沿用原原因。
 - 首次请求的明确 4xx problem 拒绝可恢复为未请求；之后的拒绝不能抹除更早 pending 的不确定性。已确认重复调用直接返回本地结果。
@@ -68,3 +68,23 @@ aster-acme cert revoke --operation <FULL-ID> --yes --json
 准备与确认期间持有同一 cert.lock，预检托管文件、目录和 current/临时链接的 no-follow、权限、owner 和硬链接边界；不解码私钥。用户额外文件/目录/链接保留原位，锁 inode 始终保留。阻塞清理保留租约至结束；先落盘 .removing 标记，中断后阻止新建复用残留；成功后移除标记。没有额外内容的版本目录会删除，名称目录可能仅剩锁文件。
 
 account show 的核验输出统一为 CA query: account refreshed / not performed (local data only)，JSON 为 ca_query.account_refreshed。证书查询范围为 order_refreshed/authorizations_refreshed，吊销依据单列 saved CA response，不将整条记录笼统标为 verified。
+
+## 证书密钥算法
+
+RFC 8555 §7.4 没有封闭的证书公钥算法列表；CSR 表达公钥及自签名，CA 决定接受范围。§6.2 的 ES256 必须支持/Ed25519 建议支持针对账户 JWS，不约束证书公钥，也不决定 CA 证书签名算法。
+
+公共 CertificateKeyAlgorithm 定义八个真实可生成选项：ecdsa-p256（默认）、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。CLI `cert issue -k/--key-type` 直接从该枚举产生可选值，不复制第二套算法表，不按 CA 预设过滤。Let’s Encrypt 官方 integration guide 当前列出 P-256/P-384 和 RSA 2048/3072/4096；其他选项可用于接受它们的自定义 CA，拒绝时保留实际 badCSR 等错误，不自动换算法重下单。
+
+ECDSA CSR 分别用 SHA-256/384/512，RSA CSR 用 PKCS#1 SHA-256，Ed25519 用原算法。全部由现有 AWS-LC/rcgen 后端生成，无 OpenSSL 或新密码学依赖；RSA 8192 通过 AWS-LC 标准 PKCS#8 接入 rcgen，耗时可能较长。账户签名仍 ES256，与证书选项独立。
+
+key_algorithm 同时保存于稳定 cert.toml 和各 operation.toml；创建后不可变。恢复使用原密钥和固定 CSR，不能同时指定 --resume 与 --key-type；后续续期存储入口继承相同选择。读取时校验实际曲线或 RSA modulus 位数与保存选择一致，不以 digest 正确替代算法校验；返回证书继续验证公钥/SAN/有效期和链。issue 创建前输出 Certificate key type，恢复输出保存值，list/show/JSON 显示同一字段。未发布格式直接演进，不做缺字段兼容或迁移。
+
+## 固定 CSR 被 CA 拒绝后的恢复
+
+某些 CA 会为同一账户和域名集合复用未完成订单。独立本地申请的 CA order URL 因此可能相同；这不允许混用本地密钥和产物。finalize 的明确 HTTP400 badCSR 会保存到 operation.finalize_rejection，恢复先返回该固定 CSR 的原始问题，不再根据后来被其他申请完成的订单下载证书；列表 STATUS、详情和选择器标记红色 failed (CSR rejected)，ORDER STATUS 仍展示 CA 原始状态（例如蓝色 ready）。nonce 过期、网络超时或其他未确认结果不冒充 badCSR，不改变原有有界重试/不重放规则。
+
+此前未保存的错误无法从已变更的远端订单还原，不自动猜测或补写。更换密钥算法必须显式新建申请，原始失败材料保留。协议问题使用 ProblemKind（RFC8555 §6.7 的24项标准值及 Unknown(String)），JSON/TOML 仍是原始 type URI，未知扩展无损保留，调用方按枚举分发。
+
+CLI 的 ACME Problem 诊断集中到 common/error/problem，账户/签发/吊销共享；按 ProblemKind 穷尽映射可执行建议，不把所有错误都提示“resume”。保留 CA detail、未知 URI、Retry-After，以及最多8条 subproblem 的 identifier/detail；截断展示不修改库中的完整结构。仅改变展示，不从提示中增加自动重试策略。
+
+终端样式统一用 common/output::Style 枚举，ANSI 数字只在该模块编码；表格只保留一个 align 实现，通过可选回调在计算纯文本宽度后着色。cert list 隐藏 CURRENT 列，show/JSON 保留 current；ORDER STATUS 的 valid=绿、ready=蓝、pending/processing=黄、invalid/unknown=红，本地 failed(CSR rejected) 独立为红。

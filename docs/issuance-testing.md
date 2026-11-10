@@ -74,3 +74,13 @@ Registry/参数与 release 收尾：200 项 workspace 测试和严格 Clippy 通
 HTTP 单独升级到 registry 的 =0.1.0-alpha.2，utils/macros 保持 alpha.1。workspace 只启用 json、rustls-aws-lc-rs、system-proxy；直接 reqwest 依赖关闭默认且不另选 features，HttpClient 显式选择 TlsBackend::Rustls。生产 normal/build feature 图确认无 form/query/multipart/stream/charset/http2/default 入口；系统代理与 rustls 平台根行为保留。
 
 同一 macOS target、normal+build、去重包口径从 258 降至 246；全平台/测试 Cargo.lock 条目从 334 降至 326。被移除的可选依赖包括 encoding_rs、mime_guess、serde_urlencoded 和 wasm-streams。252 项 workspace 测试及严格 Clippy 通过，TLS 守卫继续拒绝 native-tls/OpenSSL；没有真实 CA mutation。
+
+## 证书密钥与吊销原因扩展验收
+
+本轮 261 项 workspace 测试通过：八种 CertificateKeyAlgorithm 均实际生成 PKCS#8/CSR，并用独立 AWS-LC 验证器核验 CSR 签名（P-521 SHA-512 单独选择其验证算法），校验证书公钥/SAN、PEM 与 DER 私钥一致、错钥拒绝。真实文件会话逐项完成落盘、重启打开、固定 CSR 不变、算法不可篡改、续期准备保留类型并生成新密钥；digest 未变但保存算法不符也拒绝。包含实际 RSA 8192 生成，无 OpenSSL 或新密码学依赖。
+
+CLI 枚举驱动八种 key-type 解析、默认 ecdsa-p256、短参数 -k、resume/显式 key-type 互斥、未知算法拒绝，issue 新建/恢复输出实际选择，列表/详情/JSON 显示一致字段。十种 RFC5280 已分配原因逐项核验 struct→JSON 数字编码；7/越界/负值拒绝，CA badRevocationReason 保留且不冒报吊销成功。账户签名仍 ES256。没有真实 CA 签发/吊销，本地生成能力不等于所有公开 CA 接受。
+
+固定CSR拒绝恢复回归实际模拟 P521 badCSR、P384 共享相同 order 成功、P521 重启后返回原错误且零额外请求，原钥/CSR不变且不写错误产物。ProblemKind 覆盖RFC8555的24项标准值及未知URI往返，线上URI序列化不变；公共CLI诊断测试覆盖badCSR、badRevocationReason、未知问题、限流和identifier子问题。此前没有持久化的真实失败原因不可从后来的valid订单还原，本轮不猜测补写或重放真实CA操作。
+
+最终收尾：266 项 workspace 测试、严格 Clippy、workspace 依赖/TLS 策略、格式、文档构建及 whitespace 检查通过；新增公共 problem 诊断正常/未知/子问题/限流回归。所有运行使用独立构建目标目录，真实申请数据仅只读核对；没有提交新订单、重新 finalize 或吊销真实证书。

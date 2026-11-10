@@ -78,7 +78,7 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RevocationSe
         "last_status":"valid","deactivation":"not_requested","key_rotation":null,"accepted_terms_url":null,"state":"registered"
     })).unwrap();
     let record:IssueRecord=serde_json::from_value(serde_json::json!({
-        "solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+        "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"local-id","account_thumbprint":account.key_thumbprint,
         "directory":url("/directory"),"account_url":url("/account/1"),"identifiers":["example.com"],
         "phase":"completed","creation_submitted":true,"order_url":url("/order/1"),"finalize_submitted":"submitted","authorizations":[]
@@ -110,12 +110,27 @@ async fn revoke_signs_exact_leaf_der_and_reason_and_confirmed_repeat_is_local() 
         .expect(1)
         .mount(&server)
         .await;
-    let record = service.revoke(&mut session, Some(1)).await.unwrap();
+    let record = service
+        .revoke(
+            &mut session,
+            Some(aster_acme_protocol::revocation::RevocationReason::KeyCompromise),
+        )
+        .await
+        .unwrap();
     assert_eq!(record.revocation.state, RevocationState::Confirmed);
-    assert_eq!(record.revocation.reason, Some(1));
+    assert_eq!(
+        record.revocation.reason,
+        Some(aster_acme_protocol::revocation::RevocationReason::KeyCompromise)
+    );
     assert!(record.revocation.requested_at.is_some());
     assert!(record.revocation.confirmed_at.is_some());
-    service.revoke(&mut session, Some(4)).await.unwrap(); // Confirmed result does not revoke again.
+    service
+        .revoke(
+            &mut session,
+            Some(aster_acme_protocol::revocation::RevocationReason::Superseded),
+        )
+        .await
+        .unwrap(); // Confirmed result does not revoke again.
     let requests = server.received_requests().await.unwrap();
     let request = requests
         .iter()
@@ -130,7 +145,10 @@ async fn revoke_signs_exact_leaf_der_and_reason_and_confirmed_repeat_is_local() 
     assert!(header.get("jwk").is_none());
     let payload: RevocationRequest =
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&jws.payload).unwrap()).unwrap();
-    assert_eq!(payload.reason, Some(1));
+    assert_eq!(
+        payload.reason,
+        Some(aster_acme_protocol::revocation::RevocationReason::KeyCompromise)
+    );
     assert_eq!(
         URL_SAFE_NO_PAD.decode(payload.certificate).unwrap(),
         session.der
@@ -155,7 +173,7 @@ async fn already_revoked_is_confirmed_and_unspecified_reason_is_omitted() {
         .respond_with(
             ResponseTemplate::new(400)
                 .insert_header("Replay-Nonce", "next")
-                .set_body_json(serde_json::json!({"type":ALREADY_REVOKED})),
+                .set_body_json(serde_json::json!({"type":ProblemKind::AlreadyRevoked})),
         )
         .mount(&server)
         .await;
@@ -178,7 +196,7 @@ async fn already_revoked_is_confirmed_and_unspecified_reason_is_omitted() {
 
 #[tokio::test]
 async fn local_eligibility_endpoint_identity_and_save_failures_send_nothing() {
-    for case in 0..5 {
+    for case in 0..4 {
         let (server, service, mut session) = fixture(case != 0, Duration::from_secs(5)).await;
         match case {
             1 => session.record.lock().await.phase = IssuancePhase::Authorizing,
@@ -186,7 +204,7 @@ async fn local_eligibility_endpoint_identity_and_save_failures_send_nothing() {
             3 => session.fail_save.store(true, Ordering::SeqCst),
             _ => {}
         }
-        let reason = if case == 4 { Some(7) } else { None };
+        let reason = None;
         assert!(service.revoke(&mut session, reason).await.is_err());
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
@@ -201,22 +219,42 @@ async fn timeout_is_pending_and_explicit_retry_preserves_original_reason() {
         .expect(1)
         .mount(&server)
         .await;
-    assert!(service.revoke(&mut session, Some(1)).await.is_err());
+    assert!(
+        service
+            .revoke(
+                &mut session,
+                Some(aster_acme_protocol::revocation::RevocationReason::KeyCompromise)
+            )
+            .await
+            .is_err()
+    );
     let pending = session.record().await.unwrap().revocation;
     assert_eq!(pending.state, RevocationState::Pending);
     assert!(pending.confirmed_at.is_none());
-    assert!(service.revoke(&mut session, Some(4)).await.is_err());
+    assert!(
+        service
+            .revoke(
+                &mut session,
+                Some(aster_acme_protocol::revocation::RevocationReason::Superseded)
+            )
+            .await
+            .is_err()
+    );
     Mock::given(method("POST"))
         .and(path("/vendor/revoke"))
         .respond_with(
-            ResponseTemplate::new(400).set_body_json(serde_json::json!({"type":ALREADY_REVOKED})),
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"type":ProblemKind::AlreadyRevoked})),
         )
         .with_priority(1)
         .expect(1)
         .mount(&server)
         .await;
     let record = service.revoke(&mut session, None).await.unwrap();
-    assert_eq!(record.revocation.reason, Some(1));
+    assert_eq!(
+        record.revocation.reason,
+        Some(aster_acme_protocol::revocation::RevocationReason::KeyCompromise)
+    );
     assert_eq!(record.revocation.requested_at, pending.requested_at);
     assert_eq!(record.revocation.state, RevocationState::Confirmed);
 }
@@ -286,5 +324,48 @@ async fn dropped_in_flight_revocation_preserves_pending_intent() {
     assert_eq!(
         session.record().await.unwrap().revocation.state,
         RevocationState::Pending
+    );
+}
+
+#[tokio::test]
+async fn every_assigned_reason_is_sent_as_numeric_code_without_a_client_ca_policy_allowlist() {
+    for reason in RevocationReason::ALL {
+        let (server, service, mut session) = fixture(true, Duration::from_secs(5)).await;
+        Mock::given(method("POST"))
+            .and(path("/vendor/revoke"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "next"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = service.revoke(&mut session, Some(reason)).await.unwrap();
+        assert_eq!(result.revocation.reason, Some(reason));
+        let requests = server.received_requests().await.unwrap();
+        let request = requests
+            .iter()
+            .find(|request| request.method == "POST")
+            .unwrap();
+        let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
+        assert_eq!(payload["reason"], reason.code());
+    }
+}
+
+#[tokio::test]
+async fn ca_bad_revocation_reason_is_preserved_as_protocol_error_and_not_reported_as_revoked() {
+    let (server, service, mut session) = fixture(true, Duration::from_secs(5)).await;
+    Mock::given(method("POST")).and(path("/vendor/revoke"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({"type":"urn:ietf:params:acme:error:badRevocationReason","detail":"this CA accepts only keyCompromise"})))
+        .expect(1).mount(&server).await;
+    let error = service
+        .revoke(&mut session, Some(RevocationReason::CertificateHold))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error,IssueError::Transport(ref error) if error.is_problem(&ProblemKind::BadRevocationReason))
+    );
+    assert_eq!(
+        session.record().await.unwrap().revocation.state,
+        RevocationState::NotRequested
     );
 }

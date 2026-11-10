@@ -1,14 +1,46 @@
 //! Shared human output policy: terminal colors, untrusted text, fields and hints.
 
+/// Terminal palette; ANSI escape codes belong only to this rendering boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Style {
+    Plain,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Cyan,
+    BoldRed,
+    BoldGreen,
+    BoldYellow,
+    BoldCyan,
+}
+
+impl Style {
+    const fn ansi(self) -> &'static str {
+        match self {
+            Self::Plain => "",
+            Self::Red => "31",
+            Self::Green => "32",
+            Self::Yellow => "33",
+            Self::Blue => "34",
+            Self::Cyan => "36",
+            Self::BoldRed => "1;31",
+            Self::BoldGreen => "1;32",
+            Self::BoldYellow => "1;33",
+            Self::BoldCyan => "1;36",
+        }
+    }
+}
+
 pub(crate) fn colors(terminal: bool) -> bool {
     terminal
         && std::env::var_os("NO_COLOR").is_none()
         && std::env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
-pub(crate) fn styled(text: &str, code: &str, enabled: bool) -> String {
-    if enabled {
-        format!("\x1b[{code}m{text}\x1b[0m")
+pub(crate) fn styled(text: &str, style: Style, enabled: bool) -> String {
+    if enabled && !matches!(style, Style::Plain) {
+        format!("\x1b[{}m{text}\x1b[0m", style.ansi())
     } else {
         text.to_owned()
     }
@@ -30,14 +62,14 @@ pub(crate) fn safe(value: &str) -> String {
 
 /// Presentation hint; paint only the label so the command text stays easy to copy.
 pub(crate) fn tips(message: &str, color: bool) -> String {
-    format!("{} {}", styled("Tips:", "34", color), safe(message))
+    format!("{} {}", styled("Tips:", Style::Blue, color), safe(message))
 }
 
 /// Shared detail-field layout; callers can style already escaped semantic values.
 pub(crate) fn field(label: &str, value: &str, color: bool) -> String {
     use unicode_width::UnicodeWidthStr;
     let padding = " ".repeat(25_usize.saturating_sub(label.width()));
-    format!("  {}{padding}  {value}", styled(label, "36", color))
+    format!("  {}{padding}  {value}", styled(label, Style::Cyan, color))
 }
 
 /// Confirmation blocks share the same field alignment and warning policy as details.
@@ -47,7 +79,7 @@ pub(crate) fn confirmation(details: &str, color: bool) -> String {
         .enumerate()
         .map(|(index, line)| {
             if index == 0 {
-                return styled(&safe(line), "1;33", color);
+                return styled(&safe(line), Style::BoldYellow, color);
             }
             if let Some((label, value)) = line
                 .strip_prefix("  ")
@@ -55,7 +87,7 @@ pub(crate) fn confirmation(details: &str, color: bool) -> String {
             {
                 return field(&format!("{label}:"), &safe(value), color);
             }
-            styled(&safe(line), "33", color && !line.is_empty())
+            styled(&safe(line), Style::Yellow, color && !line.is_empty())
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -99,5 +131,26 @@ mod tests {
         let plain = confirmation(message, false);
         assert!(!plain.contains('\x1b'));
         assert!(plain.contains("https://ca.example/directory"));
+    }
+    #[test]
+    fn palette_has_one_encoding_boundary_and_plain_never_emits_escape_sequences() {
+        for (style, code) in [
+            (Style::Red, "31"),
+            (Style::Green, "32"),
+            (Style::Yellow, "33"),
+            (Style::Blue, "34"),
+            (Style::Cyan, "36"),
+            (Style::BoldRed, "1;31"),
+            (Style::BoldGreen, "1;32"),
+            (Style::BoldYellow, "1;33"),
+            (Style::BoldCyan, "1;36"),
+        ] {
+            assert_eq!(
+                styled("value", style, true),
+                format!("\x1b[{code}mvalue\x1b[0m")
+            );
+            assert_eq!(styled("value", style, false), "value");
+        }
+        assert_eq!(styled("value", Style::Plain, true), "value");
     }
 }

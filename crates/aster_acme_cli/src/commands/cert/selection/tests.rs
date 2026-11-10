@@ -45,7 +45,7 @@ fn record(id: char, created: &str) -> aster_acme::issuance::IssueRecord {
         "operation_id":id.to_string().repeat(43),"name":"example.com","created_at":created,
         "account_name":"default","account_id":"account","directory":"https://ca.example/directory",
         "account_url":"https://ca.example/account","account_thumbprint":"key","identifiers":["example.com"],
-        "solver_id":"manual_dns","phase":"creating_order","creation_submitted":false,"order_url":null,"order":null,
+        "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","phase":"creating_order","creation_submitted":false,"order_url":null,"order":null,
         "authorizations":[],"finalize_submitted":"not_submitted","next_poll_at":null,"certificate_not_after":null
     })).unwrap()
 }
@@ -389,7 +389,7 @@ fn selectors_and_table_share_san_summary_and_current_marker_with_full_details_re
     assert!(!label.contains("unrelated.example.net"));
     let table = super::super::render::list(std::slice::from_ref(&request), false).unwrap();
     assert!(table.contains("DOMAINS"));
-    assert!(table.contains("CURRENT"));
+    assert!(!table.contains("CURRENT"));
     assert!(table.contains("example.com, *.example.com, api.example.com, +2"));
     let details = super::super::render::show(std::slice::from_ref(&request), false, false).unwrap();
     assert!(details.contains("unrelated.example.net"));
@@ -493,5 +493,28 @@ fn historical_list_and_show_are_explicit_and_do_not_conflict_with_exact_operatio
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ])
         .is_err()
+    );
+}
+
+#[test]
+fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_valid() {
+    use aster_acme_protocol::problem::{Problem, ProblemKind};
+    let mut request = record('a', "2026-01-01T00:00:00Z");
+    request.finalize_rejection = Some(Problem {
+        kind: ProblemKind::BadCsr,
+        detail: Some("ECDSA curve P-521 not allowed".into()),
+        instance: None,
+        subproblems: vec![],
+        extensions: serde_json::Map::new(),
+    });
+    let text = super::super::render::show(std::slice::from_ref(&request), false, true).unwrap();
+    assert!(text.contains("CSR rejected"));
+    assert!(text.contains("ECDSA curve P-521 not allowed"));
+    assert!(super::choice_label(&request).contains("CSR rejected"));
+    let json: serde_json::Value =
+        serde_json::from_str(&super::super::render::show(&[request], true, true).unwrap()).unwrap();
+    assert_eq!(
+        json[0]["finalize_rejection"]["type"],
+        "urn:ietf:params:acme:error:badCSR"
     );
 }
