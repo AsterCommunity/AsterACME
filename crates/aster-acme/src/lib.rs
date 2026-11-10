@@ -11,3 +11,10 @@
         clippy::todo
     )
 )]
+
+pub mod challenge;
+pub mod identifier;
+pub mod solver;
+
+#[cfg(test)]
+mod tests;

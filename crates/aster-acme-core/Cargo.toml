@@ -6,10 +6,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "ACME protocol models and state transition rules."
+description = "ACME resource states and state machine decisions."
 publish.workspace = true
+readme = "README.md"
 
 [dependencies]
+aster_forge_macros.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

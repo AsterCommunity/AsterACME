@@ -99,9 +99,9 @@ RFC 8555 引用的是当时的 HTTP 和 problem details 规范。新基础规范
 
 ## 6. DNS provider 复用来源
 
-优先评估 [AptS-1547/dns-orchestrator](https://github.com/AptS-1547/dns-orchestrator) 中独立的 `dns-orchestrator-provider` crate。调查时本地 manifest 为 0.1.2、MIT，支持 Cloudflare、阿里云、DNSPod 和华为云，并提供记录查询、创建、删除等接口。
+参考 [AptS-1547/dns-orchestrator](https://github.com/AptS-1547/dns-orchestrator) 中独立的 `dns-orchestrator-provider` crate。调查时本地 manifest 为 0.1.2、MIT，支持 Cloudflare、阿里云、DNSPod 和华为云，并提供记录查询、创建、删除等接口。
 
-依赖落地前确认已发布版本、feature、错误语义及 TXT 多值行为；此处记录不保证 crates.io 发布状态。DNS-01 编排由本项目负责，供应商 API 和签名逻辑优先复用，避免复制维护。
+DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版权与许可声明；迁入时重新核验 API 签名、分页、错误与 TXT 多值语义。DNS-01 编排与迁入代码的后续维护由本项目负责。
 
 原项目 toolbox 的传播检测统计公共解析器答案一致率，可参考查询机制，不直接作为 ACME 就绪判定。
 

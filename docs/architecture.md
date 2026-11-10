@@ -1,6 +1,6 @@
 # AsterACME 架构设计
 
-状态：设计基线，尚未实现。日期：2026-11-10。
+状态：架构基线；状态决策、上层类型与 solver 契约已实现，网络签发尚未实现。日期：2026-11-10。
 
 规范依据见 [ACME RFC 参考](rfc-reference.md)。本文确定职责、依赖方向与可靠性契约；Rust 代码均为接口示意，不承诺最终签名。
 
@@ -18,7 +18,7 @@ AsterACME 提供可嵌入的 Rust 库和 CLI，管理 ACME 账户、证书申请
 flowchart TD
     CLI[CLI / 嵌入式应用] --> API[证书服务 issue / renew / revoke / resume]
     API --> ORCH[异步编排器]
-    ORCH --> CORE[Core 协议模型与状态转换]
+    ORCH --> CORE[Core 状态与推进规则]
     ORCH --> TRANSPORT[ACME transport]
     TRANSPORT --> CA[ACME CA]
     ORCH --> SOLVER[Challenge solver]
@@ -34,8 +34,8 @@ flowchart TD
 
 | Crate | 负责 | 不负责 |
 | --- | --- | --- |
-| `aster-acme-core` | 协议资源、标识符、错误模型、状态及转换规则、签名输入和 challenge 材料计算 | 网络、磁盘、供应商凭据、调度 |
-| `aster-acme` | 公共高层 API、异步编排、ACME transport、solver/存储/密钥接口、续期策略 | DNS 供应商实现、命令解析 |
+| `aster-acme-core` | 资源状态枚举、本地流程阶段及纯状态推进决策 | 验证方法、材料计算、网络、磁盘、供应商凭据、调度 |
+| `aster-acme` | 标识符、验证策略与材料、公共高层 API、异步编排、ACME transport、solver/存储/密钥接口、续期策略 | DNS 供应商实现、命令解析 |
 | `aster-acme-dns` | DNS-01 solver、zone 路由、委托解析、传播检查、provider 适配 | ACME 订单推进、证书部署 |
 | `aster-acme-cli` | 参数与配置、文件存储适配、进度显示、证书输出、部署 hook、退出码 | 协议状态机、challenge 重试与清理算法 |
 
@@ -63,7 +63,7 @@ Core 用穷尽匹配表达已知状态，并保留未知 wire 值用于兼容和
 
 challenge 清理具有独立状态，可与其他授权推进交错；部署也独立于签发。订单 valid 不表示证书已下载、输出成功或部署成功。
 
-Core 提供可确定性测试的解析、材料计算和转换判断。编排器取得服务端响应后更新快照，调用 Core 决定合法的下一步。不同轮询间可能跳过中间状态，因此不能只接受逐级观察到的转换。
+Core 提供可确定性测试的状态解析和推进判断，不理解验证方法、标识符或材料。上层负责这些语义。编排器取得服务端响应后更新快照，调用 Core 决定合法的下一步。不同轮询间可能跳过中间状态，因此不能只接受逐级观察到的转换。
 
 ## 4. 公共 API 与配置边界
 
@@ -137,7 +137,7 @@ TLS-ALPN-01 通过独立适配器提供验证证书和 ALPN 响应；普通业�
 
 ## 6. ACME transport 与密码学
 
-Transport 负责 directory、HTTPS、响应解析、nonce 管理、JWS 封装、POST-as-GET、Retry-After 和 ACME problem 映射。Core 定义协议语义及签名输入，密钥接口完成签名；密码学实现来自成熟库。
+Transport 负责 directory、HTTPS、响应解析、nonce 管理、JWS 封装、POST-as-GET、Retry-After 和 ACME problem 映射。上层定义请求模型及签名输入，密钥接口完成签名；密码学实现来自成熟库。
 
 - nonce 并发安全地消费，badNonce 后按有界策略重新构建并签名请求；不重放原始 JWS。
 - 严格区分 POST-as-GET 空 payload、JSON 空对象和 challenge 响应。
@@ -192,8 +192,9 @@ CLI 初期提供可由 systemd timer/cron 调用的单次续期检查，库暴�
 
 | 层 | 验证重点 |
 | --- | --- |
-| Core | 资源状态转换、跳跃观察、未知状态、JWK thumbprint、challenge 材料与规范向量 |
+| Core | 资源状态推进、跳跃观察、未知与失败状态拒绝；不测试验证方式 |
 | Transport | mock CA 验证 JWS、nonce 并发、badNonce、POST-as-GET、Retry-After、problem、超时不确定性 |
+| 上层类型 | DNS/IDN/通配符、长度边界、token/key authorization、验证材料、方法选择 |
 | 编排 | 虚拟时钟、多个授权、部分失败、有效授权复用、取消、恢复、重试上限 |
 | Solver | TXT 多值和共享所有权、委托、传播超时、prepare 崩溃窗口、清理幂等 |
 | 存储/输出 | schema 版本、并发锁、原子发布、私钥权限、部署失败后重试 |
@@ -216,3 +217,12 @@ Core 保持无网络和运行时依赖。其他基础组件包括 thiserror、ur
 DNSO 不作为 crate 依赖。按需迁入 provider 源码，保留原 MIT 版权与许可声明，重新核验 API 签名、分页、TXT 多值、错误与重试语义，并适配统一 reqwest 客户端。原项目不作为维护和正确性的保证。
 
 当前骨架使用 stable Rust channel、edition 2024，manifest 的最低版本暂设 1.99，成员暂不发布；MSRV 尚未作跨版本验证。CLI 仅提供帮助和版本信息，普通执行明确返回未实现错误。
+
+
+## 13. 首批类型实现状态
+
+已实现 core 资源状态与纯动作决策，上层 DNS 标识符、challenge 类型/策略/材料及 solver trait。`ChallengeSolver` 用 async-trait 提供可注入的 dyn 接口；执行上下文包含取消令牌和单次调用 deadline，但实际 I/O 中的取消与期限执行仍由 solver 实现。恢复句柄带非零 schema 版本，未知方法与状态均保留 wire 文本但不进入执行。
+
+字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。尚未实现具体 solver、网络编排或完整持久化恢复，不能据此声称已有端到端签发能力。
+
+Forge 宏依赖已固定到远端 master 提交 `beb3d45faad47ca9e53e3f704e0db57c686a4882`；成员仅从根 workspace 继承，不保留本地 path 或 patch。

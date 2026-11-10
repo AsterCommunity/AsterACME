@@ -16,6 +16,8 @@ publish = false
 # All dependency versions and feature selections belong here.
 # Members must inherit dependencies with `workspace = true`.
 [workspace.dependencies]
+# Shared wire-enum generation; pin the published Forge revision.
+aster_forge_macros = { git = "https://github.com/AsterCommunity/AsterForge", rev = "beb3d45faad47ca9e53e3f704e0db57c686a4882" }
 aster-acme-core = { path = "crates/aster-acme-core" }
 aster-acme = { path = "crates/aster-acme" }
 aster-acme-dns = { path = "crates/aster-acme-dns" }
@@ -33,6 +35,9 @@ thiserror = "2"
 url = { version = "2", features = ["serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 base64 = "0.22"
+idna = "1"
+async-trait = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 

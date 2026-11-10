@@ -1,4 +1,4 @@
-//! ACME protocol models and state transition rules.
+//! ACME resource states and state machine decisions.
 //!
 //! This crate must remain independent of async runtimes and external I/O.
 
@@ -13,3 +13,10 @@
         clippy::todo
     )
 )]
+
+pub mod machine;
+pub mod protocol;
+pub mod workflow;
+
+#[cfg(test)]
+mod tests;
