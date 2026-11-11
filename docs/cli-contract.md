@@ -6,7 +6,7 @@
 
 | 参数 | 统一含义 | 不包含的权限 |
 | --- | --- | --- |
-| `-y / --yes` | 对当前命令已经明确的操作作肯定确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
+| `-y / --yes` | 自动接受当前命令所有操作确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
 | `--accept-terms` | 注册时同意所选 CA 当前实际公布的条款 | 不确认复用已有账户，不作为永久自动接受配置 |
 | `--skip-dns-check` | 在 cert issue/renew 跳过本地 DNS 可见性检查 | 不免除 CA 验证，不忽略过期/身份/密钥/CSR/证书检查，不覆盖用户文件 |
 | `--verify` | 查询已有资源的 CA 状态，更新观察快照 | 不启动验证、不 finalize、不新建订单 |
@@ -29,7 +29,7 @@
 
 首次手动 DNS 自动化申请必须先让用户/脚本取得新 TXT 值；即使传 --yes/--skip-dns-check 也返回 action_required，不因“确认”假设记录已发布。首次终端申请未带 --yes 时仍可以现场输入和继续。发布后 resume，仍由 CA 完成实际验证。没有 --yes 的非 TTY/JSON resume 也不弹提示，按已有脚本行为直接检查 DNS；--yes 是显式确认语义，保持非终端一律不提示的统一规则。
 
---yes 不出现在 list/show/switch/recover/version；这些命令没有相同的危险操作确认。后续 renew 等命令按这里的确认语义扩展，不让 --yes 获得额外隐式权限。
+--yes 不出现在 list/show/switch/recover/version；这些命令没有相同的危险操作确认。issue/renew及后续验证实现均按这里的通用确认语义扩展，不让 --yes 获得额外隐式权限。
 
 ## 名称与选择
 
@@ -73,7 +73,7 @@
 | account rotate-key | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account remove | [NAME] / -n、-y；仅本地操作 |
-| cert renew | [NAME] / -n、--now、-y、--skip-dns-check、HTTP、--wait-timeout；定义固定，未到期返回 not_due |
+| cert renew | [NAME] / -n 或 --all；--now、-y、--skip-dns-check、HTTP、--wait-timeout；定义固定，未到期返回 not_due |
 | cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、--skip-dns-check、HTTP、--wait-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
@@ -105,3 +105,13 @@ cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / auth
 证书密钥和吊销原因共用库/协议枚举产生 CLI 选项；支持算法与 RFC 原因码、CA 可拒绝边界见生命周期契约。账户 key/rotate-key 仍使用 ES256，不因证书 -k 改变。
 
 --now 只在 cert renew 提前执行，不隐含 --yes/--skip-dns-check。--force/-f 已移除，无兼容别名。issue/renew 共享 RunArgs，但续期不暴露定义覆盖参数。账户list JSON使用ca_query.requested/refreshed/failed，remove仅描述本次ca_request_performed。
+
+批量入口为 cert renew --all，与NAME/--name互斥；顺序检查托管身份，not_due/待办/跳过/完成/失败分开计数，单项失败继续，Ctrl-C停止整个批次。批量不弹TXT确认，首次新TXT仍yield。JSON一次输出完整汇总：失败退出1，取消130，待办无失败退出0；不会再追加第二份错误JSON。细节见生命周期契约。
+
+cert issue --resume 不带名称时在真实终端选择未完成申请，选择行包含名称/SAN摘要/UTC申请时间/状态；--resume NAME继续直接定位，脚本/JSON需提供名称或--operation完整ID，不猜最新。只筛选未完成记录，完成版本不进入恢复选择。DNS未就绪的人类日志提示--skip-dns-check只跳本地查询，CA仍验证；JSON不增加人类日志。
+
+新建 cert issue 必须显式 -c/--challenge，无默认验证方式；终端可在 -c 已指定时引导域名输入。--yes不补填验证方式。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
+
+仅在实际存在证书前台进度时与最终结果之间留一空行；无进度的全未到期批次及单次not_due不加开头空行（JSON不加分隔）；批量标题/计数使用INFO/WARN/ERROR标签，表格复用公共对齐和Style，待办/取消黄色、失败红色、完成绿色、未到期青色。
+
+批量不输出重复计划表或逐项Checking日志；有续期/恢复工作时只先报告任务数和未到期数，实际事务持锁复核。仅实际执行项输出进度和Using CA；全未到期时只保留结果表及检查数量总结，其他汇总只展示非零计数。JSON完整计数不变。

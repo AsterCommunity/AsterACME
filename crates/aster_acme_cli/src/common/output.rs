@@ -60,6 +60,22 @@ pub(crate) fn safe(value: &str) -> String {
         .collect()
 }
 
+/// A separator is useful only when a report follows human progress output.
+#[derive(Clone, Copy)]
+pub(crate) enum ResultPreceding {
+    None,
+    Progress,
+}
+
+/// Separate a foreground progress stream from its final report; machine output
+/// remains exactly one document with no human separators.
+pub(crate) fn print_result(text: &str, json: bool, preceding: ResultPreceding) {
+    if !json && matches!(preceding, ResultPreceding::Progress) {
+        eprintln!();
+    }
+    println!("{text}");
+}
+
 /// Presentation hint; paint only the label so the command text stays easy to copy.
 pub(crate) fn tips(message: &str, color: bool) -> String {
     format!("{} {}", styled("Tips:", Style::Blue, color), safe(message))

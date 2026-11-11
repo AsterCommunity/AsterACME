@@ -30,8 +30,13 @@ async fn main() -> std::process::ExitCode {
     match dispatch::execute(args).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            common::error::error(error.as_ref(), json);
-            if error.is::<common::terminal::Canceled>() {
+            let reported = error.downcast_ref::<common::error::ReportedFailure>();
+            if reported.is_none() {
+                common::error::error(error.as_ref(), json);
+            }
+            if error.is::<common::terminal::Canceled>()
+                || matches!(reported, Some(common::error::ReportedFailure::Cancelled))
+            {
                 std::process::ExitCode::from(130)
             } else {
                 std::process::ExitCode::FAILURE

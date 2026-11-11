@@ -325,3 +325,5 @@ IssueSession.record 异步读取最新 durable 状态，不返回创建会话时
 见 [生命周期契约](certificate-lifecycle.md)。core::renewal/revocation 负责纯动作决策，protocol 持有 renewalInfo/revokeCert 发现字段与 wire struct，aster_acme::renewal/revocation 执行无签名 GET/账户签名 POST，存储在同一 IssueSession 下保存计划和状态。首次签发提交回退计划后立即查询 ARI；后续定时唤醒留给统一 daemon。CLI 增加 cert revoke，与 show 共用目标参数和账户→证书锁执行路径；不实现自动续期或额外 watch 命令。
 
 默认 list/show 选择托管证书的 in_use，list --history / show --history / --operation 显式访问历史；只有 in_use 可作为活跃续期计划，历史计划不再调度。证书分组和删除范围见生命周期契约。
+
+批量续期：CLI cert/renewal 只调度托管身份，复用 execute::transact 返回 CertificateResult（不打印）；cert/report 定义逐项结果、汇总与统一 BatchDisposition，render 将其一次输出。--all 不向库增加另一条签发路径；取消令牌覆盖整个顺序批次，存储仍负责租约与落盘，详细契约见生命周期文档。

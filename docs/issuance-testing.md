@@ -92,3 +92,15 @@ CLI 枚举驱动八种 key-type 解析、默认 ecdsa-p256、短参数 -k、resu
 账户/证书删除在根.locks保持原inode，成功清理无用户内容的对象目录；用户额外文件和失败标记边界仍覆盖。全库状态路径检查将结果JSON改为ActionRequired/Completed/NotDue标签枚举，not_due不再冒充错误；移除account remove对未查询远端状态的断言，account list提供实际刷新/失败计数，通配符授权与裸域名分开显示。统一选择器行使用ChoiceLabel（名称/摘要/UTC时间/状态/标记）和同一terminal索引身份。默认不显示重复标记，版本视图In use: yes/no。内部、字段、symlink路径统一in_use，无current别名或旧格式迁移。
 
 独立CLI子进程使用临时目录验证默认in_use/历史/精确operation视图、歧义脚本拒绝、history/revoked/all清理、保留pending/用户文件、外置锁；version --json为0.1.0-alpha.1，renew帮助不暴露域名/账户/密钥覆盖参数。所有六个workspace包独立声明该版本，未发布任何包、未操作真实CA或用户数据。
+
+## 批量续期验收
+
+cert renew --all 本轮全量292项测试通过（79客户端、111 CLI、77存储、13core、10protocol、2validation），严格Clippy、格式、依赖/TLS策略、文档构建与whitespace通过。新增参数范围/名称互斥、顺序执行、单项失败继续、手动待办后继续、空库存、无in_use跳过、预取消/进行中取消、提交成功同时取消仍保留完成项、实际证书锁超时后继续，以及批量汇总JSON的完成/待办/失败/取消与逐项结果一致性测试。
+
+真实本地账户/证书适配器回归核验not_due零新版本/密钥/HTTP、缺失账户不阻塞其他证书、--now时loopback连接失败保留原in_use和待恢复版本。独立CLI子进程使用临时目录与本机TLS阻塞监听器，验证空批次、混合失败/未到期/无选用版本结果、stdout单个JSON且stderr无第二份错误、失败退出1、SIGINT退出130及剩余项不执行。现有人工DNS首次yield和恢复、ARI/replaces、超时/重试/取消/原子产物等库回归继续通过。
+
+本轮未访问公网CA、未修改真实账户或证书、未扩展账户密钥算法、未启动daemon。全量库存损坏在安全枚举阶段整体失败；不能宣称能跳过任意损坏目录继续处理。
+
+恢复交互收尾：112项CLI测试及严格workspace Clippy通过；--resume未带名称使用类型化Choose/Named意图，终端仅枚举未完成申请，JSON/脚本不猜目标。独立PTY/JSON进程验收确认选择包含UTC申请时间、完成申请被排除、取消退出130且journal字节不变、不创建账户；DNS未就绪提示skip-dns-check只跳本地查询，CA仍验证。全部使用临时目录，不发公网CA请求。
+
+批量输出精简验收：114项CLI测试、严格Clippy、格式/依赖/TLS/whitespace检查通过。移除重复计划表与Checking renewal逐项日志，保留有工作时的数量简报，最终表按名称顺序输出；全未到期一句总结，其他人类计数仅非零，JSON完整不变。独立CLI子进程验证两项全未到期stderr无进度、结果只有一个有序表与总结，--now两项loopback失败仅一条数量简报、失败计数不混入零项；原JSON/取消/部分失败进程验收继续通过。只使用临时目录及本机拒绝连接地址，未操作真实CA。

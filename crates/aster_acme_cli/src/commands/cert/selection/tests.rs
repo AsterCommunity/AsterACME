@@ -5,8 +5,17 @@ use clap::Parser;
 #[test]
 fn issue_arguments_keep_resume_and_new_requests_separate() {
     for arguments in [
-        vec!["cert", "issue"],
-        vec!["cert", "issue", "-d", "Example.com", "-d", "*.example.com"],
+        vec!["cert", "issue", "-c", "manual_dns"],
+        vec![
+            "cert",
+            "issue",
+            "-d",
+            "Example.com",
+            "-d",
+            "*.example.com",
+            "-c",
+            "manual_dns",
+        ],
         vec!["cert", "issue", "--resume", "example.com"],
         vec![
             "cert",
@@ -18,6 +27,8 @@ fn issue_arguments_keep_resume_and_new_requests_separate() {
             "work",
             "-n",
             "example",
+            "-c",
+            "manual_dns",
         ],
     ] {
         assert!(Args::try_parse_from(std::iter::once("aster-acme").chain(arguments)).is_ok());
@@ -31,7 +42,16 @@ fn issue_arguments_keep_resume_and_new_requests_separate() {
             "-d",
             "other.com",
         ],
-        vec!["cert", "issue", "-d", "example.com", "--operation", "id"],
+        vec![
+            "cert",
+            "issue",
+            "-d",
+            "example.com",
+            "--operation",
+            "id",
+            "-c",
+            "manual_dns",
+        ],
         vec!["order", "create"],
         vec!["order", "show", "example.com", "--skip-dns-check"],
     ] {
@@ -142,7 +162,7 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
 fn one_challenge_option_selects_publication_without_exposing_wire_method() {
     use clap::CommandFactory;
     for arguments in [
-        vec!["cert", "issue", "-d", "example.com"],
+        vec!["cert", "issue", "-d", "example.com", "-c", "manual_dns"],
         vec!["cert", "issue", "-d", "example.com", "-c", "manual_dns"],
     ] {
         let parsed = Args::try_parse_from(std::iter::once("aster-acme").chain(arguments)).unwrap();
@@ -154,7 +174,7 @@ fn one_challenge_option_selects_publication_without_exposing_wire_method() {
         };
         assert!(matches!(
             args.challenge,
-            super::super::args::Challenge::ManualDns
+            Some(super::super::args::Challenge::ManualDns)
         ));
     }
     for flag in [
@@ -164,9 +184,17 @@ fn one_challenge_option_selects_publication_without_exposing_wire_method() {
     ] {
         assert!(
             Args::try_parse_from(
-                ["aster-acme", "cert", "issue", "-d", "example.com"]
-                    .into_iter()
-                    .chain(flag)
+                [
+                    "aster-acme",
+                    "cert",
+                    "issue",
+                    "-d",
+                    "example.com",
+                    "-c",
+                    "manual_dns"
+                ]
+                .into_iter()
+                .chain(flag)
             )
             .is_err()
         );

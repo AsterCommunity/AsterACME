@@ -114,12 +114,25 @@ fn key_algorithm_parser() -> impl clap::builder::TypedValueParser<Value = Certif
 }
 
 /// User-facing verification implementation; the ACME wire method stays internal.
-#[derive(Clone, Copy, ValueEnum, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum Challenge {
     /// Publish the requested DNS TXT records yourself.
-    #[default]
     #[value(name = "manual_dns")]
     ManualDns,
+}
+
+/// Explicit recovery intent distinguishes an omitted flag from terminal selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResumeTarget {
+    Choose,
+    Named(String),
+}
+
+fn parse_resume(value: &str) -> Result<ResumeTarget, String> {
+    match value {
+        "" => Ok(ResumeTarget::Choose),
+        name => parse_certificate_name(name).map(ResumeTarget::Named),
+    }
 }
 
 #[derive(Args)]
@@ -141,12 +154,18 @@ pub(crate) struct IssueArgs {
     /// Certificate key algorithm; CA acceptance varies. Account signing key is unchanged.
     #[arg(short = 'k', long = "key-type", value_parser = key_algorithm_parser(), default_value = "ecdsa-p256", conflicts_with = "resume")]
     pub key_algorithm: CertificateKeyAlgorithm,
-    /// How to validate domain ownership.
-    #[arg(short = 'c', long, value_enum, default_value = "manual_dns")]
-    pub challenge: Challenge,
-    /// Resume by certificate name; select interactively when several requests are unfinished.
-    #[arg(long, value_name = "CERTIFICATE",value_parser=parse_certificate_name)]
-    pub resume: Option<String>,
+    /// Required validation implementation for a new certificate; resume uses the saved method.
+    #[arg(
+        short = 'c',
+        long,
+        value_enum,
+        required_unless_present = "resume",
+        conflicts_with = "resume"
+    )]
+    pub challenge: Option<Challenge>,
+    /// Resume a saved request; omit the name to choose unfinished requests interactively.
+    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
+    pub resume: Option<ResumeTarget>,
     /// Exact saved request ID; required for ambiguous noninteractive recovery.
     #[arg(long, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
     pub operation: Option<String>,
@@ -157,7 +176,7 @@ pub(crate) struct IssueArgs {
 /// Foreground validation policy shared by initial issuance and renewal.
 #[derive(Args, Clone)]
 pub(crate) struct RunArgs {
-    /// Confirm manual TXT publication when continuing; DNS checks still run.
+    /// Automatically accept all operation confirmations; does not supply inputs or bypass validation.
     #[arg(short = 'y', long)]
     pub yes: bool,
     /// Skip only local DNS visibility checks; the CA still validates the challenge.
@@ -176,6 +195,9 @@ pub(crate) struct RunArgs {
 pub(crate) struct RenewArgs {
     #[command(flatten)]
     pub target: CertificateNameArgs,
+    /// Check every managed certificate sequentially; report each outcome without prompts.
+    #[arg(long, conflicts_with_all = ["name", "named_name"])]
+    pub all: bool,
     /// Renew before the saved renewal time; does not bypass validation or confirmation.
     #[arg(long)]
     pub now: bool,
@@ -342,6 +364,8 @@ mod tests {
                 "example.com",
                 "-k",
                 algorithm.name(),
+                "-c",
+                "manual_dns",
             ])
             .unwrap();
             let Command::Cert { command } = args.command else {
@@ -352,8 +376,16 @@ mod tests {
             };
             assert_eq!(options.key_algorithm, algorithm);
         }
-        let args =
-            Args::try_parse_from(["aster-acme", "cert", "issue", "-d", "example.com"]).unwrap();
+        let args = Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "issue",
+            "-d",
+            "example.com",
+            "-c",
+            "manual_dns",
+        ])
+        .unwrap();
         let Command::Cert { command } = args.command else {
             panic!("certificate command expected")
         };
@@ -368,8 +400,12 @@ mod tests {
             vec!["-d", "example.com", "-k", "unknown"],
         ] {
             assert!(
-                Args::try_parse_from(["aster-acme", "cert", "issue"].into_iter().chain(args))
-                    .is_err()
+                Args::try_parse_from(
+                    ["aster-acme", "cert", "issue", "-c", "manual_dns"]
+                        .into_iter()
+                        .chain(args)
+                )
+                .is_err()
             );
         }
     }
@@ -425,8 +461,17 @@ mod tests {
         }
         for flag in ["--force", "-f"] {
             assert!(
-                Args::try_parse_from(["aster-acme", "cert", "issue", "-d", "example.com", flag])
-                    .is_err()
+                Args::try_parse_from([
+                    "aster-acme",
+                    "cert",
+                    "issue",
+                    "-d",
+                    "example.com",
+                    flag,
+                    "-c",
+                    "manual_dns"
+                ])
+                .is_err()
             );
         }
         let parsed = Args::try_parse_from(["aster-acme", "cert", "renew", "web", "--now"]).unwrap();
@@ -439,5 +484,117 @@ mod tests {
         assert!(args.now);
         assert!(!args.run.yes);
         assert!(!args.run.skip_dns_check);
+    }
+    #[test]
+    fn batch_renewal_all_conflicts_with_names_but_not_explicit_execution_policies() {
+        for args in [
+            vec!["--all"],
+            vec!["--all", "--now", "--yes", "--skip-dns-check", "--json"],
+        ] {
+            let parsed =
+                Args::try_parse_from(["aster-acme", "cert", "renew"].into_iter().chain(args))
+                    .unwrap();
+            let Command::Cert { command } = parsed.command else {
+                panic!("expected cert")
+            };
+            let CertCommand::Renew(args) = *command else {
+                panic!("expected renew")
+            };
+            assert!(args.all);
+        }
+        for args in [
+            vec!["web", "--all"],
+            vec!["--all", "--name", "web"],
+            vec![
+                "--all",
+                "--operation",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+            vec!["--all", "--force"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "renew"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn resume_distinguishes_absent_flag_interactive_selection_and_explicit_name() {
+        for (args, expected) in [
+            (vec!["-c", "manual_dns"], None),
+            (vec!["--resume"], Some(ResumeTarget::Choose)),
+            (
+                vec!["--resume", "web"],
+                Some(ResumeTarget::Named("web".to_owned())),
+            ),
+        ] {
+            let parsed =
+                Args::try_parse_from(["aster-acme", "cert", "issue"].into_iter().chain(args))
+                    .unwrap();
+            let Command::Cert { command } = parsed.command else {
+                panic!("cert expected")
+            };
+            let CertCommand::Issue(args) = *command else {
+                panic!("issue expected")
+            };
+            assert_eq!(args.resume, expected);
+        }
+        assert!(
+            Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "--resume",
+                "--operation",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "--resume",
+                "-d",
+                "example.com"
+            ])
+            .is_err()
+        );
+    }
+    #[test]
+    fn new_issuance_requires_explicit_method_even_with_yes_and_resume_cannot_override_it() {
+        for args in [
+            vec![],
+            vec!["-d", "example.com"],
+            vec!["-d", "example.com", "--yes"],
+            vec!["--resume", "web", "-c", "manual_dns"],
+        ] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "cert", "issue"].into_iter().chain(args))
+                    .is_err()
+            );
+        }
+        assert!(
+            Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "-d",
+                "example.com",
+                "-c",
+                "manual_dns",
+                "--yes"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Args::try_parse_from(["aster-acme", "cert", "issue", "--resume", "web", "--yes"])
+                .is_ok()
+        );
+        assert!(
+            Args::try_parse_from(["aster-acme", "cert", "renew", "web", "-c", "manual_dns"])
+                .is_err()
+        );
     }
 }

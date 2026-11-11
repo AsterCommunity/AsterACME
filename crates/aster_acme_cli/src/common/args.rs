@@ -170,9 +170,17 @@ mod tests {
         };
         assert!(args.yes);
         assert!(!args.accept_terms);
-        let parsed =
-            Args::try_parse_from(["aster-acme", "cert", "issue", "-d", "example.com", "--json"])
-                .unwrap();
+        let parsed = Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "issue",
+            "-d",
+            "example.com",
+            "--json",
+            "-c",
+            "manual_dns",
+        ])
+        .unwrap();
         let Command::Cert { command } = parsed.command else {
             panic!("expected cert");
         };

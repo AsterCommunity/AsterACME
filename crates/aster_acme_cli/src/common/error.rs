@@ -14,6 +14,19 @@ mod problem;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
+/// The command already emitted a complete structured report; only its exit status remains.
+#[derive(Debug)]
+pub(crate) enum ReportedFailure {
+    Failed,
+    Cancelled,
+}
+impl std::fmt::Display for ReportedFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("See the emitted per-item report.")
+    }
+}
+impl std::error::Error for ReportedFailure {}
+
 /// Missing local identity, distinct from a CA rejecting an existing signing key.
 #[derive(Debug)]
 pub(crate) struct MissingLocalAccount {

@@ -122,11 +122,13 @@ Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed
 
 ## Renewal planning and revocation
 
-After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Periodic wakeups remain future daemon work.
+After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Batch renewal uses `cert renew --all`: process each managed certificate sequentially, retain manual TXT tasks, continue after per-item failures, and emit one summary. `--all` conflicts with a certificate name. JSON emits one report; failures exit 1 and cancellation exits 130. Periodic wakeups remain future daemon work.
 
 ```sh
 aster-acme cert renew example-cert
 aster-acme cert renew example-cert --now
+aster-acme cert renew --all
+aster-acme cert renew --all --now --json
 aster-acme cert revoke example-cert --reason key-compromise --yes
 aster-acme cert remove example-cert --history --yes
 aster-acme cert remove example-cert --revoked --yes
@@ -228,3 +230,5 @@ Local tests exercise a loopback CA, real signatures, durable storage, restart, c
 Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 
 Unless explicitly stated otherwise, contributions intentionally submitted for inclusion are dual-licensed under the same terms.
+
+New issuance requires an explicit `-c/--challenge`; there is no default validation method. Recovery and renewal retain the saved implementation. `--yes` accepts all operation confirmations, without selecting inputs or bypassing validation; terms consent remains independent.

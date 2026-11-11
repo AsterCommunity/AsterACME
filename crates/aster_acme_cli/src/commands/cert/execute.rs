@@ -33,7 +33,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String>) -> AccountArgs {
+pub(super) fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String>) -> AccountArgs {
     AccountArgs {
         data_dir: local.data_dir.clone(),
         json: local.json,
@@ -56,20 +56,38 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
     let selected = match &args.resume {
-        Some(name) => Some(selection::choose(
-            store.list().await?,
-            &CertificateName::new(name)?,
-            args.operation.as_deref(),
-            selection::RequestSelection::Unfinished,
-            options.json,
-        )?),
+        Some(explicit) => {
+            let records = store
+                .list()
+                .await?
+                .into_iter()
+                .filter(IssueRecord::unfinished)
+                .collect::<Vec<_>>();
+            let name = selection::certificate_name(
+                &records,
+                match explicit {
+                    super::args::ResumeTarget::Choose => None,
+                    super::args::ResumeTarget::Named(name) => Some(name.as_str()),
+                },
+                args.operation.as_deref(),
+                options.json,
+            )?;
+            Some(selection::choose(
+                records,
+                &name,
+                args.operation.as_deref(),
+                selection::RequestSelection::Unfinished,
+                options.json,
+            )?)
+        }
         None => None,
     };
     if let Some(record) = &selected {
         options.name = Some(record.account_name.clone());
     }
     let run = args.run.clone();
-    transact(
+    let root = settings.data_dir.clone();
+    let result = transact(
         settings,
         options,
         &store,
@@ -78,49 +96,19 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
             args,
         },
         &run,
+        RunMode::Single,
         progress,
     )
-    .await
+    .await?;
+    crate::common::output::print_result(
+        &render::result(&result, run.local.json, &root)?,
+        run.local.json,
+        crate::common::output::ResultPreceding::Progress,
+    );
+    Ok(())
 }
 
-async fn renew(args: super::args::RenewArgs) -> CliResult<()> {
-    let progress = Arc::new(Progress::new(args.run.local.json));
-    let mut options = options(&args.run.local, &args.run.http, None);
-    let settings = CliSettings::load(&options).await?;
-    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let records = store.list().await?;
-    let name = selection::certificate_name(
-        &records,
-        args.target
-            .name
-            .as_deref()
-            .or(args.target.named_name.as_deref()),
-        None,
-        options.json,
-    )?;
-    let in_use = records
-        .iter()
-        .find(|record| record.name == name && record.is_in_use)
-        .ok_or(
-            "No in-use certificate is selected. Complete an initial issuance before renewing.",
-        )?;
-    options.name = Some(in_use.account_name.clone());
-    transact(
-        settings,
-        options,
-        &store,
-        Start::Renew {
-            name,
-            expected_in_use: in_use.operation_id.clone(),
-            now: args.now,
-        },
-        &args.run,
-        progress,
-    )
-    .await
-}
-
-enum Start {
+pub(super) enum Start {
     Issue {
         selected: Option<Box<IssueRecord>>,
         args: IssueArgs,
@@ -132,23 +120,16 @@ enum Start {
     },
 }
 
-async fn transact(
+pub(super) async fn transact(
     settings: CliSettings,
     options: AccountArgs,
     store: &CliIssueStore,
     start: Start,
     run: &super::args::RunArgs,
+    mode: RunMode,
     progress: Arc<Progress>,
-) -> CliResult<()> {
+) -> CliResult<super::report::CertificateResult> {
     let context = settings.account(&options).await?;
-    progress.log.line(
-        Level::Info,
-        &format!(
-            "Using CA: {} (account {})",
-            context.directory.as_str(),
-            context.name
-        ),
-    );
     let signer = context
         .store
         .signer(&context.directory, &context.name, false)
@@ -191,13 +172,20 @@ async fn transact(
             {
                 Ok(aster_acme_cli_storage::issuance::RenewalPreparation::Ready(session)) => session,
                 Ok(aster_acme_cli_storage::issuance::RenewalPreparation::NotDue(record)) => {
-                    println!("{}", render::not_due(&record, options.json)?);
-                    return Ok(());
+                    return Ok(super::report::CertificateResult::NotDue(record));
                 }
                 Err(error) => return Err(error.into()),
             }
         }
     };
+    progress.log.line(
+        Level::Info,
+        &format!(
+            "Using CA: {} (account {})",
+            context.directory.as_str(),
+            context.name
+        ),
+    );
     let record = session.record().await?;
     let publication = PublicationState::from_record(&record);
     report_material(&context, &record, &progress)?;
@@ -206,6 +194,7 @@ async fn transact(
         options: &options,
         args: run,
         publication,
+        mode,
         progress: progress.clone(),
     };
     let outcome = match foreground
@@ -221,18 +210,7 @@ async fn transact(
             return Err(error);
         }
     };
-    println!(
-        "{}",
-        render::outcome(
-            &outcome,
-            options.json,
-            context
-                .config_path
-                .parent()
-                .ok_or("Missing data directory.")?
-        )?
-    );
-    Ok(())
+    Ok(super::report::CertificateResult::Issuance(outcome))
 }
 
 fn report_material(
@@ -268,11 +246,18 @@ fn report_material(
     Ok(())
 }
 
+/// Batch cancellation and prompt policy are explicit, never inferred from JSON styling.
+pub(super) enum RunMode {
+    Single,
+    Batch(CancellationToken),
+}
+
 struct Foreground<'a> {
     context: &'a CliContext,
     options: &'a AccountArgs,
     args: &'a super::args::RunArgs,
     publication: PublicationState,
+    mode: RunMode,
     progress: Arc<Progress>,
 }
 impl Foreground<'_> {
@@ -295,15 +280,21 @@ impl Foreground<'_> {
         self.progress
             .protocol(client.directory(), &session.record().await?);
         let service = IssueService::new(client, identity)?.with_observer(self.progress.clone());
-        let cancellation = CancellationToken::new();
-        let signal = tokio::spawn({
-            let cancellation = cancellation.clone();
-            async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    cancellation.cancel();
-                }
+        let (cancellation, signal) = match &self.mode {
+            RunMode::Single => {
+                let cancellation = CancellationToken::new();
+                let signal = tokio::spawn({
+                    let cancellation = cancellation.clone();
+                    async move {
+                        if tokio::signal::ctrl_c().await.is_ok() {
+                            cancellation.cancel();
+                        }
+                    }
+                });
+                (cancellation, Some(signal))
             }
-        });
+            RunMode::Batch(cancellation) => (cancellation.clone(), None),
+        };
         let execution = IssueExecution {
             context: ExecutionContext {
                 cancellation,
@@ -312,17 +303,21 @@ impl Foreground<'_> {
             skip_dns_check: self.args.skip_dns_check,
             poll_interval: Duration::from_secs(2),
         };
-        let dns = match super::args::Challenge::ManualDns {
-            super::args::Challenge::ManualDns => ManualDns {
-                interactive: terminal::interactive(self.options.json),
+        let dns = match session.record().await?.solver_id.as_str() {
+            "manual_dns" => ManualDns {
+                interactive: matches!(self.mode, RunMode::Single)
+                    && terminal::interactive(self.options.json),
                 publication: self.publication,
                 yes: self.args.yes,
                 checker: Arc::new(aster_acme_validation::dns01::visibility::DnsVisibility),
                 progress: self.progress.clone(),
             },
+            _ => return Err("The saved validation implementation is not supported.".into()),
         };
         let result = service.run(session, &dns, &execution).await;
-        signal.abort();
+        if let Some(signal) = signal {
+            signal.abort();
+        }
         Ok(result?)
     }
 }
@@ -414,6 +409,7 @@ impl DnsReadiness for ManualDns {
                 Level::Warning,
                 "Required DNS TXT values are not visible yet; the request is retained for resume",
             );
+            self.progress.log.line(Level::Info, "You can use --skip-dns-check when resuming to skip local DNS visibility checks; the CA will still validate domain ownership.");
         }
         Ok(ready)
     }
@@ -422,7 +418,7 @@ impl DnsReadiness for ManualDns {
 pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
     match command {
         CertCommand::Issue(args) => issue(args).await,
-        CertCommand::Renew(args) => renew(args).await,
+        CertCommand::Renew(args) => super::renewal::execute(args).await,
         CertCommand::Remove {
             target,
             all,
@@ -687,6 +683,10 @@ async fn remote_operation(
 }
 
 fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
+    match args.challenge {
+        Some(super::args::Challenge::ManualDns) => {}
+        None => return Err("Specify -c/--challenge for a new certificate.".into()),
+    }
     let identifiers = args.domain.clone();
     let primary = identifiers
         .first()
@@ -1007,6 +1007,7 @@ mod tests {
                 named_name: None,
             },
             now: false,
+            all: false,
             run: super::super::args::RunArgs {
                 yes: false,
                 skip_dns_check: false,
@@ -1018,7 +1019,7 @@ mod tests {
                 },
             },
         };
-        renew(args).await.unwrap();
+        super::super::renewal::execute(args).await.unwrap();
         assert_eq!(store.list().await.unwrap().len(), 1);
         assert_eq!(
             std::fs::read(generation.join("operation.toml")).unwrap(),

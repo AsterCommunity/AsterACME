@@ -9,6 +9,10 @@ use aster_acme_core::revocation::RevocationState;
 use serde::Serialize;
 use std::io::{self, IsTerminal};
 
+use super::report::{
+    BatchDisposition, CertificateResult, RenewalBatch, RenewalResult, RenewalSummary, SkipReason,
+};
+
 /// Labels describe execution progress without presenting Rust enum debug output.
 pub(super) fn phase_label(phase: aster_acme_core::workflow::IssuancePhase) -> &'static str {
     use aster_acme_core::workflow::IssuancePhase;
@@ -570,6 +574,241 @@ fn artifact_lines(paths: &ArtifactPaths) -> Vec<String> {
     lines
 }
 
+pub(super) fn result(
+    result: &CertificateResult,
+    json: bool,
+    data_dir: &std::path::Path,
+) -> CliResult<String> {
+    match result {
+        CertificateResult::Issuance(issued) => outcome(issued, json, data_dir),
+        CertificateResult::NotDue(record) => not_due(record, json),
+    }
+}
+
+// One typed conversion shared by single results and batch JSON; no parsing rendered JSON.
+fn result_output<'a>(
+    result: &'a CertificateResult,
+    data_dir: &std::path::Path,
+) -> ResultOutput<'a> {
+    match result {
+        CertificateResult::NotDue(record) => ResultOutput::NotDue { operation: record },
+        CertificateResult::Issuance(outcome) => ResultOutput::from_outcome(outcome, data_dir),
+    }
+}
+
+impl<'a> ResultOutput<'a> {
+    fn from_outcome(outcome: &'a IssueOutcome, data_dir: &std::path::Path) -> Self {
+        match outcome {
+            IssueOutcome::ActionRequired { record, records } => Self::ActionRequired {
+                operation: record,
+                records,
+                resume: format!(
+                    "aster-acme cert issue --resume '{}' --operation {}",
+                    record.name.as_str(),
+                    record.operation_id
+                ),
+            },
+            IssueOutcome::Completed { record, cleanup } => {
+                let generation = data_dir
+                    .join("certs")
+                    .join(record.name.as_str())
+                    .join("in_use");
+                Self::Completed {
+                    operation: record,
+                    records: cleanup,
+                    artifacts: ArtifactPaths {
+                        fullchain: generation.join("fullchain.pem"),
+                        certificate: generation.join("cert.pem"),
+                        ca_chain: generation.join("ca.pem"),
+                        private_key: generation.join("private-key.pem"),
+                    },
+                }
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum BatchItemOutput<'a> {
+    Skipped {
+        reason: SkipReason,
+    },
+    Failed {
+        message: &'a str,
+        hint: Option<&'a str>,
+    },
+    Cancelled,
+    #[serde(untagged)]
+    Outcome(ResultOutput<'a>),
+}
+
+#[derive(Serialize)]
+struct BatchEntryOutput<'a> {
+    name: &'a str,
+    result: BatchItemOutput<'a>,
+}
+
+#[derive(Serialize)]
+struct BatchOutput<'a> {
+    status: BatchDisposition,
+    summary: RenewalSummary,
+    results: Vec<BatchEntryOutput<'a>>,
+}
+
+fn batch_output<'a>(report: &'a RenewalBatch, data_dir: &std::path::Path) -> BatchOutput<'a> {
+    let status = report.disposition();
+    let results = report
+        .entries
+        .iter()
+        .map(|entry| BatchEntryOutput {
+            name: &entry.name,
+            result: match &entry.result {
+                RenewalResult::Outcome(result) => {
+                    BatchItemOutput::Outcome(result_output(result, data_dir))
+                }
+                RenewalResult::Skipped(reason) => BatchItemOutput::Skipped { reason: *reason },
+                RenewalResult::Failed { message, hint } => BatchItemOutput::Failed {
+                    message,
+                    hint: hint.as_deref(),
+                },
+                RenewalResult::Cancelled => BatchItemOutput::Cancelled,
+            },
+        })
+        .collect();
+    BatchOutput {
+        status,
+        summary: report.summary(),
+        results,
+    }
+}
+
+fn batch_summary(summary: &RenewalSummary, total: usize) -> String {
+    if total > 0 && summary.not_due == total {
+        return format!("{total} certificates checked; none due for renewal.");
+    }
+    let counts = [
+        ("Completed", summary.completed),
+        ("action required", summary.action_required),
+        ("not due", summary.not_due),
+        ("skipped", summary.skipped),
+        ("failed", summary.failed),
+        ("cancelled", summary.cancelled),
+    ]
+    .into_iter()
+    .filter(|(_, count)| *count > 0)
+    .map(|(label, count)| format!("{label}: {count}"))
+    .collect::<Vec<_>>();
+    if counts.is_empty() {
+        "No managed certificates to check.".into()
+    } else {
+        format!("{}.", counts.join("; "))
+    }
+}
+
+pub(super) fn batch(
+    report: &RenewalBatch,
+    json: bool,
+    data_dir: &std::path::Path,
+) -> CliResult<String> {
+    let summary = report.summary();
+    if json {
+        return Ok(serde_json::to_string_pretty(&batch_output(
+            report, data_dir,
+        ))?);
+    }
+    let color = output::colors(io::stdout().is_terminal());
+    let mut rows = vec![["NAME".into(), "STATUS".into(), "DETAILS".into()]];
+    let mut details = Vec::new();
+    for entry in &report.entries {
+        let (status, detail) = match &entry.result {
+            RenewalResult::Outcome(CertificateResult::NotDue(record)) => (
+                "not due",
+                timestamp(record.renewal.as_ref().map(|plan| plan.renew_at)),
+            ),
+            RenewalResult::Outcome(result) => {
+                details.push(self::result(result, false, data_dir)?);
+                match result {
+                    CertificateResult::Issuance(IssueOutcome::Completed { .. }) => {
+                        ("completed", "new certificate selected".into())
+                    }
+                    CertificateResult::Issuance(IssueOutcome::ActionRequired { .. }) => {
+                        ("action required", "publish the saved TXT records".into())
+                    }
+                    CertificateResult::NotDue(_) => ("not due", String::new()),
+                }
+            }
+            RenewalResult::Skipped(reason) => ("skipped", reason.message().into()),
+            RenewalResult::Failed { message, hint } => {
+                details.push(format!(
+                    "{} {}: {}{}",
+                    output::styled("[ERROR]", Style::BoldRed, color),
+                    output::safe(&entry.name),
+                    output::safe(message),
+                    hint.as_ref().map_or_else(String::new, |hint| format!(
+                        "\n{}",
+                        output::tips(hint, color)
+                    ))
+                ));
+                ("failed", message.clone())
+            }
+            RenewalResult::Cancelled => (
+                "cancelled",
+                "stopped; inspect the saved request and selected certificate".into(),
+            ),
+        };
+        rows.push([
+            output::safe(&entry.name),
+            status.into(),
+            output::safe(&detail),
+        ]);
+    }
+    let (label, style) = match report.disposition() {
+        BatchDisposition::Completed => ("[INFO]", Style::BoldCyan),
+        BatchDisposition::ActionRequired | BatchDisposition::Cancelled => {
+            ("[WARN]", Style::BoldYellow)
+        }
+        BatchDisposition::PartialFailure => ("[ERROR]", Style::BoldRed),
+    };
+    let mut lines = vec![format!(
+        "{} Batch renewal results:",
+        output::styled(label, style, color)
+    )];
+    lines.extend(crate::common::table::align(
+        &rows,
+        Some(&|row, column, cell| {
+            let style = match (row, column) {
+                (0, _) => Style::BoldCyan,
+                (_, 1) => match &report.entries[row - 1].result {
+                    RenewalResult::Outcome(CertificateResult::Issuance(
+                        IssueOutcome::Completed { .. },
+                    )) => Style::Green,
+                    RenewalResult::Outcome(CertificateResult::NotDue(_)) => Style::Cyan,
+                    RenewalResult::Outcome(CertificateResult::Issuance(
+                        IssueOutcome::ActionRequired { .. },
+                    ))
+                    | RenewalResult::Skipped(_)
+                    | RenewalResult::Cancelled => Style::Yellow,
+                    RenewalResult::Failed { .. } => Style::Red,
+                },
+                _ => Style::Plain,
+            };
+            output::styled(cell, style, color)
+        }),
+    ));
+    lines.push(String::new());
+    lines.push(format!(
+        "{} {}",
+        output::styled(label, style, color),
+        batch_summary(&summary, report.entries.len())
+    ));
+    for detail in details {
+        lines.push(String::new());
+        lines.push(detail);
+    }
+    Ok(lines.join("\n"))
+}
+
 pub(super) fn outcome(
     outcome: &IssueOutcome,
     json: bool,
@@ -579,33 +818,7 @@ pub(super) fn outcome(
         IssueOutcome::ActionRequired { record, records } => (record.as_ref(), records.as_slice()),
         IssueOutcome::Completed { record, cleanup } => (record.as_ref(), cleanup.as_slice()),
     };
-    let result = match outcome {
-        IssueOutcome::ActionRequired { .. } => ResultOutput::ActionRequired {
-            operation: record,
-            records,
-            resume: format!(
-                "aster-acme cert issue --resume '{}' --operation {}",
-                record.name.as_str(),
-                record.operation_id
-            ),
-        },
-        IssueOutcome::Completed { .. } => {
-            let generation = data_dir
-                .join("certs")
-                .join(record.name.as_str())
-                .join("in_use");
-            ResultOutput::Completed {
-                operation: record,
-                records,
-                artifacts: ArtifactPaths {
-                    fullchain: generation.join("fullchain.pem"),
-                    certificate: generation.join("cert.pem"),
-                    ca_chain: generation.join("ca.pem"),
-                    private_key: generation.join("private-key.pem"),
-                },
-            }
-        }
-    };
+    let result = ResultOutput::from_outcome(outcome, data_dir);
     if json {
         return Ok(serde_json::to_string_pretty(&result)?);
     }

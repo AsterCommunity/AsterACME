@@ -76,7 +76,8 @@ mod tests {
         }
     }
     fn arguments() -> IssueArgs {
-        let parsed = crate::app::Args::parse_from(["aster-acme", "cert", "issue"]);
+        let parsed =
+            crate::app::Args::parse_from(["aster-acme", "cert", "issue", "-c", "manual_dns"]);
         let crate::app::Command::Cert { command } = parsed.command else {
             panic!("expected cert");
         };
@@ -112,7 +113,9 @@ mod tests {
                 .is::<crate::common::terminal::Canceled>()
         );
         let mut resume = arguments();
-        resume.resume = Some("example.com".into());
+        resume.resume = Some(super::super::args::ResumeTarget::Named(
+            "example.com".into(),
+        ));
         complete(&mut resume, false, &mut Prompts(None)).unwrap();
     }
 }

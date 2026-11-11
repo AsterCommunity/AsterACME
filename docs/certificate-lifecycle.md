@@ -114,3 +114,17 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 普通证书名称选择器统一显示名称/SAN摘要/UTC申请时间/本地状态，不显示重复in_use标记；普通show也不重复Current字段。显式历史、删除或吊销的版本选择标记in use，历史/精确operation详情显示In use: yes/no，删除确认仍说明清空in_use的影响；JSON和存储继续保留current。账户及证书行展示由common/selection::ChoiceLabel统一，交互身份仍使用独立索引。
 
 人工发布继续资格来自已持久化的TXT要求，而非--resume或creation_submitted参数；早于TXT准备的中断即使带--yes恢复，也先返回新待办，不暗中通知CA。
+
+## 批量续期
+
+`cert renew --all` 按托管名称排序顺序执行，每份托管证书只处理选用的 in_use 版本，历史版本不单独调度。--all 与位置 NAME / --name 互斥，--now、--yes、--skip-dns-check、HTTP 参数和 --wait-timeout 保持单次含义；wait-timeout 是每项执行预算，不是整个批次预算。
+
+批量复用单份证书的事务执行入口、账户→证书锁序、到期检查、未完成恢复、ARI/replaces 和产物校验，不另写签发逻辑。一项失败继续后续项；无 in_use 的托管证书标记 skipped，不隐式完成初次申请。目录损坏等无法安全枚举的库存错误在批次开始前整体报错。
+
+批量不弹逐项确认问题。手动 DNS 首次新材料始终先返回 action_required 并保存 TXT；已有材料则调用正常 DNS 检查（除非明确 --skip-dns-check），不会因为 --all 自动假设已发布。逐项 action_required 不阻塞后续证书，也不计为完成。仍可用 `cert renew NAME` 或带完整 operation ID 的 issue --resume 继续。
+
+单次与批量共用 CertificateResult（Issuance/NotDue）及实际 IssueOutcome；批量逐项增加 Skipped/Failed/Cancelled，最终一次渲染。人类输出汇总表、计数、错误建议和 TXT/产物细节；JSON stdout 仅一个对象，包含 status、summary 和 results，每项的 result 为带 status 的结构。失败时 status=partial_failure、退出1；无失败但有待办时 status=action_required、退出0；全部处理完毕为completed（不代表每份证书都新签出，需检查计数）；取消为cancelled、退出130。空库存成功返回空列表及零计数。退出边界不会另加第二份JSON错误。
+
+整个批次共用取消令牌。Ctrl-C 停止进行中的异步执行，不再开始后续项，剩余项为 skipped/batch_cancelled；已返回的完成结果保留，不因提交后的取消改报失败。已启动的存储阻塞写入持有自身租约至完成，取消后状态与是否切换in_use以持久化记录为准。没有自动后台重试、定时调度或并行写DNS行为；账户签名仍ES256，未扩展账户算法。
+
+批量显示收敛为一次结果表，不再展示重复本地计划表和逐项Checking renewal日志。仅有实际续期/恢复工作时先简报数量，执行时保持原进度；全部未到期时用“certificates checked; none due for renewal.”总结，混合结果只列非零计数，JSON仍完整。库存和执行结果按托管名称统一排序。

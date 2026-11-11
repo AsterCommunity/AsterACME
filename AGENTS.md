@@ -121,3 +121,7 @@ git diff HEAD --check
 - cert renew 默认到期才执行，--now 仅提前；未到期输出not_due，续期沿用固定定义，持久化旧in_use及实际submitted_replaces，未完成优先恢复，旧版本不覆写新in_use。--skip-dns-check取代--force/-f，无旧别名。对象锁只在根.locks下，删除对象可清空目录而不破坏稳定锁inode。当前所有包分别声明0.1.0-alpha.1。结果渲染从枚举匹配，不以resume/路径字段反推完成状态。
 
 - 选用版本内部字段和稳定链接统一in_use（is_in_use、expected_in_use等），无current兼容。人类只在版本选择/历史详情用in use；普通证书选择不显示重复标记。ChoiceLabel统一账户/证书行展示，产品筛选策略仍由各自模块负责。
+
+- cert renew --all 与NAME/--name互斥，按托管身份顺序执行；批量不逐项提示，首次TXT仍action_required、保存后继续。单次和批量共用事务返回CertificateResult，汇总区分完成/待办/未到期/跳过/失败/取消；JSON仅一个对象，失败1/取消130，保留已经提交的完成结果。账户签名算法不在此任务范围。
+
+- 新建cert issue强制显式-c验证实现，无默认；resume/renew从持久化记录选择，不允许覆盖。--yes为通用操作确认，不绑定manual_dns，不补填输入/选择/条款，不绕过DNS或CA验证；首次新TXT仍yield。

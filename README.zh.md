@@ -122,11 +122,13 @@ aster-acme cert show example-cert --verify --data-dir ./data
 
 ## 续期计划与吊销
 
-签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。cert renew 已支持单次到期续期（--now 提前），周期唤醒留给后续 daemon。
+签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。cert renew 已支持单次到期续期（--now 提前），批量使用 cert renew --all，按托管名称顺序执行，保留人工 TXT 待办，单项失败继续并输出一次汇总。--all 与名称互斥；JSON 只输出一个报告，存在失败退出1，取消退出130。周期唤醒留给后续 daemon。
 
 ```sh
 aster-acme cert renew example-cert
 aster-acme cert renew example-cert --now
+aster-acme cert renew --all
+aster-acme cert renew --all --now --json
 aster-acme cert revoke example-cert --reason key-compromise --yes
 aster-acme cert remove example-cert --history --yes
 aster-acme cert remove example-cert --revoked --yes
@@ -228,3 +230,5 @@ cargo doc --workspace --no-deps --locked
 可以选择 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 许可。
 
 除非明确另行说明，有意提交并纳入本项目的贡献同样采用上述双许可。
+
+新申请必须显式 -c/--challenge，不默认选择验证方式；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
