@@ -12,6 +12,7 @@
 | 必读 | [RFC 9773 — ACME Renewal Information (ARI) Extension](https://www.rfc-editor.org/rfc/rfc9773.html) | 续期信息查询、建议续期窗口与替换证书关联；设计续期调度时一并考虑 |
 | 按需 | [RFC 8737 — ACME TLS Application-Layer Protocol Negotiation (ALPN) Challenge Extension](https://www.rfc-editor.org/rfc/rfc8737.html) | TLS-ALPN-01、专用 ALPN 协议与验证证书 |
 | 按需 | [RFC 8738 — ACME IP Identifier Validation Extension](https://www.rfc-editor.org/rfc/rfc8738.html) | IP 地址证书标识符与 HTTP/TLS 验证扩展；DNS-01 不用于 IP 标识符验证 |
+| 注册表 | [IANA ACME protocol registry (plain text)](https://www.iana.org/assignments/acme/acme.txt) · [HTML](https://www.iana.org/assignments/acme/acme.xhtml) · [XML](https://www.iana.org/assignments/acme/acme.xml) | ACME Error Types、Validation Methods、Identifier Types、Directory Metadata 等注册项；TXT 是便于人工审查的主链接，XML 适合机器处理 |
 | 诊断参考 | [RFC 8657 — CAA Record Extensions for Account URI and ACME Method Binding](https://www.rfc-editor.org/rfc/rfc8657.html) | CAA 中对 ACME 账户和验证方法的约束 |
 
 建议顺序：RFC 8555 的术语与状态机 → JWS/JWK → 账户与订单 → DNS-01/HTTP-01 → CSR 与证书下载 → RFC 9773 → 其他扩展。
@@ -75,7 +76,7 @@ RFC 8555 引用的是当时的 HTTP 和 problem details 规范。新基础规范
 - [ACME DNS Labeled With ACME Account ID Challenge](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-account-label/)：按账户区分 DNS challenge 名称。
 - [ACME Scoped DNS Challenges](https://datatracker.ietf.org/doc/draft-ietf-acme-scoped-dns-challenges/)：限定范围的 DNS challenge。
 
-完整追踪入口：[IETF ACME 工作组文档](https://datatracker.ietf.org/wg/acme/documents/)、[ACME IANA 注册表](https://www.iana.org/assignments/acme/acme.xhtml)、[RFC 8555 勘误](https://www.rfc-editor.org/errata/rfc8555)。
+完整追踪入口：[IETF ACME 工作组文档](https://datatracker.ietf.org/wg/acme/documents/)、[ACME IANA 注册表纯文本](https://www.iana.org/assignments/acme/acme.txt)、[ACME IANA 注册表 HTML](https://www.iana.org/assignments/acme/acme.xhtml)、[ACME IANA 注册表 XML](https://www.iana.org/assignments/acme/acme.xml)、[RFC 8555 勘误](https://www.rfc-editor.org/errata/rfc8555)。人工审查优先使用 TXT，工具解析使用 XML。
 
 ## 5. 客户端设计检查表
 
@@ -119,7 +120,7 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 
 ## RFC 错误状态接入核对（2026-11-12）
 
-本次对照RFC8555 §6.7、§7.1.6、§7.4、§7.5、§8及RFC9773 §5。24种RFC8555 problem均已具名解析并提供CLI诊断，RFC9773 alreadyReplaced也已解析；未知type/扩展/subproblems无损保留。以下区分线上资源状态、完整错误响应及未确认网络副作用，不将HTTP错误直接映射成order invalid。
+对照 [IANA ACME Error Types CSV](https://www.iana.org/assignments/acme/acme-error-types.csv) 与 registry TXT/XML（last updated 2026-08-04），并检查 RFC 8555 §6.7、§7.1.6、§7.4、§7.5、§8 及 RFC 8739、RFC 9115、RFC 9773、RFC 9799 和 device-attestation draft。当前 CSV 的 32 种错误均已具名解析；`badAttestationStatement` 来自 IANA 所列 draft，并非已发布 RFC。专用 CI 每周在线下载官方 CSV 并与 `ProblemKind` 双向比较，不在仓库保存副本；增删项会使检查失败，要求核对规范并补充类型和诊断。未知类型、扩展字段和 subproblems 仍无损保留。以下区分线上资源状态、完整错误响应及未确认网络副作用，不将 HTTP 错误直接映射成 order invalid。
 
 | 结果 | 持久化与恢复策略 |
 | --- | --- |

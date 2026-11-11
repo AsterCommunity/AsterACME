@@ -13,7 +13,7 @@ class FeaturePolicy(unittest.TestCase):
         self.assertEqual(policy.audit("reqwest v0.13|json,rustls,system-proxy\ninquire v0.9|crossterm,fuzzy (*)\naster_forge_panic v0.1|\nother v1|default"), [])
 
     def test_transitive_extras_cannot_hide_behind_no_default_features(self):
-        for package, feature in [("hyper", "full"), ("hyper", "http2"), ("hyper-util", "server-auto"), ("reqwest", "default-tls"), ("reqwest", "gzip"), ("reqwest", "multipart"), ("rustls", "ring"), ("rcgen", "ring"), ("inquire", "editor"), ("tracing-subscriber", "local-time")]:
+        for package, feature in [("hyper", "full"), ("hyper", "http2"), ("hyper-util", "server-auto"), ("tokio-rustls", "ring"), ("tokio-rustls", "zlib"), ("reqwest", "default-tls"), ("reqwest", "gzip"), ("reqwest", "multipart"), ("rustls", "ring"), ("rcgen", "ring"), ("inquire", "editor"), ("tracing-subscriber", "local-time")]:
             with self.subTest(package=package, feature=feature):
                 self.assertTrue(policy.audit(f"{package} v1|{feature}"))
         for package in policy.FORBIDDEN:

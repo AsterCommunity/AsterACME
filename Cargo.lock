@@ -169,12 +169,14 @@ dependencies = [
  "hyper-util",
  "inquire",
  "rcgen",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "toml",
  "toml_edit",
@@ -183,6 +185,7 @@ dependencies = [
  "unicode-width",
  "url",
  "wiremock",
+ "x509-parser",
  "zeroize",
 ]
 

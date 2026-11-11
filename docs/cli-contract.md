@@ -176,10 +176,10 @@ Webroot自动化输出：INFO逐项记录实际写入、复用、借用和清理
 
 Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且内容/身份未变的验证文件及所有权凭据；复用同一cleanup入口。借用、用户替换或修改的文件不删除，站点目录、订单、密钥和CSR保留；修改/权限/保存失败保留cleanup_pending，仍以原始CA problem报告终态。取消、超时、轮询上限及不确定远端结果不触发失败清理；manual实现不自动删文件或DNS记录。既往已记录invalid的申请仍拒绝签发恢复，不以该改动隐式执行用户旧数据清理。
 
-## HTTP standalone
+## HTTP standalone and TLS-ALPN
 
-`cert issue -c standalone -d example.com`临时监听`0.0.0.0:80`，无需人工确认或现有Web服务器。仅新申请接受`--listen-address IP:PORT`（非零端口、支持显式IPv6，例如`[::]:80`），与其他验证实现或--webroot组合报错；配置保存后恢复/续期不可覆盖。公网HTTP-01入口仍是80；自定义本地端口必须自行转发，保留原Host并处理所有已公布A/AAAA路由。默认IPv4不承诺IPv6双栈。端口占用/权限不足保留申请并明确报错，不停止其他服务或提权。
+`cert issue -c standalone -d example.com`临时监听`0.0.0.0:80`，`cert issue -c tls_alpn -d example.com`临时监听`0.0.0.0:443`，均无需人工确认或现有Web服务器。仅新申请接受`--listen-address IP:PORT`（非零端口、支持显式IPv6，例如`[::]:80`），与其他验证实现或--webroot组合报错；配置保存后恢复/续期不可覆盖。TLS-ALPN仅按匹配SNI和`acme-tls/1`协商提供RFC 8737挑战证书。公网HTTP-01入口仍是80、TLS-ALPN入口仍是443；自定义本地端口必须自行转发，保留原Host/SNI并处理所有已公布A/AAAA路由。默认IPv4不承诺IPv6双栈。端口占用/权限不足保留申请并明确报错，不停止其他服务或提权。
 
-INFO显示实际监听启动/停止，DEBUG提示转发要求；建议性公网HTTP预检保持限时非阻塞。成功、invalid、取消、总期限和轮询上限均关闭监听并回收连接；恢复重建原挑战响应但不重复ack。单次监听最多64个活动连接，每连接最多5秒，HTTP头8KiB/32项，只提供已保存域名/路径的GET，不写文件。服务仅存活于当前调用；后续TLS-ALPN复用监听生命周期，但本轮不提供对应CLI实现。
+INFO显示实际监听启动/停止，DEBUG提示转发要求；建议性公网HTTP预检保持限时非阻塞。成功、invalid、取消、总期限和轮询上限均关闭监听并回收连接；恢复重建原挑战响应但不重复ack。单次监听最多64个活动连接，每连接最多5秒，HTTP响应只提供已保存域名/路径的GET、不写文件；TLS listener只提供保存的挑战证书。服务仅存活于当前调用，所有终态关闭监听和连接。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。

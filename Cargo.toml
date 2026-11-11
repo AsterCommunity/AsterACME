@@ -49,6 +49,7 @@ base64 = "0.23.1"
 idna = "1"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
+tokio-rustls = { version = "0.26", default-features = false }
 # Reuse the existing transport stack; the challenge listener only needs HTTP/1.
 hyper = { version = "1", default-features = false, features = ["server", "http1"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }

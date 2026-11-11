@@ -29,7 +29,7 @@
 
 AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与 DNS-01/HTTP-01 证书签发。用户声明证书需求，库负责创建订单、跟踪授权、提交固定 CSR、下载证书链并持久化结果；CLI 提供终端交互和本地存储。
 
-项目正在开发，ACME 包尚未正式发布。手动签发与恢复、ARI 续期计划及账户签名证书吊销已经实现；HTTP standalone 和前台续期已实现；自动 DNS provider、TLS-ALPN 验证、daemon 和部署 hook 仍是计划能力。
+项目正在开发，ACME 包尚未正式发布。手动签发与恢复、HTTP standalone、TLS-ALPN-01、ARI 续期计划、前台续期及账户签名证书吊销已经实现；自动 DNS provider、daemon 和部署 hook 仍是计划能力。
 
 ## 适用场景
 
@@ -136,6 +136,7 @@ aster-acme cert show example-cert --verify --data-dir ./data
 | `manual_http` | HTTP-01 | 按保存的 URL、文件路径及内容部署，随后恢复 |
 | `webroot` | HTTP-01 | 在现有 HTTP 服务器的网站根目录发布并清理拥有的文件 |
 | `standalone` | HTTP-01 | 临时监听挑战请求，默认 `0.0.0.0:80` |
+| `tls_alpn` | TLS-ALPN-01 | 临时提供域名挑战证书，默认监听 `0.0.0.0:443` |
 
 ```sh
 aster-acme cert issue -d example.com -c manual_http
@@ -143,17 +144,20 @@ aster-acme cert issue --resume example.com-xxxxxxxx --yes
 aster-acme cert issue -d example.com -c webroot --webroot /srv/www
 aster-acme cert issue -d example.com -c standalone
 aster-acme cert issue -d example.com -c standalone --listen-address 0.0.0.0:8080
+aster-acme cert issue -d example.com -c tls_alpn
 ```
 
-HTTP 不支持通配符；manual_http/webroot 须通过现有服务器为全部 SAN 在公网80端口提供验证路径。webroot 需要同目录 hard-link 支持；不覆盖已有不同内容，不删除借用或被用户修改/替换的文件。规范绝对路径及配置持久化，恢复/续期沿用。只为新文件/目录设置Unix 0644/0755，已有站点权限不变，Windows沿用继承权限。
+HTTP/TLS-ALPN 不支持通配符；manual_http/webroot 须通过现有服务器为全部 SAN 在公网80端口提供验证路径。webroot 需要同目录 hard-link 支持；不覆盖已有不同内容，不删除借用或被用户修改/替换的文件。规范绝对路径及配置持久化，恢复/续期沿用。只为新文件/目录设置Unix 0644/0755，已有站点权限不变，Windows沿用继承权限。
 
 未显式设置新名称时，终端会在生成密钥前提示是否恢复完整匹配的未完成申请。脚本默认停止并给出恢复命令；`--if-similar-order` 在唯一匹配时恢复、零匹配时新建、多个匹配时报错。匹配完整域名集合、账户/CA、方法/配置及密钥类型。newOrder结果未确认的记录也会提示，但没有保存Location就不会自动重发；`--name <NEW_NAME>` 明确创建独立身份。
 
-删除DNS跳过/force参数。DNS预检不代替CA决定；用户取消、总期限和CA过期照常生效。TLS-ALPN、DNS-PERSIST及自动CNAME委托仍未实现。
+删除DNS跳过/force参数。DNS预检不代替CA决定；用户取消、总期限和CA过期照常生效。DNS-PERSIST及自动CNAME委托仍未实现。
+
+TLS-ALPN在本地443端口使用RFC 8737临时挑战证书，只有SNI匹配且协商`acme-tls/1`时才提供；证书包含单一域名SAN和critical `acmeIdentifier`扩展，临时私钥与申请证书私钥分离。公网443须转发至监听器并保留原SNI，恢复时重建挑战响应但不重复ack。
 
 ### HTTP standalone
 
-Standalone只响应当前HTTP-01挑战对应的Host/path GET，不写验证文件。本地监听地址持久化，恢复/续期沿用；即使用`--listen-address`更换本地端口，公网入口仍须是80，转发须保留原Host。默认仅IPv4；需要时显式选择IPv6地址，并确保所有已公布A/AAAA路由都能到达响应服务。端口占用/权限不足明确失败，不替换其他服务器。INFO显示实际监听启动/停止，DEBUG说明转发要求。成功、invalid、取消、超时、轮询上限均停止服务，恢复时重新提供原材料且不重复通知CA。TLS-ALPN尚未实现。
+Standalone只响应当前HTTP-01挑战对应的Host/path GET，不写验证文件。TLS-ALPN使用RFC 8737临时挑战证书和`acme-tls/1` ALPN；两种监听地址都持久化并在恢复/续期沿用，终态均关闭。公网入口分别须是80/443，转发须保留原Host/SNI。端口占用/权限不足明确失败，不替换其他服务器。INFO显示实际监听启动/停止，DEBUG说明转发要求。
 
 ## 证书密钥算法
 

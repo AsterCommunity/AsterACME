@@ -14,6 +14,7 @@ mod http;
 mod listener;
 mod manual;
 mod standalone;
+mod tls_alpn;
 mod webroot;
 
 /// Stable user-facing implementation IDs; protocol method choices remain in ACME.
@@ -35,12 +36,17 @@ pub(crate) enum ValidationMethod {
     #[value(name = "standalone")]
     #[serde(rename = "standalone")]
     Standalone,
+    /// Temporarily serve TLS-ALPN-01 challenge certificates on a TLS listener.
+    #[value(name = "tls_alpn")]
+    #[serde(rename = "tls_alpn")]
+    TlsAlpn,
 }
 impl ValidationMethod {
     pub(super) const fn kind(self) -> ChallengeKind {
         match self {
             Self::ManualDns => ChallengeKind::Dns01,
             Self::ManualHttp | Self::Webroot | Self::Standalone => ChallengeKind::Http01,
+            Self::TlsAlpn => ChallengeKind::TlsAlpn01,
         }
     }
     pub(super) const fn id(self) -> &'static str {
@@ -49,6 +55,7 @@ impl ValidationMethod {
             Self::ManualHttp => "manual_http",
             Self::Webroot => "webroot",
             Self::Standalone => "standalone",
+            Self::TlsAlpn => "tls_alpn",
         }
     }
     pub(super) fn from_record(record: &IssueRecord) -> Result<Self, IssueError> {
@@ -89,7 +96,11 @@ pub(super) fn configuration(
     root: Option<&std::path::Path>,
     listen_address: Option<std::net::SocketAddr>,
 ) -> Result<serde_json::Value, IssueError> {
-    if method != ValidationMethod::Standalone && listen_address.is_some() {
+    if !matches!(
+        method,
+        ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+    ) && listen_address.is_some()
+    {
         return Err(IssueError::InvalidInput(
             "--listen-address is only valid with -c standalone",
         ));
@@ -107,6 +118,19 @@ pub(super) fn configuration(
                 listen_address: address,
             })
             .map_err(|_| IssueError::InvalidInput("cannot encode standalone configuration"))
+        }
+        (ValidationMethod::TlsAlpn, None) => {
+            let address =
+                listen_address.unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 443)));
+            if address.port() == 0 {
+                return Err(IssueError::InvalidInput(
+                    "TLS-ALPN listen port must be nonzero",
+                ));
+            }
+            serde_json::to_value(StandaloneConfig {
+                listen_address: address,
+            })
+            .map_err(|_| IssueError::InvalidInput("cannot encode TLS-ALPN configuration"))
         }
         (ValidationMethod::Webroot, Some(path)) => {
             let root = path.canonicalize().map_err(|_| {
@@ -129,7 +153,8 @@ pub(super) fn configuration(
         (
             ValidationMethod::ManualDns
             | ValidationMethod::ManualHttp
-            | ValidationMethod::Standalone,
+            | ValidationMethod::Standalone
+            | ValidationMethod::TlsAlpn,
             Some(_),
         ) => Err(IssueError::InvalidInput(
             "--webroot is only valid with -c webroot",
@@ -153,6 +178,19 @@ pub(super) fn adapter(
                 ));
             }
             Ok(Box::new(standalone::Standalone::new(
+                config.listen_address,
+                progress,
+            )))
+        }
+        ValidationMethod::TlsAlpn => {
+            let config: StandaloneConfig = serde_json::from_value(record.solver_config.clone())
+                .map_err(|_| IssueError::InvalidInput("invalid saved TLS-ALPN configuration"))?;
+            if config.listen_address.port() == 0 {
+                return Err(IssueError::InvalidInput(
+                    "saved TLS-ALPN listen port must be nonzero",
+                ));
+            }
+            Ok(Box::new(tls_alpn::TlsAlpn::new(
                 config.listen_address,
                 progress,
             )))

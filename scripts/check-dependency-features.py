@@ -13,6 +13,7 @@ ALLOWED = {
     "aster_forge_panic": set(),
     "reqwest": {"__rustls", "__rustls-aws-lc-rs", "__tls", "json", "rustls", "rustls-no-provider", "system-proxy"},
     "rustls": {"aws-lc-rs", "aws_lc_rs", "std", "tls12"},
+    "tokio-rustls": {"aws-lc-rs", "aws_lc_rs", "tls12"},
     "rcgen": {"crypto", "aws_lc_rs", "pem"},
     "inquire": {"crossterm", "fuzzy", "fuzzy-matcher"},
     "tracing-subscriber": {"alloc", "ansi", "env-filter", "fmt", "matchers", "nu-ansi-term", "once_cell", "registry", "sharded-slab", "std", "thread_local", "tracing"},

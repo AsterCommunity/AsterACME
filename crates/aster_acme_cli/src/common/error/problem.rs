@@ -112,6 +112,11 @@ pub(super) fn diagnostic(
 
 fn guidance(kind: &ProblemKind, instance: Option<&str>, retry: Option<&RetryAfter>) -> String {
     match kind {
+        ProblemKind::AutoRenewalCanceled | ProblemKind::AutoRenewalExpired => "The CA reports that its short-term certificate auto-renewal order is unavailable. Inspect the saved CA problem and request a replacement certificate explicitly.".into(),
+        ProblemKind::AutoRenewalCancellationInvalid | ProblemKind::AutoRenewalRevocationNotSupported => "This CA auto-renewal operation is not supported by this client. Inspect the saved CA problem and use the CA's documented workflow.".into(),
+        ProblemKind::BadAttestationStatement => "The CA rejected the device attestation statement. This client does not implement the device-attestation extension; retain the problem and use a supported identifier/workflow.".into(),
+        ProblemKind::UnknownDelegation => "The CA rejected the order's delegation configuration. Check the delegation names and the CA's RFC 9115 configuration.".into(),
+        ProblemKind::OnionCaaRequired => "The CA requires in-band CAA data for this onion identifier. This client does not implement the RFC 9799 onion CSR extension.".into(),
         ProblemKind::AccountDoesNotExist=>"Recover or register the same account key before continuing.".into(),
         ProblemKind::BadCsr=>"This fixed CSR was rejected. Start a new cert issue with a CA-supported --key-type; resume does not replace the saved CSR or key.".into(),
         ProblemKind::BadNonce=>"The bounded nonce retry budget was exhausted or a usable replacement nonce was missing. Keep the saved operation; do not assume the mutation succeeded.".into(),

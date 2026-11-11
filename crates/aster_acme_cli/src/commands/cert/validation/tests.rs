@@ -378,6 +378,64 @@ fn standalone_arguments_expose_only_new_issuance_and_preserve_saved_settings() {
     }
 }
 
+#[test]
+fn tls_alpn_configuration_defaults_to_public_port_443_and_is_immutable_on_resume() {
+    let value = configuration(ValidationMethod::TlsAlpn, None, None).unwrap();
+    let saved: StandaloneConfig = serde_json::from_value(value).unwrap();
+    assert_eq!(saved.listen_address.to_string(), "0.0.0.0:443");
+    let value = configuration(
+        ValidationMethod::TlsAlpn,
+        None,
+        Some("127.0.0.1:8443".parse().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_value::<StandaloneConfig>(value)
+            .unwrap()
+            .listen_address
+            .to_string(),
+        "127.0.0.1:8443"
+    );
+    assert!(
+        crate::app::Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "issue",
+            "-d",
+            "example.com",
+            "-c",
+            "tls_alpn"
+        ])
+        .is_ok()
+    );
+    assert!(
+        crate::app::Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "issue",
+            "-d",
+            "example.com",
+            "-c",
+            "tls_alpn",
+            "--listen-address",
+            "127.0.0.1:8443"
+        ])
+        .is_ok()
+    );
+    assert!(
+        crate::app::Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "issue",
+            "--resume",
+            "example.com",
+            "--listen-address",
+            "127.0.0.1:8443"
+        ])
+        .is_err()
+    );
+}
+
 #[tokio::test]
 async fn dns_precheck_missing_values_errors_and_short_timeout_are_advisory_but_cancellation_is_not()
 {

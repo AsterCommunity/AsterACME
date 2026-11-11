@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS-01 证书申请、恢复和只读订单查看已实现；ARI 续期计划和账户签名吊销已实现；自动续期及 daemon 尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；自动 DNS、自动续期调度和 daemon 尚未实现。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -210,7 +210,7 @@ aster-acme cert show example.com --operation <ID> --verify
 
 手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多2秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
---request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone，前台续期和吊销已实现；自动 DNS、TLS-ALPN 和部署未实现。
+--request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone/tls_alpn，前台续期和吊销已实现；自动 DNS 和部署未实现。
 
 每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
 
@@ -275,6 +275,6 @@ Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且�
 
 ## HTTP standalone
 
-`aster-acme cert issue -c standalone -d example.com`默认临时监听`0.0.0.0:80`，可在新申请通过`--listen-address 0.0.0.0:8080`指定本地socket；公网仍须80端口转发到该socket并保留Host。IPv6需显式选择且确保所有A/AAAA可达。配置持久化，resume/renew沿用；不写挑战文件，不停止其他服务器或自动提权。INFO记录真实启停，DEBUG解释入口要求。成功/invalid/取消/超时/轮询上限均关闭服务；恢复已ack挑战重新提供内容但不重复提交CA。监听使用现有Tokio/Hyper HTTP/1栈、64条活动连接上限和每连接5秒期限，无Web框架。TLS-ALPN仍未实现，后续可共用listener和restore/shutdown生命周期。
+`aster-acme cert issue -c standalone -d example.com`默认临时监听`0.0.0.0:80`；`-c tls_alpn`默认临时监听`0.0.0.0:443`，两者均可用`--listen-address`指定本地socket。公网入口须分别转发80/443并保留Host/SNI。配置持久化，resume/renew沿用；TLS-ALPN证书只包含目标DNS SAN、critical `acmeIdentifier`和`acme-tls/1`。成功/invalid/取消/超时/轮询上限均关闭服务；恢复已ack挑战重新提供内容但不重复提交CA。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。

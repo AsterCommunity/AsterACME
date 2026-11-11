@@ -4,7 +4,13 @@
 
 实现对照 RFC 8555 原文 §7.1.3（订单与 expires）、§7.1.4–7.1.5（授权/challenge）、§7.4（newOrder、finalize 与 CSR）、§7.4.2（PEM 链下载）、§7.5.1（通知与轮询）、§8.4（TXT 摘要），并复用 §6 的精确 URL、kid/JWS、nonce、POST-as-GET 和错误策略。证书/CSR 采用 PKCS#8、PKCS#10 和 X.509/SAN。
 
-当前实现manual_dns/manual_http/webroot/standalone。CLI负责人工/文件发布，ACME负责方法和材料及CA状态推进；DNS预检建议性限2秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+当前实现manual_dns/manual_http/webroot/standalone/tls_alpn。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性限2秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+
+TLS-ALPN专项覆盖：默认443及自定义监听地址、每域名单独证书、单DNS SAN、critical `id-pe-acmeIdentifier` DER摘要、SNI/`acme-tls/1`门控、重复/混合材料拒绝、恢复重建及终态释放。普通Rustls客户端拒绝未知critical扩展是预期行为，ACME验证器应按RFC8737读取该扩展。
+
+端到端 TLS-ALPN loopback CA 测试通过真实TLS握手检查SNI、ALPN及challenge证书摘要后才把mock订单转为ready，完成固定CSR finalize和下载；轮询上限后重启会重建挑战证书且不重复ack/newOrder。Resolver测试还覆盖新SAN增量加入、同摘要复用、冲突摘要不覆盖已发布证书，以及占用端口、取消、过期及活动连接关闭。IANA Error Types 在线映射由每周GitHub Actions读取官方CSV，不保存注册表快照；脚本单测使用内存CSV验证增删差异，不依赖网络。
+
+TLS-ALPN使用真正的loopback TLS握手推进mock ACME订单，覆盖两域名证书选择、增量加入域名、冲突摘要不覆盖旧挑战、恢复已ack challenge不重复POST、验证后finalize/download/in_use、取消和监听释放；IANA Error Types另由`scripts/check-iana-acme-errors.py`在线检查，专用workflow每周一运行并在相关PR运行，常规脚本单测不依赖网络。
 
 ## 本地证据
 
@@ -16,7 +22,7 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI 续期计划与账户签名吊销已实现并有本地 mock/存储验收；周期调度、TLS-ALPN solver、外部 CSR 和部署尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；周期调度、自动DNS、外部CSR和部署尚未实现。
 
 ## 常规验证
 
@@ -144,3 +150,11 @@ Workspace 399项测试通过（ACME89、CLI191、storage93、core14、protocol10
 Finalize回归覆盖403 badCSR原状态与重启拒绝、403 orderNotReady先POST-as-GET再ready后重交同一CSR、持续拒绝被max_polls限制；429/5xx/未知错误不解除不确定提交。授权invalid/deactivated/expired/revoked及选中challenge invalid保留problem并离线拒绝恢复，既有valid订单/授权不因旧challenge失败历史而错误阻止下载，无problem终态也保持可诊断。末次边界断言调整后重跑5项storage错误用例和CLI状态渲染用例；严格原生/Windows GNU all-targets Clippy、原生build、rustdoc、依赖/TLS/feature策略和fmt/diff检查通过。
 
 这些均为本地mock与实际存储重启验收，不是公网CA或Windows原生运行证据。不修改用户旧记录；旧记录没有保存的HTTP拒绝原因无法由本地安全还原。错误接入映射及边界见rfc-reference.md的2026-11-12核对表。
+
+Windows CI测试假设核对（2026-11-12）：rcgen在Windows默认输出CRLF，拆分证书编码固定为LF。产物测试显式输入CRLF并检查fullchain字节保留、cert/ca规范LF及私钥一致，不依赖宿主默认换行；历史删除测试通过native Publication移除Unix链接或Windows目录副本，继续断言缺失视图时拒绝清理历史且保留世代/密钥。修订后本地storage93项测试、原生与Windows GNU严格all-targets Clippy通过。Windows原生测试仍需CI运行，交叉检查不作为Windows运行证据。此为测试修订，不单列同版本修复日志。
+
+## CI 跨平台回归（2026-11-12）
+
+Windows runner 报告的两个失败源于测试假设：rcgen PEM 使用平台原生 CRLF，而拆分导出的叶子/CA PEM 由客户端规范编码为 LF；跨平台测试现显式用CRLF fullchain输入，分别断言原始链保留和拆分产物格式。RFC 7468 §2 与ABNF规定解析器须接受CRLF、CR、LF，没有要求生成器必须CRLF。另一失败把Windows `in_use`完整目录副本当成Unix文件链接删除；测试现在调用平台 `Publication::remove` 移除视图，并验证托管世代密钥保留、history范围仍拒绝猜测。
+
+修订后storage93项测试通过，workspace414项测试通过，原生及Windows GNU all-targets严格Clippy通过。Windows目标证据仅为交叉编译/Clippy，不宣称本地原生Windows运行；提交后的GitHub Windows runner仍负责复核这两个环境相关用例。

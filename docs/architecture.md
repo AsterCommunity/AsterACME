@@ -8,7 +8,7 @@
 
 AsterACME 提供可嵌入的 Rust 库和 CLI，管理 ACME 账户、证书申请、续期与吊销。调用者声明域名及验证策略，库内部承担协议推进、challenge 准备、轮询、恢复和清理。
 
-首期面向 DNS 标识符，包括 SAN 与通配符；实现 DNS-01、HTTP-01，并在续期设计中支持 ARI。TLS-ALPN-01 预留 solver 接口，其他标识符和草案扩展按明确需求加入。依赖成熟密码学、CSR 和 X.509 库，不自行实现底层密码算法。
+首期面向 DNS 标识符，包括 SAN 与通配符；实现 DNS-01、HTTP-01、TLS-ALPN-01，并在续期设计中支持 ARI。其他标识符和草案扩展按明确需求加入。依赖成熟密码学、CSR 和 X.509 库，不自行实现底层密码算法。
 
 分层是职责边界，不要求每个接口都单独形成 crate。初期不建设通用工作流引擎、全局插件注册表或完整的 Effect 解释器。
 
@@ -41,7 +41,7 @@ flowchart TD
 | `aster_acme_cli_storage` | CLI 账户元数据、PKCS#8 文件、锁、权限和原子持久化；实现上层 dyn 契约 | 协议、core、DNS 验证及命令解析 |
 | `aster_acme_cli` | 参数与配置、适配器组装、进度显示、证书输出、部署 hook、退出码 | 协议状态机、challenge 重试与清理算法 |
 
-`aster_acme_validation` 依赖 `aster_acme` 的 solver 契约；`aster_acme` 不反向依赖 DNS 实现，由应用注入 solver。HTTP/TLS 的协议方法和材料属于 `aster_acme`；CLI standalone 监听及未来 TLS-ALPN 握手适配器属于 CLI publication 层，不进入协议库。
+`aster_acme_validation` 依赖 `aster_acme` 的 solver 契约；`aster_acme` 不反向依赖 DNS 实现，由应用注入 solver。HTTP/TLS 的协议方法和材料属于 `aster_acme`；CLI standalone 监听及 TLS-ALPN 握手适配器属于 CLI publication 层，不进入协议库。
 
 ## 3. Core：资源状态机与客户端流程分离
 
@@ -103,7 +103,7 @@ ACME 选择方法并推导材料 → 保存类型化 requirements → CLI solver
     → ACME 通知 CA → 轮询授权/订单 → 保存证书 → solver 清理拥有的材料
 ```
 
-库的 `ChallengeKind` 表示 DNS-01/HTTP-01/TLS-ALPN-01；`ValidationRequirement` 按方法保存 DNS TXT、HTTP URL/path/content 或 TLS 摘要，`ChallengeSolver` 是唯一实际注入的 ready/cleanup/restore/shutdown 边界。CLI 的 `ValidationMethod` 表示 manual_dns/manual_http/webroot/standalone，通过穷尽映射选择协议方法。协议 WireChallengeKind 仍无损保留未知线上扩展，不与 CLI 实现枚举混用。
+库的 `ChallengeKind` 表示 DNS-01/HTTP-01/TLS-ALPN-01；`ValidationRequirement` 按方法保存 DNS TXT、HTTP URL/path/content 或 TLS 摘要，`ChallengeSolver` 是唯一实际注入的 ready/cleanup/restore/shutdown 边界。CLI 的 `ValidationMethod` 表示 manual_dns/manual_http/webroot/standalone/tls_alpn，通过穷尽映射选择协议方法。协议 WireChallengeKind 仍无损保留未知线上扩展，不与 CLI 实现枚举混用。
 
 ACME 持有 challenge 选择、token/key authorization 推导、过期检查、CA 通知、轮询及恢复安全规则；CLI 持有输入、方法实现选择、文件/DNS 操作和人类提示。自动 DNS provider 尚未实现，不预留第二套 prepare/wait_ready/receipt API。旧的未接线 OperationContext/PreparedChallenge/ResourceOwnership 已移除，避免两条发布流程。
 
@@ -213,7 +213,7 @@ DNSO 不作为 crate 依赖。按需迁入 provider 源码，保留原 MIT 版�
 
 已实现 core 资源状态与纯动作决策，上层 DNS 标识符、challenge 类型/策略/材料及 solver trait。`ChallengeSolver` 用 async-trait 提供可注入的 dyn 接口；执行上下文包含取消令牌和单次调用 deadline，但实际 I/O 中的取消与期限执行仍由 solver 实现。恢复句柄带非零 schema 版本，未知方法与状态均保留 wire 文本但不进入执行。
 
-字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。账户网络交互及持久化恢复已实现；manual DNS-01 的完整签发链路已有 loopback CA 验收；TLS-ALPN 与自动 DNS 发布尚未实现，真实 staging 签发尚未验收。
+字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。账户网络交互及持久化恢复已实现；manual DNS-01 与 HTTP/TLS-ALPN standalone 有 loopback CA/socket 验收；自动 DNS 发布尚未实现，真实 staging 签发尚未验收。
 
 Forge 宏依赖已固定到远端 master 提交 `beb3d45faad47ca9e53e3f704e0db57c686a4882`；成员仅从根 workspace 继承，不保留本地 path 或 patch。
 
@@ -388,7 +388,9 @@ Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且�
 
 ### 临时挑战服务生命周期
 
-HTTP standalone位于CLI validation/standalone，复用现有依赖树的Tokio、Hyper HTTP/1、hyper-util TokioIo和http-body-util；不引入Web框架，不自行解析HTTP。共享validation/listener拥有TCP bind、64条并发上限、每连接5秒期限、操作取消/deadline及连接任务回收；handler接收TcpStream，后续TLS-ALPN可在同一边界做rustls握手，当前未实现TLS响应。
+HTTP standalone位于CLI validation/standalone，复用现有依赖树的Tokio、Hyper HTTP/1、hyper-util TokioIo和http-body-util；不引入Web框架，不自行解析HTTP。TLS-ALPN位于CLI validation/tls_alpn，复用同一listener生命周期和rustls/AWS-LC、tokio-rustls。共享validation/listener拥有TCP bind、64条并发上限、每连接5秒期限、操作取消/deadline及连接任务回收。
+
+TLS-ALPN按RFC8737生成每个DNS标识符独立的ECDSA P-256自签名挑战证书：单一DNS SAN、critical `id-pe-acmeIdentifier`扩展（DER `OCTET STRING`内含32字节key authorization digest），只在SNI匹配且客户端提供`acme-tls/1`时选择。默认监听0.0.0.0:443，支持保存的自定义socket；不支持通配符/IP，不能复用普通证书私钥。通用TLS客户端可能因未知critical扩展拒绝该证书，这是预期行为，ACME验证器应按RFC检查扩展。
 
 ChallengeSolver::restore在恢复pending订单的已保存pending授权材料时调用；默认持久化/人工适配器无动作，临时适配器重新发布，包括已ack的processing挑战。它不提交任何CA请求。IssueService::run在每个返回路径await shutdown，shutdown独立于已到期的operation context，必须有界；持久化cleanup与关闭临时服务是不同职责。宿主直接丢弃run future时应关闭或丢弃solver；CLI在本次调用结束释放所有权，Drop中止任务兜底。成功/invalid清理后重复shutdown幂等；取消和不确定结果保留检查点并关闭临时监听。ready/valid/processing订单不重启不再需要的响应服务。
 

@@ -1117,7 +1117,11 @@ async fn complete_persists_leaf_ca_fullchain_and_same_pem_key_before_promoting()
     .unwrap()
     .signed_by(&key, &issuer)
     .unwrap();
-    let chain = format!("{}{}", leaf.pem(), ca.pem());
+    // Force CRLF on every host: fullchain preserves CA bytes while split
+    // cert/CA artifacts use the encoder's canonical LF presentation.
+    let leaf_pem = leaf.pem().replace("\r\n", "\n");
+    let ca_pem = ca.pem().replace("\r\n", "\n");
+    let chain = format!("{leaf_pem}{ca_pem}").replace('\n', "\r\n");
     record.phase = IssuancePhase::Completed;
     session.complete(&record, chain.as_bytes()).await.unwrap();
     assert_eq!(
@@ -1126,11 +1130,11 @@ async fn complete_persists_leaf_ca_fullchain_and_same_pem_key_before_promoting()
     );
     assert_eq!(
         fs::read_to_string(generation.join("cert.pem")).unwrap(),
-        leaf.pem()
+        leaf_pem
     );
     assert_eq!(
         fs::read_to_string(generation.join("ca.pem")).unwrap(),
-        ca.pem()
+        ca_pem
     );
     let pem_key =
         zeroize::Zeroizing::new(fs::read_to_string(generation.join("private-key.pem")).unwrap());
@@ -1973,7 +1977,9 @@ async fn history_without_consistent_in_use_and_unknown_operation_delete_nothing(
     );
     let in_use = completed_generation(&fixture).await;
     let slot = fixture.store.slot(&in_use.name);
-    fs::remove_file(slot.join("in_use")).unwrap();
+    // Unix exposes a link; Windows exposes a complete copied directory.
+    // Removing the native view must preserve its backing generation on both.
+    publication::NATIVE.remove(&slot.join("in_use")).unwrap();
     assert!(
         fixture
             .store

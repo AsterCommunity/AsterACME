@@ -3,6 +3,7 @@
 use super::*;
 use aster_acme::{
     account::{AccountKeyStore, AccountRecord, AccountStore, KeyAccess},
+    challenge::{ChallengeMaterial, ChallengeToken},
     identifier::DnsIdentifier,
     issuance::service::IssueService,
     issuance::{IssueExecution, IssueOutcome, IssueRequest, IssueSession, IssueStore},
@@ -23,6 +24,7 @@ use wiremock::{
 
 const TOKEN: &str = "opaque-HTTP-token-with-enough-entropy";
 struct Fixture {
+    implementation: ValidationMethod,
     temp: tempfile::TempDir,
     server: MockServer,
     store: CliIssueStore,
@@ -31,6 +33,7 @@ struct Fixture {
     session: Option<Box<dyn IssueSession>>,
     publication_fault: Arc<AtomicUsize>,
     generation: Arc<Mutex<PathBuf>>,
+    stage: Arc<AtomicUsize>,
 }
 
 impl Fixture {
@@ -94,7 +97,10 @@ impl Fixture {
                 } else {
                     None
                 },
-                if implementation == ValidationMethod::Standalone {
+                if matches!(
+                    implementation,
+                    ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+                ) {
                     let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
                     Some(reservation.local_addr().unwrap())
                 } else {
@@ -109,6 +115,7 @@ impl Fixture {
             temp.path().join("certs/web").join(record.generation_name()),
         ));
         let fixture = Self {
+            implementation,
             temp,
             server,
             store,
@@ -117,13 +124,14 @@ impl Fixture {
             session: Some(session),
             publication_fault: Arc::new(AtomicUsize::new(0)),
             generation,
+            stage: Arc::new(AtomicUsize::new(0)),
         };
         fixture.mount().await;
         fixture
     }
 
     async fn mount(&self) {
-        let stage = Arc::new(AtomicUsize::new(0));
+        let stage = self.stage.clone();
         let base = self.server.uri();
         let order = |status: &str| serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
         let initial = order("pending");
@@ -145,31 +153,23 @@ impl Fixture {
         let ready = order("ready");
         let valid = order("valid");
         let current = stage.clone();
+        let implementation = self.implementation;
         Mock::given(method("POST"))
             .and(path("/order/1"))
             .respond_with(move |_: &wiremock::Request| {
                 ResponseTemplate::new(200)
                     .insert_header("Replay-Nonce", "queried")
                     .insert_header("Retry-After", "0")
-                    .set_body_json(match current.load(Ordering::SeqCst) {
-                        0 => pending.clone(),
-                        1 => ready.clone(),
+                    .set_body_json(match (current.load(Ordering::SeqCst), implementation) {
+                        (0, _) | (1, ValidationMethod::TlsAlpn) => pending.clone(),
+                        (2, ValidationMethod::TlsAlpn) | (1, _) => ready.clone(),
                         _ => valid.clone(),
                     })
             })
             .mount(&self.server)
             .await;
-        Mock::given(method("POST")).and(path("/authorize")).respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce","authz").set_body_json(serde_json::json!({"identifier":{"type":"dns","value":"example.com"},"status":"pending","expires":"2099-01-01T00:00:00Z","challenges":[
-            {"type":"dns-01","url":format!("{base}/wrong-dns"),"status":"pending","token":"another-opaque-token-long-enough"},
-            {"type":"http-01","url":format!("{base}/http-challenge"),"status":"pending","token":TOKEN}
-        ]}))).mount(&self.server).await;
-        let current = stage.clone();
-        Mock::given(method("POST")).and(path("/http-challenge")).respond_with(move |request: &wiremock::Request| {
-            let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
-            assert_eq!(URL_SAFE_NO_PAD.decode(jws.payload).unwrap(), b"{}");
-            current.store(1,Ordering::SeqCst);
-            ResponseTemplate::new(200).insert_header("Replay-Nonce","ack").set_body_json(serde_json::json!({"type":"http-01","url":format!("{base}/http-challenge"),"status":"valid","token":TOKEN}))
-        }).mount(&self.server).await;
+        self.mount_authorization_challenge(stage.clone(), base, implementation)
+            .await;
         let current = stage;
         let base = self.server.uri();
         let generation = self.generation.clone();
@@ -177,9 +177,13 @@ impl Fixture {
             let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
             assert_eq!(URL_SAFE_NO_PAD.decode(payload["csr"].as_str().unwrap()).unwrap(), std::fs::read(generation.lock().unwrap().join("request.der")).unwrap());
-            current.store(2,Ordering::SeqCst);
+            current.store(3,Ordering::SeqCst);
             ResponseTemplate::new(200).insert_header("Replay-Nonce","finalized").insert_header("Retry-After","0").set_body_json(serde_json::json!({"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
         }).mount(&self.server).await;
+        self.mount_certificate().await;
+    }
+
+    async fn mount_certificate(&self) {
         let generation = self.generation.clone();
         let fault = self.publication_fault.clone();
         let public_file = self
@@ -210,6 +214,40 @@ impl Fixture {
             })
             .mount(&self.server)
             .await;
+    }
+
+    async fn mount_authorization_challenge(
+        &self,
+        stage: Arc<AtomicUsize>,
+        base: String,
+        implementation: ValidationMethod,
+    ) {
+        let (challenge_kind, challenge_path) = match implementation {
+            ValidationMethod::TlsAlpn => ("tls-alpn-01", "/tls-challenge"),
+            ValidationMethod::ManualDns
+            | ValidationMethod::ManualHttp
+            | ValidationMethod::Webroot
+            | ValidationMethod::Standalone => ("http-01", "/http-challenge"),
+        };
+        let challenge_url = format!("{base}{challenge_path}");
+        let auth_stage = stage.clone();
+        let auth_url = challenge_url.clone();
+        Mock::given(method("POST")).and(path("/authorize"))
+            .respond_with(move |_: &wiremock::Request| {
+                let validated = implementation == ValidationMethod::TlsAlpn && auth_stage.load(Ordering::SeqCst) >= 2;
+                let processing = implementation == ValidationMethod::TlsAlpn && auth_stage.load(Ordering::SeqCst) > 0;
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "authz").set_body_json(serde_json::json!({
+                    "identifier":{"type":"dns","value":"example.com"},"status":if validated { "valid" } else { "pending" },"expires":"2099-01-01T00:00:00Z",
+                    "challenges":[{"type":challenge_kind,"url":auth_url,"status":if processing { "processing" } else { "pending" },"token":TOKEN}]
+                }))
+            }).mount(&self.server).await;
+        Mock::given(method("POST")).and(path(challenge_path))
+            .respond_with(move |request: &wiremock::Request| {
+                let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
+                assert_eq!(URL_SAFE_NO_PAD.decode(jws.payload).unwrap(), b"{}");
+                stage.store(1, Ordering::SeqCst);
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "ack").set_body_json(serde_json::json!({"type":challenge_kind,"url":challenge_url,"status":"processing","token":TOKEN}))
+            }).mount(&self.server).await;
     }
 
     async fn mount_standalone_ca(&self, ack_wait: u64) -> (Arc<AtomicUsize>, Arc<AtomicUsize>) {
@@ -465,6 +503,136 @@ async fn standalone_serves_real_http_and_resumes_acknowledged_challenges_without
         let renewal = renewed.record().await.unwrap();
         assert_eq!(renewal.solver_id, "standalone");
         assert_eq!(renewal.solver_config, completed.solver_config);
+    }
+}
+
+async fn await_tls_alpn_validation(
+    address: std::net::SocketAddr,
+    digest: [u8; 32],
+    stage: Arc<AtomicUsize>,
+) {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while stage.load(Ordering::SeqCst) < 1 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        loop {
+            match super::super::tls_alpn::tests::verify_challenge_certificate(
+                address,
+                "example.com",
+                digest,
+            )
+            .await
+            {
+                Ok(()) => {
+                    stage.store(2, Ordering::SeqCst);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn tls_alpn_completes_acme_order_and_resumes_without_reacknowledging() {
+    for resume in [false, true] {
+        let mut fixture = Fixture::new(ValidationMethod::TlsAlpn).await;
+        let original = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let config: StandaloneConfig =
+            serde_json::from_value(original.solver_config.clone()).unwrap();
+        let address = config.listen_address;
+        let token = ChallengeToken::new(TOKEN).unwrap();
+        let material = ChallengeMaterial::derive(
+            ChallengeKind::TlsAlpn01,
+            &DnsIdentifier::new("example.com").unwrap(),
+            &token,
+            &fixture.account.key_thumbprint,
+        )
+        .unwrap();
+        let ChallengeMaterial::TlsAlpn01 {
+            authorization_digest,
+            ..
+        } = material
+        else {
+            panic!("expected TLS-ALPN material");
+        };
+
+        if resume {
+            let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+            let solver = adapter(&saved, false, false, progress()).unwrap();
+            assert!(matches!(
+                fixture
+                    .service
+                    .run(
+                        fixture.session.as_mut().unwrap().as_mut(),
+                        solver.as_ref(),
+                        &IssueExecution {
+                            max_polls: 1,
+                            context: ExecutionContext {
+                                deadline: Instant::now() + Duration::from_secs(10),
+                                ..execution()
+                            },
+                            poll_interval: Duration::from_millis(1)
+                        }
+                    )
+                    .await,
+                Err(IssueError::PollLimit { .. })
+            ));
+            assert_eq!(fixture.count("/tls-challenge").await, 1);
+            let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+            drop(rebound);
+            fixture.reopen().await;
+        }
+
+        let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let solver = adapter(&saved, false, false, progress()).unwrap();
+        let stage = fixture.stage.clone();
+        let controls = IssueExecution {
+            max_polls: 30,
+            context: ExecutionContext {
+                deadline: Instant::now() + Duration::from_secs(10),
+                ..execution()
+            },
+            poll_interval: Duration::from_millis(1),
+        };
+        let service = fixture.service.run(
+            fixture.session.as_mut().unwrap().as_mut(),
+            solver.as_ref(),
+            &controls,
+        );
+        let validate = await_tls_alpn_validation(address, authorization_digest, stage);
+        let (outcome, ()) = tokio::join!(service, validate);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => panic!(
+                "TLS issuance failed at remote stage {}: {error}",
+                fixture.stage.load(Ordering::SeqCst)
+            ),
+        };
+        let IssueOutcome::Completed { record, cleanup } = outcome else {
+            panic!("expected completed TLS-ALPN order");
+        };
+        assert_eq!(cleanup, Vec::<ValidationRequirement>::new());
+        assert_eq!(record.solver_id, "tls_alpn");
+        assert_eq!(record.solver_config, original.solver_config);
+        assert_eq!(fixture.count("/orders/create").await, 1);
+        assert_eq!(fixture.count("/tls-challenge").await, 1);
+        assert_eq!(fixture.count("/finalize").await, 1);
+        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        drop(rebound);
+        drop(fixture.session.take());
+        let renewal = fixture
+            .store
+            .renew(&record.name, &fixture.account)
+            .await
+            .unwrap()
+            .record()
+            .await
+            .unwrap();
+        assert_eq!(renewal.solver_id, "tls_alpn");
+        assert_eq!(renewal.solver_config, record.solver_config);
     }
 }
 

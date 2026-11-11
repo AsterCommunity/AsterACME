@@ -1,58 +1,72 @@
-//! RFC 8555 problem documents and standard problem identifiers.
+//! ACME problem documents and IANA-registered problem identifiers.
 use serde::{Deserialize, Serialize};
 
 aster_forge_macros::wire_enum! {
-    /// RFC 8555 section 6.7 problem types; future extensions remain lossless.
+    /// IANA ACME error types, including RFC 8555 §6.7 and registered extensions; unknown types remain lossless.
     pub enum ProblemKind {
-        /// RFC 9773: predecessor was already replaced by another order.
+        /// RFC 9773 §5: predecessor was already replaced by another order.
         AlreadyReplaced => "urn:ietf:params:acme:error:alreadyReplaced",
-        /// Account identity does not exist.
+        /// RFC 8739: an auto-renewal order was explicitly canceled.
+        AutoRenewalCanceled => "urn:ietf:params:acme:error:autoRenewalCanceled",
+        /// RFC 8739: an auto-renewal order expired.
+        AutoRenewalExpired => "urn:ietf:params:acme:error:autoRenewalExpired",
+        /// RFC 8739: an auto-renewal cancellation request was invalid.
+        AutoRenewalCancellationInvalid => "urn:ietf:params:acme:error:autoRenewalCancellationInvalid",
+        /// RFC 8739: auto-renewal certificate revocation is unsupported.
+        AutoRenewalRevocationNotSupported => "urn:ietf:params:acme:error:autoRenewalRevocationNotSupported",
+        /// RFC 8555 §6.7: Account identity does not exist.
         AccountDoesNotExist => "urn:ietf:params:acme:error:accountDoesNotExist",
-        /// Certificate was already revoked.
+        /// RFC 8555 §6.7: Certificate was already revoked.
         AlreadyRevoked => "urn:ietf:params:acme:error:alreadyRevoked",
-        /// The CSR is unacceptable.
+        /// RFC 8555 §6.7: The CSR is unacceptable.
         BadCsr => "urn:ietf:params:acme:error:badCSR",
-        /// Nonce rejected; retry with the supplied fresh nonce.
+        /// RFC 8555 §6.7: Nonce rejected; retry with the supplied fresh nonce.
         BadNonce => "urn:ietf:params:acme:error:badNonce",
-        /// Unsupported JWS public key.
+        /// RFC 8555 §6.7: Unsupported JWS public key.
         BadPublicKey => "urn:ietf:params:acme:error:badPublicKey",
-        /// CA policy rejects the requested revocation reason.
+        /// RFC 8555 §6.7: CA policy rejects the requested revocation reason.
         BadRevocationReason => "urn:ietf:params:acme:error:badRevocationReason",
-        /// Unsupported JWS signing algorithm.
+        /// RFC 8555 §6.7: Unsupported JWS signing algorithm.
         BadSignatureAlgorithm => "urn:ietf:params:acme:error:badSignatureAlgorithm",
-        /// CAA records forbid issuance.
+        /// `draft-ietf-acme-device-attest-09` (IANA reference `RFC-ietf-acme-device-attest-09`): unacceptable device attestation; not a published RFC.
+        BadAttestationStatement => "urn:ietf:params:acme:error:badAttestationStatement",
+        /// RFC 8555 §6.7: CAA records forbid issuance.
         Caa => "urn:ietf:params:acme:error:caa",
-        /// Inspect per-identifier subproblems.
+        /// RFC 8555 §6.7: Inspect per-identifier subproblems.
         Compound => "urn:ietf:params:acme:error:compound",
-        /// CA could not connect to the validation target.
+        /// RFC 8555 §6.7: CA could not connect to the validation target.
         Connection => "urn:ietf:params:acme:error:connection",
-        /// DNS validation query failed.
+        /// RFC 8555 §6.7: DNS validation query failed.
         Dns => "urn:ietf:params:acme:error:dns",
-        /// External account binding is required.
+        /// RFC 8555 §6.7: External account binding is required.
         ExternalAccountRequired => "urn:ietf:params:acme:error:externalAccountRequired",
-        /// Challenge response did not match.
+        /// RFC 8555 §6.7: Challenge response did not match.
         IncorrectResponse => "urn:ietf:params:acme:error:incorrectResponse",
-        /// Invalid contact URI.
+        /// RFC 8555 §6.7: Invalid contact URI.
         InvalidContact => "urn:ietf:params:acme:error:invalidContact",
-        /// Malformed request.
+        /// RFC 9115: the order delegation configuration is unknown.
+        UnknownDelegation => "urn:ietf:params:acme:error:unknownDelegation",
+        /// RFC 8555 §6.7: Malformed request.
         Malformed => "urn:ietf:params:acme:error:malformed",
-        /// Order is not ready to finalize.
+        /// RFC 8555 §6.7: Order is not ready to finalize.
         OrderNotReady => "urn:ietf:params:acme:error:orderNotReady",
-        /// Request rate limit exceeded.
+        /// RFC 9799 §6.4.1: in-band onion CAA was required.
+        OnionCaaRequired => "urn:ietf:params:acme:error:onionCAARequired",
+        /// RFC 8555 §6.7: Request rate limit exceeded.
         RateLimited => "urn:ietf:params:acme:error:rateLimited",
-        /// CA refuses the requested identifier.
+        /// RFC 8555 §6.7: CA refuses the requested identifier.
         RejectedIdentifier => "urn:ietf:params:acme:error:rejectedIdentifier",
-        /// CA internal error.
+        /// RFC 8555 §6.7: CA internal error.
         ServerInternal => "urn:ietf:params:acme:error:serverInternal",
-        /// TLS validation error.
+        /// RFC 8555 §6.7: TLS validation error.
         Tls => "urn:ietf:params:acme:error:tls",
-        /// Account is not authorized.
+        /// RFC 8555 §6.7: Account is not authorized.
         Unauthorized => "urn:ietf:params:acme:error:unauthorized",
-        /// Unsupported contact scheme.
+        /// RFC 8555 §6.7: Unsupported contact scheme.
         UnsupportedContact => "urn:ietf:params:acme:error:unsupportedContact",
-        /// Unsupported identifier type.
+        /// RFC 8555 §6.7: Unsupported identifier type.
         UnsupportedIdentifier => "urn:ietf:params:acme:error:unsupportedIdentifier",
-        /// Operator action is required.
+        /// RFC 8555 §6.7: Operator action is required.
         UserActionRequired => "urn:ietf:params:acme:error:userActionRequired",
     }
 }
@@ -90,7 +104,13 @@ mod tests {
         for wire in [
             "accountDoesNotExist",
             "alreadyRevoked",
+            "autoRenewalCanceled",
+            "autoRenewalExpired",
+            "autoRenewalCancellationInvalid",
+            "autoRenewalRevocationNotSupported",
+            "alreadyReplaced",
             "badCSR",
+            "badAttestationStatement",
             "badNonce",
             "badPublicKey",
             "badRevocationReason",
@@ -102,7 +122,9 @@ mod tests {
             "externalAccountRequired",
             "incorrectResponse",
             "invalidContact",
+            "unknownDelegation",
             "malformed",
+            "onionCAARequired",
             "orderNotReady",
             "rateLimited",
             "rejectedIdentifier",

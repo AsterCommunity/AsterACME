@@ -779,6 +779,10 @@ impl IssueService {
                             return Ok(());
                         }
                         ProblemKind::AlreadyReplaced
+                        | ProblemKind::AutoRenewalCanceled
+                        | ProblemKind::AutoRenewalExpired
+                        | ProblemKind::AutoRenewalCancellationInvalid
+                        | ProblemKind::AutoRenewalRevocationNotSupported
                         | ProblemKind::AccountDoesNotExist
                         | ProblemKind::AlreadyRevoked
                         | ProblemKind::BadNonce
@@ -792,7 +796,10 @@ impl IssueService {
                         | ProblemKind::ExternalAccountRequired
                         | ProblemKind::IncorrectResponse
                         | ProblemKind::InvalidContact
+                        | ProblemKind::UnknownDelegation
                         | ProblemKind::Malformed
+                        | ProblemKind::OnionCaaRequired
+                        | ProblemKind::BadAttestationStatement
                         | ProblemKind::RateLimited
                         | ProblemKind::RejectedIdentifier
                         | ProblemKind::ServerInternal

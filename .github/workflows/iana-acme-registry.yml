@@ -1,0 +1,25 @@
+name: IANA ACME Registry
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/iana-acme-registry.yml'
+      - 'crates/aster_acme_protocol/src/problem.rs'
+      - 'scripts/check-iana-acme-errors.py'
+      - 'scripts/tests/test_iana_acme_errors.py'
+
+permissions:
+  contents: read
+
+jobs:
+  error-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python3 scripts/check-iana-acme-errors.py

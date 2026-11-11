@@ -158,7 +158,7 @@ pub(crate) struct IssueArgs {
         conflicts_with = "resume"
     )]
     pub webroot: Option<std::path::PathBuf>,
-    /// Standalone local socket, default 0.0.0.0:80; saved for resume/renew. Public port 80 must reach it.
+    /// Temporary validation listener socket: port 80 for standalone or 443 for `tls_alpn`; saved for resume/renew.
     #[arg(
         long,
         value_name = "IP:PORT",
