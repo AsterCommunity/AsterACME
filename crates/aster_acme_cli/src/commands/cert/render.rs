@@ -3,15 +3,47 @@ use crate::common::error::CliResult;
 use crate::common::output;
 use crate::common::output::Style;
 use crate::common::output::field;
+use crate::common::session::Format;
 use crate::common::time::timestamp;
 use aster_acme::issuance::{DnsRequirement, IssueOutcome, IssueRecord};
 use aster_acme_core::revocation::RevocationState;
 use serde::Serialize;
-use std::io::{self, IsTerminal};
 
 use super::report::{
     BatchDisposition, CertificateResult, RenewalBatch, RenewalResult, RenewalSummary, SkipReason,
 };
+
+pub(crate) fn render(
+    report: &super::report::CertificateReport,
+    format: Format,
+) -> CliResult<String> {
+    use super::report::CertificateReport;
+    match report {
+        CertificateReport::Result {
+            result: report,
+            data_dir,
+        } => result(report, format, data_dir),
+        CertificateReport::Batch { report, data_dir } => batch(report, format, data_dir),
+        CertificateReport::List(records) => list(records, format),
+        CertificateReport::Show {
+            record,
+            verified,
+            view,
+        } => show(
+            std::slice::from_ref(record.as_ref()),
+            format,
+            *verified,
+            *view,
+        ),
+        CertificateReport::Revoked(record) => revoked(record, format),
+        CertificateReport::Removed {
+            name,
+            scope,
+            ids,
+            in_use_removed,
+        } => removed(name, scope, ids, *in_use_removed, format),
+    }
+}
 
 /// Labels describe execution progress without presenting Rust enum debug output.
 pub(super) fn phase_label(phase: aster_acme_core::workflow::IssuancePhase) -> &'static str {
@@ -105,15 +137,15 @@ impl RevocationSource {
     }
 }
 
-pub(super) fn list(records: &[IssueRecord], json: bool) -> CliResult<String> {
-    if json {
-        return show(records, true, false, DetailView::InUse);
+pub(super) fn list(records: &[IssueRecord], format: Format) -> CliResult<String> {
+    if format.json {
+        return show(records, format, false, DetailView::InUse);
     }
     if records.is_empty() {
         return Ok("No saved certificate requests.".into());
     }
     let now = time::OffsetDateTime::now_utc();
-    let color = output::colors(io::stdout().is_terminal());
+    let color = format.color;
     let mut rows = vec![[
         "NAME".into(),
         "DOMAINS".into(),
@@ -197,19 +229,19 @@ fn order_status_style(status: Option<&aster_acme_core::protocol::OrderStatus>) -
 
 /// Human detail scope; `in_use` is shown only when choosing an explicit version.
 #[derive(Clone, Copy)]
-pub(super) enum DetailView {
+pub(crate) enum DetailView {
     InUse,
     Version,
 }
 
 pub(super) fn show(
     records: &[IssueRecord],
-    json: bool,
+    format: Format,
     verified: bool,
     view: DetailView,
 ) -> CliResult<String> {
     let now = time::OffsetDateTime::now_utc();
-    if json {
+    if format.json {
         let views = records
             .iter()
             .map(|operation| OrderView {
@@ -234,7 +266,7 @@ pub(super) fn show(
     if records.is_empty() {
         return Ok("No saved certificate requests.".into());
     }
-    let color = output::colors(io::stdout().is_terminal());
+    let color = format.color;
     Ok(records
         .iter()
         .map(|record| {
@@ -576,12 +608,12 @@ fn artifact_lines(paths: &ArtifactPaths) -> Vec<String> {
 
 pub(super) fn result(
     result: &CertificateResult,
-    json: bool,
+    format: Format,
     data_dir: &std::path::Path,
 ) -> CliResult<String> {
     match result {
-        CertificateResult::Issuance(issued) => outcome(issued, json, data_dir),
-        CertificateResult::NotDue(record) => not_due(record, json),
+        CertificateResult::Issuance(issued) => outcome(issued, format, data_dir),
+        CertificateResult::NotDue(record) => not_due(record, format),
     }
 }
 
@@ -708,41 +740,46 @@ fn batch_summary(summary: &RenewalSummary, total: usize) -> String {
 
 pub(super) fn batch(
     report: &RenewalBatch,
-    json: bool,
+    format: Format,
     data_dir: &std::path::Path,
 ) -> CliResult<String> {
     let summary = report.summary();
-    if json {
+    if format.json {
         return Ok(serde_json::to_string_pretty(&batch_output(
             report, data_dir,
         ))?);
     }
-    let color = output::colors(io::stdout().is_terminal());
-    let mut rows = vec![["NAME".into(), "STATUS".into(), "DETAILS".into()]];
+    let color = format.color;
+    let mut rows = vec![["NAME".into(), "STATUS".into(), "NEXT RENEWAL (UTC)".into()]];
     let mut details = Vec::new();
     for entry in &report.entries {
-        let (status, detail) = match &entry.result {
-            RenewalResult::Outcome(CertificateResult::NotDue(record)) => (
-                "not due",
-                timestamp(record.renewal.as_ref().map(|plan| plan.renew_at)),
-            ),
-            RenewalResult::Outcome(result) => {
-                details.push(self::result(result, false, data_dir)?);
-                match result {
-                    CertificateResult::Issuance(IssueOutcome::Completed { .. }) => {
-                        ("completed", "new certificate selected".into())
-                    }
-                    CertificateResult::Issuance(IssueOutcome::ActionRequired { .. }) => {
-                        ("action required", "publish the saved TXT records".into())
-                    }
-                    CertificateResult::NotDue(_) => ("not due", String::new()),
+        let (status, renew_at) = match &entry.result {
+            RenewalResult::Outcome(CertificateResult::NotDue(record)) => {
+                ("not due", record.renewal.as_ref().map(|plan| plan.renew_at))
+            }
+            RenewalResult::Outcome(CertificateResult::Issuance(outcome)) => {
+                details.push(self::outcome(outcome, format, data_dir)?);
+                match outcome {
+                    IssueOutcome::Completed { record, .. } => (
+                        "completed",
+                        record.renewal.as_ref().map(|plan| plan.renew_at),
+                    ),
+                    IssueOutcome::ActionRequired { .. } => ("action required", None),
                 }
             }
-            RenewalResult::Skipped(reason) => ("skipped", reason.message().into()),
+            RenewalResult::Skipped(reason) => {
+                details.push(format!(
+                    "{} {}: {}",
+                    output::MessageKind::Warning.badge(color),
+                    output::safe(&entry.name),
+                    reason.message()
+                ));
+                ("skipped", None)
+            }
             RenewalResult::Failed { message, hint } => {
                 details.push(format!(
                     "{} {}: {}{}",
-                    output::styled("[ERROR]", Style::BoldRed, color),
+                    output::MessageKind::Error.badge(color),
                     output::safe(&entry.name),
                     output::safe(message),
                     hint.as_ref().map_or_else(String::new, |hint| format!(
@@ -750,47 +787,37 @@ pub(super) fn batch(
                         output::tips(hint, color)
                     ))
                 ));
-                ("failed", message.clone())
+                ("failed", None)
             }
-            RenewalResult::Cancelled => (
-                "cancelled",
-                "stopped; inspect the saved request and selected certificate".into(),
-            ),
+            RenewalResult::Cancelled => {
+                details.push(format!(
+                    "{} {}: stopped; inspect the saved request and selected certificate",
+                    output::MessageKind::Warning.badge(color),
+                    output::safe(&entry.name)
+                ));
+                ("cancelled", None)
+            }
         };
         rows.push([
             output::safe(&entry.name),
             status.into(),
-            output::safe(&detail),
+            timestamp(renew_at),
         ]);
     }
-    let (label, style) = match report.disposition() {
-        BatchDisposition::Completed => ("[INFO]", Style::BoldCyan),
+    let kind = match report.disposition() {
+        BatchDisposition::Completed => output::MessageKind::Info,
         BatchDisposition::ActionRequired | BatchDisposition::Cancelled => {
-            ("[WARN]", Style::BoldYellow)
+            output::MessageKind::Warning
         }
-        BatchDisposition::PartialFailure => ("[ERROR]", Style::BoldRed),
+        BatchDisposition::PartialFailure => output::MessageKind::Error,
     };
-    let mut lines = vec![format!(
-        "{} Batch renewal results:",
-        output::styled(label, style, color)
-    )];
+    let mut lines = vec![format!("{} Batch renewal results:", kind.badge(color))];
     lines.extend(crate::common::table::align(
         &rows,
         Some(&|row, column, cell| {
             let style = match (row, column) {
                 (0, _) => Style::BoldCyan,
-                (_, 1) => match &report.entries[row - 1].result {
-                    RenewalResult::Outcome(CertificateResult::Issuance(
-                        IssueOutcome::Completed { .. },
-                    )) => Style::Green,
-                    RenewalResult::Outcome(CertificateResult::NotDue(_)) => Style::Cyan,
-                    RenewalResult::Outcome(CertificateResult::Issuance(
-                        IssueOutcome::ActionRequired { .. },
-                    ))
-                    | RenewalResult::Skipped(_)
-                    | RenewalResult::Cancelled => Style::Yellow,
-                    RenewalResult::Failed { .. } => Style::Red,
-                },
+                (_, 1) => batch_status_style(&report.entries[row - 1].result),
                 _ => Style::Plain,
             };
             output::styled(cell, style, color)
@@ -799,7 +826,7 @@ pub(super) fn batch(
     lines.push(String::new());
     lines.push(format!(
         "{} {}",
-        output::styled(label, style, color),
+        kind.badge(color),
         batch_summary(&summary, report.entries.len())
     ));
     for detail in details {
@@ -809,9 +836,24 @@ pub(super) fn batch(
     Ok(lines.join("\n"))
 }
 
+fn batch_status_style(result: &RenewalResult) -> Style {
+    match result {
+        RenewalResult::Outcome(CertificateResult::Issuance(IssueOutcome::Completed { .. })) => {
+            Style::Green
+        }
+        RenewalResult::Outcome(CertificateResult::NotDue(_)) => Style::Cyan,
+        RenewalResult::Outcome(CertificateResult::Issuance(IssueOutcome::ActionRequired {
+            ..
+        }))
+        | RenewalResult::Skipped(_)
+        | RenewalResult::Cancelled => Style::Yellow,
+        RenewalResult::Failed { .. } => Style::Red,
+    }
+}
+
 pub(super) fn outcome(
     outcome: &IssueOutcome,
-    json: bool,
+    format: Format,
     data_dir: &std::path::Path,
 ) -> CliResult<String> {
     let (record, records) = match outcome {
@@ -819,20 +861,22 @@ pub(super) fn outcome(
         IssueOutcome::Completed { record, cleanup } => (record.as_ref(), cleanup.as_slice()),
     };
     let result = ResultOutput::from_outcome(outcome, data_dir);
-    if json {
+    if format.json {
         return Ok(serde_json::to_string_pretty(&result)?);
     }
-    let color = output::colors(io::stdout().is_terminal());
-    let (label, style, message) = match outcome {
-        IssueOutcome::ActionRequired { .. } => ("[WARN]", Style::BoldYellow, "Action required for"),
+    let color = format.color;
+    let (kind, message) = match outcome {
+        IssueOutcome::ActionRequired { .. } => {
+            (output::MessageKind::Warning, "Action required for")
+        }
         IssueOutcome::Completed { record, .. } => match &record.renewal_of {
-            Some(_) => ("[DONE]", Style::BoldGreen, "Renewed certificate"),
-            None => ("[DONE]", Style::BoldGreen, "Issued certificate"),
+            Some(_) => (output::MessageKind::Done, "Renewed certificate"),
+            None => (output::MessageKind::Done, "Issued certificate"),
         },
     };
     let mut lines = vec![format!(
         "{} {message} {}",
-        output::styled(label, style, color),
+        kind.badge(color),
         output::safe(record.name.as_str())
     )];
     lines.push(format!("  Request: {}", record.operation_id));
@@ -875,16 +919,16 @@ pub(super) fn outcome(
     Ok(lines.join("\n"))
 }
 
-pub(super) fn not_due(record: &IssueRecord, json: bool) -> CliResult<String> {
-    if json {
+pub(super) fn not_due(record: &IssueRecord, format: Format) -> CliResult<String> {
+    if format.json {
         return Ok(serde_json::to_string_pretty(&ResultOutput::NotDue {
             operation: record,
         })?);
     }
-    let color = output::colors(io::stdout().is_terminal());
+    let color = format.color;
     let mut lines = vec![format!(
         "{} Certificate {} is not due for renewal.",
-        output::styled("[INFO]", Style::Cyan, color),
+        crate::common::output::MessageKind::Info.badge(color),
         output::safe(record.name.as_str())
     )];
     lines.extend(renewal_lines(
@@ -904,7 +948,7 @@ pub(super) fn removed(
     scope: &aster_acme_cli_storage::issuance::removal::RemovalScope,
     ids: &[String],
     in_use_removed: bool,
-    json: bool,
+    format: Format,
 ) -> CliResult<String> {
     use aster_acme_cli_storage::issuance::removal::RemovalScope;
     #[derive(Serialize)]
@@ -923,7 +967,7 @@ pub(super) fn removed(
         RemovalScope::Revoked => "revoked",
         RemovalScope::All => "all",
     };
-    if json {
+    if format.json {
         return Ok(serde_json::to_string_pretty(&CertificateDeletionOutput {
             name,
             scope: scope_label,
@@ -934,7 +978,7 @@ pub(super) fn removed(
             ca_request_performed: false,
         })?);
     }
-    let color = output::colors(io::stdout().is_terminal());
+    let color = format.color;
     let message = match scope {
         RemovalScope::Operation(_) => format!(
             "Removed local certificate request for {}.",
@@ -965,7 +1009,7 @@ pub(super) fn removed(
     };
     let mut lines = vec![format!(
         "{} {message}",
-        output::styled("[OK]", Style::BoldGreen, color)
+        crate::common::output::MessageKind::Success.badge(color)
     )];
     if in_use_removed {
         lines.push(field(
@@ -977,7 +1021,7 @@ pub(super) fn removed(
     Ok(lines.join("\n"))
 }
 
-pub(super) fn revoked(record: &IssueRecord, json: bool) -> CliResult<String> {
+pub(super) fn revoked(record: &IssueRecord, format: Format) -> CliResult<String> {
     #[derive(Serialize)]
     struct RevokedOutput<'a> {
         status: &'static str,
@@ -992,16 +1036,16 @@ pub(super) fn revoked(record: &IssueRecord, json: bool) -> CliResult<String> {
             );
         }
     }
-    if json {
+    if format.json {
         return Ok(serde_json::to_string_pretty(&RevokedOutput {
             status: "revoked",
             operation: record,
         })?);
     }
-    let color = output::colors(io::stdout().is_terminal());
+    let color = format.color;
     let mut lines = vec![format!(
         "{} Revoked certificate {}. Local files retained.",
-        output::styled("[OK]", Style::BoldGreen, color),
+        crate::common::output::MessageKind::Success.badge(color),
         output::safe(record.name.as_str())
     )];
     lines.extend(renewal_lines(
@@ -1015,8 +1059,7 @@ pub(super) fn revoked(record: &IssueRecord, json: bool) -> CliResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn details_style_statuses_and_keep_human_times_fixed_without_altering_json() {
+    fn detailed_record() -> IssueRecord {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
             "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00.123456Z","account_name":"default","account_id":"id","account_thumbprint":"key",
@@ -1032,6 +1075,12 @@ mod tests {
             "renew_at":"2026-02-01T00:00:00Z","source":"fallback","suggested_window":null,"explanation_url":null,
             "last_checked_at":null,"next_check_at":null,"last_query_failed":false
         })).unwrap());
+        record
+    }
+
+    #[test]
+    fn details_style_statuses_and_keep_human_times_fixed_without_altering_json() {
+        let record = detailed_record();
         let colored = show_text(&record, time::OffsetDateTime::now_utc(), true, false);
         assert!(colored.contains("\x1b[32mcompleted\x1b[0m"));
         assert!(colored.contains("\x1b[32mvalid\x1b[0m"));
@@ -1041,22 +1090,28 @@ mod tests {
         assert!(plain.contains("Key type:"));
         assert!(plain.contains("ecdsa-p256"));
         assert!(
-            list(std::slice::from_ref(&record), false)
-                .unwrap()
-                .contains("KEY TYPE")
+            list(
+                std::slice::from_ref(&record),
+                crate::common::session::Format::plain(false)
+            )
+            .unwrap()
+            .contains("KEY TYPE")
         );
         assert!(!plain.contains('\x1b'));
         assert!(plain.contains("Next renewal:"));
         assert!(plain.contains("2026-02-01 00:00:00 UTC"));
         assert!(plain.contains("fallback (2/3 of certificate validity)"));
         assert!(
-            list(std::slice::from_ref(&record), false)
-                .unwrap()
-                .contains("NEXT RENEWAL (UTC)")
+            list(
+                std::slice::from_ref(&record),
+                crate::common::session::Format::plain(false)
+            )
+            .unwrap()
+            .contains("NEXT RENEWAL (UTC)")
         );
         let machine = show(
             std::slice::from_ref(&record),
-            true,
+            crate::common::session::Format::plain(true),
             false,
             DetailView::InUse,
         )
@@ -1067,11 +1122,21 @@ mod tests {
             record: Box::new(record),
             cleanup: vec![],
         };
-        let human = outcome(&result, false, std::path::Path::new("/data")).unwrap();
+        let human = outcome(
+            &result,
+            crate::common::session::Format::plain(false),
+            std::path::Path::new("/data"),
+        )
+        .unwrap();
         assert!(human.contains("Next renewal:"));
         assert!(human.contains("2026-02-01 00:00:00 UTC"));
         assert!(human.find("Private key:").unwrap() < human.find("Next renewal:").unwrap());
-        let output = outcome(&result, true, std::path::Path::new("/data")).unwrap();
+        let output = outcome(
+            &result,
+            crate::common::session::Format::plain(true),
+            std::path::Path::new("/data"),
+        )
+        .unwrap();
         let fields: serde_json::Value = serde_json::from_str(&output).unwrap();
         for (key, file) in [
             ("fullchain", "fullchain.pem"),
@@ -1084,9 +1149,11 @@ mod tests {
                 format!("/data/certs/example.com/in_use/{file}")
             );
         }
-        let IssueOutcome::Completed { record, .. } = &result else {
-            panic!("completed result expected")
-        };
+    }
+
+    #[test]
+    fn revoked_and_pending_records_suspend_scheduling_without_claiming_fresh_verification() {
+        let record = Box::new(detailed_record());
         for state in [RevocationState::Pending, RevocationState::Confirmed] {
             let mut record = record.as_ref().clone();
             record.revocation.state = state;
@@ -1100,7 +1167,7 @@ mod tests {
             let json: serde_json::Value = serde_json::from_str(
                 &show(
                     std::slice::from_ref(&record),
-                    true,
+                    crate::common::session::Format::plain(true),
                     false,
                     DetailView::InUse,
                 )
@@ -1109,15 +1176,20 @@ mod tests {
             .unwrap();
             assert_eq!(json[0]["renewal_due"], false);
             if matches!(state, RevocationState::Confirmed) {
-                assert!(revoked(&record, false).unwrap().contains("Next renewal:"));
                 assert!(
-                    revoked(&record, false)
+                    revoked(&record, crate::common::session::Format::plain(false))
+                        .unwrap()
+                        .contains("Next renewal:")
+                );
+                assert!(
+                    revoked(&record, crate::common::session::Format::plain(false))
                         .unwrap()
                         .contains("disabled (revoked)")
                 );
             }
         }
     }
+
     #[test]
     fn local_deletion_output_does_not_assert_a_remote_certificate_status() {
         let machine: serde_json::Value = serde_json::from_str(
@@ -1126,7 +1198,7 @@ mod tests {
                 &aster_acme_cli_storage::issuance::removal::RemovalScope::All,
                 &["a".into(), "b".into(), "c".into()],
                 true,
-                true,
+                crate::common::session::Format::plain(true),
             )
             .unwrap(),
         )
@@ -1140,7 +1212,7 @@ mod tests {
             &aster_acme_cli_storage::issuance::removal::RemovalScope::All,
             &["a".into(), "b".into(), "c".into()],
             true,
-            false,
+            crate::common::session::Format::plain(false),
         )
         .unwrap();
         assert!(human.contains("Removed all local certificate requests for example.com."));
@@ -1170,7 +1242,11 @@ mod tests {
             order_status_style(record.order.as_ref().map(|order| &order.status)),
             Style::Blue
         );
-        let table = list(std::slice::from_ref(&record), false).unwrap();
+        let table = list(
+            std::slice::from_ref(&record),
+            crate::common::session::Format::plain(false),
+        )
+        .unwrap();
         assert!(table.contains("STATUS"));
         assert!(!table.contains("PHASE"));
         assert!(table.contains("failed (CSR rejected)"));
@@ -1178,9 +1254,16 @@ mod tests {
         let details = show_text(&record, now, true, false);
         assert!(details.contains("\x1b[31mfailed (CSR rejected)\x1b[0m"));
         assert!(details.contains("\x1b[34mready\x1b[0m"));
-        let json: serde_json::Value =
-            serde_json::from_str(&show(&[record], true, false, DetailView::InUse).unwrap())
-                .unwrap();
+        let json: serde_json::Value = serde_json::from_str(
+            &show(
+                &[record],
+                crate::common::session::Format::plain(true),
+                false,
+                DetailView::InUse,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(json[0]["order"]["status"], "ready");
     }
     #[test]
@@ -1196,12 +1279,22 @@ mod tests {
             }],
         };
         let root = std::path::Path::new("/data");
-        let json: serde_json::Value =
-            serde_json::from_str(&outcome(&pending, true, root).unwrap()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(
+            &outcome(&pending, crate::common::session::Format::plain(true), root).unwrap(),
+        )
+        .unwrap();
         assert_eq!(json["status"], "action_required");
         assert!(json.get("artifacts").is_none());
-        assert!(outcome(&pending, false, root).unwrap().contains("[WARN]"));
-        assert!(!outcome(&pending, false, root).unwrap().contains("[DONE]"));
+        assert!(
+            outcome(&pending, crate::common::session::Format::plain(false), root)
+                .unwrap()
+                .contains("[WARN]")
+        );
+        assert!(
+            !outcome(&pending, crate::common::session::Format::plain(false), root)
+                .unwrap()
+                .contains("[DONE]")
+        );
         for renewal in [false, true] {
             let mut complete = record.clone();
             complete.phase = aster_acme_core::workflow::IssuancePhase::Completed;
@@ -1215,27 +1308,41 @@ mod tests {
                 record: Box::new(complete),
                 cleanup: vec![],
             };
-            let human = outcome(&completed, false, root).unwrap();
+            let human = outcome(
+                &completed,
+                crate::common::session::Format::plain(false),
+                root,
+            )
+            .unwrap();
             assert!(human.contains(if renewal {
                 "Renewed certificate"
             } else {
                 "Issued certificate"
             }));
-            let json: serde_json::Value =
-                serde_json::from_str(&outcome(&completed, true, root).unwrap()).unwrap();
+            let json: serde_json::Value = serde_json::from_str(
+                &outcome(
+                    &completed,
+                    crate::common::session::Format::plain(true),
+                    root,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             assert_eq!(json["status"], "completed");
             assert!(json.get("resume").is_none());
             assert!(json.get("artifacts").is_some());
         }
-        let json: serde_json::Value =
-            serde_json::from_str(&not_due(&record, true).unwrap()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(
+            &not_due(&record, crate::common::session::Format::plain(true)).unwrap(),
+        )
+        .unwrap();
         assert_eq!(json["status"], "not_due");
         assert!(json.get("resume").is_none());
         assert!(json.get("artifacts").is_none());
         for state in [RevocationState::NotRequested, RevocationState::Pending] {
             let mut record = record.clone();
             record.revocation.state = state;
-            assert!(revoked(&record, true).is_err());
+            assert!(revoked(&record, crate::common::session::Format::plain(true)).is_err());
         }
     }
 }

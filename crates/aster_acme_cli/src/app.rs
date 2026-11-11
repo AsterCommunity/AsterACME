@@ -15,12 +15,12 @@ pub(crate) enum Command {
     /// Manage ACME accounts and the local default selection.
     Account {
         #[command(subcommand)]
-        command: Box<AccountCommand>,
+        command: AccountCommand,
     },
     /// Issue and manage certificates.
     Cert {
         #[command(subcommand)]
-        command: Box<crate::commands::cert::args::CertCommand>,
+        command: crate::commands::cert::args::CertCommand,
     },
     /// Show version, revision, target, profile, enabled features and build time.
     Version {

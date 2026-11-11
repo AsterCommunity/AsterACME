@@ -76,7 +76,8 @@ async fn account_requests_follow_custom_directory_and_location_urls() {
         .expect(1)
         .mount(&server)
         .await;
-    let client = AcmeClient::discover(resource("/entry-point"), local_options())
+    let client = crate::transport::HttpPool::default()
+        .discover(resource("/entry-point"), local_options())
         .await
         .unwrap();
     let service = AccountService::new(Arc::new(client), Arc::new(MemoryStore::default()));

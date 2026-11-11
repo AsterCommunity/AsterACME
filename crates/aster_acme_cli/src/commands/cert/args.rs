@@ -268,7 +268,7 @@ mod tests {
                 panic!("certificate command expected")
             };
             assert!(matches!(
-                *command,
+                command,
                 CertCommand::Revoke {
                     yes: true,
                     reason: Some(RevocationReason::KeyCompromise),
@@ -304,7 +304,7 @@ mod tests {
             let Command::Cert { command } = args.command else {
                 panic!("certificate command expected")
             };
-            assert!(matches!(*command, CertCommand::Remove { yes: true, .. }));
+            assert!(matches!(command, CertCommand::Remove { yes: true, .. }));
         }
         for scope in [
             vec!["--all"],
@@ -371,7 +371,7 @@ mod tests {
             let Command::Cert { command } = args.command else {
                 panic!("certificate command expected")
             };
-            let CertCommand::Issue(options) = *command else {
+            let CertCommand::Issue(options) = command else {
                 panic!("issue expected")
             };
             assert_eq!(options.key_algorithm, algorithm);
@@ -389,7 +389,7 @@ mod tests {
         let Command::Cert { command } = args.command else {
             panic!("certificate command expected")
         };
-        let CertCommand::Issue(options) = *command else {
+        let CertCommand::Issue(options) = command else {
             panic!("issue expected")
         };
         assert_eq!(options.key_algorithm, CertificateKeyAlgorithm::EcdsaP256);
@@ -426,7 +426,7 @@ mod tests {
             let Command::Cert { command } = args.command else {
                 panic!("certificate command expected")
             };
-            let CertCommand::Revoke { reason: actual, .. } = *command else {
+            let CertCommand::Revoke { reason: actual, .. } = command else {
                 panic!("revoke expected")
             };
             assert_eq!(actual, Some(reason));
@@ -478,7 +478,7 @@ mod tests {
         let Command::Cert { command } = parsed.command else {
             panic!("cert expected")
         };
-        let CertCommand::Renew(args) = *command else {
+        let CertCommand::Renew(args) = command else {
             panic!("renew expected")
         };
         assert!(args.now);
@@ -497,7 +497,7 @@ mod tests {
             let Command::Cert { command } = parsed.command else {
                 panic!("expected cert")
             };
-            let CertCommand::Renew(args) = *command else {
+            let CertCommand::Renew(args) = command else {
                 panic!("expected renew")
             };
             assert!(args.all);
@@ -534,7 +534,7 @@ mod tests {
             let Command::Cert { command } = parsed.command else {
                 panic!("cert expected")
             };
-            let CertCommand::Issue(args) = *command else {
+            let CertCommand::Issue(args) = command else {
                 panic!("issue expected")
             };
             assert_eq!(args.resume, expected);

@@ -81,7 +81,7 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
             &name,
             None,
             super::RequestSelection::Unfinished,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
@@ -91,7 +91,7 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
             &name,
             Some(&first.operation_id),
             super::RequestSelection::Unfinished,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
         .operation_id,
@@ -103,7 +103,7 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
             &name,
             Some("missing"),
             super::RequestSelection::Unfinished,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
@@ -114,7 +114,7 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
             &name,
             None,
             super::RequestSelection::Unfinished,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
         .operation_id,
@@ -126,13 +126,13 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
             &name,
             None,
             super::RequestSelection::Unfinished,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
     let text = super::super::render::show(
         std::slice::from_ref(&first),
-        false,
+        crate::common::session::Format::plain(false),
         false,
         super::super::render::DetailView::InUse,
     )
@@ -147,7 +147,7 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
         serde_json::from_str::<serde_json::Value>(
             &super::super::render::show(
                 &[first],
-                true,
+                crate::common::session::Format::plain(true),
                 false,
                 super::super::render::DetailView::InUse
             )
@@ -169,7 +169,7 @@ fn one_challenge_option_selects_publication_without_exposing_wire_method() {
         let crate::app::Command::Cert { command } = parsed.command else {
             panic!("expected certificate command");
         };
-        let super::super::args::CertCommand::Issue(args) = *command else {
+        let super::super::args::CertCommand::Issue(args) = command else {
             panic!("expected issue");
         };
         assert!(matches!(
@@ -219,11 +219,15 @@ fn manual_action_is_a_warning_but_json_retains_a_typed_action_result() {
         }],
     };
     let root = std::path::Path::new("/private/tmp/fixture");
-    let text = super::super::render::outcome(&outcome, false, root).unwrap();
+    let text =
+        super::super::render::outcome(&outcome, crate::common::session::Format::plain(false), root)
+            .unwrap();
     assert!(text.starts_with("[WARN] Action required for example.com"));
     assert!(text.contains("opaque-TXT-value"));
     assert!(text.contains("--resume 'example.com'"));
-    let json = super::super::render::outcome(&outcome, true, root).unwrap();
+    let json =
+        super::super::render::outcome(&outcome, crate::common::session::Format::plain(true), root)
+            .unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["status"], "action_required");
     assert!(!json.contains("[WARN]"));
@@ -241,7 +245,7 @@ fn issued_certificate_has_a_done_summary_and_independent_manual_cleanup() {
     };
     let text = super::super::render::outcome(
         &outcome,
-        false,
+        crate::common::session::Format::plain(false),
         std::path::Path::new("/private/tmp/fixture"),
     )
     .unwrap();
@@ -249,9 +253,12 @@ fn issued_certificate_has_a_done_summary_and_independent_manual_cleanup() {
     assert!(text.contains("manual-value"));
     assert!(text.contains("fullchain.pem"));
     assert!(text.contains("private-key.pem"));
-    let json =
-        super::super::render::outcome(&outcome, true, std::path::Path::new("/private/tmp/fixture"))
-            .unwrap();
+    let json = super::super::render::outcome(
+        &outcome,
+        crate::common::session::Format::plain(true),
+        std::path::Path::new("/private/tmp/fixture"),
+    )
+    .unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&json).unwrap()["status"],
         "completed"
@@ -264,7 +271,11 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
     let mut first = record('a', "2026-01-01T00:00:00Z");
     let second = record('b', "2026-02-01T00:00:00Z");
     first.name = aster_acme::issuance::CertificateName::new("long.example.com").unwrap();
-    let text = super::super::render::list(&[first.clone(), second.clone()], false).unwrap();
+    let text = super::super::render::list(
+        &[first.clone(), second.clone()],
+        crate::common::session::Format::plain(false),
+    )
+    .unwrap();
     let lines = text.lines().collect::<Vec<_>>();
     assert!(lines[1].contains("REQUESTED (UTC)"));
     assert_eq!(lines[2].find("2026-01-01"), lines[3].find("2026-02-01"));
@@ -274,21 +285,25 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
     assert!(
         super::super::render::show(
             std::slice::from_ref(&first),
-            false,
+            crate::common::session::Format::plain(false),
             false,
             super::super::render::DetailView::InUse
         )
         .unwrap()
         .contains(&first.operation_id)
     );
-    let json = super::super::render::list(&[first, second], true).unwrap();
+    let json = super::super::render::list(
+        &[first, second],
+        crate::common::session::Format::plain(true),
+    )
+    .unwrap();
     assert!(
         serde_json::from_str::<serde_json::Value>(&json)
             .unwrap()
             .is_array()
     );
     assert_eq!(
-        super::super::render::list(&[], false).unwrap(),
+        super::super::render::list(&[], crate::common::session::Format::plain(false)).unwrap(),
         "No saved certificate requests."
     );
 }
@@ -320,24 +335,45 @@ fn selection_labels_only_show_primary_domain_fixed_time_and_status() {
 fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
     assert!(Args::try_parse_from(["aster-acme", "cert", "show"]).is_ok());
     let first = record('a', "2026-01-01T00:00:00Z");
-    assert!(super::certificate_name(std::slice::from_ref(&first), None, None, true).is_err());
+    assert!(
+        super::certificate_name(
+            std::slice::from_ref(&first),
+            None,
+            None,
+            &crate::common::session::OutputSession::new(true)
+        )
+        .is_err()
+    );
     assert_eq!(
         super::certificate_name(
             std::slice::from_ref(&first),
             None,
             Some(&first.operation_id),
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap(),
         first.name
     );
     assert_eq!(
-        super::certificate_name(&[], Some("example.com"), None, true)
-            .unwrap()
-            .as_str(),
+        super::certificate_name(
+            &[],
+            Some("example.com"),
+            None,
+            &crate::common::session::OutputSession::new(true)
+        )
+        .unwrap()
+        .as_str(),
         "example.com"
     );
-    assert!(super::certificate_name(&[], None, Some("missing"), true).is_err());
+    assert!(
+        super::certificate_name(
+            &[],
+            None,
+            Some("missing"),
+            &crate::common::session::OutputSession::new(true)
+        )
+        .is_err()
+    );
     for arguments in [
         ["aster-acme", "order", "list"],
         ["aster-acme", "order", "show"],
@@ -359,7 +395,7 @@ fn verification_source_is_explicit_in_text_and_json() {
         for verified in [false, true] {
             let text = super::super::render::show(
                 std::slice::from_ref(&record),
-                false,
+                crate::common::session::Format::plain(false),
                 verified,
                 super::super::render::DetailView::InUse,
             )
@@ -382,7 +418,7 @@ fn verification_source_is_explicit_in_text_and_json() {
             assert!(!text.contains("verified with CA"));
             let json = super::super::render::show(
                 std::slice::from_ref(&record),
-                true,
+                crate::common::session::Format::plain(true),
                 verified,
                 super::super::render::DetailView::InUse,
             )
@@ -412,7 +448,7 @@ fn certificate_yes_has_short_and_long_forms_without_implying_force_or_other_perm
         let crate::app::Command::Cert { command } = parsed.command else {
             panic!("expected cert");
         };
-        let super::super::args::CertCommand::Issue(args) = *command else {
+        let super::super::args::CertCommand::Issue(args) = command else {
             panic!("expected issue");
         };
         assert!(args.run.yes);
@@ -451,13 +487,17 @@ fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_ret
     assert!(label.contains("example.com, *.example.com, api.example.com, +2"));
     assert!(label.ends_with(" | in use"));
     assert!(!label.contains("unrelated.example.net"));
-    let table = super::super::render::list(std::slice::from_ref(&request), false).unwrap();
+    let table = super::super::render::list(
+        std::slice::from_ref(&request),
+        crate::common::session::Format::plain(false),
+    )
+    .unwrap();
     assert!(table.contains("DOMAINS"));
     assert!(!table.contains("IN_USE"));
     assert!(table.contains("example.com, *.example.com, api.example.com, +2"));
     let details = super::super::render::show(
         std::slice::from_ref(&request),
-        false,
+        crate::common::session::Format::plain(false),
         false,
         super::super::render::DetailView::InUse,
     )
@@ -467,7 +507,7 @@ fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_ret
     let machine: serde_json::Value = serde_json::from_str(
         &super::super::render::show(
             &[request],
-            true,
+            crate::common::session::Format::plain(true),
             false,
             super::super::render::DetailView::InUse,
         )
@@ -497,7 +537,7 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
             &name,
             None,
             super::RequestSelection::InUse,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
         .operation_id,
@@ -509,7 +549,7 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
             &name,
             None,
             super::RequestSelection::Unfinished,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
         .operation_id,
@@ -521,7 +561,7 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
             &name,
             None,
             super::RequestSelection::InUse,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
@@ -531,7 +571,7 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
             &name,
             Some(&old.operation_id),
             super::RequestSelection::InUse,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
         .operation_id,
@@ -543,7 +583,7 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
             &name,
             None,
             super::RequestSelection::InUse,
-            true
+            &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
         .operation_id,
@@ -586,7 +626,7 @@ fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_
     });
     let text = super::super::render::show(
         std::slice::from_ref(&request),
-        false,
+        crate::common::session::Format::plain(false),
         true,
         super::super::render::DetailView::InUse,
     )
@@ -597,7 +637,7 @@ fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_
     let json: serde_json::Value = serde_json::from_str(
         &super::super::render::show(
             &[request],
-            true,
+            crate::common::session::Format::plain(true),
             true,
             super::super::render::DetailView::InUse,
         )
@@ -617,7 +657,7 @@ fn selected_version_details_show_in_use_only_when_explicitly_requested() {
         saved.is_in_use = selected;
         let ordinary = super::super::render::show(
             std::slice::from_ref(&saved),
-            false,
+            crate::common::session::Format::plain(false),
             false,
             super::super::render::DetailView::InUse,
         )
@@ -625,7 +665,7 @@ fn selected_version_details_show_in_use_only_when_explicitly_requested() {
         assert!(!ordinary.contains("In use:"));
         let history = super::super::render::show(
             std::slice::from_ref(&saved),
-            false,
+            crate::common::session::Format::plain(false),
             false,
             super::super::render::DetailView::Version,
         )

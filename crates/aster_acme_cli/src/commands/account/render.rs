@@ -5,19 +5,19 @@ use crate::common::output::Style;
 use crate::common::time::timestamp;
 use crate::common::{
     error::CliResult,
-    output::{colors, field, safe, styled},
+    output::{field, safe, styled},
 };
 use aster_acme_core::account::AccountRecordState;
 
-use std::io::{self, IsTerminal};
+use crate::common::session::Format;
 
-pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<String> {
-    if structured {
+pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String> {
+    if format.json {
         return Ok(serde_json::to_string_pretty(&super::output::Output::from(
             report,
         ))?);
     }
-    let color = colors(io::stdout().is_terminal());
+    let color = format.color;
     Ok(match report {
         AccountReport::KeyRotated { name, .. } => {
             success(&format!("Rotated key for account {}.", safe(name)), color)
@@ -74,7 +74,10 @@ pub(crate) fn render(report: &AccountReport, structured: bool) -> CliResult<Stri
 }
 
 fn success(message: &str, color: bool) -> String {
-    format!("{} {message}", styled("[OK]", Style::BoldGreen, color))
+    format!(
+        "{} {message}",
+        crate::common::output::MessageKind::Success.badge(color)
+    )
 }
 
 fn rotation_label(phase: aster_acme_core::account::KeyRotationPhase) -> &'static str {
@@ -203,7 +206,7 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
     let mut lines = vec![
         format!(
             "{} Account {}",
-            styled("[INFO]", Style::BoldCyan, color),
+            crate::common::output::MessageKind::Info.badge(color),
             safe(&local.name)
         ),
         field("CA:", &safe(local.directory.as_str()), color),
@@ -351,7 +354,7 @@ pub(super) mod tests {
             "1970-01-01T00:00:00Z"
         );
         assert!(value["accounts"][0]["last_status_at"].is_null());
-        let output = render(&report, false).unwrap();
+        let output = render(&report, crate::common::session::Format::plain(false)).unwrap();
         assert!(output.contains("REGISTERED AT (UTC)") && output.contains("LAST USED (UTC)"));
         assert!(output.contains("1970-01-01 00:00"));
     }
@@ -418,7 +421,7 @@ pub(super) mod tests {
                 reused: false,
                 action,
             };
-            let text = render(&report, false).unwrap();
+            let text = render(&report, crate::common::session::Format::plain(false)).unwrap();
             assert!(text.contains(expected));
             assert_eq!(text.lines().count(), 1);
             assert!(!text.contains("https://"));
@@ -433,7 +436,11 @@ pub(super) mod tests {
             reused: true,
             action: RemoteAction::Register,
         };
-        assert!(render(&report, false).unwrap().contains("Reused account"));
+        assert!(
+            render(&report, crate::common::session::Format::plain(false))
+                .unwrap()
+                .contains("Reused account")
+        );
         let mut inactive = account.clone();
         inactive.status = AccountStatus::Deactivated;
         let report = AccountReport::Remote {
@@ -443,7 +450,7 @@ pub(super) mod tests {
             action: RemoteAction::Recover,
         };
         assert!(
-            render(&report, false)
+            render(&report, crate::common::session::Format::plain(false))
                 .unwrap()
                 .contains("Status: deactivated")
         );
@@ -452,9 +459,15 @@ pub(super) mod tests {
             account,
             verified: true,
         };
-        assert_eq!(render(&report, false).unwrap().lines().count(), 1);
+        assert_eq!(
+            render(&report, crate::common::session::Format::plain(false))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
         assert!(
-            render(&report, false)
+            render(&report, crate::common::session::Format::plain(false))
                 .unwrap()
                 .contains("Deactivated account work.")
         );

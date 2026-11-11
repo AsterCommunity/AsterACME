@@ -2,8 +2,52 @@
 use aster_acme::issuance::{IssueOutcome, IssueRecord};
 use serde::Serialize;
 
+pub(crate) enum CertificateReport {
+    Result {
+        result: CertificateResult,
+        data_dir: std::path::PathBuf,
+    },
+    Batch {
+        report: RenewalBatch,
+        data_dir: std::path::PathBuf,
+    },
+    List(Vec<IssueRecord>),
+    Show {
+        record: Box<IssueRecord>,
+        verified: bool,
+        view: super::render::DetailView,
+    },
+    Revoked(Box<IssueRecord>),
+    Removed {
+        name: String,
+        scope: aster_acme_cli_storage::issuance::removal::RemovalScope,
+        ids: Vec<String>,
+        in_use_removed: bool,
+    },
+}
+
+impl CertificateReport {
+    pub(crate) fn exit_status(&self) -> crate::common::session::ExitStatus {
+        use crate::common::session::ExitStatus;
+        match self {
+            Self::Batch { report, .. } => match report.disposition() {
+                BatchDisposition::Cancelled => ExitStatus::Cancelled,
+                BatchDisposition::PartialFailure => ExitStatus::Failed,
+                BatchDisposition::Completed | BatchDisposition::ActionRequired => {
+                    ExitStatus::Success
+                }
+            },
+            Self::Result { .. }
+            | Self::List(_)
+            | Self::Show { .. }
+            | Self::Revoked(_)
+            | Self::Removed { .. } => ExitStatus::Success,
+        }
+    }
+}
+
 /// Shared single-certificate result; scheduling without work is a successful outcome.
-pub(super) enum CertificateResult {
+pub(crate) enum CertificateResult {
     Issuance(IssueOutcome),
     NotDue(Box<IssueRecord>),
 }
@@ -105,7 +149,7 @@ pub(super) enum BatchDisposition {
     Cancelled,
 }
 
-pub(super) struct RenewalBatch {
+pub(crate) struct RenewalBatch {
     pub(super) entries: Vec<RenewalEntry>,
     pub(super) cancelled: bool,
 }

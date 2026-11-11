@@ -4,7 +4,7 @@
 
 - `account`：账户服务、注册恢复、不可恢复停用、条款/EAB、对象安全的 `AccountStore` / `AccountKeyStore`。
 - `crypto`：`dyn AccountSigner`、软件 P-256 密钥、JWK/thumbprint、原始 R||S ES256 JWS 和 HS256 EAB。
-- `transport`：HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
+- `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。
 - `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization 和三种验证材料。
 - `solver`：Send + Sync 的异步 trait，可通过 dyn 注入；prepare、wait_ready、cleanup 与版本化恢复句柄。
@@ -84,6 +84,8 @@ AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at
 `AccountService::rotate_key(&dyn AccountRotationStore)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。当前仅生成 ES256/P-256，不支持 CLI 导入新钥或选择其他算法。
 
 `http_client` 通过 registry 的 aster_forge_http =0.1.0-alpha.2 构造连接池，根 workspace 仅选择 json/rustls-aws-lc-rs/system-proxy，客户端显式选择 TlsBackend::Rustls，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本；不单独打开 features，由 Forge 的 workspace 配置选择。`TransportOptions::validate` 在副作用前校验设置。
+
+调用方创建一个 `HttpPool::default()`，通过 `pool.discover(directory_url, options).await?` 创建不同账户的 `AcmeClient`。池惰性初始化，克隆池句柄共用同一个 Forge/reqwest 客户端与连接池；每个 AcmeClient 持有池，其操作不再额外接收 HTTP 参数。请求直接借用池内客户端；User-Agent 和总期限逐请求设置，连接期限最多十秒且受更短的总期限约束，账户 nonce/directory 不共享。调用方决定池生命周期，库不创建全局单例。
 
 ## 手动 DNS-01 签发
 

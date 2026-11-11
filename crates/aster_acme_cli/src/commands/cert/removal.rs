@@ -24,7 +24,8 @@ pub(super) async fn execute(
     filter: RemovalFilter,
     yes: bool,
     local: LocalArgs,
-) -> CliResult<()> {
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<super::report::CertificateReport> {
     let settings = CliSettings::load(&AccountArgs {
         data_dir: local.data_dir.clone(),
         json: local.json,
@@ -41,7 +42,7 @@ pub(super) async fn execute(
             .as_deref()
             .or(target.identity.named_name.as_deref()),
         target.operation.as_deref(),
-        local.json,
+        &cli.output,
     )?;
     let scope = match filter {
         RemovalFilter::All => RemovalScope::All,
@@ -53,7 +54,7 @@ pub(super) async fn execute(
                 &name,
                 target.operation.as_deref(),
                 selection::RequestSelection::Any,
-                local.json,
+                &cli.output,
             )?
             .operation_id,
         ),
@@ -70,15 +71,16 @@ pub(super) async fn execute(
             &confirmation_details(&removal),
             "Remove this local material?",
             yes,
-            local.json,
+            &cli.output,
         )?;
     }
     removal.remove().await?;
-    println!(
-        "{}",
-        super::render::removed(name.as_str(), &scope, &ids, in_use_removed, local.json)?
-    );
-    Ok(())
+    Ok(super::report::CertificateReport::Removed {
+        name: name.as_str().into(),
+        scope,
+        ids,
+        in_use_removed,
+    })
 }
 
 fn confirmation_details(removal: &CertificateRemoval) -> String {
@@ -199,21 +201,40 @@ mod tests {
             data_dir: Some(temp.path().into()),
             json: true,
         };
-        let error = execute(target(), RemovalFilter::Request, false, local())
-            .await
-            .unwrap_err();
+        let error = execute(
+            target(),
+            RemovalFilter::Request,
+            false,
+            local(),
+            &crate::common::context::CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("use --yes"));
         assert_eq!(std::fs::read(&key).unwrap(), before);
         assert_eq!(store.list().await.unwrap().len(), 1);
-        execute(target(), RemovalFilter::Request, true, local())
-            .await
-            .unwrap();
+        execute(
+            target(),
+            RemovalFilter::Request,
+            true,
+            local(),
+            &crate::common::context::CommandContext::new(true),
+        )
+        .await
+        .unwrap();
         assert!(!key.exists());
         assert_eq!(store.list().await.unwrap().len(), 0);
         assert!(
-            execute(target(), RemovalFilter::Request, true, local())
-                .await
-                .is_err()
+            execute(
+                target(),
+                RemovalFilter::Request,
+                true,
+                local(),
+                &crate::common::context::CommandContext::new(true)
+            )
+            .await
+            .is_err()
         );
         assert!(!temp.path().join("accounts/default/account.toml").exists());
     }

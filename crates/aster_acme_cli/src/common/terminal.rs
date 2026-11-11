@@ -35,9 +35,9 @@ pub(crate) fn prompt_result<T>(result: Result<T, inquire::InquireError>) -> CliR
 }
 
 /// Shared prompt palette; terminal controls stay disabled under `NO_COLOR` or redirects.
-pub(crate) fn prompt_style(danger: bool) -> inquire::ui::RenderConfig<'static> {
+pub(crate) fn prompt_style(color: bool, danger: bool) -> inquire::ui::RenderConfig<'static> {
     use inquire::ui::{Color, RenderConfig, StyleSheet};
-    if !super::output::colors(io::stderr().is_terminal()) {
+    if !color {
         return RenderConfig::empty();
     }
     RenderConfig {
@@ -52,7 +52,13 @@ pub(crate) fn prompt_style(danger: bool) -> inquire::ui::RenderConfig<'static> {
 }
 
 /// Resolve terminal selection to a stable caller-owned index and normalize cancellation.
-pub(crate) fn select_index(message: &str, choices: &[String], default: usize) -> CliResult<usize> {
+pub(crate) fn select_index(
+    message: &str,
+    choices: &[String],
+    default: usize,
+    output: &super::session::OutputSession,
+) -> CliResult<usize> {
+    output.interaction_started();
     let items = choices
         .iter()
         .enumerate()
@@ -64,7 +70,7 @@ pub(crate) fn select_index(message: &str, choices: &[String], default: usize) ->
     let chosen = prompt_result(
         inquire::Select::new(message, items)
             .with_starting_cursor(default)
-            .with_render_config(prompt_style(false))
+            .with_render_config(prompt_style(output.diagnostic_format().color, false))
             .prompt(),
     )?;
     Ok(chosen.index)
@@ -84,17 +90,22 @@ impl fmt::Display for SelectionItem {
 
 /// Follow the Drive confirmation policy: default no, explicit opt-in for automation.
 /// JSON mode never prompts, even when attached to a terminal.
-pub(crate) fn confirm_write(message: &str, yes: bool, json: bool) -> CliResult<()> {
+pub(crate) fn confirm_write(
+    message: &str,
+    yes: bool,
+    output: &super::session::OutputSession,
+) -> CliResult<()> {
     confirm_with(
         message,
         yes,
-        json,
+        output.is_json(),
         io::stdin().is_terminal() && io::stderr().is_terminal(),
         |message| {
+            output.interaction_started();
             prompt_result(
                 inquire::Confirm::new(message)
                     .with_default(false)
-                    .with_render_config(prompt_style(false))
+                    .with_render_config(prompt_style(output.diagnostic_format().color, false))
                     .prompt(),
             )
         },
@@ -107,23 +118,25 @@ pub(crate) fn confirm_action(
     details: &str,
     question: &str,
     yes: bool,
-    json: bool,
+    output: &super::session::OutputSession,
 ) -> CliResult<()> {
     if yes {
         return Ok(());
     }
-    if !interactive(json) {
+    if !interactive(output.is_json()) {
         return Err(format!(
             "{details}\nThis operation requires confirmation; use --yes in automation."
         )
         .into());
     }
-    let color = super::output::colors(io::stderr().is_terminal());
-    eprintln!("{}\n", super::output::confirmation(details, color));
+    output.context(&super::output::confirmation(
+        details,
+        output.diagnostic_format().color,
+    ));
     let accepted = prompt_result(
         inquire::Confirm::new(question)
             .with_default(false)
-            .with_render_config(prompt_style(true))
+            .with_render_config(prompt_style(output.diagnostic_format().color, true))
             .prompt(),
     )?;
     if accepted {

@@ -5,7 +5,7 @@ use super::{
     render, selection,
 };
 use crate::common::args::{HttpArgs, LocalArgs};
-use crate::common::log::Level;
+use crate::common::output::MessageKind;
 use crate::{
     commands::account::args::AccountArgs,
     common::{
@@ -23,7 +23,6 @@ use aster_acme::{
         IssueOutcome, IssueRecord, IssueRequest, IssueSession, IssueStore,
     },
     solver::ExecutionContext,
-    transport::AcmeClient,
 };
 use aster_acme_cli_storage::issuance::CliIssueStore;
 use async_trait::async_trait;
@@ -44,13 +43,15 @@ pub(super) fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String
     }
 }
 
-async fn issue(mut args: IssueArgs) -> CliResult<()> {
-    let progress = Arc::new(Progress::new(args.run.local.json));
+async fn issue(
+    mut args: IssueArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<super::report::CertificateReport> {
     let interactive = terminal::interactive(args.run.local.json);
     super::interaction::complete(
         &mut args,
         interactive,
-        &mut super::interaction::TerminalDomains,
+        &mut super::interaction::TerminalDomains(&cli.output),
     )?;
     let mut options = options(&args.run.local, &args.run.http, args.account.clone());
     let settings = CliSettings::load(&options).await?;
@@ -70,14 +71,14 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
                     super::args::ResumeTarget::Named(name) => Some(name.as_str()),
                 },
                 args.operation.as_deref(),
-                options.json,
+                &cli.output,
             )?;
             Some(selection::choose(
                 records,
                 &name,
                 args.operation.as_deref(),
                 selection::RequestSelection::Unfinished,
-                options.json,
+                &cli.output,
             )?)
         }
         None => None,
@@ -97,19 +98,18 @@ async fn issue(mut args: IssueArgs) -> CliResult<()> {
         },
         &run,
         RunMode::Single,
-        progress,
+        cli,
     )
     .await?;
-    crate::common::output::print_result(
-        &render::result(&result, run.local.json, &root)?,
-        run.local.json,
-        crate::common::output::ResultPreceding::Progress,
-    );
-    Ok(())
+    Ok(super::report::CertificateReport::Result {
+        result,
+        data_dir: root,
+    })
 }
 
 pub(super) enum Start {
     Issue {
+        // Keep the fixed saved journal out of the Start enum and transaction future.
         selected: Option<Box<IssueRecord>>,
         args: IssueArgs,
     },
@@ -127,8 +127,9 @@ pub(super) async fn transact(
     start: Start,
     run: &super::args::RunArgs,
     mode: RunMode,
-    progress: Arc<Progress>,
+    cli: &crate::common::context::CommandContext,
 ) -> CliResult<super::report::CertificateResult> {
+    let progress = Arc::new(Progress::new(cli.output.clone()));
     let context = settings.account(&options).await?;
     let signer = context
         .store
@@ -178,8 +179,8 @@ pub(super) async fn transact(
             }
         }
     };
-    progress.log.line(
-        Level::Info,
+    progress.output.progress(
+        MessageKind::Info,
         &format!(
             "Using CA: {} (account {})",
             context.directory.as_str(),
@@ -195,6 +196,7 @@ pub(super) async fn transact(
         args: run,
         publication,
         mode,
+        cli,
         progress: progress.clone(),
     };
     let outcome = match foreground
@@ -204,8 +206,8 @@ pub(super) async fn transact(
         Ok(outcome) => outcome,
         Err(error) => {
             match session.record().await {
-                Ok(saved) if saved.finalize_rejection.is_some() => progress.log.line(Level::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection."),
-                _ => progress.log.line(Level::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id)),
+                Ok(saved) if saved.finalize_rejection.is_some() => progress.output.progress(MessageKind::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection."),
+                _ => progress.output.progress(MessageKind::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id)),
             }
             return Err(error);
         }
@@ -219,8 +221,8 @@ fn report_material(
     progress: &Progress,
 ) -> CliResult<()> {
     if record.renewal_of.is_some() {
-        progress.log.line(
-            Level::Info,
+        progress.output.progress(
+            MessageKind::Info,
             &format!(
                 "Renewing {} with {}",
                 record.name.as_str(),
@@ -236,8 +238,8 @@ fn report_material(
         .join("certs")
         .join(record.name.as_str())
         .join(record.generation_name());
-    progress.log.line(
-        Level::Info,
+    progress.output.progress(
+        MessageKind::Info,
         &format!(
             "Certificate key: {}",
             generation.join("private-key.pk8").display()
@@ -258,6 +260,7 @@ struct Foreground<'a> {
     args: &'a super::args::RunArgs,
     publication: PublicationState,
     mode: RunMode,
+    cli: &'a crate::common::context::CommandContext,
     progress: Arc<Progress>,
 }
 impl Foreground<'_> {
@@ -266,16 +269,19 @@ impl Foreground<'_> {
         identity: IssueIdentity,
         session: &mut dyn IssueSession,
     ) -> CliResult<IssueOutcome> {
-        self.progress
-            .log
-            .line(Level::Info, "Discovering ACME endpoints over verified TLS");
+        self.progress.output.progress(
+            MessageKind::Info,
+            "Discovering ACME endpoints over verified TLS",
+        );
         tracing::debug!("Discovering certificate issuance endpoints");
         let client = Arc::new(
-            AcmeClient::discover(
-                self.context.directory.clone(),
-                self.context.transport_options(self.options)?,
-            )
-            .await?,
+            self.cli
+                .http
+                .discover(
+                    self.context.directory.clone(),
+                    self.context.transport_options(self.options)?,
+                )
+                .await?,
         );
         self.progress
             .protocol(client.directory(), &session.record().await?);
@@ -373,8 +379,8 @@ impl DnsReadiness for ManualDns {
                 .name("manual-dns-confirmation".into())
                 .spawn(move || {
                     let details=records.iter().map(|record|format!("{}  TXT  {}",record.name,record.value)).collect::<Vec<_>>();
-                    progress.log.details(Level::Warning,"Action required: add every TXT value below; keep existing unrelated values",&details);
-                    let result = inquire::Confirm::new("Have you published these TXT values?").with_render_config(crate::common::terminal::prompt_style(false))
+                    progress.output.details(MessageKind::Warning,"Action required: add every TXT value below; keep existing unrelated values",&details);
+                    let result = inquire::Confirm::new("Have you published these TXT values?").with_render_config(crate::common::terminal::prompt_style(progress.output.diagnostic_format().color, false))
                         .with_default(false)
                         .prompt();
                     let _ = sender.send(result);
@@ -388,11 +394,11 @@ impl DnsReadiness for ManualDns {
                 return Ok(false);
             }
         }
-        self.progress.log.line(
+        self.progress.output.progress(
             if skip_dns_check {
-                Level::Warning
+                MessageKind::Warning
             } else {
-                Level::Info
+                MessageKind::Info
             },
             if skip_dns_check {
                 "Skipping local DNS lookup (--skip-dns-check); proceeding to CA validation"
@@ -405,20 +411,23 @@ impl DnsReadiness for ManualDns {
             .ready(records, skip_dns_check, execution)
             .await?;
         if !ready {
-            self.progress.log.line(
-                Level::Warning,
+            self.progress.output.progress(
+                MessageKind::Warning,
                 "Required DNS TXT values are not visible yet; the request is retained for resume",
             );
-            self.progress.log.line(Level::Info, "You can use --skip-dns-check when resuming to skip local DNS visibility checks; the CA will still validate domain ownership.");
+            self.progress.output.progress(MessageKind::Info, "You can use --skip-dns-check when resuming to skip local DNS visibility checks; the CA will still validate domain ownership.");
         }
         Ok(ready)
     }
 }
 
-pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
+pub(crate) async fn execute(
+    command: CertCommand,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<super::report::CertificateReport> {
     match command {
-        CertCommand::Issue(args) => issue(args).await,
-        CertCommand::Renew(args) => super::renewal::execute(args).await,
+        CertCommand::Issue(args) => issue(args, cli).await,
+        CertCommand::Renew(args) => super::renewal::execute(args, cli).await,
         CertCommand::Remove {
             target,
             all,
@@ -435,7 +444,7 @@ pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
                 (false, false, true) => RemovalFilter::Revoked,
                 _ => return Err("--all, --history and --revoked are mutually exclusive.".into()),
             };
-            super::removal::execute(target, filter, yes, local).await
+            super::removal::execute(target, filter, yes, local, cli).await
         }
         CertCommand::List {
             name,
@@ -461,8 +470,7 @@ pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
             } else {
                 selection::managed_records(records)?
             };
-            println!("{}", render::list(&records, local.json)?);
-            Ok(())
+            Ok(super::report::CertificateReport::List(records))
         }
         CertCommand::Show {
             target,
@@ -470,14 +478,14 @@ pub(crate) async fn execute(command: CertCommand) -> CliResult<()> {
             verify,
             http,
             local,
-        } => show(target, history, verify, http, local).await,
+        } => show(target, history, verify, http, local, cli).await,
         CertCommand::Revoke {
             target,
             reason,
             yes,
             http,
             local,
-        } => revoke(target, reason, yes, http, local).await,
+        } => revoke(target, reason, yes, http, local, cli).await,
     }
 }
 
@@ -487,14 +495,15 @@ async fn show(
     verify: bool,
     http: HttpArgs,
     local: LocalArgs,
-) -> CliResult<()> {
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<super::report::CertificateReport> {
     let options = options(&local, &http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
     let mut record = selected_record(
         &store,
         &target,
-        local.json,
+        cli,
         if history {
             selection::RequestSelection::Any
         } else {
@@ -509,16 +518,26 @@ async fn show(
                 ..options
             })
             .await?;
-        record =
-            remote_operation(context, &http, &record, &store, RemoteOperation::Inspect).await?;
+        record = remote_operation(
+            context,
+            &http,
+            &record,
+            &store,
+            RemoteOperation::Inspect,
+            cli,
+        )
+        .await?;
     }
     let view = if history || target.operation.is_some() {
         render::DetailView::Version
     } else {
         render::DetailView::InUse
     };
-    println!("{}", render::show(&[record], local.json, verify, view)?);
-    Ok(())
+    Ok(super::report::CertificateReport::Show {
+        record: Box::new(record),
+        verified: verify,
+        view,
+    })
 }
 
 async fn revoke(
@@ -527,17 +546,12 @@ async fn revoke(
     yes: bool,
     http: HttpArgs,
     local: LocalArgs,
-) -> CliResult<()> {
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<super::report::CertificateReport> {
     let options = options(&local, &http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let record = selected_record(
-        &store,
-        &target,
-        local.json,
-        selection::RequestSelection::Any,
-    )
-    .await?;
+    let record = selected_record(&store, &target, cli, selection::RequestSelection::Any).await?;
     // A confirmed local outcome needs neither an account key nor HTTP.
     let record = match record.revocation.state {
         aster_acme_core::revocation::RevocationState::Confirmed => record,
@@ -554,23 +568,19 @@ async fn revoke(
                 &http,
                 &record,
                 &store,
-                RemoteOperation::Revoke {
-                    reason,
-                    yes,
-                    json: local.json,
-                },
+                RemoteOperation::Revoke { reason, yes },
+                cli,
             )
             .await?
         }
     };
-    println!("{}", render::revoked(&record, local.json)?);
-    Ok(())
+    Ok(super::report::CertificateReport::Revoked(Box::new(record)))
 }
 
 async fn selected_record(
     store: &CliIssueStore,
     target: &super::args::SavedTargetArgs,
-    json: bool,
+    cli: &crate::common::context::CommandContext,
     mode: selection::RequestSelection,
 ) -> CliResult<IssueRecord> {
     let records = store.list().await?;
@@ -582,9 +592,15 @@ async fn selected_record(
             .as_deref()
             .or(target.identity.named_name.as_deref()),
         target.operation.as_deref(),
-        json,
+        &cli.output,
     )?;
-    selection::choose(records, &name, target.operation.as_deref(), mode, json)
+    selection::choose(
+        records,
+        &name,
+        target.operation.as_deref(),
+        mode,
+        &cli.output,
+    )
 }
 
 enum RemoteOperation {
@@ -592,7 +608,6 @@ enum RemoteOperation {
     Revoke {
         reason: Option<aster_acme_protocol::revocation::RevocationReason>,
         yes: bool,
-        json: bool,
     },
 }
 
@@ -602,6 +617,7 @@ async fn remote_operation(
     record: &IssueRecord,
     store: &CliIssueStore,
     operation: RemoteOperation,
+    cli: &crate::common::context::CommandContext,
 ) -> CliResult<IssueRecord> {
     let signer = context
         .store
@@ -620,7 +636,7 @@ async fn remote_operation(
     let mut session = store.open(&record.name, &record.operation_id).await?;
     match &operation {
         RemoteOperation::Inspect => {}
-        RemoteOperation::Revoke { reason, yes, json } => {
+        RemoteOperation::Revoke { reason, yes } => {
             use aster_acme_core::revocation::{RevocationAction, revocation_action};
             let in_use = session.record().await?;
             match revocation_action(
@@ -659,7 +675,7 @@ async fn remote_operation(
                 ),
                 "Revoke this certificate?",
                 *yes,
-                *json,
+                &cli.output,
             )?;
         }
     }
@@ -668,7 +684,7 @@ async fn remote_operation(
         timeout: http.timeout,
         ..AccountArgs::default()
     })?;
-    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let identity = IssueIdentity { account, signer };
     match operation {
         RemoteOperation::Inspect => Ok(IssueService::new(client, identity)?
@@ -712,16 +728,16 @@ async fn prepare_session(
     progress: &Progress,
 ) -> CliResult<Box<dyn IssueSession>> {
     let session = if let Some(record) = selected {
-        progress.log.line(
-            Level::Info,
+        progress.output.progress(
+            MessageKind::Info,
             &format!(
                 "Resuming {} requested at {}",
                 record.name.as_str(),
                 crate::common::time::timestamp(Some(record.created_at))
             ),
         );
-        progress.log.line(
-            Level::Info,
+        progress.output.progress(
+            MessageKind::Info,
             &format!(
                 "Certificate key type: {} (saved)",
                 record.key_algorithm.name()
@@ -730,8 +746,8 @@ async fn prepare_session(
         store.open(&record.name, &record.operation_id).await?
     } else {
         let request = request(args, account_name)?;
-        progress.log.line(
-            Level::Info,
+        progress.output.progress(
+            MessageKind::Info,
             &format!(
                 "Domains: {}",
                 request
@@ -742,13 +758,13 @@ async fn prepare_session(
                     .join(", ")
             ),
         );
-        progress.log.line(
-            Level::Info,
+        progress.output.progress(
+            MessageKind::Info,
             &format!("Certificate key type: {}", request.key_algorithm.name()),
         );
         progress
-            .log
-            .line(Level::Info, "Creating certificate key and fixed CSR");
+            .output
+            .progress(MessageKind::Info, "Creating certificate key and fixed CSR");
         allocate_certificate(
             store,
             request,
@@ -831,7 +847,9 @@ mod tests {
                     publication: PublicationState::SavedRequirements,
                     yes: true,
                     checker: check.clone(),
-                    progress: Arc::new(Progress::new(true)),
+                    progress: Arc::new(Progress::new(crate::common::session::OutputSession::new(
+                        true,
+                    ))),
                 };
                 let execution = ExecutionContext {
                     cancellation: CancellationToken::new(),
@@ -869,7 +887,9 @@ mod tests {
                 publication: PublicationState::Fresh,
                 yes,
                 checker: check.clone(),
-                progress: Arc::new(Progress::new(true)),
+                progress: Arc::new(Progress::new(crate::common::session::OutputSession::new(
+                    true,
+                ))),
             };
             let execution = ExecutionContext {
                 cancellation: CancellationToken::new(),
@@ -1019,7 +1039,9 @@ mod tests {
                 },
             },
         };
-        super::super::renewal::execute(args).await.unwrap();
+        super::super::renewal::execute(args, &crate::common::context::CommandContext::new(true))
+            .await
+            .unwrap();
         assert_eq!(store.list().await.unwrap().len(), 1);
         assert_eq!(
             std::fs::read(generation.join("operation.toml")).unwrap(),

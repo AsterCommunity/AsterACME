@@ -20,14 +20,14 @@ pub(crate) async fn server(options: TransportOptions) -> (MockServer, AcmeClient
     // Keep short mutation deadlines independent of parallel test scheduling.
     let mut discovery = options.clone();
     discovery.request_timeout = discovery.request_timeout.max(Duration::from_secs(2));
-    let mut client = AcmeClient::discover(
-        AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap(),
-        discovery,
-    )
-    .await
-    .unwrap();
-    // HTTP deadlines live on the pool, so reconstruct it with the tested policy.
-    client.http = crate::http_client::build(&options).unwrap();
+    let mut client = crate::transport::HttpPool::default()
+        .discover(
+            AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap(),
+            discovery,
+        )
+        .await
+        .unwrap();
+    // Request deadlines are independent of the shared connection pool.
     client.options = options;
     (server, client)
 }
@@ -103,7 +103,9 @@ fn url_validation_preserves_exact_strings_and_rejects_unsafe_forms() {
 async fn plaintext_is_explicit_and_options_are_bounded() {
     let url = AcmeUrl::new("http://127.0.0.1:1/directory").unwrap();
     assert!(matches!(
-        AcmeClient::discover(url.clone(), TransportOptions::default()).await,
+        crate::transport::HttpPool::default()
+            .discover(url.clone(), TransportOptions::default())
+            .await,
         Err(TransportError::InsecureTransport)
     ));
     for options in [
@@ -117,7 +119,9 @@ async fn plaintext_is_explicit_and_options_are_bounded() {
         },
     ] {
         assert!(matches!(
-            AcmeClient::discover(url.clone(), options).await,
+            crate::transport::HttpPool::default()
+                .discover(url.clone(), options)
+                .await,
             Err(TransportError::InvalidOptions)
         ));
     }
@@ -475,7 +479,7 @@ async fn discovery_timeout_malformed_json_and_insecure_endpoints_are_errors() {
     ] {
         let server=MockServer::start().await;
         Mock::given(method("GET")).respond_with(response).mount(&server).await;
-        assert!(AcmeClient::discover(AcmeUrl::new(&format!("{}/directory",server.uri())).unwrap(),TransportOptions{request_timeout:Duration::from_millis(100),..local_options()}).await.is_err());
+        assert!(crate::transport::HttpPool::default().discover(AcmeUrl::new(&format!("{}/directory",server.uri())).unwrap(),TransportOptions{request_timeout:Duration::from_millis(100),..local_options()}).await.is_err());
     }
 }
 
@@ -515,4 +519,136 @@ async fn successful_post_without_usable_nonce_keeps_location_and_fetches_fresh_n
                 .all(|r| r.headers.get("Replay-Nonce").is_none())
         );
     }
+}
+
+// Count accepted sockets, rather than just cloned handles: HTTP/1.1 keep-alive
+// proves that independent ACME clients actually use the same connection pool.
+#[tokio::test]
+async fn pool_clones_reuse_tcp_connections_without_sharing_account_policy_or_nonces() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let body = serde_json::to_string(&serde_json::json!({
+        "newNonce": format!("{base}/nonce"), "newAccount": format!("{base}/account")
+    }))
+    .unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let accepted = connections.clone();
+    let (sender, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let mut tasks = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                socket = listener.accept() => {
+                    let (socket, _) = socket.unwrap();
+                    accepted.fetch_add(1, Ordering::SeqCst);
+                    let body = body.clone();
+                    let sender = sender.clone();
+                    tasks.spawn(async move {
+                        let mut socket = BufReader::new(socket);
+                        loop {
+                            let mut headers = String::new();
+                            loop {
+                                let mut line = String::new();
+                                if socket.read_line(&mut line).await.unwrap() == 0 { return; }
+                                if line == "\r\n" { break; }
+                                headers.push_str(&line);
+                            }
+                            sender.send(headers.clone()).unwrap();
+                            let nonce = if headers.contains("account-a") { "nonce_a" } else { "nonce_b" };
+                            let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nReplay-Nonce: {nonce}\r\n\r\n{body}",body.len());
+                            socket.get_mut().write_all(response.as_bytes()).await.unwrap();
+                        }
+                    });
+                }
+                _ = tasks.join_next(), if !tasks.is_empty() => {}
+            }
+        }
+    });
+    let pool = HttpPool::default();
+    assert!(pool.0.get().is_none());
+    // Keep system proxies out of the socket-count fixture: a proxy may close
+    // its upstream connection independently of reqwest pool reuse.
+    pool.0
+        .set(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    let url = AcmeUrl::new(&format!("{base}/directory")).unwrap();
+    let first = pool
+        .discover(
+            url.clone(),
+            TransportOptions {
+                user_agent: Some("account-a".into()),
+                ..local_options()
+            },
+        )
+        .await
+        .unwrap();
+    let second = pool
+        .clone()
+        .discover(
+            url.clone(),
+            TransportOptions {
+                user_agent: Some("account-b".into()),
+                ..local_options()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.take_nonce().await.unwrap(), "nonce_a");
+    assert_eq!(second.take_nonce().await.unwrap(), "nonce_b");
+    first.get(&url).await.unwrap();
+    second.get(&url).await.unwrap();
+    for agent in ["account-a", "account-b", "account-a", "account-b"] {
+        let request = requests.try_recv().unwrap();
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains(&format!("user-agent: {agent}\r\n")),
+            "{request}"
+        );
+    }
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn shared_pool_keeps_request_deadlines_independent_and_initializes_lazily() {
+    let pool = HttpPool::default();
+    let url = AcmeUrl::new("http://127.0.0.1:1/directory").unwrap();
+    assert!(
+        pool.discover(url, TransportOptions::default())
+            .await
+            .is_err()
+    );
+    assert!(pool.0.get().is_none());
+    let (server, _) = server(local_options()).await;
+    let url = AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap();
+    let shared = pool.clone();
+    let (first, second) = tokio::join!(
+        pool.discover(url.clone(), local_options()),
+        shared.discover(url, local_options())
+    );
+    let mut first = first.unwrap();
+    let second = second.unwrap();
+    first.options.request_timeout = Duration::from_millis(20);
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(150)))
+        .mount(&server)
+        .await;
+    let url = AcmeUrl::new(&format!("{}/slow", server.uri())).unwrap();
+    let (short, long) = tokio::join!(first.get(&url), second.get(&url));
+    assert!(matches!(short, Err(TransportError::Network(error)) if error.is_timeout()));
+    assert_eq!(long.unwrap().status, StatusCode::OK);
+    assert!(pool.0.get().is_some());
 }

@@ -6,7 +6,7 @@ use aster_acme::{
     account::{AccountKeyStore, AccountStore},
     issuance::{DnsReadiness, DnsRequirement, IssueExecution, IssueIdentity, IssueOutcome},
     solver::ExecutionContext,
-    transport::{AcmeClient, TransportOptions},
+    transport::TransportOptions,
 };
 use aster_acme_core::{account::AccountRecordState, protocol::AccountStatus};
 use aster_acme_protocol::{jws::FlattenedJws, url::AcmeUrl};
@@ -51,15 +51,16 @@ async fn fixture() -> Fixture {
     account.last_status = Some(AccountStatus::Valid);
     account.account_url = Some(AcmeUrl::new(&format!("{}/account/1", server.uri())).unwrap());
     accounts.save(&account).await.unwrap();
-    let client = AcmeClient::discover(
-        directory,
-        TransportOptions {
-            allow_loopback_http: true,
-            ..TransportOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            directory,
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
     let store = CliIssueStore::new(temp.path().into(), Duration::from_millis(100));
     let service = Arc::new(
         IssueService::new(
@@ -1317,15 +1318,16 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
         .expect(1)
         .mount(&fixture.server)
         .await;
-    let client = AcmeClient::discover(
-        record.directory.clone(),
-        TransportOptions {
-            allow_loopback_http: true,
-            ..TransportOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            record.directory.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
     let service = RenewalService::new(Arc::new(client));
     drop(session);
     let mut reopened = fixture
@@ -1396,15 +1398,16 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
         .mount(&fixture.server)
         .await;
     let client = Arc::new(
-        AcmeClient::discover(
-            record.directory.clone(),
-            TransportOptions {
-                allow_loopback_http: true,
-                ..TransportOptions::default()
-            },
-        )
-        .await
-        .unwrap(),
+        aster_acme::transport::HttpPool::default()
+            .discover(
+                record.directory.clone(),
+                TransportOptions {
+                    allow_loopback_http: true,
+                    ..TransportOptions::default()
+                },
+            )
+            .await
+            .unwrap(),
     );
     let accounts =
         super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
@@ -2424,15 +2427,16 @@ async fn renewal_client(fixture: &Fixture, ari: bool) -> Arc<IssueService> {
             "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
             "newOrder":format!("{}/vendor/create",fixture.server.uri()),"renewalInfo":ari.then(||format!("{}/renewal-info",fixture.server.uri()))
         }))).with_priority(1).mount(&fixture.server).await;
-    let client = AcmeClient::discover(
-        fixture.account.directory_url.clone(),
-        TransportOptions {
-            allow_loopback_http: true,
-            ..TransportOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            fixture.account.directory_url.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
     let accounts =
         super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
             .unwrap();

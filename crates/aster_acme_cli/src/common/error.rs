@@ -1,6 +1,6 @@
 //! Structured library errors translated at the process boundary.
 
-use super::output::{colors, safe, styled};
+use super::output::{safe, styled};
 use crate::common::output::Style;
 use aster_acme::{
     account::AccountError,
@@ -8,24 +8,9 @@ use aster_acme::{
 };
 use aster_acme_cli_storage::StorageError;
 
-use std::io::{self, IsTerminal};
-
 mod problem;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
-
-/// The command already emitted a complete structured report; only its exit status remains.
-#[derive(Debug)]
-pub(crate) enum ReportedFailure {
-    Failed,
-    Cancelled,
-}
-impl std::fmt::Display for ReportedFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("See the emitted per-item report.")
-    }
-}
-impl std::error::Error for ReportedFailure {}
 
 /// Missing local identity, distinct from a CA rejecting an existing signing key.
 #[derive(Debug)]
@@ -170,9 +155,12 @@ fn transport_diagnostic(error: &TransportError) -> (String, Option<String>) {
     }
 }
 
-pub(crate) fn error(error: &(dyn std::error::Error + 'static), json: bool) {
+pub(crate) fn render(
+    error: &(dyn std::error::Error + 'static),
+    format: super::session::Format,
+) -> CliResult<String> {
     let (message, hint) = diagnostic(error);
-    if json {
+    if format.json {
         #[derive(serde::Serialize)]
         struct Diagnostic {
             message: String,
@@ -182,27 +170,22 @@ pub(crate) fn error(error: &(dyn std::error::Error + 'static), json: bool) {
         struct ErrorOutput {
             error: Diagnostic,
         }
-        let output = ErrorOutput {
+        Ok(serde_json::to_string(&ErrorOutput {
             error: Diagnostic { message, hint },
-        };
-        match serde_json::to_string(&output) {
-            Ok(output) => eprintln!("{output}"),
-            Err(_) => eprintln!("Could not serialize error diagnostic."),
-        }
+        })?)
     } else {
-        let color = colors(io::stderr().is_terminal());
-        eprintln!(
+        let mut text = format!(
             "{} {}",
-            styled("[ERROR]", Style::BoldRed, color),
+            crate::common::output::MessageKind::Error.badge(format.color),
             safe(&message)
         );
         if let Some(hint) = hint {
-            eprintln!(
-                "{} {}",
-                styled("  Hint:", Style::Yellow, color),
-                safe(&hint)
-            );
+            text.push('\n');
+            text.push_str(&styled("  Hint:", Style::Yellow, format.color));
+            text.push(' ');
+            text.push_str(&safe(&hint));
         }
+        Ok(text)
     }
 }
 

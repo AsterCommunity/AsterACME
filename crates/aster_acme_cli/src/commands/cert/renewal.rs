@@ -2,25 +2,25 @@
 use super::{
     args::{RenewArgs, RunArgs},
     execute::{RunMode, Start, transact},
-    progress::Progress,
-    render,
     report::{
-        BatchDisposition, CertificateResult, RenewalBatch, RenewalEntry, RenewalResult,
-        RenewalWork, SkipReason,
+        CertificateResult, RenewalBatch, RenewalEntry, RenewalResult, RenewalWork, SkipReason,
     },
     selection,
 };
 use crate::common::{
     context::CliSettings,
-    error::{CliResult, ReportedFailure, diagnostic},
+    error::{CliResult, diagnostic},
 };
 use aster_acme::issuance::{IssueRecord, IssueStore};
 use aster_acme_cli_storage::issuance::CliIssueStore;
 use async_trait::async_trait;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-pub(super) async fn execute(args: RenewArgs) -> CliResult<()> {
+pub(super) async fn execute(
+    args: RenewArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<super::report::CertificateReport> {
     let options = super::execute::options(&args.run.local, &args.run.http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
@@ -28,8 +28,8 @@ pub(super) async fn execute(args: RenewArgs) -> CliResult<()> {
     if args.all {
         let work = RenewalWork::from_records(&records, args.now, time::OffsetDateTime::now_utc());
         if work.scheduled > 0 {
-            Progress::new(options.json).log.line(
-                crate::common::log::Level::Info,
+            cli.output.progress(
+                crate::common::output::MessageKind::Info,
                 &format!(
                     "Renewing {} certificates; {} not due.",
                     work.scheduled, work.not_due
@@ -52,22 +52,13 @@ pub(super) async fn execute(args: RenewArgs) -> CliResult<()> {
             run: &args.run,
             immediate: args.now,
             cancellation: Some(&cancellation),
+            cli,
         };
         let report = run_batch(candidates, &executor, &cancellation).await;
-        crate::common::output::print_result(
-            &render::batch(&report, options.json, &settings.data_dir)?,
-            options.json,
-            if work.scheduled > 0 {
-                crate::common::output::ResultPreceding::Progress
-            } else {
-                crate::common::output::ResultPreceding::None
-            },
-        );
-        match report.disposition() {
-            BatchDisposition::Cancelled => Err(Box::new(ReportedFailure::Cancelled)),
-            BatchDisposition::PartialFailure => Err(Box::new(ReportedFailure::Failed)),
-            BatchDisposition::Completed | BatchDisposition::ActionRequired => Ok(()),
-        }
+        Ok(super::report::CertificateReport::Batch {
+            report,
+            data_dir: settings.data_dir,
+        })
     } else {
         let name = selection::certificate_name(
             &records,
@@ -76,7 +67,7 @@ pub(super) async fn execute(args: RenewArgs) -> CliResult<()> {
                 .as_deref()
                 .or(args.target.named_name.as_deref()),
             None,
-            options.json,
+            &cli.output,
         )?;
         let selected = records
             .iter()
@@ -90,17 +81,13 @@ pub(super) async fn execute(args: RenewArgs) -> CliResult<()> {
             run: &args.run,
             immediate: args.now,
             cancellation: None,
+            cli,
         };
         let result = executor.run(selected).await?;
-        crate::common::output::print_result(
-            &render::result(&result, options.json, &settings.data_dir)?,
-            options.json,
-            match &result {
-                CertificateResult::NotDue(_) => crate::common::output::ResultPreceding::None,
-                CertificateResult::Issuance(_) => crate::common::output::ResultPreceding::Progress,
-            },
-        );
-        Ok(())
+        Ok(super::report::CertificateReport::Result {
+            result,
+            data_dir: settings.data_dir,
+        })
     }
 }
 
@@ -124,12 +111,12 @@ struct Transaction<'a> {
     run: &'a RunArgs,
     immediate: bool,
     cancellation: Option<&'a CancellationToken>,
+    cli: &'a crate::common::context::CommandContext,
 }
 
 #[async_trait(?Send)]
 impl RenewalExecutor for Transaction<'_> {
     async fn run(&self, record: &IssueRecord) -> CliResult<CertificateResult> {
-        let progress = Arc::new(Progress::new(self.run.local.json));
         let options = super::execute::options(
             &self.run.local,
             &self.run.http,
@@ -150,7 +137,7 @@ impl RenewalExecutor for Transaction<'_> {
             },
             self.run,
             mode,
-            progress,
+            self.cli,
         )
         .await
     }

@@ -165,7 +165,7 @@ mod tests {
         let Command::Account { command } = parsed.command else {
             panic!("expected account");
         };
-        let crate::commands::account::args::AccountCommand::Register(args) = *command else {
+        let crate::commands::account::args::AccountCommand::Register(args) = command else {
             panic!("expected register");
         };
         assert!(args.yes);
@@ -184,7 +184,7 @@ mod tests {
         let Command::Cert { command } = parsed.command else {
             panic!("expected cert");
         };
-        let crate::commands::cert::args::CertCommand::Issue(args) = *command else {
+        let crate::commands::cert::args::CertCommand::Issue(args) = command else {
             panic!("expected issue");
         };
         assert!(!args.run.yes);

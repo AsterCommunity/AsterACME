@@ -9,23 +9,28 @@ use crate::common::{
     error::CliResult,
     terminal,
 };
-use aster_acme::{
-    account::{AccountError, AccountKeyStore, AccountRotationStore, AccountService, AccountStore},
-    transport::AcmeClient,
+use aster_acme::account::{
+    AccountError, AccountKeyStore, AccountRotationStore, AccountService, AccountStore,
 };
 use std::sync::Arc;
 
-async fn context(options: &mut AccountArgs) -> CliResult<CliContext> {
+async fn context(
+    options: &mut AccountArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<CliContext> {
     let settings = CliSettings::load(options).await?;
-    super::selection::complete(options, &settings, super::selection::Mode::Existing).await?;
+    super::selection::complete(options, &settings, super::selection::Mode::Existing, cli).await?;
     let context = settings.account(options).await?;
     context.require_account().await?;
     Ok(context)
 }
 
-pub(super) async fn update_contacts(args: UpdateContactArgs) -> CliResult<AccountReport> {
+pub(super) async fn update_contacts(
+    args: UpdateContactArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     let mut options = AccountArgs::from(args.network);
-    let context = context(&mut options).await?;
+    let context = context(&mut options, cli).await?;
     let signer = context
         .store
         .signer(&context.directory, &context.name, false)
@@ -42,7 +47,7 @@ pub(super) async fn update_contacts(args: UpdateContactArgs) -> CliResult<Accoun
         args.contact,
         args.clear_contacts,
         terminal::interactive(options.json),
-        &mut super::interaction::TerminalPrompts,
+        &mut super::interaction::TerminalPrompts(&cli.output),
     )?;
     terminal::confirm_action(
         &format!(
@@ -57,10 +62,10 @@ pub(super) async fn update_contacts(args: UpdateContactArgs) -> CliResult<Accoun
         ),
         "Replace these contacts?",
         args.yes,
-        options.json,
+        &cli.output,
     )?;
     let transport = context.transport_options(&options)?;
-    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let account = AccountService::new(client, context.store)
         .update_contacts(signer.as_ref(), contacts)
         .await?;
@@ -72,9 +77,12 @@ pub(super) async fn update_contacts(args: UpdateContactArgs) -> CliResult<Accoun
     })
 }
 
-pub(super) async fn rotate_key(args: RotateKeyArgs) -> CliResult<AccountReport> {
+pub(super) async fn rotate_key(
+    args: RotateKeyArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     let mut options = AccountArgs::from(args.network);
-    let context = context(&mut options).await?;
+    let context = context(&mut options, cli).await?;
     // Opening a rotation session validates the existing old/staged key identity without
     // generating material. Release it before user input; service revalidates under lease.
     let checked = context.store.rotation(&context.directory).await?;
@@ -87,10 +95,10 @@ pub(super) async fn rotate_key(args: RotateKeyArgs) -> CliResult<AccountReport> 
         ),
         "Rotate or reconcile this key?",
         args.yes,
-        options.json,
+        &cli.output,
     )?;
     let transport = context.transport_options(&options)?;
-    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let record = AccountService::new(client, context.store.clone())
         .rotate_key(context.store.as_ref())
         .await?;

@@ -14,7 +14,7 @@ pub(super) trait RegistrationPrompts {
     fn email(&mut self) -> CliResult<String>;
 }
 
-pub(super) struct TerminalPrompts;
+pub(super) struct TerminalPrompts<'a>(pub(super) &'a crate::common::session::OutputSession);
 
 /// Missing update input is never interpreted as permission to clear contacts.
 pub(super) fn replacement_contacts(
@@ -32,20 +32,28 @@ pub(super) fn replacement_contacts(
     }
 }
 
-impl RegistrationPrompts for TerminalPrompts {
+impl RegistrationPrompts for TerminalPrompts<'_> {
     fn confirm(&mut self, message: &str) -> CliResult<bool> {
+        self.0.interaction_started();
         prompt_result(
             inquire::Confirm::new(message)
                 .with_default(false)
-                .with_render_config(crate::common::terminal::prompt_style(false))
+                .with_render_config(crate::common::terminal::prompt_style(
+                    self.0.diagnostic_format().color,
+                    false,
+                ))
                 .prompt(),
         )
     }
 
     fn email(&mut self) -> CliResult<String> {
+        self.0.interaction_started();
         prompt_result(
             inquire::Text::new("Contact email:")
-                .with_render_config(crate::common::terminal::prompt_style(false))
+                .with_render_config(crate::common::terminal::prompt_style(
+                    self.0.diagnostic_format().color,
+                    false,
+                ))
                 .with_placeholder("you@example.com")
                 .with_help_message("Optional CA contact; saved locally for future registrations.")
                 .with_validator(|input: &str| {

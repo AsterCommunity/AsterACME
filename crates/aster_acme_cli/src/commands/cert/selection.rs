@@ -6,7 +6,7 @@ pub(super) fn certificate_name(
     records: &[IssueRecord],
     explicit: Option<&str>,
     operation: Option<&str>,
-    json: bool,
+    output: &crate::common::session::OutputSession,
 ) -> CliResult<CertificateName> {
     if let Some(name) = explicit {
         return Ok(CertificateName::new(name)?);
@@ -18,7 +18,7 @@ pub(super) fn certificate_name(
             .map(|record| record.name.clone())
             .ok_or_else(|| "No saved certificate request matches --operation.".into());
     }
-    if !terminal::interactive(json) {
+    if !terminal::interactive(output.is_json()) {
         return Err("Specify a certificate NAME or --operation <ID>, or use an interactive terminal to select a certificate.".into());
     }
     let certificates = managed_records(records.to_vec())?;
@@ -29,7 +29,7 @@ pub(super) fn certificate_name(
         .iter()
         .map(certificate_label)
         .collect::<Vec<_>>();
-    let index = terminal::select_index("Choose a certificate:", &choices, 0)?;
+    let index = terminal::select_index("Choose a certificate:", &choices, 0, output)?;
     Ok(certificates
         .get(index)
         .ok_or("Invalid certificate selection.")?
@@ -95,7 +95,7 @@ pub(super) fn choose(
     name: &CertificateName,
     id: Option<&str>,
     mode: RequestSelection,
-    json: bool,
+    output: &crate::common::session::OutputSession,
 ) -> CliResult<IssueRecord> {
     let mut candidates = records
         .into_iter()
@@ -126,10 +126,10 @@ pub(super) fn choose(
     match candidates.as_slice() {
         [] => Err("No matching saved request. Use cert list to inspect existing requests; a new request must be started explicitly.".into()),
         [record] => Ok(record.clone()),
-        _ if !terminal::interactive(json) => Err("Several saved requests match. Use cert list and specify --operation <ID>; no request was selected automatically.".into()),
+        _ if !terminal::interactive(output.is_json()) => Err("Several saved requests match. Use cert list and specify --operation <ID>; no request was selected automatically.".into()),
         _ => {
             let choices=candidates.iter().map(choice_label).collect::<Vec<_>>();
-            let index = terminal::select_index("Choose a saved certificate request:", &choices, 0)?;
+            let index = terminal::select_index("Choose a saved certificate request:", &choices, 0, output)?;
             candidates.into_iter().nth(index).ok_or_else(||"Invalid request selection.".into())
         }
     }

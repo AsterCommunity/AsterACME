@@ -1,70 +1,21 @@
 //! Shared human CLI logging: fixed UTC timestamps, aligned levels and detail rows.
 //! Structured command results belong to command renderers; JSON disables this sink.
 use super::output;
-use crate::common::output::Style;
-use std::io::{self, IsTerminal};
-
-#[derive(Clone, Copy)]
-pub(crate) enum Level {
-    Info,
-    Wait,
-    Success,
-    Warning,
-}
-
-pub(crate) struct Log {
-    pub(crate) enabled: bool,
-    color: bool,
-}
-impl Log {
-    pub(crate) fn new(json: bool) -> Self {
-        Self {
-            enabled: !json,
-            color: output::colors(io::stderr().is_terminal()),
-        }
-    }
-
-    pub(crate) fn line(&self, level: Level, message: &str) {
-        self.details(level, message, &[]);
-    }
-
-    pub(crate) fn details(&self, level: Level, message: &str, details: &[String]) {
-        if self.enabled {
-            eprintln!(
-                "{}",
-                render(
-                    level,
-                    message,
-                    details,
-                    time::OffsetDateTime::now_utc(),
-                    self.color
-                )
-            );
-        }
-    }
-}
+use crate::common::output::MessageKind;
 
 // Pad the plain prefix before styling. Time, labels and continuation rows share one
 // visible column even when the terminal uses ANSI colors or timestamps had subseconds.
-fn render(
-    level: Level,
+pub(super) fn render(
+    level: MessageKind,
     message: &str,
     details: &[String],
     at: time::OffsetDateTime,
     color: bool,
 ) -> String {
-    let (label, style) = match level {
-        Level::Info => ("[INFO]", Style::Cyan),
-        Level::Wait => ("[WAIT]", Style::Yellow),
-        Level::Success => ("[OK]", Style::BoldGreen),
-        Level::Warning => ("[WARN]", Style::Yellow),
-    };
+    let label = level.label();
     let timestamp = crate::common::time::timestamp(Some(at));
     let padding = " ".repeat(6 - label.len());
-    let prefix = format!(
-        "[{timestamp}] {}{padding} ",
-        output::styled(label, style, color)
-    );
+    let prefix = format!("[{timestamp}] {}{padding} ", level.badge(color));
     let indent = " ".repeat(timestamp.len() + 10);
     let mut output = format!("{prefix}{}", output::safe(message));
     for detail in details {
@@ -84,7 +35,12 @@ mod tests {
             .unwrap()
             .replace_nanosecond(123_456_000)
             .unwrap();
-        for level in [Level::Info, Level::Success, Level::Wait, Level::Warning] {
+        for level in [
+            MessageKind::Info,
+            MessageKind::Success,
+            MessageKind::Wait,
+            MessageKind::Warning,
+        ] {
             let text = render(level, "message", &["detail".into()], at, false);
             let mut lines = text.lines();
             let first = lines.next().unwrap();
@@ -105,7 +61,7 @@ mod tests {
             );
         }
         let text = render(
-            Level::Warning,
+            MessageKind::Warning,
             "bad\x1b[2J",
             &["line\nnext".into()],
             at,

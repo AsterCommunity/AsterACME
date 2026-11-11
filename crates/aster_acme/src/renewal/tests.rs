@@ -73,16 +73,17 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
             "newNonce":format!("{}/unused",server.uri()),"newAccount":format!("{}/unused",server.uri()),
             "renewalInfo":endpoint.then(|| format!("{}/custom/renewal",server.uri()))
         }))).mount(&server).await;
-    let client = AcmeClient::discover(
-        directory.clone(),
-        TransportOptions {
-            allow_loopback_http: true,
-            request_timeout: timeout,
-            ..TransportOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let client = crate::transport::HttpPool::default()
+        .discover(
+            directory.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                request_timeout: timeout,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
     let mut record: IssueRecord = serde_json::from_value(serde_json::json!({
         "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",

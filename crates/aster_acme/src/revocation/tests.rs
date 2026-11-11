@@ -61,16 +61,17 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RevocationSe
         .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "fresh_nonce"))
         .mount(&server)
         .await;
-    let client = AcmeClient::discover(
-        url("/directory"),
-        TransportOptions {
-            allow_loopback_http: true,
-            request_timeout: timeout,
-            ..TransportOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let client = crate::transport::HttpPool::default()
+        .discover(
+            url("/directory"),
+            TransportOptions {
+                allow_loopback_http: true,
+                request_timeout: timeout,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
     let signer = Arc::new(AccountKey::generate().unwrap());
     let account:AccountRecord=serde_json::from_value(serde_json::json!({
         "account_id":"local-id","directory_url":url("/directory"),"account_url":url("/account/1"),

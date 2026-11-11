@@ -1,5 +1,5 @@
 //! Timestamped human progress on stderr; JSON mode never emits human progress.
-use crate::common::log::Level;
+use crate::common::output::MessageKind;
 use aster_acme::issuance::progress::{IssueEvent, IssueObserver};
 use aster_acme_core::protocol::{AuthorizationStatus, OrderStatus};
 use std::{
@@ -15,13 +15,13 @@ struct Observed {
 }
 
 pub(super) struct Progress {
-    pub(super) log: crate::common::log::Log,
+    pub(super) output: crate::common::session::OutputSession,
     observed: Mutex<Observed>,
 }
 impl Progress {
-    pub(super) fn new(json: bool) -> Self {
+    pub(super) fn new(output: crate::common::session::OutputSession) -> Self {
         Self {
-            log: crate::common::log::Log::new(json),
+            output,
             observed: Mutex::new(Observed::default()),
         }
     }
@@ -32,12 +32,12 @@ impl Progress {
         record: &aster_acme::issuance::IssueRecord,
     ) {
         for message in protocol_messages(directory, record) {
-            self.log.line(Level::Info, &message);
+            self.output.progress(MessageKind::Info, &message);
         }
     }
 
     fn should_display(&self, event: &IssueEvent) -> bool {
-        if !self.log.enabled {
+        if self.output.is_json() {
             return false;
         }
         let Ok(mut observed) = self.observed.lock() else {
@@ -72,33 +72,40 @@ impl IssueObserver for Progress {
             return;
         }
         let (level, message) = match event {
-            IssueEvent::CreatingOrder => (Level::Info, "Creating ACME order".into()),
-            IssueEvent::OrderCreated { url } => {
-                (Level::Success, format!("Order created: {}", url.as_str()))
-            }
+            IssueEvent::CreatingOrder => (MessageKind::Info, "Creating ACME order".into()),
+            IssueEvent::OrderCreated { url } => (
+                MessageKind::Success,
+                format!("Order created: {}", url.as_str()),
+            ),
             IssueEvent::OrderObserved { status } => match status {
-                OrderStatus::Pending => {
-                    (Level::Wait, "CA order is pending domain validation".into())
-                }
+                OrderStatus::Pending => (
+                    MessageKind::Wait,
+                    "CA order is pending domain validation".into(),
+                ),
                 OrderStatus::Ready => (
-                    Level::Success,
+                    MessageKind::Success,
                     "Domain validation finished; order is ready for signing".into(),
                 ),
-                OrderStatus::Processing => {
-                    (Level::Wait, "CA is processing certificate issuance".into())
+                OrderStatus::Processing => (
+                    MessageKind::Wait,
+                    "CA is processing certificate issuance".into(),
+                ),
+                OrderStatus::Valid => {
+                    (MessageKind::Success, "CA has issued the certificate".into())
                 }
-                OrderStatus::Valid => (Level::Success, "CA has issued the certificate".into()),
-                OrderStatus::Invalid => (Level::Warning, "CA marked this order invalid".into()),
+                OrderStatus::Invalid => {
+                    (MessageKind::Warning, "CA marked this order invalid".into())
+                }
                 OrderStatus::Unknown(value) => (
-                    Level::Warning,
+                    MessageKind::Warning,
                     format!("CA returned unsupported order status: {value}"),
                 ),
             },
             IssueEvent::AuthorizationObserved { identifier, status } => (
                 if matches!(status, AuthorizationStatus::Valid) {
-                    Level::Success
+                    MessageKind::Success
                 } else {
-                    Level::Info
+                    MessageKind::Info
                 },
                 format!(
                     "Authorization {identifier}: {}",
@@ -106,42 +113,43 @@ impl IssueObserver for Progress {
                 ),
             ),
             IssueEvent::PublicationRequired { count } => (
-                Level::Info,
+                MessageKind::Info,
                 format!("Prepared {count} DNS TXT requirement(s); publish every required value"),
             ),
             IssueEvent::DnsReady { forced: true } => (
-                Level::Warning,
+                MessageKind::Warning,
                 "Local DNS check skipped (--skip-dns-check); CA validation is still required"
                     .into(),
             ),
             IssueEvent::DnsReady { forced: false } => (
-                Level::Success,
+                MessageKind::Success,
                 "All required TXT values are visible through the local DNS resolver".into(),
             ),
             IssueEvent::ValidationSubmitted { identifier } => (
-                Level::Info,
+                MessageKind::Info,
                 format!("CA validation requested for {identifier}"),
             ),
             IssueEvent::Waiting { delay } => (
-                Level::Wait,
+                MessageKind::Wait,
                 format!(
                     "Waiting {:.1}s before the next CA query",
                     delay.as_secs_f64()
                 ),
             ),
             IssueEvent::Finalizing => (
-                Level::Info,
+                MessageKind::Info,
                 "Submitting the saved CSR to finalize the order".into(),
             ),
             IssueEvent::Downloading => (
-                Level::Info,
+                MessageKind::Info,
                 "Downloading and checking the issued certificate chain".into(),
             ),
-            IssueEvent::CertificateSaved => {
-                (Level::Success, "Certificate verified and saved".into())
-            }
+            IssueEvent::CertificateSaved => (
+                MessageKind::Success,
+                "Certificate verified and saved".into(),
+            ),
         };
-        self.log.line(level, &message);
+        self.output.progress(level, &message);
     }
 }
 
@@ -203,9 +211,9 @@ mod tests {
     use super::*;
     #[test]
     fn json_suppresses_progress_and_repeated_waits_and_authorizations_are_throttled() {
-        let json = Progress::new(true);
+        let json = Progress::new(crate::common::session::OutputSession::new(true));
         assert!(!json.should_display(&IssueEvent::CreatingOrder));
-        let progress = Progress::new(false);
+        let progress = Progress::new(crate::common::session::OutputSession::new(false));
         let wait = IssueEvent::Waiting {
             delay: Duration::from_secs(2),
         };

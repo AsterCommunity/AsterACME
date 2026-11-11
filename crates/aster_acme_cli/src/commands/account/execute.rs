@@ -11,7 +11,6 @@ use crate::common::{
 use aster_acme::{
     account::{AccountError, AccountKeyStore, AccountService, AccountStore, RegistrationOptions},
     crypto::{AccountSigner, ExternalAccountCredentials},
-    transport::AcmeClient,
 };
 use std::sync::Arc;
 
@@ -35,14 +34,19 @@ impl Operation {
     }
 }
 
-pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport> {
+pub(crate) async fn execute(
+    command: AccountCommand,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     let command = match command {
-        AccountCommand::UpdateContact(args) => return super::mutation::update_contacts(args).await,
-        AccountCommand::RotateKey(args) => return super::mutation::rotate_key(args).await,
+        AccountCommand::UpdateContact(args) => {
+            return super::mutation::update_contacts(args, cli).await;
+        }
+        AccountCommand::RotateKey(args) => return super::mutation::rotate_key(args, cli).await,
         command => command,
     };
     if let AccountCommand::List(options) = command {
-        return list(options).await;
+        return list(options, cli).await;
     }
     let (mut options, operation) = match command {
         AccountCommand::UpdateContact(_) | AccountCommand::RotateKey(_) => {
@@ -66,7 +70,7 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         }
         Operation::Deactivate | Operation::Switch => super::selection::Mode::Registered,
     };
-    super::selection::complete(&mut options, &settings, mode).await?;
+    super::selection::complete(&mut options, &settings, mode, cli).await?;
     if matches!(operation, Operation::Switch) && options.name.is_none() {
         return Err(
             "Specify account switch <NAME> or --name <NAME>, or use an interactive terminal to select an account."
@@ -85,7 +89,7 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         }
     }
     if matches!(operation, Operation::Remove) {
-        return remove(context, &options).await;
+        return remove(context, &options, cli).await;
     }
     // Check before loading/creating keys, changing contacts, or constructing HTTP.
     // Both registered accounts and interrupted pending identities require explicit reuse.
@@ -99,7 +103,7 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
                 crate::common::output::safe(context.directory.as_str()),
             ),
             options.yes,
-            options.json,
+            &cli.output,
         )?;
     }
     if let Operation::Switch = operation {
@@ -111,17 +115,18 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
         .signer(&context.directory, &name, operation.creates_key())
         .await?;
     if matches!(operation, Operation::Deactivate) {
-        return deactivate(context, signer, options).await;
+        return deactivate(context, signer, options, cli).await;
     }
     match operation {
         Operation::Show { verify } => {
             if verify {
                 let client = Arc::new(
-                    AcmeClient::discover(
-                        context.directory.clone(),
-                        context.transport_options(&options)?,
-                    )
-                    .await?,
+                    cli.http
+                        .discover(
+                            context.directory.clone(),
+                            context.transport_options(&options)?,
+                        )
+                        .await?,
                 );
                 AccountService::new(client, context.store.clone())
                     .inspect(signer.as_ref())
@@ -129,13 +134,16 @@ pub(crate) async fn execute(command: AccountCommand) -> CliResult<AccountReport>
             }
             local(&context, signer.as_ref(), name, verify).await
         }
-        operation => remote(context, signer, name, options, operation, reused).await,
+        operation => remote(context, signer, name, options, operation, reused, cli).await,
     }
 }
 
 /// Verification is sequential and bounded per request. Each failure is a row result,
 /// so one unavailable CA does not discard the rest of the local account inventory.
-async fn list(args: super::args::ListArgs) -> CliResult<AccountReport> {
+async fn list(
+    args: super::args::ListArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     let options = AccountArgs {
         user_agent: args.http.user_agent,
         timeout: args.http.timeout,
@@ -157,7 +165,7 @@ async fn list(args: super::args::ListArgs) -> CliResult<AccountReport> {
                     .signer(&context.directory, &context.name, false)
                     .await?;
                 let transport = context.transport_options(&options)?;
-                let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+                let client = Arc::new(cli.http.discover(context.directory, transport).await?);
                 Ok::<_, Box<dyn std::error::Error>>(
                     AccountService::new(client, context.store)
                         .inspect(signer.as_ref())
@@ -195,7 +203,11 @@ async fn list(args: super::args::ListArgs) -> CliResult<AccountReport> {
 }
 
 /// Local removal deliberately never initializes HTTP or decodes the private key.
-async fn remove(context: CliContext, options: &AccountArgs) -> CliResult<AccountReport> {
+async fn remove(
+    context: CliContext,
+    options: &AccountArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     if context.store.metadata().await?.is_none() {
         return Err("No local account record exists for this name.".into());
     }
@@ -218,7 +230,7 @@ async fn remove(context: CliContext, options: &AccountArgs) -> CliResult<Account
         ),
         "Remove this local account?",
         options.yes,
-        options.json,
+        &cli.output,
     )?;
     context.store.remove().await?;
     crate::config::clear_removed_default(context.config_path, context.name.clone()).await
@@ -235,6 +247,7 @@ async fn deactivate(
     context: CliContext,
     signer: Arc<dyn AccountSigner>,
     options: AccountArgs,
+    cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let thumbprint = signer.jwk()?.thumbprint()?;
     let record = context
@@ -285,10 +298,10 @@ async fn deactivate(
         ),
         "Deactivate this account?",
         options.yes,
-        options.json,
+        &cli.output,
     )?;
     let transport = context.transport_options(&options)?;
-    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let account = AccountService::new(client, context.store)
         .deactivate(signer.as_ref())
         .await?;
@@ -360,6 +373,7 @@ async fn remote(
     options: AccountArgs,
     operation: Operation,
     reused: bool,
+    cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let transport = context.transport_options(&options)?;
     let interactive = crate::common::terminal::interactive(options.json);
@@ -395,7 +409,7 @@ async fn remote(
         persist_contacts |= super::interaction::contact(
             registration,
             interactive,
-            &mut super::interaction::TerminalPrompts,
+            &mut super::interaction::TerminalPrompts(&cli.output),
         )?;
     }
     save_registration_intent(
@@ -406,7 +420,7 @@ async fn remote(
         account_user_agent,
     )
     .await?;
-    let client = Arc::new(AcmeClient::discover(context.directory, transport).await?);
+    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     if let Some(registration) = &mut registration {
         super::interaction::terms(
             registration,
@@ -415,7 +429,7 @@ async fn remote(
                 .as_ref()
                 .and_then(|record| record.accepted_terms_url.as_ref()),
             interactive,
-            &mut super::interaction::TerminalPrompts,
+            &mut super::interaction::TerminalPrompts(&cli.output),
         )?;
     }
     let service = AccountService::new(client, context.store);

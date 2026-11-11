@@ -20,6 +20,7 @@
 
 ### 变更
 
+- **命令输出与 HTTP 生命周期**：账户、证书、version 共用命令级输出会话，集中进度、交互和最终结果，分别控制输出流配色，按实际输出添加分隔，部分失败也仅输出一份 JSON 报告。ACME 客户端在批量操作中持有同一惰性 HTTP 连接池，账户 User-Agent、请求期限及 nonce 独立。
 - **依赖与 TLS 归属**：Forge HTTP 使用已发布的 `=0.1.0-alpha.2`，仅启用 JSON、rustls/AWS-LC 和系统代理；utils/macros 保持 `=0.1.0-alpha.1`，AsterFs 使用 `=0.1.0`，base64 使用 0.23.1。rustls 与共用 AWS-LC 后端减少重复 P-256 依赖，客户端显式选择 rustls，嵌入应用合并其他后端时也不会改变选择；CI 拒绝 native-tls/OpenSSL 传输依赖。各 crate 独立维护自身版本，依赖版本、来源和 features 仍集中在 workspace 定义。
 - **Release 构建**：CLI 及其依赖使用 `opt-level="z"`、LTO、单 codegen unit 优化体积。保留 unwind panic 和函数符号，不携带源码级调试信息。panic hook 接入由 [#1](https://github.com/AsterCommunity/AsterACME/issues/1) 跟踪，等待上游能力。
 - **文档**：新增中英文 README/更新日志、官网入口、crate 指南、RFC 索引、架构与 CLI 契约，并分开记录本地/staging 验证证据。自动 DNS 发布、HTTP/TLS solver、自动续期、daemon 调度和部署尚未实现。

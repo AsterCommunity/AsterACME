@@ -32,6 +32,40 @@ impl Style {
     }
 }
 
+/// Labels and presentation for progress, completion and diagnostics share one mapping.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MessageKind {
+    Info,
+    Wait,
+    Success,
+    Warning,
+    Error,
+    Done,
+}
+impl MessageKind {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Info => "[INFO]",
+            Self::Wait => "[WAIT]",
+            Self::Success => "[OK]",
+            Self::Warning => "[WARN]",
+            Self::Error => "[ERROR]",
+            Self::Done => "[DONE]",
+        }
+    }
+    pub(crate) const fn style(self) -> Style {
+        match self {
+            Self::Info => Style::Cyan,
+            Self::Wait | Self::Warning => Style::Yellow,
+            Self::Success | Self::Done => Style::BoldGreen,
+            Self::Error => Style::BoldRed,
+        }
+    }
+    pub(crate) fn badge(self, color: bool) -> String {
+        styled(self.label(), self.style(), color)
+    }
+}
+
 pub(crate) fn colors(terminal: bool) -> bool {
     terminal
         && std::env::var_os("NO_COLOR").is_none()
@@ -58,22 +92,6 @@ pub(crate) fn safe(value: &str) -> String {
             }
         })
         .collect()
-}
-
-/// A separator is useful only when a report follows human progress output.
-#[derive(Clone, Copy)]
-pub(crate) enum ResultPreceding {
-    None,
-    Progress,
-}
-
-/// Separate a foreground progress stream from its final report; machine output
-/// remains exactly one document with no human separators.
-pub(crate) fn print_result(text: &str, json: bool, preceding: ResultPreceding) {
-    if !json && matches!(preceding, ResultPreceding::Progress) {
-        eprintln!();
-    }
-    println!("{text}");
 }
 
 /// Presentation hint; paint only the label so the command text stays easy to copy.

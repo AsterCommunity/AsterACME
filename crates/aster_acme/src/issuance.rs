@@ -374,6 +374,7 @@ pub struct IssueExecution {
 }
 
 /// A foreground invocation can finish or yield durable manual action without an error.
+/// The owned snapshot is boxed to avoid inlining the full journal into each async result.
 pub enum IssueOutcome {
     /// User must publish these TXT records then resume the named certificate.
     ActionRequired {

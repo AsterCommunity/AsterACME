@@ -19,6 +19,7 @@ pub(super) async fn complete(
     options: &mut AccountArgs,
     settings: &crate::common::context::CliSettings,
     mode: Mode,
+    cli: &crate::common::context::CommandContext,
 ) -> CliResult<()> {
     if crate::common::terminal::interactive(options.json) && options.name.is_none() {
         let accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
@@ -29,7 +30,9 @@ pub(super) async fn complete(
             settings.config.default_account.as_deref(),
             crate::ca::resolve(settings.config.ca, settings.config.ca_directory.as_deref())?,
             true,
-            &mut TerminalSelection,
+            &mut TerminalSelection {
+                output: &cli.output,
+            },
         )?;
     }
     Ok(())
@@ -41,24 +44,30 @@ pub(super) trait SelectionPrompts {
     fn invalid(&mut self, message: &str);
 }
 
-pub(super) struct TerminalSelection;
+pub(super) struct TerminalSelection<'a> {
+    output: &'a crate::common::session::OutputSession,
+}
 
-impl SelectionPrompts for TerminalSelection {
+impl SelectionPrompts for TerminalSelection<'_> {
     fn choose(&mut self, message: &str, choices: Vec<String>, default: usize) -> CliResult<usize> {
-        crate::common::terminal::select_index(message, &choices, default)
+        crate::common::terminal::select_index(message, &choices, default, self.output)
     }
 
     fn text(&mut self, message: &str, default: &str) -> CliResult<String> {
+        self.output.interaction_started();
         prompt_result(
             inquire::Text::new(message)
                 .with_default(default)
-                .with_render_config(crate::common::terminal::prompt_style(false))
+                .with_render_config(crate::common::terminal::prompt_style(
+                    self.output.diagnostic_format().color,
+                    false,
+                ))
                 .prompt(),
         )
     }
 
     fn invalid(&mut self, message: &str) {
-        eprintln!("{}", safe(message));
+        self.output.context(&safe(message));
     }
 }
 

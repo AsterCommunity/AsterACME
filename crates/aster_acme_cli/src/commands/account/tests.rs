@@ -44,20 +44,26 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
     };
     let before = std::fs::read(temp.path().join("accounts/personal/account-key.pk8")).unwrap();
     assert!(
-        execute::execute(AccountCommand::Remove(args(false)))
-            .await
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("--yes")
+        execute::execute(
+            AccountCommand::Remove(args(false)),
+            &crate::common::context::CommandContext::new(true)
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("--yes")
     );
     assert_eq!(
         std::fs::read(temp.path().join("accounts/personal/account-key.pk8")).unwrap(),
         before
     );
-    let report = execute::execute(AccountCommand::Remove(args(true)))
-        .await
-        .unwrap();
+    let report = execute::execute(
+        AccountCommand::Remove(args(true)),
+        &crate::common::context::CommandContext::new(true),
+    )
+    .await
+    .unwrap();
     assert_eq!(render::tests::json_value(&report)["removed_locally"], true);
     assert_eq!(
         render::tests::json_value(&report)["ca_request_performed"],
@@ -125,17 +131,20 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
             drop(stream);
         }));
     }
-    let report = execute::execute(AccountCommand::List(ListArgs {
-        verify: true,
-        http: HttpArgs {
-            timeout: Some(1),
-            ..HttpArgs::default()
-        },
-        local: LocalArgs {
-            data_dir: Some(temp.path().into()),
-            json: true,
-        },
-    }))
+    let report = execute::execute(
+        AccountCommand::List(ListArgs {
+            verify: true,
+            http: HttpArgs {
+                timeout: Some(1),
+                ..HttpArgs::default()
+            },
+            local: LocalArgs {
+                data_dir: Some(temp.path().into()),
+                json: true,
+            },
+        }),
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .unwrap();
     for peer in peers {
@@ -151,7 +160,7 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
         assert!(result["error"].is_string());
     }
     assert!(
-        render::render(&report, false)
+        render::render(&report, crate::common::session::Format::plain(false))
             .unwrap()
             .contains("verification failed")
     );
@@ -178,7 +187,7 @@ fn all_single_account_commands_share_positional_and_named_targets() {
             let Command::Account { command } = parsed.command else {
                 panic!("expected account");
             };
-            let options: AccountArgs = match *command {
+            let options: AccountArgs = match command {
                 AccountCommand::Show { options, .. } | AccountCommand::Recover(options) => {
                     options.into()
                 }
@@ -287,13 +296,16 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
         // Listing metadata remains useful even when a key needs restoration.
         std::fs::remove_file(temp.path().join(format!("accounts/{name}/account-key.pk8"))).unwrap();
     }
-    let report = execute::execute(AccountCommand::List(
-        LocalArgs {
-            data_dir: Some(temp.path().into()),
-            json: true,
-        }
-        .into(),
-    ))
+    let report = execute::execute(
+        AccountCommand::List(
+            LocalArgs {
+                data_dir: Some(temp.path().into()),
+                json: true,
+            }
+            .into(),
+        ),
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .unwrap();
     let value = render::tests::json_value(&report);
@@ -301,8 +313,16 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
     assert_eq!(value["accounts"][0]["name"], "alpha");
     assert_eq!(value["accounts"][0]["is_default"], true);
     assert_eq!(value["accounts"][1]["local_state"], "registration_pending");
-    assert!(render::render(&report, false).unwrap().contains("* alpha"));
-    assert!(!render::render(&report, true).unwrap().contains('\x1b'));
+    assert!(
+        render::render(&report, crate::common::session::Format::plain(false))
+            .unwrap()
+            .contains("* alpha")
+    );
+    assert!(
+        !render::render(&report, crate::common::session::Format::plain(true))
+            .unwrap()
+            .contains('\x1b')
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(30), listener.accept())
             .await
@@ -314,13 +334,16 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
 async fn empty_list_is_actionable_and_stale_default_is_explicit() {
     use super::{execute, render};
     let temp = tempfile::tempdir().unwrap();
-    let report = execute::execute(AccountCommand::List(
-        LocalArgs {
-            data_dir: Some(temp.path().into()),
-            json: false,
-        }
-        .into(),
-    ))
+    let report = execute::execute(
+        AccountCommand::List(
+            LocalArgs {
+                data_dir: Some(temp.path().into()),
+                json: false,
+            }
+            .into(),
+        ),
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .unwrap();
     assert_eq!(
@@ -328,7 +351,7 @@ async fn empty_list_is_actionable_and_stale_default_is_explicit() {
         serde_json::json!([])
     );
     assert!(
-        render::render(&report, false)
+        render::render(&report, crate::common::session::Format::plain(false))
             .unwrap()
             .contains("No local accounts")
     );
@@ -382,11 +405,14 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
         }
         .into(),
     };
-    let error = execute::execute(AccountCommand::Deactivate(args(false)))
-        .await
-        .err()
-        .unwrap()
-        .to_string();
+    let error = execute::execute(
+        AccountCommand::Deactivate(args(false)),
+        &crate::common::context::CommandContext::new(true),
+    )
+    .await
+    .err()
+    .unwrap()
+    .to_string();
     assert!(
         error.contains("cannot be undone")
             && error.contains("--yes")
@@ -410,9 +436,12 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
         drop(stream);
     });
     assert!(
-        execute::execute(AccountCommand::Deactivate(args(true)))
-            .await
-            .is_err()
+        execute::execute(
+            AccountCommand::Deactivate(args(true)),
+            &crate::common::context::CommandContext::new(true)
+        )
+        .await
+        .is_err()
     );
     peer.await.unwrap();
     assert_eq!(
@@ -448,31 +477,37 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
     record.last_status = Some(aster_acme_core::protocol::AccountStatus::Deactivated);
     record.deactivation = DeactivationState::Confirmed;
     store.save(&record).await.unwrap();
-    let report = execute::execute(AccountCommand::Deactivate(DeactivateArgs {
-        yes: false,
-        network: AccountArgs {
-            name: Some("old".into()),
-            data_dir: Some(temp.path().into()),
-            json: true,
-            ..AccountArgs::default()
-        }
-        .into(),
-    }))
+    let report = execute::execute(
+        AccountCommand::Deactivate(DeactivateArgs {
+            yes: false,
+            network: AccountArgs {
+                name: Some("old".into()),
+                data_dir: Some(temp.path().into()),
+                json: true,
+                ..AccountArgs::default()
+            }
+            .into(),
+        }),
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .unwrap();
     assert_eq!(render::tests::json_value(&report)["verified"], false);
     assert_eq!(render::tests::json_value(&report)["deactivated"], true);
     assert!(
-        execute::execute(AccountCommand::Switch(super::args::LocalTargetArgs {
-            identity: super::args::NameArgs {
-                positional_name: Some("old".into()),
-                ..super::args::NameArgs::default()
-            },
-            local: LocalArgs {
-                data_dir: Some(temp.path().into()),
-                json: true
-            }
-        }))
+        execute::execute(
+            AccountCommand::Switch(super::args::LocalTargetArgs {
+                identity: super::args::NameArgs {
+                    positional_name: Some("old".into()),
+                    ..super::args::NameArgs::default()
+                },
+                local: LocalArgs {
+                    data_dir: Some(temp.path().into()),
+                    json: true
+                }
+            }),
+            &crate::common::context::CommandContext::new(true)
+        )
         .await
         .is_err()
     );
@@ -603,18 +638,21 @@ impl From<super::args::AccountArgs> for super::args::RegisterArgs {
 async fn switch_without_a_name_in_automation_fails_without_selecting_the_default() {
     use super::{args::AccountArgs, execute};
     let temp = tempfile::tempdir().unwrap();
-    let error = execute::execute(AccountCommand::Switch(super::args::LocalTargetArgs {
-        identity: super::args::NameArgs {
-            positional_name: None,
-            ..super::args::NameArgs::default()
-        },
-        local: AccountArgs {
-            data_dir: Some(temp.path().into()),
-            json: true,
-            ..AccountArgs::default()
-        }
-        .into(),
-    }))
+    let error = execute::execute(
+        AccountCommand::Switch(super::args::LocalTargetArgs {
+            identity: super::args::NameArgs {
+                positional_name: None,
+                ..super::args::NameArgs::default()
+            },
+            local: AccountArgs {
+                data_dir: Some(temp.path().into()),
+                json: true,
+                ..AccountArgs::default()
+            }
+            .into(),
+        }),
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .err()
     .unwrap();
@@ -650,10 +688,13 @@ async fn existing_registration_requires_confirmation_before_any_mutation_or_http
         timeout: Some(1),
         ..AccountArgs::default()
     };
-    let error = execute::execute(AccountCommand::Register(options().into()))
-        .await
-        .err()
-        .unwrap();
+    let error = execute::execute(
+        AccountCommand::Register(options().into()),
+        &crate::common::context::CommandContext::new(true),
+    )
+    .await
+    .err()
+    .unwrap();
     assert!(error.to_string().contains("already exists"));
     assert!(error.to_string().contains("--yes"));
     assert_eq!(
@@ -674,10 +715,13 @@ async fn existing_registration_requires_confirmation_before_any_mutation_or_http
     });
     let mut confirmed = options();
     confirmed.yes = true;
-    let error = execute::execute(AccountCommand::Register(confirmed.into()))
-        .await
-        .err()
-        .unwrap();
+    let error = execute::execute(
+        AccountCommand::Register(confirmed.into()),
+        &crate::common::context::CommandContext::new(true),
+    )
+    .await
+    .err()
+    .unwrap();
     assert!(!error.to_string().contains("Reuse requires confirmation"));
     peer.await.unwrap();
     assert_eq!(std::fs::read(key_path).unwrap(), before[2]);
@@ -704,17 +748,20 @@ async fn registration_saves_explicit_contact_before_discovery_failure() {
     });
     let temp = tempfile::tempdir().unwrap();
     assert!(
-        execute::execute(AccountCommand::Register(
-            AccountArgs {
-                data_dir: Some(temp.path().into()),
-                ca_directory: Some(directory.as_str().into()),
-                contact: vec!["you@example.com".into()],
-                accept_terms: true,
-                timeout: Some(1),
-                ..AccountArgs::default()
-            }
-            .into()
-        ))
+        execute::execute(
+            AccountCommand::Register(
+                AccountArgs {
+                    data_dir: Some(temp.path().into()),
+                    ca_directory: Some(directory.as_str().into()),
+                    contact: vec!["you@example.com".into()],
+                    accept_terms: true,
+                    timeout: Some(1),
+                    ..AccountArgs::default()
+                }
+                .into()
+            ),
+            &crate::common::context::CommandContext::new(true)
+        )
         .await
         .is_err()
     );
@@ -776,13 +823,16 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
         ..AccountArgs::default()
     };
     assert!(
-        execute::execute(AccountCommand::Switch(super::args::LocalTargetArgs {
-            identity: super::args::NameArgs {
-                positional_name: Some("work".into()),
-                ..super::args::NameArgs::default()
-            },
-            local: options().into()
-        }))
+        execute::execute(
+            AccountCommand::Switch(super::args::LocalTargetArgs {
+                identity: super::args::NameArgs {
+                    positional_name: Some("work".into()),
+                    ..super::args::NameArgs::default()
+                },
+                local: options().into()
+            }),
+            &crate::common::context::CommandContext::new(true)
+        )
         .await
         .is_err()
     );
@@ -791,13 +841,16 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     record.state = AccountRecordState::Registered;
     record.account_url = Some(AcmeUrl::new("https://custom.invalid/account/1").unwrap());
     store.save(&record).await.unwrap();
-    let result = execute::execute(AccountCommand::Switch(super::args::LocalTargetArgs {
-        identity: super::args::NameArgs {
-            positional_name: Some("work".into()),
-            ..super::args::NameArgs::default()
-        },
-        local: options().into(),
-    }))
+    let result = execute::execute(
+        AccountCommand::Switch(super::args::LocalTargetArgs {
+            identity: super::args::NameArgs {
+                positional_name: Some("work".into()),
+                ..super::args::NameArgs::default()
+            },
+            local: options().into(),
+        }),
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .unwrap();
     assert!(matches!(result, AccountReport::Switched { directory, .. } if directory == ca));
@@ -811,10 +864,13 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
             .as_deref(),
         Some("work")
     );
-    let result = execute::execute(AccountCommand::Show {
-        verify: false,
-        options: options().into(),
-    })
+    let result = execute::execute(
+        AccountCommand::Show {
+            verify: false,
+            options: options().into(),
+        },
+        &crate::common::context::CommandContext::new(true),
+    )
     .await
     .unwrap();
     assert!(
@@ -823,10 +879,13 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     let mut wrong_ca = options();
     wrong_ca.ca_directory = Some("https://another.invalid/directory".into());
     assert!(
-        execute::execute(AccountCommand::Show {
-            verify: false,
-            options: wrong_ca.into()
-        })
+        execute::execute(
+            AccountCommand::Show {
+                verify: false,
+                options: wrong_ca.into()
+            },
+            &crate::common::context::CommandContext::new(true)
+        )
         .await
         .is_err()
     );
@@ -858,12 +917,12 @@ fn verify_is_an_explicit_show_only_option() {
     let args = Args::try_parse_from(["aster-acme", "account", "show", "--verify"]).unwrap();
     assert!(matches!(
         args.command,
-        Command::Account { command } if matches!(*command, AccountCommand::Show { verify: true, .. })
+        Command::Account { command } if matches!(command, AccountCommand::Show { verify: true, .. })
     ));
     let args = Args::try_parse_from(["aster-acme", "account", "show"]).unwrap();
     assert!(matches!(
         args.command,
-        Command::Account { command } if matches!(*command, AccountCommand::Show { verify: false, .. })
+        Command::Account { command } if matches!(command, AccountCommand::Show { verify: false, .. })
     ));
     for command in ["register", "recover", "switch"] {
         assert!(Args::try_parse_from(["aster-acme", "account", command, "--verify"]).is_err());
@@ -922,18 +981,21 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
                 .unwrap();
         }
         let before = store.load(&directory, &thumbprint).await.unwrap();
-        let report = execute::execute(AccountCommand::Show {
-            verify: false,
-            options: AccountArgs {
-                ca_directory: Some(directory.as_str().into()),
-                data_dir: Some(temp.path().into()),
-                name: Some("work".into()),
-                // Invalid HTTP-only settings must not interfere with local inspection.
-                user_agent: Some("bad\nheader".into()),
-                ..AccountArgs::default()
-            }
-            .into(),
-        })
+        let report = execute::execute(
+            AccountCommand::Show {
+                verify: false,
+                options: AccountArgs {
+                    ca_directory: Some(directory.as_str().into()),
+                    data_dir: Some(temp.path().into()),
+                    name: Some("work".into()),
+                    // Invalid HTTP-only settings must not interfere with local inspection.
+                    user_agent: Some("bad\nheader".into()),
+                    ..AccountArgs::default()
+                }
+                .into(),
+            },
+            &crate::common::context::CommandContext::new(true),
+        )
         .await
         .unwrap();
         assert!(matches!(report, AccountReport::Local(_)));
@@ -943,9 +1005,13 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
         assert!(value.get("verified").is_none());
         assert!(value.get("source").is_none());
         assert!(value["status"].is_null());
-        assert!(!render::render(&report, true).unwrap().contains('\x1b'));
         assert!(
-            render::render(&report, false)
+            !render::render(&report, crate::common::session::Format::plain(true))
+                .unwrap()
+                .contains('\x1b')
+        );
+        assert!(
+            render::render(&report, crate::common::session::Format::plain(false))
                 .unwrap()
                 .contains("not performed (local data only)")
         );
@@ -988,16 +1054,19 @@ async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
         drop(stream);
     });
     assert!(
-        execute::execute(AccountCommand::Show {
-            verify: true,
-            options: AccountArgs {
-                ca_directory: Some(directory.as_str().into()),
-                data_dir: Some(temp.path().into()),
-                timeout: Some(1),
-                ..AccountArgs::default()
-            }
-            .into()
-        })
+        execute::execute(
+            AccountCommand::Show {
+                verify: true,
+                options: AccountArgs {
+                    ca_directory: Some(directory.as_str().into()),
+                    data_dir: Some(temp.path().into()),
+                    timeout: Some(1),
+                    ..AccountArgs::default()
+                }
+                .into()
+            },
+            &crate::common::context::CommandContext::new(true)
+        )
         .await
         .is_err()
     );
@@ -1101,7 +1170,11 @@ async fn existing_account_commands_reject_missing_names_before_prompts_keys_or_h
         let Command::Account { command } = parsed.command else {
             panic!("expected account");
         };
-        let error = super::execute::execute(*command).await.err().unwrap();
+        let error =
+            super::execute::execute(command, &crate::common::context::CommandContext::new(true))
+                .await
+                .err()
+                .unwrap();
         assert!(
             error
                 .to_string()

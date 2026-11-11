@@ -3,7 +3,7 @@ use super::*;
 use aster_acme::account::{AccountKeyStore, AccountStore};
 use aster_acme::{
     account::{AccountService, AccountTimes},
-    transport::{AcmeClient, TransportOptions},
+    transport::TransportOptions,
 };
 use aster_acme_core::{
     account::{AccountRecordState, DeactivationState, KeyRotation},
@@ -75,16 +75,17 @@ async fn setup(endpoint: bool, timeout: Duration) -> Fixture {
     before.server_contacts = None;
     before.deactivation = DeactivationState::NotRequested;
     store.save(&before).await.unwrap();
-    let client = AcmeClient::discover(
-        directory,
-        TransportOptions {
-            request_timeout: timeout,
-            allow_loopback_http: true,
-            ..TransportOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            directory,
+            TransportOptions {
+                request_timeout: timeout,
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
     Fixture {
         temp,
         server,

@@ -94,7 +94,9 @@
 
 ## 展示与退出
 
-人类输出复用 common/output、time、log、table。时间为 YYYY-MM-DD HH:MM:SS UTC；JSON/TOML 保存 RFC3339 原精度。NO_COLOR/非终端不着色，JSON 不输出人类进度。
+人类输出由命令级 `common/session::OutputSession` 管理 stdout/stderr、交互/进度状态和一次最终写入；克隆会话共享状态。`common/output::MessageKind` 统一标签与样式，time/log/table/terminal 负责具体呈现。执行层返回 `CommandReport`，渲染层接收显式 `Format`，不探测终端或写流；main 根据报告决定退出码并完成唯一一次输出。进度、确认上下文和 tracing 写 stderr，最终报告写 stdout，执行错误写 stderr。只有实际发生人类输出/交互才在最终结果前分隔一行；写入失败不尝试追加第二份 JSON。
+
+时间为 YYYY-MM-DD HH:MM:SS UTC；JSON/TOML 保存 RFC3339 原精度。stdout/stderr 分别依据 TTY、NO_COLOR、TERM=dumb 决定配色，提示与日志使用 stderr 配色。JSON 禁用交互、人类进度和 tracing；批量及账户列表部分失败保留一份结构化报告并退出非零。
 
 0 表示命令成功执行；cert issue 的 action_required 同样为 0，脚本必须检查 status，不能将其误认为 completed。一般错误为 1，Clap 解析错误沿用 2，交互取消为 130。远端查询失败不标为 verified。
 
@@ -114,4 +116,6 @@ cert issue --resume 不带名称时在真实终端选择未完成申请，选择
 
 仅在实际存在证书前台进度时与最终结果之间留一空行；无进度的全未到期批次及单次not_due不加开头空行（JSON不加分隔）；批量标题/计数使用INFO/WARN/ERROR标签，表格复用公共对齐和Style，待办/取消黄色、失败红色、完成绿色、未到期青色。
 
-批量不输出重复计划表或逐项Checking日志；有续期/恢复工作时只先报告任务数和未到期数，实际事务持锁复核。仅实际执行项输出进度和Using CA；全未到期时只保留结果表及检查数量总结，其他汇总只展示非零计数。JSON完整计数不变。
+批量结果表使用 NAME / STATUS / NEXT RENEWAL (UTC)，未到期或本次完成续期的记录显示下次续期时间；待办、失败、跳过和取消不猜测时间，具体说明放在表后。批量不输出重复计划表或逐项Checking日志；有续期/恢复工作时只先报告任务数和未到期数，实际事务持锁复核。仅实际执行项输出进度和Using CA；全未到期时只保留结果表及检查数量总结，其他汇总只展示非零计数。JSON完整计数不变。
+
+每个命令的 `CommandContext` 持有一个惰性 `HttpPool`，批量续期和账户逐项查询共用它；纯本地命令不构造 HTTP 客户端。`AcmeClient` 自己保留池句柄，调用操作无需额外传池。User-Agent 和请求总期限逐请求设置，不改变池或其他账户；CA directory 和 Replay-Nonce 仍归各自 ACME 客户端。共享池不保证代理/服务器始终保留 TCP 连接。

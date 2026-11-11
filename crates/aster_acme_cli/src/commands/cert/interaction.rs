@@ -6,12 +6,16 @@ use aster_acme::identifier::DnsIdentifier;
 pub(super) trait DomainPrompts {
     fn domains(&mut self) -> CliResult<String>;
 }
-pub(super) struct TerminalDomains;
-impl DomainPrompts for TerminalDomains {
+pub(super) struct TerminalDomains<'a>(pub(super) &'a crate::common::session::OutputSession);
+impl DomainPrompts for TerminalDomains<'_> {
     fn domains(&mut self) -> CliResult<String> {
+        self.0.interaction_started();
         prompt_result(
             inquire::Text::new("Domain names:")
-                .with_render_config(crate::common::terminal::prompt_style(false))
+                .with_render_config(crate::common::terminal::prompt_style(
+                    self.0.diagnostic_format().color,
+                    false,
+                ))
                 .with_placeholder("example.com *.example.com")
                 .with_help_message(
                     "Separate domains with spaces or commas; the first is the primary domain.",
@@ -81,7 +85,7 @@ mod tests {
         let crate::app::Command::Cert { command } = parsed.command else {
             panic!("expected cert");
         };
-        let super::super::args::CertCommand::Issue(args) = *command else {
+        let super::super::args::CertCommand::Issue(args) = command else {
             panic!("expected issue");
         };
         args

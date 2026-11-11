@@ -10,6 +10,21 @@ use aster_acme::transport::TransportOptions;
 use aster_acme_cli_storage::CliAccountStore;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+/// Command lifetime dependencies: one output session and one reusable HTTP pool.
+#[derive(Clone)]
+pub(crate) struct CommandContext {
+    pub(crate) output: super::session::OutputSession,
+    pub(crate) http: aster_acme::transport::HttpPool,
+}
+impl CommandContext {
+    pub(crate) fn new(json: bool) -> Self {
+        Self {
+            output: super::session::OutputSession::new(json),
+            http: aster_acme::transport::HttpPool::default(),
+        }
+    }
+}
+
 pub(crate) struct CliContext {
     pub(crate) account_user_agent: Option<String>,
     pub(crate) config: Config,
@@ -147,9 +162,12 @@ mod tests {
         };
         // Discovery fails, but validated explicit intent must already be durable.
         assert!(
-            execute::execute(AccountCommand::Register(register))
-                .await
-                .is_err()
+            execute::execute(
+                AccountCommand::Register(register),
+                &CommandContext::new(true)
+            )
+            .await
+            .is_err()
         );
         let account_path = temp.path().join("accounts/work/account.toml");
         let text = std::fs::read_to_string(&account_path).unwrap();

@@ -67,13 +67,16 @@ MIT OR Apache-2.0.
 src/
   main.rs                  # Tokio、tracing、退出码
   app.rs                   # 根参数树
-  dispatch.rs              # 命令分发与最终输出
+  dispatch.rs              # 命令分发、报告渲染与退出状态
   config.rs                # 配置 schema、注释模板、默认路径
   common/
-    context.rs             # 配置与本地存储上下文，不初始化 HTTP
+    context.rs             # 命令输出会话、惰性 HTTP 池、配置与存储上下文
+    session.rs             # 输出流、显式 Format、分隔与一次最终写入
+    output.rs              # 标签、样式、字段及提示
+    log.rs                 # 纯进度格式化
     error.rs               # 统一错误诊断
     help.rs                # clap 配色
-    terminal.rs            # TTY/NO_COLOR、控制字符转义
+    terminal.rs            # 交互选择、确认和取消
   commands/account/
     args.rs                # 子命令参数
     execute.rs             # 命令执行及库适配
@@ -240,3 +243,5 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
 新申请必须显式 -c/--challenge，不默认选择验证方式；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
+
+所有账户、证书和 version 命令返回类型化 CommandReport，main 通过 OutputSession 统一写入最终结果；命令执行层不直接打印。渲染接收显式 Format，stdout/stderr 独立控制配色，JSON 只有一个结果或错误文档。会话跟踪真实进度/交互，避免全未到期批次出现开头空行。CommandContext 为一次命令持有同一惰性 HttpPool；批量续期和账户列表核验复用连接池，局部调用无需传入底层 HTTP 客户端。

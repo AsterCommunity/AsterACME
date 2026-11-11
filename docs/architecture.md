@@ -206,7 +206,7 @@ CLI 初期提供可由 systemd timer/cron 调用的单次续期检查，库暴�
 
 ## 12. 依赖与工程约束
 
-采用 Tokio、reqwest + rustls、Serde/serde_json、tracing、clap、toml 和 Hickory。ACME 直接声明的 reqwest 关闭默认 feature，仅启用 rustls 与 JSON；固定 Forge HTTP 当前会合并开启 HTTP/2、系统代理、charset、form、multipart 等 feature，下游不能关闭上游已启用 feature。没有 native-tls/OpenSSL 传输。TLS 使用稳定 rustls 0.23 系列，与 reqwest 的后端保持一致，不采用 0.24 开发版。
+采用 Tokio、reqwest + rustls、Serde/serde_json、tracing、clap、toml 和 Hickory。ACME 直接声明的 reqwest 关闭默认 feature，不额外启用功能；Forge HTTP =0.1.0-alpha.2 只选择 json/rustls-aws-lc-rs/system-proxy。没有 native-tls/OpenSSL 传输。TLS 使用稳定 rustls 0.23 系列，与 reqwest 的后端保持一致，不采用 0.24 开发版。
 
 根 `Cargo.toml` 的 `[workspace.dependencies]` 是所有依赖版本和 feature 策略的唯一事实源。成员 crate 的普通、开发、构建及 target 专用依赖都必须使用 `workspace = true`，不得自行声明 version、path、git 或额外 feature；新增能力先修改根配置。依赖仅在实际使用时由成员领取，根表中的预选依赖不代表已编译或已验证集成。提交 Cargo.lock 固定 CLI 的完整解析结果。
 
@@ -311,7 +311,7 @@ IssueSession.record 异步读取最新 durable 状态，不返回创建会话时
 
 产物集合为 fullchain.pem/cert.pem/ca.pem/private-key.pem，先校验 SAN/公钥/链并全部落盘，再原子切换 in_use。in_use 指向同级 YYYYMMDDTHHMMSSZ-random8，完整 ID 留在元数据；不迁移旧 generations/ID。用户额外文件/目录不参与正确性检查，托管标记确定所有权后才校验其身份/权限；删除只处理托管内容。
 
-账户 ES256 改用 rustls 已采用的 AWS-LC 后端，仍保持标准 PKCS#8、P-256 JWK、64 字节 R||S 和 HS256；外部生成的公开测试密钥/签名验证互操作性。SHA/HMAC 与现有新版本链统一后，本轮 macOS CLI normal+build 依赖从 277 到 258，锁文件解析条目从 355 到 334；锁文件包含测试/其他平台依赖，不等于 CLI 实际构建数量。CI 的 check-tls-backend.py 拒绝 native-tls/OpenSSL 传输依赖；保留平台证书根查询不等于使用 native TLS。Forge HTTP feature 收紧需要上游支持，未擅自修改正在发布的 Forge 工作树。
+账户 ES256 改用 rustls 已采用的 AWS-LC 后端，仍保持标准 PKCS#8、P-256 JWK、64 字节 R||S 和 HS256；外部生成的公开测试密钥/签名验证互操作性。SHA/HMAC 与现有新版本链统一后，本轮 macOS CLI normal+build 依赖从 277 到 258，锁文件解析条目从 355 到 334；锁文件包含测试/其他平台依赖，不等于 CLI 实际构建数量。CI 的 check-tls-backend.py 拒绝 native-tls/OpenSSL 传输依赖；保留平台证书根查询不等于使用 native TLS。Forge HTTP alpha.2 已提供 feature 拆分，当前根 workspace 只开启所需功能。
 
 
 ## 发布构建、参数合同与 registry 依赖
@@ -327,3 +327,27 @@ IssueSession.record 异步读取最新 durable 状态，不返回创建会话时
 默认 list/show 选择托管证书的 in_use，list --history / show --history / --operation 显式访问历史；只有 in_use 可作为活跃续期计划，历史计划不再调度。证书分组和删除范围见生命周期契约。
 
 批量续期：CLI cert/renewal 只调度托管身份，复用 execute::transact 返回 CertificateResult（不打印）；cert/report 定义逐项结果、汇总与统一 BatchDisposition，render 将其一次输出。--all 不向库增加另一条签发路径；取消令牌覆盖整个顺序批次，存储仍负责租约与落盘，详细契约见生命周期文档。
+
+
+## 命令输出与 HTTP 生命周期
+
+一次命令持有 `CommandContext`，其中 `OutputSession` 管理共享输出状态，`HttpPool` 惰性构造唯一的 Forge/reqwest 客户端。账户、证书和版本执行返回 `CommandReport`，main 用显式 `Format` 渲染并写入一次最终结果；失败/取消退出状态由报告或类型化错误决定，不依赖“已经打印过”的异常。共用 `MessageKind` 映射状态标签及样式；交互与进度记入同一会话，最终分隔取决于实际发生的输出。JSON 不输出人类提示或 tracing，部分失败也只保留一份报告。stdout/stderr 各自决定颜色。
+
+`AcmeClient` 保留池句柄，其 nonce、CA directory 和请求策略独立；所有 HTTP 请求直接借用池内客户端，逐请求设置 User-Agent/总期限。池连接期限为十秒，较短总期限仍优先生效。跨账户批量操作共享连接，纯本地操作不初始化客户端，无全局单例。真实 HTTP/1.1 测试在禁用系统代理的隔离环境统计 accepted socket，验证两个 ACME 客户端四次顺序请求只建立一条连接；代理和远端服务可自主关闭连接。Forge 通用池生命周期建议由 [AsterForge #66](https://github.com/AsterCommunity/AsterForge/issues/66) 跟踪。
+
+### Box 的边界
+
+全库按所有权核对装箱：
+
+| 用途 | 决策与依据 |
+| --- | --- |
+| 根命令参数 AccountCommand/CertCommand | 直接内联，枚举布局不需要额外堆分配 |
+| CommandReport 的 AccountReport | 在最终报告边界装箱，避免账户快照撑大每种命令结果 |
+| IssueOutcome/CertificateResult/CertificateReport/Start/RenewalPreparation 内的 IssueRecord | 保留，完整日志大而且跨异步流程、批次结果移动；装箱约束结果及异步状态的内联大小 |
+| TransportError 内的 Problem | 保留，完整结构化问题及扩展归堆，避免增大所有上层 Result |
+| dyn IssueSession/AccountLease/AccountRotation | 保留，对象安全存储接口返回拥有所有权的异构实现，租约必须跨 await 保持有效 |
+| CLI/build.rs/示例的 dyn Error | 保留于异构错误边界，CLI 仍可 downcast 为领域错误，库内部维持具名错误 |
+| 输出 dyn Write | 保留，统一拥有 stdout/stderr 或隔离的捕获/故障 writer，测试覆盖输出失败 |
+| clap 的 dyn Iterator | 由 TypedValueParser trait 签名规定 |
+
+当前 aarch64 开发构建测量：IssueRecord 1000 B、IssueOutcome 40 B、Problem 120 B、TransportError 40 B、AccountReport 384 B、CertificateReport/CommandReport 80 B、RenewalPreparation 16 B。数值依赖目标平台；布局测试约束相对大小，不把平台数值当作 ABI。Box 不用于消除任意 Clippy 提示，而由对象所有权或布局收益决定。

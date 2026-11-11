@@ -70,6 +70,7 @@ pub enum TransportError {
         /// HTTP status independent of any problem JSON status field.
         status: u16,
         /// Structured problem including unknown extensions.
+        // Keep nested account/issuance errors small without discarding problem details.
         problem: Box<Problem>,
         /// Parsed retry information.
         retry_after: Option<RetryAfter>,
@@ -137,34 +138,37 @@ impl Default for TransportOptions {
     }
 }
 
-/// Account-oriented ACME transport with a concurrency-safe bounded nonce pool.
-pub struct AcmeClient {
-    http: aster_forge_http::HttpClient,
-    directory_url: AcmeUrl,
-    pub(crate) directory: Directory,
-    options: TransportOptions,
-    nonces: Mutex<VecDeque<String>>,
-}
+/// Reusable verified-TLS connection pool, injectable by CLI commands or embedded
+/// applications. Cloning this handle shares the lazily constructed Forge/reqwest
+/// pool; it does not construct another HTTP client. Account identity, nonce state
+/// and request policy remain per ACME client.
+#[derive(Clone, Default)]
+pub struct HttpPool(std::sync::Arc<tokio::sync::OnceCell<aster_forge_http::HttpClient>>);
+impl HttpPool {
+    async fn client(&self) -> Result<&aster_forge_http::HttpClient, TransportError> {
+        self.0
+            .get_or_try_init(|| async { crate::http_client::build() })
+            .await
+    }
 
-pub(crate) struct AcmeResponse {
-    pub status: StatusCode,
-    pub headers: HeaderMap,
-    pub body: Vec<u8>,
-}
-
-impl AcmeClient {
     /// Discover a CA using verified TLS, without redirects or automatic mutation retries.
     ///
     /// # Errors
     /// Reports unsafe endpoints, HTTP/JSON failures or an oversized directory.
     pub async fn discover(
+        &self,
         directory_url: AcmeUrl,
         options: TransportOptions,
-    ) -> Result<Self, TransportError> {
+    ) -> Result<AcmeClient, TransportError> {
         options.validate()?;
         check_transport(&directory_url, &options)?;
-        let http = crate::http_client::build(&options)?;
-        let response = read_response(http.get(directory_url.as_str()).send().await?).await?;
+        let http = self.client().await?;
+        let response = read_response(
+            request(http, Method::GET, &directory_url, &options)
+                .send()
+                .await?,
+        )
+        .await?;
         if response.status != StatusCode::OK {
             return Err(response_error(&response));
         }
@@ -182,8 +186,8 @@ impl AcmeClient {
         {
             check_transport(endpoint, &options)?;
         }
-        let client = Self {
-            http,
+        let client = AcmeClient {
+            http_pool: self.clone(),
             directory_url,
             directory,
             options,
@@ -192,7 +196,24 @@ impl AcmeClient {
         client.remember_nonce(nonce(&response.headers)).await;
         Ok(client)
     }
+}
 
+/// Account-oriented ACME transport with a concurrency-safe bounded nonce pool.
+pub struct AcmeClient {
+    http_pool: HttpPool,
+    directory_url: AcmeUrl,
+    pub(crate) directory: Directory,
+    options: TransportOptions,
+    nonces: Mutex<VecDeque<String>>,
+}
+
+pub(crate) struct AcmeResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
+}
+
+impl AcmeClient {
     /// Discovered directory and its current metadata.
     #[must_use]
     pub fn directory(&self) -> &Directory {
@@ -208,11 +229,15 @@ impl AcmeClient {
     pub(crate) async fn get(&self, url: &AcmeUrl) -> Result<AcmeResponse, TransportError> {
         check_transport(url, &self.options)?;
         let response = read_response(
-            self.http
-                .request(Method::GET, url.as_str())
-                .header(reqwest::header::ACCEPT, "application/json")
-                .send()
-                .await?,
+            request(
+                self.http_pool.client().await?,
+                Method::GET,
+                url,
+                &self.options,
+            )
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?,
         )
         .await?;
         if response.status != StatusCode::OK {
@@ -234,11 +259,14 @@ impl AcmeClient {
         if let Some(nonce) = self.nonces.lock().await.pop_front() {
             return Ok(nonce);
         }
-        let response = self
-            .http
-            .request(Method::HEAD, self.directory.new_nonce.as_str())
-            .send()
-            .await?;
+        let response = request(
+            self.http_pool.client().await?,
+            Method::HEAD,
+            &self.directory.new_nonce,
+            &self.options,
+        )
+        .send()
+        .await?;
         let status = response.status();
         if status != StatusCode::OK && status != StatusCode::NO_CONTENT {
             return Err(response_error(&read_response(response).await?));
@@ -263,12 +291,16 @@ impl AcmeClient {
             };
             let jws = sign_request(signer, identity, &current_nonce, url.as_str(), payload)?;
             let response = read_response(
-                self.http
-                    .post(url.as_str())
-                    .header("Content-Type", "application/jose+json")
-                    .json(&jws)
-                    .send()
-                    .await?,
+                request(
+                    self.http_pool.client().await?,
+                    Method::POST,
+                    url,
+                    &self.options,
+                )
+                .header("Content-Type", "application/jose+json")
+                .json(&jws)
+                .send()
+                .await?,
             )
             .await?;
             let fresh = nonce(&response.headers);
@@ -315,6 +347,25 @@ impl AcmeClient {
     ) -> Result<AcmeUrl, TransportError> {
         response_location(response, &self.options)
     }
+}
+
+// User-Agent and total request budget are per invocation/account. Applying them
+// on the request prevents a shared pool from inheriting the previous account's policy.
+fn request(
+    http: &aster_forge_http::HttpClient,
+    method: Method,
+    url: &AcmeUrl,
+    options: &TransportOptions,
+) -> aster_forge_http::HttpRequestBuilder {
+    http.request(method, url.as_str())
+        .header(
+            reqwest::header::USER_AGENT,
+            options
+                .user_agent
+                .as_deref()
+                .unwrap_or(concat!("AsterACME/", env!("CARGO_PKG_VERSION"))),
+        )
+        .timeout(options.request_timeout)
 }
 
 fn check_transport(url: &AcmeUrl, options: &TransportOptions) -> Result<(), TransportError> {

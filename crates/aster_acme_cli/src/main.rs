@@ -23,24 +23,37 @@ mod dispatch;
 async fn main() -> std::process::ExitCode {
     let args = app::Args::parse();
     let json = args.json();
+    let cli = common::context::CommandContext::new(json);
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
+        .with_env_filter(if json {
+            tracing_subscriber::EnvFilter::new("off")
+        } else {
+            tracing_subscriber::EnvFilter::from_default_env()
+        })
+        .with_ansi(cli.output.diagnostic_format().color)
+        .with_writer(cli.output.clone())
         .init();
-    match dispatch::execute(args).await {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+    let result = dispatch::execute(args, &cli).await.and_then(|report| {
+        let text = report.render(cli.output.format())?;
+        cli.output
+            .finish(&text, common::session::FinalChannel::Result)?;
+        Ok(report.exit_status())
+    });
+    match result {
+        Ok(status) => status.code(),
         Err(error) => {
-            let reported = error.downcast_ref::<common::error::ReportedFailure>();
-            if reported.is_none() {
-                common::error::error(error.as_ref(), json);
-            }
-            if error.is::<common::terminal::Canceled>()
-                || matches!(reported, Some(common::error::ReportedFailure::Cancelled))
-            {
-                std::process::ExitCode::from(130)
+            let status = if error.is::<common::terminal::Canceled>() {
+                common::session::ExitStatus::Cancelled
             } else {
-                std::process::ExitCode::FAILURE
+                common::session::ExitStatus::Failed
+            };
+            if let Ok(text) = common::error::render(error.as_ref(), cli.output.diagnostic_format())
+            {
+                let _ = cli
+                    .output
+                    .finish(&text, common::session::FinalChannel::Diagnostic);
             }
+            status.code()
         }
     }
 }

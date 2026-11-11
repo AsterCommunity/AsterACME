@@ -4,28 +4,25 @@ use std::time::Duration;
 
 use aster_forge_http::{HttpClient, TlsBackend};
 
-use crate::transport::{TransportError, TransportOptions};
+use crate::transport::TransportError;
 
 /// Construct the reusable ACME HTTP connection pool with its security policy.
 ///
 /// Redirects are disabled because ACME JWS binds an exact URL. TLS validation uses
 /// reqwest's rustls platform roots. Forge owns redirect/retry/pool construction;
-/// ACME supplies its User-Agent and total/connect deadlines. System proxy policy is retained.
+/// ACME applies User-Agent and total deadlines per request; connecting is also bounded
+/// by the shorter of that deadline and the pool's ten-second connect limit.
+/// System proxy policy is retained.
 ///
 /// # Errors
-/// Rejects malformed user agents and reports reqwest client configuration failures.
-pub(crate) fn build(options: &TransportOptions) -> Result<HttpClient, TransportError> {
-    let user_agent = options
-        .user_agent
-        .as_deref()
-        .unwrap_or(concat!("AsterACME/", env!("CARGO_PKG_VERSION")));
-    validate_user_agent(user_agent)?;
+/// Reports reqwest client configuration failures. Request-specific agents are validated separately.
+pub(crate) fn build() -> Result<HttpClient, TransportError> {
     HttpClient::builder()
         .tls_backend(TlsBackend::Rustls)
         .without_read_timeout()
-        .timeout(options.request_timeout)
-        .connect_timeout(options.request_timeout.min(Duration::from_secs(10)))
-        .user_agent(user_agent)
+        .without_total_timeout()
+        .connect_timeout(Duration::from_secs(10))
+        .user_agent(concat!("AsterACME/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(TransportError::Network)
 }
@@ -45,6 +42,7 @@ pub(crate) fn validate_user_agent(user_agent: &str) -> Result<(), TransportError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::TransportOptions;
 
     #[test]
     fn user_agent_boundaries_are_checked_in_one_place() {
@@ -54,7 +52,7 @@ mod tests {
                 ..TransportOptions::default()
             };
             assert!(matches!(
-                build(&options),
+                options.validate(),
                 Err(TransportError::InvalidUserAgent)
             ));
         }
@@ -62,6 +60,7 @@ mod tests {
             user_agent: Some("Aster ACME integration/1.2".into()),
             ..TransportOptions::default()
         };
-        assert!(build(&options).is_ok());
+        assert!(options.validate().is_ok());
+        assert!(build().is_ok());
     }
 }
