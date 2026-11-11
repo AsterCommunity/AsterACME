@@ -39,7 +39,7 @@ The project is under active development and has not released its ACME packages. 
 - Embed the protocol service in an application with injected storage, signing, readiness, and progress interfaces.
 - Use either terminal prompts or explicit arguments and structured JSON in scripts.
 
-An unattended certificate lifecycle still needs automated publication and renewal support, which is not available yet. The in_use private filesystem adapter supports Unix; library consumers can provide other adapters.
+An unattended certificate lifecycle still needs automated publication and renewal support, which is not available yet. The filesystem adapter includes Unix mode policy and Windows inherited-permission storage. Native runtime validation is tracked separately from cross-compilation.
 
 ## Design focus
 
@@ -47,7 +47,7 @@ An unattended certificate lifecycle still needs automated publication and renewa
 - **Explicit decisions** — The pure core returns actions from CA observations and saved submission state. The service owns HTTP, timers, and execution.
 - **Recoverable operations** — Mutation intent is durable before submission. Pending responses do not authorize silently creating another order or repeating finalization.
 - **Stable artifacts** — Each request has a separate timestamped version. A validated complete artifact set is promoted through an atomic `in_use` link.
-- **Shared mechanisms** — Forge HTTP, AsterFs locks, rustls, and AWS-LC provide transport and crypto foundations; application rules remain in ACME.
+- **Shared mechanisms** — Forge HTTP, standard-library file locks, rustls, and AWS-LC provide transport and crypto foundations; application rules remain in ACME.
 
 ## Quick start
 
@@ -217,9 +217,13 @@ Each crate owns its package version. All dependency versions, sources, and featu
 
 Python 3.11+ is required for repository policy checks. The release profile uses size optimization (`opt-level="z"`), LTO, one codegen unit, unwind panics, and stripped debug information while retaining function symbols.
 
+The CLI uses published Forge panic alpha.2 for private, payload-redacted `<data-dir>/crash.log` reports and safe human/JSON diagnostics. Normal commands and help/version do not create crash files; panics do not retry ACME mutations. Production feature allowlists reject unreviewed TLS, crypto, HTTP, prompt and logging capabilities in CI.
+
 ```sh
 python3 scripts/check-workspace-deps.py
 python3 scripts/check-tls-backend.py
+python3 scripts/check-dependency-features.py
+python3 -m unittest discover -s scripts/tests
 cargo fmt --all --check
 cargo check --workspace --locked
 cargo test --workspace --locked

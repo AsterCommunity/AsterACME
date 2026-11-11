@@ -126,3 +126,8 @@ cert issue --resume 不带名称时在真实终端选择未完成申请，选择
 账户与证书共用 `crypto::key_algorithm::KeyAlgorithm` 和 CLI 解析器，分别选择自己的密钥。`account register -k/--key-type` 接受 ecdsa-p256、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192；新账户缺省 P-256，已有身份缺省沿用，显式不同类型拒绝复用。`account rotate-key -k` 选择新钥；不指定时新轮换沿用原类型，恢复时沿用已暂存的新钥，显式冲突拒绝且不改文件。recover/show/list 等命令不接受算法覆盖。账户 TOML 必须保存实际 `key_algorithm`，加载按真实 PKCS#8/指纹交叉检查；未发布格式直接更新，不读旧格式或增加迁移。
 
 `-h`、`--help`、`help <command>` 共用 common/help 的产品版本、宽度和配色。不增加参数改写：`account help rotate-key` 与 `account rotate-key --help` 为标准入口，`account rotate-key help` 中的 help 仍是账户名。帮助不读取配置、不初始化 HTTP、不生成密钥。
+
+
+## 意外 panic
+
+仅可执行入口安装 Forge panic alpha.2，使用已解析的数据根；不额外增加 CLI 参数。panic 诊断写 stderr，JSON 沿用单个 `{error:{message,hint}}` 对象，进程退出1；已完成输出不追加第二文档。提示含私有报告位置或不可用原因的安全指引，不包含原始 panic、私钥/凭据或回溯。crash.log 仅 panic 时产生，0600、追加、上限1MiB，原始 Message 移除；不改变已保存申请和密钥，不自动重试远端操作。help/version 与正常执行不创建 crash.log。

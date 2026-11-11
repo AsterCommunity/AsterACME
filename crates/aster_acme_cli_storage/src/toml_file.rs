@@ -1,5 +1,11 @@
 //! TOML file lifecycle: bounded reads, shared lock policy, atomic writes and durable sync.
 //! Callers own schemas and edits; configuration preserves trivia, account state is regenerated.
+//!
+//! TODO(AsterFs #3/#4): replace only missing safe-file/durability primitives after
+//! delivery. Keep TOML edits, limits, lock deadlines and cancellation leases here;
+//! Rust 1.89+ standard-library locks need no `AsterFs` compatibility adapter.
+//! <https://github.com/AsterCommunity/AsterFs/issues/3>
+//! <https://github.com/AsterCommunity/AsterFs/issues/4>
 
 use crate::{AccountStoreError, StorageError, store_error};
 use std::{
@@ -43,7 +49,7 @@ pub(crate) fn object_lock(
 pub(crate) struct FileLease(pub(crate) File);
 impl Drop for FileLease {
     fn drop(&mut self) {
-        let _ = aster_fs::FileExt::unlock(&self.0);
+        let _ = self.0.unlock();
     }
 }
 pub(crate) enum LockError {
@@ -57,133 +63,46 @@ pub(crate) fn try_lock(path: &Path) -> Result<File, LockError> {
     ensure_real_dir(parent).map_err(|_| LockError::Io)?;
     private_dir(parent).map_err(|_| LockError::Io)?;
     let file = open_lock(path).map_err(|_| LockError::Io)?;
-    match aster_fs::FileExt::try_lock(&file) {
+    match file.try_lock() {
         Ok(()) => Ok(file),
-        Err(aster_fs::TryLockError::WouldBlock) => Err(LockError::Busy),
+        Err(std::fs::TryLockError::WouldBlock) => Err(LockError::Busy),
         Err(_) => Err(LockError::Io),
     }
 }
 
-#[cfg(unix)]
-pub(crate) fn open_lock(path: &Path) -> std::io::Result<File> {
-    let (directory, name) = state_location(path)?;
-    open_state_lock(&directory, name)
+pub(crate) fn open_lock(path: &Path) -> io::Result<File> {
+    let (directory, name) = crate::state_file::location(path)?;
+    directory.open_lock(name)
 }
 
-/// macOS can return ENOENT to the loser of concurrent `O_CREAT | O_NOFOLLOW` opens,
-/// even after the winner has created the file. Retry once through the same verified
-/// directory descriptor; all no-follow, ownership, and hardlink checks still apply.
-#[cfg(unix)]
-pub(crate) fn open_state_lock(
-    directory: &aster_forge_utils::state_directory::StateDirectory,
-    name: &str,
-) -> std::io::Result<File> {
-    match directory.open_lock(name) {
-        #[cfg(target_os = "macos")]
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => directory.open_lock(name),
-        result => result,
-    }
-}
-#[cfg(not(unix))]
-pub(crate) fn open_lock(_path: &Path) -> std::io::Result<File> {
-    Err(std::io::Error::other(
-        "private CLI storage currently requires Unix",
-    ))
-}
-
-#[cfg(unix)]
-pub(crate) fn state_location(
-    path: &Path,
-) -> std::io::Result<(aster_forge_utils::state_directory::StateDirectory, &str)> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("missing parent"))?;
-    let name = path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .ok_or_else(|| std::io::Error::other("invalid file name"))?;
-    Ok((
-        aster_forge_utils::state_directory::StateDirectory::open(parent)?,
-        name,
-    ))
-}
-
-#[cfg(unix)]
 pub(crate) fn read_private(path: &Path, max: u64) -> Result<Vec<u8>, StorageError> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(StorageError::NotFound);
-        }
-        Err(_) => return Err(StorageError::Io),
-    };
-    if metadata.len() > max {
-        return Err(StorageError::TooLarge);
-    }
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(StorageError::InsecurePath);
-    }
-    let (directory, name) = state_location(path).map_err(|_| StorageError::InsecurePath)?;
     let limit = aster_forge_utils::numbers::u64_to_usize(max, "state file limit")
         .map_err(|_| StorageError::TooLarge)?;
-    directory.read(name, limit).map_err(|_| StorageError::Io)
-}
-#[cfg(not(unix))]
-pub(crate) fn read_private(_path: &Path, _max: u64) -> Result<Vec<u8>, StorageError> {
-    Err(StorageError::InsecurePath)
+    crate::state_file::read_private(path, limit).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => StorageError::NotFound,
+        io::ErrorKind::InvalidData => StorageError::TooLarge,
+        io::ErrorKind::PermissionDenied => StorageError::InsecurePath,
+        _ => StorageError::Io,
+    })
 }
 
-#[cfg(unix)]
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| std::io::Error::other("missing parent"))?;
+        .ok_or_else(|| io::Error::other("missing parent"))?;
     fs::create_dir_all(parent)?;
-    let (directory, name) = state_location(path)?;
+    let (directory, name) = crate::state_file::location(path)?;
     directory.atomic_write(name, bytes)
-}
-#[cfg(not(unix))]
-pub(crate) fn atomic_write(_path: &Path, _bytes: &[u8]) -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "private CLI storage currently requires Unix",
-    ))
 }
 
 pub(crate) fn ensure_real_dir(path: &Path) -> Result<(), AccountStoreError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| store_error("cannot inspect storage directory"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(store_error("storage path is not a real directory"));
-    }
-    Ok(())
+    crate::state_file::ensure_directory(path)
+        .map_err(|_| store_error("storage path is not a real directory"))
 }
 
-#[cfg(unix)]
 pub(crate) fn private_dir(path: &Path) -> Result<(), AccountStoreError> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| store_error("cannot inspect storage directory"))?;
-    if metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.permissions().mode() & 0o022 != 0
-    {
-        return Err(store_error(
-            "storage directory must be owner-controlled and not group/world writable",
-        ));
-    }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|_| store_error("cannot secure storage directory"))
-}
-#[cfg(not(unix))]
-pub(crate) fn private_dir(_path: &Path) -> Result<(), AccountStoreError> {
-    Err(store_error(
-        "private CLI storage currently requires Unix; embed a custom AccountStore/AccountKeyStore on other platforms",
-    ))
+    crate::state_file::prepare_directory(path)
+        .map_err(|_| store_error("storage directory is unsafe or inaccessible"))
 }
 
 /// Acquire the same bounded process lock for configuration edits and account operations.
@@ -288,17 +207,9 @@ fn sidecar(path: &Path) -> io::Result<PathBuf> {
     Ok(path.with_file_name(format!("{name}.lock")))
 }
 
-#[cfg(unix)]
 fn read_text(path: &Path, max: usize) -> io::Result<Vec<u8>> {
-    // Unlike secrets, user-maintained config may be 0644, but never writable by others.
-    let (directory, name) = state_location(path)?;
+    let (directory, name) = crate::state_file::location(path)?;
     directory.read(name, max)
-}
-#[cfg(not(unix))]
-fn read_text(_path: &Path, _max: usize) -> io::Result<Vec<u8>> {
-    Err(io::Error::other(
-        "private CLI storage currently requires Unix",
-    ))
 }
 
 /// Atomically replace a bounded UTF-8 document. The caller must hold its operation lease;
@@ -410,7 +321,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         let file = open_lock(&temp.path().join("config.toml.lock")).unwrap();
-        aster_fs::FileExt::try_lock(&file).unwrap();
+        file.try_lock().unwrap();
         let start = std::time::Instant::now();
         let error = load_or_create(path.clone(), "timeout=30".into(), Duration::from_millis(30))
             .await

@@ -43,7 +43,7 @@ AsterACME 是可嵌入的 Rust ACME 客户端与 CLI。全局身份和工程流�
 ## Rust 与依赖
 
 - stable、edition 2024。所有依赖版本及 features 只能定义在根 `[workspace.dependencies]`；成员依赖只用 `workspace = true`，Forge/AsterFs 使用根表固定的已发布版本；各 crate 的 `[package].version` 独立显式声明，不继承 workspace.package.version。
-- 复用 Forge 数字转换工具；文件锁使用 AsterFs，不新增 fs2。
+- 复用 Forge 数字转换工具；文件锁使用 Rust 1.89+ 标准库 API，不引入 fs2/fs4 或仅用于锁的 AsterFs。
 - 每个 crate 写 README。公开 API、失败策略、持久化顺序和协议边界写清注释，使用 `//` / `///` / `//!`，不使用块注释。
 - crate 入口先模块文档，再 `cfg_attr(not(test), deny(...))`，禁止生产 unwrap/expect/panic/unreachable/unimplemented/todo；继承 workspace 的 unsafe forbid 与严格 Clippy。
 - 领域枚举分发优先穷尽 match，不滥用 if；普通条件判断无需强行 match。未知 wire 扩展保留，不能执行未知验证方式。
@@ -125,3 +125,9 @@ git diff HEAD --check
 - cert renew --all 与NAME/--name互斥，按托管身份顺序执行；批量不逐项提示，首次TXT仍action_required、保存后继续。单次和批量共用事务返回CertificateResult，汇总区分完成/待办/未到期/跳过/失败/取消；JSON仅一个对象，失败1/取消130，保留已经提交的完成结果。账户注册与轮换共用 KeyAlgorithm；默认 P256、轮换缺省沿用原类型，暂存钥存在时不能静默替换或降级。
 
 - 新建cert issue强制显式-c验证实现，无默认；resume/renew从持久化记录选择，不允许覆盖。--yes为通用操作确认，不绑定manual_dns，不补填输入/选择/条款，不绕过DNS或CA验证；首次新TXT仍yield。
+
+
+- CLI 在创建 Tokio 前安装已发布 aster_forge_panic =0.1.0-alpha.2；库不得安装宿主 hook。报告只在 panic 时写统一根 crash.log，Unix 私有文件/无链接/标准库非阻塞锁/1MiB 上限，原始 payload 移除；屏幕与正常错误共享 JSON 结构，panic 不授权重放 ACME 操作。normal/build feature 白名单由 scripts/check-dependency-features.py 与 CI 检查，禁止未经审查的 HTTP、TLS/密码后端及交互/日志 features。
+
+
+- AsterFs 的生态定位以 [#4](https://github.com/AsterCommunity/AsterFs/issues/4) 为准：标准库优先，只补缺失的平台机制，不要求 fs2/fs4 API/feature/MSRV 兼容。ACME 目前不依赖 AsterFs；安全文件能力由 [#3](https://github.com/AsterCommunity/AsterFs/issues/3) 跟踪，临时适配模块顶部保留 TODO。业务层不散落平台 cfg；Windows 继承权限是有效策略，专用 ACL 非必需。in_use 在 Unix 使用链接，在 Windows 发布完整四文件副本并按持久化 catalog 恢复；目录双 rename 不是原子交换。

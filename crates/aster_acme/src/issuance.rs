@@ -20,7 +20,7 @@ pub mod certificate;
 pub mod progress;
 pub mod service;
 
-/// Stable application-visible certificate name; primary wildcard names remain distinct.
+/// Portable application-visible certificate name, independent of DNS wildcard syntax.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct CertificateName(String);
@@ -30,16 +30,8 @@ impl CertificateName {
     /// # Errors
     /// Rejects names unsafe as a single private directory component.
     pub fn new(value: &str) -> Result<Self, IssueError> {
-        if value.is_empty()
-            || value.len() > 253
-            || value == "."
-            || value == ".."
-            || !value.bytes().all(|c| {
-                c.is_ascii_lowercase()
-                    || c.is_ascii_digit()
-                    || matches!(c, b'.' | b'-' | b'_' | b'*')
-            })
-            || (value.contains('*') && (!value.starts_with("*.") || value[2..].contains('*')))
+        if !aster_acme_core::local_name::valid_component(value)
+            || value.bytes().any(|byte| byte.is_ascii_uppercase())
         {
             return Err(IssueError::InvalidInput("invalid certificate name"));
         }
@@ -53,7 +45,18 @@ impl CertificateName {
     pub fn generated(primary: &DnsIdentifier) -> Result<Self, IssueError> {
         let mut random = [0; 4];
         aws_lc_rs::rand::fill(&mut random).map_err(|_| crate::crypto::CryptoError::Randomness)?;
-        let prefix = primary.value().chars().take(244).collect::<String>();
+        let domain = primary.value();
+        let source = if let Some(base) = domain.strip_prefix("*.") {
+            format!("wildcard-{base}")
+        } else {
+            domain
+        };
+        let source = if aster_acme_core::local_name::valid_component(&source) {
+            source
+        } else {
+            format!("cert-{source}")
+        };
+        let prefix = source.chars().take(244).collect::<String>();
         Self::new(&format!("{prefix}-{:08x}", u32::from_be_bytes(random)))
     }
 
@@ -419,7 +422,12 @@ mod tests {
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             );
-            assert!(domain.value().starts_with(prefix));
+            let expected = if let Some(base) = value.strip_prefix("*.") {
+                format!("wildcard-{base}")
+            } else {
+                value.to_owned()
+            };
+            assert!(expected.starts_with(prefix));
             assert!(name.as_str().len() <= 253);
             assert_eq!(domain.value(), value);
         }

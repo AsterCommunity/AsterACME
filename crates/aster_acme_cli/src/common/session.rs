@@ -123,6 +123,44 @@ impl OutputSession {
         }
     }
 
+    /// A hook may run while this very thread owns the output lock. Never wait
+    /// for it or expose raw panic data; main still observes the atomic panic flag.
+    pub(crate) fn panic_notice(&self, hint: &str) -> io::Result<()> {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "output busy"));
+            }
+        };
+        if state.finished {
+            return Ok(());
+        }
+        state.finished = true;
+        let message = "Unexpected internal error; the operation may be incomplete.";
+        if self.is_json() {
+            let text = serde_json::to_string(&super::error::ErrorOutput {
+                error: super::error::Diagnostic {
+                    message,
+                    hint: Some(hint),
+                },
+            })?;
+            writeln!(state.stderr, "{text}")?;
+        } else {
+            if state.progress {
+                writeln!(state.stderr)?;
+            }
+            writeln!(
+                state.stderr,
+                "{} {}\n{}",
+                MessageKind::Error.badge(self.diagnostic_format.color),
+                message,
+                output::tips(hint, self.diagnostic_format.color)
+            )?;
+        }
+        state.stderr.flush()
+    }
+
     /// The root command owns finalization. A failed report write is not followed by
     /// another JSON document, and errors from detached progress writers remain observable.
     pub(crate) fn finish(&self, text: &str, channel: FinalChannel) -> io::Result<()> {

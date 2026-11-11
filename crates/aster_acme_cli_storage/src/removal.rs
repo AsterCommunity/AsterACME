@@ -74,16 +74,7 @@ impl CliAccountStore {
     }
 }
 
-#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), AccountStoreError> {
-    fs::File::open(path)
-        .and_then(|directory| directory.sync_all())
+    crate::state_file::sync_directory(path)
         .map_err(|_| store_error("cannot sync account directory after removal"))
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), AccountStoreError> {
-    Err(store_error(
-        "private account removal currently requires Unix",
-    ))
 }

@@ -155,23 +155,28 @@ fn transport_diagnostic(error: &TransportError) -> (String, Option<String>) {
     }
 }
 
+/// One structured failure contract for ordinary errors and panic diagnostics.
+#[derive(serde::Serialize)]
+pub(crate) struct Diagnostic<'a> {
+    pub(crate) message: &'a str,
+    pub(crate) hint: Option<&'a str>,
+}
+#[derive(serde::Serialize)]
+pub(crate) struct ErrorOutput<'a> {
+    pub(crate) error: Diagnostic<'a>,
+}
+
 pub(crate) fn render(
     error: &(dyn std::error::Error + 'static),
     format: super::session::Format,
 ) -> CliResult<String> {
     let (message, hint) = diagnostic(error);
     if format.json {
-        #[derive(serde::Serialize)]
-        struct Diagnostic {
-            message: String,
-            hint: Option<String>,
-        }
-        #[derive(serde::Serialize)]
-        struct ErrorOutput {
-            error: Diagnostic,
-        }
         Ok(serde_json::to_string(&ErrorOutput {
-            error: Diagnostic { message, hint },
+            error: Diagnostic {
+                message: &message,
+                hint: hint.as_deref(),
+            },
         })?)
     } else {
         let mut text = format!(

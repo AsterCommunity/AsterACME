@@ -5,6 +5,7 @@ pub(crate) mod error;
 pub(crate) mod help;
 pub(crate) mod log;
 pub(crate) mod output;
+pub(crate) mod panic;
 pub(crate) mod selection;
 pub(crate) mod session;
 pub(crate) mod table;

@@ -1146,7 +1146,13 @@ mod tests {
         ] {
             assert_eq!(
                 fields["artifacts"][key],
-                format!("/data/certs/example.com/in_use/{file}")
+                std::path::Path::new("/data")
+                    .join("certs")
+                    .join("example.com")
+                    .join("in_use")
+                    .join(file)
+                    .to_string_lossy()
+                    .as_ref()
             );
         }
     }

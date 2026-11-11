@@ -123,9 +123,7 @@ pub(super) fn cleanup(slot: &Path, record: &AccountRecord) -> Result<(), Account
     for path in paths {
         fs::remove_file(path).map_err(|_| store_error("completed rotation cleanup failed"))?;
     }
-    fs::File::open(slot)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| store_error("cannot sync rotation cleanup"))
+    crate::state_file::sync_directory(slot).map_err(|_| store_error("cannot sync rotation cleanup"))
 }
 
 #[async_trait]

@@ -16,6 +16,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+aster_forge_panic.workspace = true
 async-trait.workspace = true
 tokio-util.workspace = true
 aster_acme_validation.workspace = true

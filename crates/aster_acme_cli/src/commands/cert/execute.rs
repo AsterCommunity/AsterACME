@@ -957,6 +957,7 @@ mod tests {
         assert_eq!(store.list().await.unwrap().len(), 2);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn allocation_propagates_unsafe_storage_errors_without_creating_another_random_name() {
         use std::os::unix::fs::PermissionsExt;

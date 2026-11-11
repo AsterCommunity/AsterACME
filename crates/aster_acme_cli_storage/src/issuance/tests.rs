@@ -1218,7 +1218,7 @@ async fn in_use_link_atomically_selects_readable_generations_and_preserves_histo
         .unwrap();
         session.complete(&record, chain.as_bytes()).await.unwrap();
         assert_eq!(
-            fs::read_link(slot.join("in_use")).unwrap(),
+            selected_view(&slot),
             PathBuf::from(record.generation_name())
         );
         assert_eq!(
@@ -1459,7 +1459,7 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
         key_before
     );
     assert_eq!(
-        fs::read_link(slot.join("in_use")).unwrap(),
+        selected_view(&slot),
         PathBuf::from(record.generation_name())
     );
     let calls = fixture.server.received_requests().await.unwrap();
@@ -1479,7 +1479,7 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
 
 #[tokio::test]
 async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_without_http() {
-    use std::os::unix::fs::MetadataExt;
+    use crate::state_file::tests::file_identity;
     let fixture = fixture().await;
     let session = fixture
         .store
@@ -1506,7 +1506,7 @@ async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_with
         record.name.as_str(),
     )
     .unwrap();
-    let inode = fs::metadata(&lock_path).unwrap().ino();
+    let inode = file_identity(&lock_path);
     let account_path = fixture.temp.path().join("accounts/default/account.toml");
     let account_before = fs::read(&account_path).unwrap();
     let removal = fixture
@@ -1523,7 +1523,7 @@ async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_with
     assert!(!slot.join("in_use").exists());
     assert!(!slot.join("cert.toml").exists());
     assert!(!slot.join(".removing").exists());
-    assert_eq!(fs::metadata(&lock_path).unwrap().ino(), inode);
+    assert_eq!(file_identity(&lock_path), inode);
     assert_eq!(fs::read(account_path).unwrap(), account_before);
     assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
     // Retaining the lock carrier permits a later explicit fresh issuance.
@@ -1538,6 +1538,7 @@ async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_with
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn certificate_removal_preserves_extra_content_in_place_and_never_follows_unknown_links() {
     use std::os::unix::fs::symlink;
@@ -1637,6 +1638,7 @@ async fn removal_drop_missing_target_and_lock_contention_leave_saved_material_un
         .unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn removal_rejects_unsafe_managed_files_links_and_interrupted_markers_before_deleting() {
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -1779,6 +1781,7 @@ async fn completed_generation(fixture: &Fixture) -> IssueRecord {
     session.complete(&record, chain.as_bytes()).await.unwrap()
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn single_historical_removal_preserves_in_use_unfinished_requests_and_other_links() {
     use removal::RemovalScope;
@@ -1794,7 +1797,7 @@ async fn single_historical_removal_preserves_in_use_unfinished_requests_and_othe
     let pending_record = pending.record().await.unwrap();
     drop(pending);
     let slot = fixture.store.slot(&old.name);
-    let in_use_link = fs::read_link(slot.join("in_use")).unwrap();
+    let in_use_link = selected_view(&slot);
     let config = fs::read(slot.join("cert.toml")).unwrap();
     let in_use_temp = slot.join(format!(".in_use-{}", in_use.operation_id));
     let old_temp = slot.join(format!(".in_use-{}", old.operation_id));
@@ -1814,7 +1817,7 @@ async fn single_historical_removal_preserves_in_use_unfinished_requests_and_othe
         fs::read_link(in_use_temp).unwrap(),
         PathBuf::from(in_use.generation_name())
     );
-    assert_eq!(fs::read_link(slot.join("in_use")).unwrap(), in_use_link);
+    assert_eq!(selected_view(&slot), in_use_link);
     assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), config);
     let remaining = fixture.store.list().await.unwrap();
     assert_eq!(remaining.len(), 2);
@@ -2048,7 +2051,7 @@ async fn revoked_cleanup_preserves_unrevoked_in_use_and_incomplete_requests() {
     cleanup.remove().await.unwrap();
     let slot = fixture.store.slot(&in_use.name);
     assert_eq!(
-        fs::read_link(slot.join("in_use")).unwrap(),
+        selected_view(&slot),
         PathBuf::from(in_use.generation_name())
     );
     assert!(
@@ -2595,7 +2598,7 @@ async fn scheduled_renewal_keeps_name_definition_and_promotes_new_key_with_and_w
             record.operation_id
         );
         assert_eq!(
-            fs::read_link(slot.join("in_use")).unwrap(),
+            selected_view(&slot),
             PathBuf::from(in_use.generation_name())
         );
         let service = renewal_client(&fixture, ari).await;
@@ -2613,7 +2616,7 @@ async fn scheduled_renewal_keeps_name_definition_and_promotes_new_key_with_and_w
         assert_eq!(completed.identifiers, in_use.identifiers);
         assert_eq!(completed.key_algorithm, in_use.key_algorithm);
         assert_eq!(
-            fs::read_link(slot.join("in_use")).unwrap(),
+            selected_view(&slot),
             PathBuf::from(record.generation_name())
         );
         assert_eq!(
@@ -2727,7 +2730,7 @@ async fn interrupted_manual_renewal_retains_old_in_use_and_resumes_the_same_orde
         Err(IssueError::Interrupted)
     ));
     assert_eq!(
-        fs::read_link(slot.join("in_use")).unwrap(),
+        selected_view(&slot),
         PathBuf::from(in_use.generation_name())
     );
     assert_eq!(fs::read(generation.join("private-key.pk8")).unwrap(), key);
@@ -2806,7 +2809,7 @@ async fn renewal_rejects_missing_or_changed_replaces_echo_without_redoing_new_or
                 .is_err()
         );
         assert_eq!(
-            fs::read_link(fixture.store.slot(&in_use.name).join("in_use")).unwrap(),
+            selected_view(&fixture.store.slot(&in_use.name)),
             PathBuf::from(in_use.generation_name())
         );
     }
@@ -2846,7 +2849,7 @@ async fn failed_renewal_cannot_promote_an_old_result_after_in_use_changes() {
 
 #[tokio::test]
 async fn complete_removal_cleans_object_directories_and_keeps_shared_lock_inodes_stable() {
-    use std::os::unix::fs::MetadataExt;
+    use crate::state_file::tests::file_identity;
     let fixture = fixture().await;
     let session = fixture
         .store
@@ -2861,7 +2864,7 @@ async fn complete_removal_cleans_object_directories_and_keeps_shared_lock_inodes
         record.name.as_str(),
     )
     .unwrap();
-    let inode = fs::metadata(&lock).unwrap().ino();
+    let inode = file_identity(&lock);
     fixture
         .store
         .prepare_removal(&record.name, removal::RemovalScope::All)
@@ -2871,7 +2874,7 @@ async fn complete_removal_cleans_object_directories_and_keeps_shared_lock_inodes
         .await
         .unwrap();
     assert!(!fixture.store.slot(&record.name).exists());
-    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    assert_eq!(file_identity(&lock), inode);
     drop(
         fixture
             .store
@@ -2879,5 +2882,16 @@ async fn complete_removal_cleans_object_directories_and_keeps_shared_lock_inodes
             .await
             .unwrap(),
     );
-    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    assert_eq!(file_identity(&lock), inode);
+}
+
+fn selected_view(slot: &Path) -> PathBuf {
+    let target = publication::NATIVE
+        .target(&slot.join("in_use"))
+        .unwrap()
+        .unwrap();
+    let record = read_journal(&slot.join(&target).join("operation.toml")).unwrap();
+    assert_eq!(record.generation_name(), target);
+    assert!(publication::NATIVE.matches(slot, &record).unwrap());
+    PathBuf::from(target)
 }

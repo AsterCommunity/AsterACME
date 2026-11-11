@@ -21,6 +21,7 @@ use std::{
     time::Duration,
 };
 
+mod publication;
 pub mod removal;
 
 const MAX_JOURNAL: u64 = 1024 * 1024;
@@ -49,10 +50,33 @@ impl CliIssueStore {
             name.as_str(),
         )?;
         let timeout = self.timeout;
-        let lease = tokio::task::spawn_blocking(move || toml_file::lock(&path, timeout))
-            .await
-            .map_err(|_| failure("certificate lock worker failed"))?
-            .map_err(|_| failure("certificate lock failed or timed out"))?;
+        let slot = self.slot(name);
+        let lease = tokio::task::spawn_blocking(move || {
+            let lease = toml_file::lock(&path, timeout)?;
+            if slot.join("cert.toml").is_file() {
+                removal::ensure_idle(&slot).map_err(std::io::Error::other)?;
+                let config = selection(&slot).map_err(std::io::Error::other)?;
+                let expected = match config.cert.in_use.as_ref() {
+                    Some(id) => read_generations(&slot, &config.cert.name)
+                        .map_err(std::io::Error::other)?
+                        .into_iter()
+                        .find(|record| &record.operation_id == id)
+                        .map(|record| record.generation_name())
+                        .ok_or_else(|| {
+                            std::io::Error::other("selected certificate generation missing")
+                        })
+                        .map(Some)?,
+                    None => None,
+                };
+                publication::NATIVE
+                    .recover(&slot, expected.as_deref())
+                    .map_err(std::io::Error::other)?;
+            }
+            Ok::<_, std::io::Error>(lease)
+        })
+        .await
+        .map_err(|_| failure("certificate lock worker failed"))?
+        .map_err(|_| failure("certificate lock, view recovery or timeout failed"))?;
         Ok(Arc::new(lease))
     }
 }
@@ -261,66 +285,6 @@ fn read_generations(slot: &Path, name: &CertificateName) -> Result<Vec<IssueReco
     Ok(records)
 }
 
-#[cfg(unix)]
-fn promote_in_use(slot: &Path, record: &IssueRecord) -> Result<(), IssueError> {
-    use std::os::unix::fs::symlink;
-    let in_use = slot.join("in_use");
-    match fs::symlink_metadata(&in_use) {
-        Ok(metadata) if !metadata.file_type().is_symlink() => {
-            return Err(failure("in_use is not a managed certificate symlink"));
-        }
-        Ok(_) => {
-            let target = fs::read_link(&in_use)
-                .map_err(|_| failure("cannot inspect in_use certificate link"))?;
-            if target.components().count() != 1 || target.is_absolute() {
-                return Err(failure(
-                    "in_use certificate link points outside its managed directory",
-                ));
-            }
-            let previous = read_journal(&slot.join(&target).join("operation.toml"))?;
-            if target != Path::new(&previous.generation_name()) || previous.name != record.name {
-                return Err(failure("in_use certificate link identity mismatch"));
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(failure("cannot inspect in_use certificate link")),
-    }
-    let temporary = slot.join(format!(".in_use-{}", record.operation_id));
-    // A crash may leave our exact pending link. Resume it without touching unrelated
-    // colliding files or links, which the user may own.
-    match fs::symlink_metadata(&temporary) {
-        Ok(metadata)
-            if metadata.file_type().is_symlink()
-                && fs::read_link(&temporary).ok().as_deref()
-                    == Some(Path::new(&record.generation_name())) =>
-        {
-            fs::remove_file(&temporary)
-                .map_err(|_| failure("cannot reconcile pending in_use link"))?;
-        }
-        Ok(_) => {
-            return Err(failure(
-                "in_use link temporary path belongs to an unrelated entry",
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(failure("cannot inspect pending in_use link")),
-    }
-    symlink(record.generation_name(), &temporary)
-        .map_err(|_| failure("cannot create atomic in_use link"))?;
-    if fs::rename(&temporary, &in_use).is_err() {
-        let _ = fs::remove_file(&temporary);
-        return Err(failure("cannot promote in_use certificate link"));
-    }
-    fs::File::open(slot)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| failure("cannot sync in_use certificate link"))
-}
-
-#[cfg(not(unix))]
-fn promote_in_use(_slot: &Path, _record: &IssueRecord) -> Result<(), IssueError> {
-    Err(failure("in_use certificate links require Unix"))
-}
-
 /// A renewal check can legitimately finish without a new generation.
 pub enum RenewalPreparation {
     /// Existing `in_use` is not due; no request/key artifacts were created.
@@ -477,10 +441,7 @@ fn check_renewal_schedule(
         .find(|record| record.operation_id == expected_in_use)
         .cloned()
         .ok_or_else(|| failure("in_use certificate is missing"))?;
-    if in_use.unfinished()
-        || fs::read_link(slot.join("in_use")).ok().as_deref()
-            != Some(Path::new(&in_use.generation_name()))
-    {
+    if in_use.unfinished() || !publication::NATIVE.matches(slot, &in_use)? {
         return Err(failure(
             "in_use certificate selection is inconsistent; refusing renewal",
         ));
@@ -958,10 +919,11 @@ impl IssueSession for Session {
             // selection only causes a safe re-download of the same issued artifact.
             record.phase = IssuancePhase::Downloading;
             write_journal(&generation.join("operation.toml"), &record)?;
-            promote_in_use(&slot, &record)?;
+            publication::NATIVE.publish(&slot, &record)?;
             let mut config = selection(&slot)?;
             config.cert.in_use = Some(record.operation_id.clone());
             write_selection(&slot, &config)?;
+            publication::NATIVE.recover(&slot, Some(&record.generation_name()))?;
             record.phase = IssuancePhase::Completed;
             record.is_in_use = true;
             write_journal(&generation.join("operation.toml"), &record)?;

@@ -19,11 +19,53 @@ mod common;
 mod config;
 mod dispatch;
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
+fn main() -> std::process::ExitCode {
     let args = app::Args::parse();
     let json = args.json();
     let cli = common::context::CommandContext::new(json);
+    let root = match common::panic::data_root(&args) {
+        Ok(root) => root,
+        Err(error) => {
+            if let Ok(text) = common::error::render(error.as_ref(), cli.output.diagnostic_format())
+            {
+                let _ = cli
+                    .output
+                    .finish(&text, common::session::FinalChannel::Diagnostic);
+            }
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let panic = common::panic::PanicState::install(cli.output.clone(), root);
+    // Install before constructing Tokio worker threads. Catching only at the
+    // executable boundary preserves unwinding/leases without retrying mutations.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+        let result = runtime.block_on(run(args, &cli));
+        // Worker unwinding and retained storage leases finish before any final
+        // report. A shutdown-time panic cannot follow a successful JSON document.
+        drop(runtime);
+        if panic.occurred() {
+            let _ = panic.report();
+            return Ok(std::process::ExitCode::FAILURE);
+        }
+        Ok(finish(result, &cli))
+    })) {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => finish(Err(error), &cli),
+        Err(_) => {
+            let _ = panic.report();
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(
+    args: app::Args,
+    cli: &common::context::CommandContext,
+) -> common::error::CliResult<dispatch::CommandReport> {
+    let json = args.json();
     tracing_subscriber::fmt()
         .with_env_filter(if json {
             tracing_subscriber::EnvFilter::new("off")
@@ -33,7 +75,14 @@ async fn main() -> std::process::ExitCode {
         .with_ansi(cli.output.diagnostic_format().color)
         .with_writer(cli.output.clone())
         .init();
-    let result = dispatch::execute(args, &cli).await.and_then(|report| {
+    dispatch::execute(args, cli).await
+}
+
+fn finish(
+    execution: common::error::CliResult<dispatch::CommandReport>,
+    cli: &common::context::CommandContext,
+) -> std::process::ExitCode {
+    let result = execution.and_then(|report| {
         let text = report.render(cli.output.format())?;
         cli.output
             .finish(&text, common::session::FinalChannel::Result)?;

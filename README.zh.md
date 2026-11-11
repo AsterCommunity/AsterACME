@@ -39,7 +39,7 @@ AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与手动 DNS-01
 - 将协议服务嵌入应用，注入存储、签名、就绪检查和进度接口。
 - 使用终端提示，或通过显式参数与结构化 JSON 编写脚本。
 
-无人值守的完整证书生命周期仍需要自动发布与续期，目前尚未提供。现有私有文件存储适配器支持 Unix；库的消费方可以实现其他适配器。
+无人值守的完整证书生命周期仍需要自动发布与续期，目前尚未提供。存储适配器包含 Unix 权限策略及 Windows 继承权限策略；平台运行证据分别记录，不以交叉编译冒充 Windows 验收。
 
 ## 设计重点
 
@@ -47,7 +47,7 @@ AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与手动 DNS-01
 - **状态决策显式可测**：纯 core 根据 CA 观察和本地提交状态返回动作，服务执行 HTTP、计时和副作用。
 - **操作可以恢复**：提交 mutation 前保存意图；结果未确定时，不静默重下单或重复提交 finalize。
 - **产物路径稳定**：每次申请独立保存到时间版本目录，校验完整文件集合后原子切换 `in_use`。
-- **共用基础机制**：Forge HTTP、AsterFs 锁、rustls 和 AWS-LC 提供传输与密码学能力，业务规则保留在 ACME。
+- **共用基础机制**：Forge HTTP、标准库文件锁、rustls 和 AWS-LC 提供传输与密码学能力，业务规则保留在 ACME。
 
 ## 快速开始
 
@@ -217,9 +217,13 @@ aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
 
 仓库策略检查需要 Python 3.11+。release 使用体积优化 `opt-level="z"`、LTO、单 codegen unit、unwind panic，并剥离调试信息而保留函数符号。
 
+CLI 接入已发布 Forge panic alpha.2，私有 `<data-dir>/crash.log` 移除原始 panic payload，屏幕只给安全的人类/JSON 诊断；正常命令及 help/version 不创建崩溃文件，panic 不重试 ACME 修改。CI 检查实际生产 feature，禁止未经审查的 TLS、密码、HTTP、交互及日志功能。
+
 ```sh
 python3 scripts/check-workspace-deps.py
 python3 scripts/check-tls-backend.py
+python3 scripts/check-dependency-features.py
+python3 -m unittest discover -s scripts/tests
 cargo fmt --all --check
 cargo check --workspace --locked
 cargo test --workspace --locked

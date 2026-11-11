@@ -1,5 +1,5 @@
 //! Local durability, locking, permissions and key identity tests.
-use super::toml_file::open_lock;
+
 use super::*;
 use aster_acme::account::KeyAccess;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
@@ -528,7 +528,7 @@ fn state_reads_reject_hardlinks_and_enforce_exact_limit() {
         read_private(&path, 4),
         Err(StorageError::InsecurePath)
     ));
-    assert!(open_lock(&path).is_err());
+    assert!(super::toml_file::open_lock(&path).is_err());
     let unsafe_dir = temp.path().join("unsafe");
     fs::create_dir(&unsafe_dir).unwrap();
     fs::set_permissions(&unsafe_dir, fs::Permissions::from_mode(0o777)).unwrap();
@@ -568,7 +568,7 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
 #[tokio::test]
 async fn account_removal_leaves_no_empty_object_directory_and_reuses_external_lock_after_recreation()
  {
-    use std::os::unix::fs::MetadataExt;
+    use crate::state_file::tests::file_identity;
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "clean", Duration::from_secs(1)).unwrap();
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
@@ -577,15 +577,15 @@ async fn account_removal_leaves_no_empty_object_directory_and_reuses_external_lo
         .await
         .unwrap();
     let lock = store.lock_path().unwrap();
-    let inode = fs::metadata(&lock).unwrap().ino();
+    let inode = file_identity(&lock);
     store.remove().await.unwrap();
     assert!(!store.account_slot().exists());
-    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    assert_eq!(file_identity(&lock), inode);
     store
         .signer(&ca, "clean", KeyAccess::Create(None))
         .await
         .unwrap();
-    assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
+    assert_eq!(file_identity(&lock), inode);
     assert!(!store.account_slot().join("account.lock").exists());
 }
 

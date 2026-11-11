@@ -2,7 +2,7 @@
 
 CLI 的账户文件存储适配，实现 `dyn AccountStore` 和 `dyn AccountKeyStore`。`toml_file` 模块另提供有界读取与缺失配置的加锁、原子初始化；配置 schema 和注释模板由 CLI 定义。`aster_acme` 不依赖本 crate；嵌入式 Aster 服务可提供数据库存储和软件/远程签名器。
 
-当前文件实现支持 Unix，其他平台明确返回不支持，不将继承 ACL 冒充私钥权限保护。AsterFs 的文件锁本身支持跨平台；Windows 私有目录 ACL 仍需单独实现和验收。
+文件实现包含 Unix 和 Windows 适配。Unix 保留 owner/mode 与 no-follow 检查；Windows 沿用继承权限，不管理专用 ACL，并检查 reparse point 与托管文件硬链接。锁使用 Rust 1.89+ 标准库。Windows 构建检查与原生运行验收分别记录。
 
 布局：
 
@@ -25,7 +25,7 @@ CLI 的账户文件存储适配，实现 `dyn AccountStore` 和 `dyn AccountKeyS
 
 - 目录 `0700`、文件 `0600`，拒绝不安全目录、符号链接、硬链接或错误属主。
 - macOS 并发首次创建 no-follow 锁文件可能返回 ENOENT；通过同一校验目录描述符重试一次，保留链接和权限检查。
-- 使用固定 registry 版本的 AsterFs 非阻塞锁加有限等待；锁 guard 释放后关闭句柄。
+- 使用固定 registry 版本的 标准库非阻塞锁加有限等待；锁 guard 释放后关闭句柄。
 - Unix 文件操作复用 Forge `StateDirectory`，以目录描述符执行 no-follow 打开和原子替换，sync 文件及目录。
 - 配置上限 64 KiB，首次写入为 `0600`；已有只读公开配置可为 `0644`，拒绝其他用户可写、链接或错误属主文件。读取不会改动已有目录权限；初始化锁等待有上限，取消后工作线程仍持锁完成原子写入。
 - 账户元数据使用 TOML，默认选择保存在配置里，私钥继续使用 PKCS#8 DER。尚未正式发布，不读取或迁移旧 JSON 及旧目录布局，不提供兼容入口。旧目录不会自动清理或移动。
@@ -106,3 +106,10 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 账户元数据必需保存 key_algorithm；AccountKeyStore 使用 KeyAccess::Existing/Create(Option<KeyAlgorithm>)，真实 PKCS#8、指纹及保存类型必须一致。轮换缺省继承原类型；暂存钥存在时恢复其实际类型，显式不同选择拒绝。只有确认换钥提交才原子更新主钥和算法字段，常规 save 不能修改算法；无旧 schema 默认值或迁移。
+
+
+## 平台机制与上游归属
+
+当前使用标准库文件锁，不再直接依赖 AsterFs。state_file 是临时的跨平台文件适配，模块顶部 TODO 关联 AsterFs #3/#4；上游能力尚未交付，不保留 fs2/fs4 转发接口。普通文件 IO 保持标准库，缺失的句柄相对打开/平台文件身份/同步原语将按上游实际 API 接入。
+
+Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副本与 .generation 标记；同级 staging/previous 目录保证可按 catalog 恢复，双 rename 不是跨平台原子交换。Unix 继续使用链接，两个平台的 CLI 输出路径都为 in_use 下的四个文件。复制模式的正常、失败、回滚、用户内容保留测试在每个主机执行，Windows 原生结果由 CI 单独提供。

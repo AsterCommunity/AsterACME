@@ -15,6 +15,7 @@
 )]
 
 pub mod account;
+pub mod local_name;
 pub mod machine;
 pub mod protocol;
 pub mod renewal;

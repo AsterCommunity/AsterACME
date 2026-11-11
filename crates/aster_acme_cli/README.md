@@ -28,7 +28,7 @@ cargo run -p aster_acme_cli -- account show --verify --data-dir ./data --json
 - 普通终端显示彩色状态和可操作诊断；重定向、`NO_COLOR`、`TERM=dumb` 禁用颜色。CA 返回的控制字符会转义。
 - `--json` 输出公有账户元数据，错误也以 JSON 写 stderr；失败退出码 1，参数错误由 clap 返回 2。
 
-默认统一目录使用与 gcop-rs 相同的 `directories::ProjectDirs` 机制，身份为 `com.astercosm.acme`：macOS 为 `~/Library/Application Support/com.astercosm.acme`，Linux 为 `$XDG_CONFIG_HOME/acme` 或 `~/.config/acme`。Windows 路径按系统约定解析，但文件存储当前尚不支持 Windows ACL。配置、账户和未来证书输出共用该目录。
+默认统一目录使用与 gcop-rs 相同的 `directories::ProjectDirs` 机制，身份为 `com.astercosm.acme`：macOS 为 `~/Library/Application Support/com.astercosm.acme`，Linux 为 `$XDG_CONFIG_HOME/acme` 或 `~/.config/acme`。Windows 路径按系统约定解析，文件存储沿用目标目录继承权限，不以专用 ACL 管理作为前提。配置、账户和未来证书输出共用该目录。
 
 首次执行账户命令时自动生成带注释的 `config.toml`，使用 `toml_edit` 构造并解析文档。读取时已有文件按原始字节保留，定点编辑保留注释、格式和无关设置；损坏配置直接报错。生成文件不包含条款同意或 EAB 秘密，显式注册邮箱会保存为以后注册的默认值，其余单次 CLI 覆盖保持临时性。`--help` / `--version` 不创建配置。
 
@@ -49,7 +49,7 @@ contact = ["admin@example.org"]
 timeout = 30
 ```
 
-配置不接受持久化自动条款同意或 EAB 私密字段。相对路径以当前工作目录解析。配置上限 64 KiB，EAB 文件上限 8 KiB。文件存储当前仅支持 Unix；其他平台可通过库注入自有存储。
+配置不接受持久化自动条款同意或 EAB 私密字段。相对路径以当前工作目录解析。配置上限 64 KiB，EAB 文件上限 8 KiB。文件存储使用平台适配：Unix 保留 owner/mode，Windows 继承权限；库仍可注入自有存储。
 
 CLI 只组装 `dyn` 存储、密钥接口及账户服务，不处理 nonce、签名和注册恢复算法。文件行为详见 [cli-storage](../aster_acme_cli_storage/README.md)。
 
@@ -247,3 +247,10 @@ cert renew --all 提供按托管身份顺序执行的批量入口，复用同一
 所有账户、证书和 version 命令返回类型化 CommandReport，main 通过 OutputSession 统一写入最终结果；命令执行层不直接打印。渲染接收显式 Format，stdout/stderr 独立控制配色，JSON 只有一个结果或错误文档。会话跟踪真实进度/交互，避免全未到期批次出现开头空行。CommandContext 为一次命令持有同一惰性 HttpPool；批量续期和账户列表核验复用连接池，局部调用无需传入底层 HTTP 客户端。
 
 账户 register/rotate-key 新增 -k/--key-type，共用证书的八种算法名称。注册默认 P256，轮换缺省保持原类型，恢复保持暂存钥；显式不匹配拒绝。帮助所有层级统一产品标题和格式，保留 Clap 标准帮助入口，不改写参数值中的 help。
+
+
+## 意外崩溃
+
+main 在 Tokio 创建前安装 registry 的 aster_forge_panic =0.1.0-alpha.2，协议库不修改宿主 hook。common/panic 注入 Unix 私有 writer、共用 UTC 时间及安全 sink；只在发生 panic 时创建 data dir 下 crash.log。报告移除完整原始 payload、保留函数回溯及构建身份，追加上限1MiB；文件链接、宽权限、锁占用/写失败不回退泄漏私有报告。common/session 与普通错误共享 JSON DTO，保持单文档及失败退出码。日志/交互采用显式最小 features，实际依赖合并由 scripts/check-dependency-features.py 检查。
+
+崩溃子进程、release 符号及 feature 负例验证见 [CLI 运行时测试](../../docs/cli-runtime-testing.md)。

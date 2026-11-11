@@ -2,3 +2,6 @@
 /data/
 *.pk8
 .DS_Store
+
+# Python policy-test bytecode
+__pycache__/

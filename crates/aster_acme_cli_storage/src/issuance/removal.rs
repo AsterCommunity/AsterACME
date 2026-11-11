@@ -1,7 +1,7 @@
 //! Scoped local certificate removal under the same lease used by issuance and revocation.
 use super::{
-    CertificateName, CliIssueStore, IssueError, IssueRecord, failure, read_generations, selection,
-    write_selection,
+    CertificateName, CliIssueStore, IssueError, IssueRecord, failure, publication,
+    read_generations, selection, write_selection,
 };
 use crate::toml_file::{FileLease, ensure_real_dir, private_dir, read_private};
 use std::{
@@ -145,7 +145,7 @@ impl CertificateRemoval {
                 config.cert.in_use=None;
                 write_selection(&self.slot,&config)?;
             }
-            for link in self.links {fs::remove_file(link).map_err(|_|failure("cannot remove managed certificate link; inspect .removing marker"))?;}
+            for link in self.links { publication::NATIVE.remove(&link)?; }
             for file in self.files {fs::remove_file(file).map_err(|_|failure("certificate cleanup incomplete; inspect .removing marker and retained directory"))?;}
             for record in self.records {
                 let generation=self.slot.join(record.generation_name());
@@ -200,10 +200,7 @@ fn select_records(
                 .ok_or_else(|| {
                     failure("no in_use certificate is selected; use an exact request or --all")
                 })?;
-            if in_use.unfinished()
-                || fs::read_link(slot.join("in_use")).ok().as_deref()
-                    != Some(Path::new(&in_use.generation_name()))
-            {
+            if in_use.unfinished() || !publication::NATIVE.matches(slot, in_use)? {
                 return Err(failure(
                     "in_use certificate selection is inconsistent; refusing history cleanup",
                 ));
@@ -277,38 +274,28 @@ fn managed_links(
             .map(|r| format!(".in_use-{}", r.operation_id)),
     ) {
         let path = slot.join(&filename);
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                let target =
-                    fs::read_link(&path).map_err(|_| failure("cannot inspect certificate link"))?;
-                if target.is_absolute()
-                    || target.components().count() != 1
-                    || !inventory.iter().any(|r| {
-                        target == Path::new(&r.generation_name())
-                            && (filename == "in_use"
-                                || filename == format!(".in_use-{}", r.operation_id))
-                    })
-                {
-                    return Err(failure(
-                        "certificate link does not point to a managed generation",
-                    ));
-                }
-                if selected
-                    .iter()
-                    .any(|r| target == Path::new(&r.generation_name()))
-                {
-                    links.push(path);
-                }
+        if let Some(target) = publication::NATIVE.target(&path)? {
+            if !inventory.iter().any(|record| {
+                target == record.generation_name()
+                    && (filename == "in_use"
+                        || filename == format!(".in_use-{}", record.operation_id))
+            }) {
+                return Err(failure(
+                    "certificate view does not point to a managed generation",
+                ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            _ => return Err(failure("certificate link unsafe; refusing removal")),
+            if selected
+                .iter()
+                .any(|record| target == record.generation_name())
+            {
+                links.push(path);
+            }
         }
     }
     Ok(links)
 }
 
 fn sync_directory(path: &Path) -> Result<(), IssueError> {
-    fs::File::open(path)
-        .and_then(|directory| directory.sync_all())
+    crate::state_file::sync_directory(path)
         .map_err(|_| failure("cannot sync certificate directory after removal"))
 }

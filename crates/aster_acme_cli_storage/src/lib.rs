@@ -1,4 +1,10 @@
 //! Private local account metadata, process locks and PKCS#8 key files for the CLI.
+//!
+//! TODO(AsterFs #3/#4): consume published trusted-root file primitives when available.
+//! Keep standard-library locks/ordinary IO here; only move missing platform mechanisms.
+//! Account/certificate schemas, leases and recovery decisions remain ACME-owned.
+//! <https://github.com/AsterCommunity/AsterFs/issues/3>
+//! <https://github.com/AsterCommunity/AsterFs/issues/4>
 
 #![cfg_attr(
     not(test),
@@ -30,6 +36,7 @@ use serde::{Deserialize, Serialize};
 pub mod issuance;
 mod removal;
 mod rotation;
+pub mod state_file;
 pub mod toml_file;
 use toml_file::{FileLease, atomic_write, ensure_real_dir, private_dir, read_private};
 
@@ -413,7 +420,7 @@ fn store_error(message: &str) -> AccountStoreError {
 /// Shared by the file adapter and CLI prompts so path validation has one owner.
 #[must_use]
 pub fn valid_account_name(name: &str) -> bool {
-    !name.is_empty()
+    aster_acme_core::local_name::valid_component(name)
         && name.len() <= 64
         && name
             .bytes()

@@ -196,3 +196,25 @@ fn partially_failed_account_report_is_one_json_document_with_failure_disposition
     assert!(serde_json::from_str::<serde_json::Value>(&stdout.text()).is_ok());
     assert_eq!(stderr.text(), "");
 }
+
+#[test]
+fn panic_delivery_never_waits_for_a_held_lock_and_can_finish_a_poisoned_session() {
+    let (output, stdout, stderr) = session(true);
+    let guard = output.state.lock().unwrap();
+    assert_eq!(
+        output.panic_notice("safe hint").unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    drop(guard);
+    let cloned = output.clone();
+    let _ = std::panic::catch_unwind(move || {
+        let _guard = cloned.state.lock().unwrap();
+        panic!("test-only poisoned writer");
+    });
+    output.panic_notice("safe hint").unwrap();
+    output.panic_notice("duplicate").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stderr.text()).unwrap();
+    assert_eq!(json["error"]["hint"], "safe hint");
+    assert_eq!(stdout.text(), "");
+    assert!(output.finish("duplicate", FinalChannel::Result).is_err());
+}
