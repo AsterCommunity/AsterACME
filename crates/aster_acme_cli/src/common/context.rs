@@ -110,12 +110,15 @@ impl CliContext {
 
     /// Network-only settings are validated only when a command actually requests HTTP.
     pub(crate) fn transport_options(&self, options: &AccountArgs) -> CliResult<TransportOptions> {
-        let timeout = options.timeout.or(self.config.timeout).unwrap_or(30);
-        if !(1..=300).contains(&timeout) {
+        let request_timeout = options
+            .request_timeout
+            .or(self.config.request_timeout)
+            .unwrap_or(30);
+        if !(1..=300).contains(&request_timeout) {
             return Err("Timeout must be between 1 and 300 seconds.".into());
         }
         let transport = TransportOptions {
-            request_timeout: Duration::from_secs(timeout),
+            request_timeout: Duration::from_secs(request_timeout),
             user_agent: options
                 .user_agent
                 .clone()

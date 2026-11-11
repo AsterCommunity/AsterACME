@@ -35,6 +35,7 @@ impl Style {
 /// Labels and presentation for progress, completion and diagnostics share one mapping.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum MessageKind {
+    Debug,
     Info,
     Wait,
     Success,
@@ -45,6 +46,7 @@ pub(crate) enum MessageKind {
 impl MessageKind {
     pub(crate) const fn label(self) -> &'static str {
         match self {
+            Self::Debug => "[DEBUG]",
             Self::Info => "[INFO]",
             Self::Wait => "[WAIT]",
             Self::Success => "[OK]",
@@ -55,6 +57,7 @@ impl MessageKind {
     }
     pub(crate) const fn style(self) -> Style {
         match self {
+            Self::Debug => Style::Blue,
             Self::Info => Style::Cyan,
             Self::Wait | Self::Warning => Style::Yellow,
             Self::Success | Self::Done => Style::BoldGreen,

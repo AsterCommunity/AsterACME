@@ -1,7 +1,8 @@
 //! Hickory-based DNS TXT visibility checks without publication or deletion.
 
+use aster_acme::solver::ChallengeSolver;
 use aster_acme::{
-    issuance::{DnsReadiness, DnsRequirement, IssueError},
+    issuance::{IssueError, ValidationRequirement},
     solver::ExecutionContext,
 };
 use async_trait::async_trait;
@@ -12,30 +13,34 @@ use hickory_resolver::Resolver;
 pub struct DnsVisibility;
 
 #[async_trait]
-impl DnsReadiness for DnsVisibility {
+impl ChallengeSolver for DnsVisibility {
+    fn kind(&self) -> aster_acme::challenge::ChallengeKind {
+        aster_acme::challenge::ChallengeKind::Dns01
+    }
     async fn ready(
         &self,
-        records: &[DnsRequirement],
-        skip_dns_check: bool,
+        records: &[ValidationRequirement],
         execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
-        if skip_dns_check {
-            return Ok(true);
-        }
         let resolver = Resolver::builder_tokio()
             .map_err(|_| IssueError::InvalidInput("cannot load system DNS configuration"))?
             .build()
             .map_err(|_| IssueError::InvalidInput("cannot initialize DNS resolver"))?;
         for requirement in records {
+            let ValidationRequirement::Dns01 { name, value } = requirement else {
+                return Err(IssueError::InvalidInput(
+                    "DNS visibility received another validation method",
+                ));
+            };
             let lookup = tokio::select! {
                 biased;
                 ()=execution.cancellation.cancelled()=>return Err(IssueError::Interrupted),
-                result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{}.",requirement.name)))=>result.map_err(|_|IssueError::Interrupted)?,
+                result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::Interrupted)?,
             };
             match lookup {
                 Ok(lookup) => {
-                    if !txt_value_present(lookup.answers(), &requirement.value) {
+                    if !txt_value_present(lookup.answers(), value) {
                         return Ok(false);
                     }
                 }
@@ -43,9 +48,7 @@ impl DnsReadiness for DnsVisibility {
                     return Ok(false);
                 }
                 Err(_) => {
-                    return Err(IssueError::InvalidInput(
-                        "DNS TXT lookup failed; retry or explicitly bypass local visibility with --skip-dns-check",
-                    ));
+                    return Err(IssueError::InvalidInput("local DNS TXT lookup failed"));
                 }
             }
         }
@@ -92,24 +95,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn force_skips_resolver_but_never_cancellation_or_deadline() {
-        let execution = ExecutionContext {
+    async fn cancellation_and_deadline_prevent_resolver_work() {
+        let cancelled = ExecutionContext {
             cancellation: CancellationToken::new(),
             deadline: Instant::now() + Duration::from_secs(1),
         };
-        let records = [DnsRequirement {
-            name: "_acme-challenge.example.invalid".into(),
-            value: "not-published".into(),
-        }];
-        assert!(
-            DnsVisibility
-                .ready(&records, true, &execution)
-                .await
-                .unwrap()
-        );
-        execution.cancellation.cancel();
+        cancelled.cancellation.cancel();
         assert!(matches!(
-            DnsVisibility.ready(&records, true, &execution).await,
+            DnsVisibility.ready(&[], &cancelled).await,
             Err(IssueError::Interrupted)
         ));
         let expired = ExecutionContext {
@@ -117,7 +110,7 @@ mod tests {
             deadline: Instant::now(),
         };
         assert!(matches!(
-            DnsVisibility.ready(&records, true, &expired).await,
+            DnsVisibility.ready(&[], &expired).await,
             Err(IssueError::Interrupted)
         ));
     }

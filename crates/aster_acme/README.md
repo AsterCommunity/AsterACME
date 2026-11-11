@@ -7,7 +7,7 @@
 - `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。
 - `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization 和三种验证材料。
-- `solver`：Send + Sync 的异步 trait，可通过 dyn 注入；prepare、wait_ready、cleanup 与版本化恢复句柄。
+- `solver`：Send + Sync 的异步 trait，可通过 dyn 注入；方法匹配、ready及cleanup；类型化材料先由ACME持久化。
 
 依赖方向：本 crate → protocol / core / Forge 宏；DNS 实现 → 本 crate。具体供应商代码不放在此处。
 
@@ -89,7 +89,7 @@ AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at
 
 ## 手动 DNS-01 签发
 
-`issuance::service::IssueService` 从已注册账户、签名器和已发现 directory 构造；`dyn IssueStore/IssueSession` 持有独立证书世代与固定密钥/CSR，`dyn DnsReadiness` 返回待人工操作或本地 DNS 就绪。库不打印终端、不调用 DNS provider、不后台启动续期任务。CLI 的手动发布适配器询问用户，DNS crate 只做查询；强制标志只跳过本地查询。
+`issuance::service::IssueService` 从已注册账户、签名器和已发现 directory 构造；`dyn IssueStore/IssueSession` 持有独立证书世代与固定密钥/CSR，`dyn ChallengeSolver` 返回待人工操作或本地 DNS 就绪。库不打印终端、不调用 DNS provider、不后台启动续期任务。CLI 的手动发布适配器询问用户，DNS crate 只做查询；DNS 预检为建议性观察，是否授权由 CA 判断。
 
 依据 RFC 8555 §7.1.3–7.1.5、§7.4、§7.4.2、§7.5.1、§8.4：保存创建意图→newOrder 201/Location→获取授权→返回全部 TXT→就绪后空对象通知 challenge→等待授权/订单→固定 CSR finalize→processing 只轮询→valid 后 POST-as-GET 下载 PEM。原始线上模型 WireIdentifier/WireChallengeKind 归 protocol::order，客户端只拥有验证与执行语义。
 
@@ -101,6 +101,13 @@ CA 的订单/授权 expires 与证书 notAfter 分开处理；订单没有虚构
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
+
+
+## 方法与发布实现
+
+ChallengeKind/ValidationRequirement及IssueService归本库；调用方实现ChallengeSolver::kind/ready/cleanup。库保存材料后才调用ready，准备好后由库通知CA；完成产物后尝试cleanup，失败保留清理状态而不抹掉证书。IssueRequest验证域名与通配符约束，IssueRecord::matches_unfinished_request统一完整定义匹配。CLI不复制协议状态机。移除未接线的旧receipt/prepare接口，不保留兼容层。
+
+CLI已实现manual_dns、manual_http和webroot。HTTP材料是未经哈希的key authorization，公开URL/路径由请求标识符和CA token推导；TLS仍只有材料定义、没有可执行实现。本库不写webroot文件、不提示终端、不决定DNS预检是否应阻止用户操作。

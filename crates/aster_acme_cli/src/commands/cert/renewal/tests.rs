@@ -2,12 +2,12 @@
 use super::*;
 use crate::commands::cert::render;
 use aster_acme::account::KeyAccess;
-use aster_acme::issuance::{DnsRequirement, IssueOutcome};
+use aster_acme::issuance::{IssueOutcome, ValidationRequirement};
 use std::cell::RefCell;
 
 fn record(name: &str) -> IssueRecord {
     let mut record: IssueRecord = serde_json::from_value(serde_json::json!({
-        "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":name,
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":name,
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
         "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
         "phase":"completed","creation_submitted":true,"authorizations":[],"finalize_submitted":"submitted"
@@ -28,7 +28,7 @@ impl RenewalExecutor for Executor {
             "not-due" => Ok(CertificateResult::NotDue(Box::new(record.clone()))),
             "manual" => Ok(CertificateResult::Issuance(IssueOutcome::ActionRequired {
                 record: Box::new(record.clone()),
-                records: vec![DnsRequirement {
+                records: vec![ValidationRequirement::Dns01 {
                     name: "_acme-challenge.example.com".into(),
                     value: "value".into(),
                 }],
@@ -199,11 +199,13 @@ impl LocalFixture {
             Some(aster_acme_protocol::url::AcmeUrl::new("https://127.0.0.1:1/account").unwrap());
         accounts.save(&account).await.unwrap();
         let run = RunArgs {
+            max_polls: Some(30),
+            poll_interval: None,
             yes: false,
-            skip_dns_check: false,
-            wait_timeout: 1,
+
+            operation_timeout: Some(1),
             http: crate::common::args::HttpArgs {
-                timeout: Some(1),
+                request_timeout: Some(1),
                 ..crate::common::args::HttpArgs::default()
             },
             local: crate::common::args::LocalArgs {
@@ -231,6 +233,9 @@ impl LocalFixture {
         };
         use rcgen::{CertificateParams, Issuer, KeyPair};
         let request = IssueRequest {
+            challenge: aster_acme::challenge::ChallengeKind::Dns01,
+            solver_id: "manual_dns".into(),
+            solver_config: serde_json::Value::Object(serde_json::Map::default()),
             name: CertificateName::new(name).unwrap(),
             identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
             key_algorithm: KeyAlgorithm::EcdsaP256,

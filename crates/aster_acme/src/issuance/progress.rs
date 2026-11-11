@@ -7,7 +7,10 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueEvent {
     /// Durable intent exists and newOrder is about to be sent.
-    CreatingOrder,
+    CreatingOrder {
+        method: crate::challenge::ChallengeKind,
+        solver_id: String,
+    },
     /// The CA's Location is durably recorded.
     OrderCreated { url: AcmeUrl },
     /// Latest authoritative order state.
@@ -18,13 +21,27 @@ pub enum IssueEvent {
         status: AuthorizationStatus,
     },
     /// All outstanding manual publication requirements have been persisted.
-    PublicationRequired { count: usize },
+    PublicationRequired {
+        method: crate::challenge::ChallengeKind,
+        count: usize,
+    },
     /// Local publication readiness was established or explicitly bypassed.
-    DnsReady { forced: bool },
+    PublicationReady {
+        method: crate::challenge::ChallengeKind,
+    },
+    /// A terminal protocol outcome is saved but publication cleanup remains incomplete.
+    CleanupPending,
     /// A challenge acknowledgement received a valid matching response.
     ValidationSubmitted { identifier: String },
+    /// One bounded order query; authorizations within this round are not separate polls.
+    Polling { attempt: u32, limit: u32 },
     /// A bounded delay is about to be observed before another CA query.
-    Waiting { delay: Duration },
+    Waiting {
+        delay: Duration,
+        attempt: u32,
+        limit: u32,
+        source: super::PollWaitSource,
+    },
     /// The fixed CSR is about to be submitted.
     Finalizing,
     /// The issued certificate is being downloaded and inspected.

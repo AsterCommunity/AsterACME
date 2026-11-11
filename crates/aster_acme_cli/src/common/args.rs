@@ -18,9 +18,9 @@ pub(crate) struct HttpArgs {
     /// HTTP User-Agent override; an explicit value during registration is saved for this account.
     #[arg(long)]
     pub(crate) user_agent: Option<String>,
-    /// Whole-request timeout in seconds (1–300); used only for HTTP.
+    /// Single HTTP request timeout in seconds (1–300); config `request_timeout`, default 30.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=300))]
-    pub(crate) timeout: Option<u64>,
+    pub(crate) request_timeout: Option<u64>,
 }
 
 /// Account names are local storage identifiers, shared by account targets and cert -a.
@@ -87,10 +87,7 @@ mod tests {
                     ),
                     "{group} {name}"
                 );
-                assert_eq!(
-                    longs.contains(&"skip-dns-check"),
-                    matches!((group, name), ("cert", "issue" | "renew"))
-                );
+                assert!(!longs.contains(&"skip-dns-check"));
                 assert_eq!(
                     longs.contains(&"accept-terms"),
                     (group, name) == ("account", "register")
@@ -198,7 +195,6 @@ mod tests {
             panic!("expected issue");
         };
         assert!(!args.run.yes);
-        assert!(!args.run.skip_dns_check);
     }
 
     #[test]

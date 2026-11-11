@@ -23,6 +23,16 @@ pub enum ChallengeKind {
 }
 
 impl ChallengeKind {
+    /// Protocol name used in saved definitions and progress messages.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Dns01 => "DNS-01",
+            Self::Http01 => "HTTP-01",
+            Self::TlsAlpn01 => "TLS-ALPN-01",
+        }
+    }
+
     /// Whether this method can validate wildcard DNS identifiers.
     #[must_use]
     pub fn supports_wildcards(self) -> bool {

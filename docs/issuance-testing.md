@@ -4,19 +4,19 @@
 
 实现对照 RFC 8555 原文 §7.1.3（订单与 expires）、§7.1.4–7.1.5（授权/challenge）、§7.4（newOrder、finalize 与 CSR）、§7.4.2（PEM 链下载）、§7.5.1（通知与轮询）、§8.4（TXT 摘要），并复用 §6 的精确 URL、kid/JWS、nonce、POST-as-GET 和错误策略。证书/CSR 采用 PKCS#8、PKCS#10 和 X.509/SAN。
 
-本轮只有 manual_dns：人工发布归用户/CLI，DNS 查询归 Hickory，CA 通知和状态推进归库。--skip-dns-check 只跳过 DNS 查询，不能免除 CA 验证、过期判断或首次非交互的待办阶段。普通测试只使用数字 loopback HTTP 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+当前实现manual_dns/manual_http/webroot。CLI负责人工/文件发布，ACME负责方法和材料及CA状态推进；DNS预检建议性限2秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP 显式测试策略，不改生产默认 CA，也不安装任何测试根。
 
 ## 本地证据
 
 文件适配器与真实签名 transport 连接 loopback CA，覆盖完整新建→两条同名 TXT 待办→重启恢复→通知两个 challenge→授权 valid→订单 ready→固定 CSR finalize→valid→PEM 下载/检查→in_use 切换。校验世代只创建一次，私钥/CSR 字节不变，同名多值不会覆盖；最终 SAN/公钥与申请一致，清理提示保留。
 
-边界包括：过期订单与授权（force 也不能继续）、pending 必需 expires 缺失、非法 RFC3339、重复授权 URL、错误域名、创建响应丢失后禁止重下单、保存 Location 后坏响应可诊断、badNonce 同一申请重签、submitted finalize 的 ready 只轮询、取消/deadline、材料损坏/链接/未知版本/权限/锁竞争、同名多个世代、错误私钥/SAN/PEM 不更新 in_use。只读 inspect 验证不发 challenge/finalize。DNS 检查验证单 RR 分片拼接、多 RR 共存、force 不绕过取消/期限。
+边界包括：过期订单与授权（force 也不能继续）、pending 必需 expires 缺失、非法 RFC3339、重复授权 URL、错误域名、创建响应丢失后禁止重下单、保存 Location 后坏响应可诊断、badNonce 同一申请重签、submitted finalize 的 ready 只轮询、取消/deadline、材料损坏/链接/未知版本/权限/锁竞争、同名多个世代、错误私钥/SAN/PEM 不更新 in_use。只读 inspect 验证不发 challenge/finalize。DNS 检查验证单 RR 分片拼接、多 RR 共存，以及建议性预检不忽略取消/期限。
 
 CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥、operation 仅用于恢复、order 无写命令、JSON 多候选不猜最新、申请时间输出。独立 CLI/PTY 进程验收结果以最终执行记录为准，不把库测试声称为人工公网 DNS 验证。
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI 续期计划与账户签名吊销已实现并有本地 mock/存储验收；周期调度、HTTP/TLS solver、外部 CSR、自动续期和部署尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI 续期计划与账户签名吊销已实现并有本地 mock/存储验收；周期调度、HTTP standalone/TLS solver、外部 CSR、自动续期和部署尚未实现。
 
 ## 常规验证
 
@@ -101,6 +101,32 @@ cert renew --all 本轮全量292项测试通过（79客户端、111 CLI、77存�
 
 本轮未访问公网CA、未修改真实账户或证书、未扩展账户密钥算法、未启动daemon。全量库存损坏在安全枚举阶段整体失败；不能宣称能跳过任意损坏目录继续处理。
 
-恢复交互收尾：112项CLI测试及严格workspace Clippy通过；--resume未带名称使用类型化Choose/Named意图，终端仅枚举未完成申请，JSON/脚本不猜目标。独立PTY/JSON进程验收确认选择包含UTC申请时间、完成申请被排除、取消退出130且journal字节不变、不创建账户；DNS未就绪提示skip-dns-check只跳本地查询，CA仍验证。全部使用临时目录，不发公网CA请求。
+恢复交互收尾：112项CLI测试及严格workspace Clippy通过；--resume未带名称使用类型化Choose/Named意图，终端仅枚举未完成申请，JSON/脚本不猜目标。独立PTY/JSON进程验收确认选择包含UTC申请时间、完成申请被排除、取消退出130且journal字节不变、不创建账户；DNS未就绪/解析器错误/超时仅WARN后继续CA，取消仍终止。全部使用临时目录，不发公网CA请求。
 
 批量输出精简验收：114项CLI测试、严格Clippy、格式/依赖/TLS/whitespace检查通过。移除重复计划表与Checking renewal逐项日志，保留有工作时的数量简报，最终表按名称顺序输出；全未到期一句总结，其他人类计数仅非零，JSON完整不变。独立CLI子进程验证两项全未到期stderr无进度、结果只有一个有序表与总结，--now两项loopback失败仅一条数量简报、失败计数不混入零项；原JSON/取消/部分失败进程验收继续通过。只使用临时目录及本机拒绝连接地址，未操作真实CA。
+
+## 方法驱动HTTP与恢复诊断（2026-11-11）
+
+当前工作区363项通过：ACME库86、CLI163、storage88、core14、protocol10、validation2；严格macOS/Windows GNU all-targets Clippy零warning，工作区文档构建及依赖/feature策略检查通过。Windows结果为交叉构建检查，不代表本轮完成Windows原生HTTP运行验收。
+
+新增loopback CA流程使用真正账户签名、固定CSR和与保存密钥匹配的证书：manual_http先返回精确URL/path/content并在重开会话后复用原order；webroot无人工提示签发、清理，并以保存定义完成真正的第二次续期。包含方法不匹配、token改变/缺失/非法、CA未提供HTTP、授权已过期、发布后取消并恢复、清理时文件被用户修改但证书仍保留成功、保存方法/config被篡改时open/save拒绝。
+
+webroot文件边界检查既有同内容借用、不同内容不覆盖、独占所有权硬链接重启恢复、文件替换或修改不删除、同级目录/文件symlink拒绝、过长token/内容和控制字符、只有新文件/目录设置Unix公开读取权限而既有用户权限不变。私钥/CSR不进入webroot。
+
+相似定义匹配覆盖域名无序集合、账户/CA/指纹、方法/实现/config、算法及所有未完成阶段；创建意图已提交但URL缺失仍是可见候选，却不重发newOrder。明确CSR拒绝、过期和invalid排除。实际CLI脚本/PTY验证默认脚本阻止隐式复用、唯一匹配opt-in、多个匹配拒绝、交互包含UTC时间且取消130、显式独立名称及不新增或修改旧材料。
+
+DNS建议性预检覆盖有/无TXT、系统解析器错误、独立短超时均可继续；取消和总deadline仍停止。删除skip/force参数并有解析拒绝测试，--yes不选择目标、不替代首次人工待办。日志测试覆盖托管名称、创建时验证实现/方法、STATUS与ORDER STATUS有色/无色独立对齐。
+
+--debug实际二进制验证：已有unconfirmed创建在CA directory发现前失败，输出安全creation_submitted/has_order_url检查点；可恢复请求的传输失败输出请求类别、耗时和错误分类。RUST_LOG=trace加--json仍只有一个错误JSON，key/CSR/journal字节不变，无crash.log副作用。诊断日志不包含私钥、CSR/JWS正文、HTTP正文或nonce值，不能补回以前已丢失的Location。
+
+本轮未对公网CA或真实用户DNS/账户执行修改；用户提供的staging终端结果与上述本地证据分开记录。未增加旧schema读取、参数别名或自动迁移。
+
+HTTP跳转与等待来源收尾：实际用户staging记录表明HTTP80入口302到HTTPS后可签发；本地建议性预检调整为最多10次HTTP/HTTPS跳转，并共享2秒预算及8192字节上限，HTTPS仍执行正常TLS校验，不采用CA可能使用的跳过证书策略。回归覆盖重定向到正确内容、循环11次请求上限、无Location/非法scheme、内容不匹配/超限；ACME签名请求禁跳转测试保持。每次等待不再被进度节流隐藏，debug输出响应解析后的Retry-After及调度来源；CA未提供有效值时仍显示本地间隔。2项transport专项和168项CLI测试、严格Clippy通过，本轮不重新对公网CA下单。
+
+Invalid订单与webroot日志补齐：376项工作区测试通过（88 library、174 CLI、88 storage、14 core、10 protocol、2 validation）；本机和Windows GNU all-targets严格Clippy零warning。loopback CA验证invalid订单顶层problem保存、无顶层error时challenge error补查保存、第二次恢复零CA请求；CLI真实子进程human/JSON展示原始问题说明，不输出resume建议，key/CSR/journal字节不变，离线show仍保留problem。首次invalid的HTTP查询成功不伪装成HTTP400。无problem明确告知CA未提供，不猜实际失败原因。用户ftp.esaps.net记录只读检查发现order invalid但未存problem，未执行公网刷新或重下单。
+
+Webroot实际文件操作返回FileAction区分Published/Reused/Borrowed/Removed/Retained/Missing，INFO逐项输出绝对路径，DEBUG展示公开URL和配置映射指引（HTTP80入口、可允许HTTPS跳转、避免认证/应用重写）。测试核验不会把借用/替换文件记录为已删除；公开验证材料不涉及私钥。
+
+Webroot终态清理补齐：CA明确invalid时与成功签发共用cleanup_publication，只清理本次拥有且身份/内容未变的文件与所有权凭据。专项覆盖owned正常删除、borrowed保留、changed保留并维持cleanup_pending、replaced同内容不同身份保留；取消后的材料先保留，随后从loopback CA取得invalid才清理，原始418/unauthorized问题、私钥和CSR均保留。工作区377项通过；重构测试fixture后175项CLI及严格Clippy通过。没有自动清理既往用户invalid记录，也没有向公网CA发送新请求。
+
+用户在本轮确认webroot路径已实际成功签发；这是用户提供的真实环境验收记录，与本地loopback测试分开，不据此推断所有反向代理配置或所有平台均已通过。

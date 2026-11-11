@@ -22,7 +22,7 @@ cargo run -p aster_acme_cli -- account show --verify --data-dir ./data --json
 - 账户选择优先级：`--name` > 配置 `default_account` > `default`。
 - `account switch work` 仅切换本地默认账户，要求目标密钥和已注册元数据存在，不访问 CA，用 `toml_edit` 更新配置的 `default_account` 并保留注释和格式。
 - `--ca letsencrypt|zerossl|google` 选择公开提供商，或 `--ca-directory URL` 指定完整 ACME directory URL；两者互斥。注册时显式 `--user-agent` 保存到该账户 TOML 的 `user_agent`；后续本次参数覆盖账户设置，否则用内置默认值。默认值不写入文件，config 不保存 User-Agent。
-- `--timeout` 为单次请求期限，1–300 秒，默认 30 秒。只有 badNonce 自动限次重签；网络超时和 429/5xx 均不自动重放注册。
+- `--request-timeout` 为单次请求期限，1–300 秒，默认 30 秒。只有 badNonce 自动限次重签；网络超时和 429/5xx 均不自动重放注册。
 - `--contact you@example.com` 可在注册时设置联系人，参数覆盖配置 `contact`，显式参数验证后回写配置 `contact`（普通邮箱格式）。编辑配置只改变未来注册的默认值，不更新 CA 上已有账户；`account update-contact work --contact admin@example.org --yes` 更新已有 CA 账户，`--clear-contacts` 显式清空；不改全局注册默认联系人。
 - `--eab-kid ID --eab-key-file FILE` 提供 HS256 EAB，不把秘密放在命令行参数或账户元数据里。仅 register 接受注册选项。
 - 普通终端显示彩色状态和可操作诊断；重定向、`NO_COLOR`、`TERM=dumb` 禁用颜色。CA 返回的控制字符会转义。
@@ -46,7 +46,10 @@ ca = "letsencrypt"
 # 自定义 CA 时删除 ca 并使用 ca_directory = "https://ca.example/directory"。
 default_account = "default"
 contact = ["admin@example.org"]
-timeout = 30
+request_timeout = 30
+operation_timeout = 600
+max_polls = 30
+poll_interval = 5
 ```
 
 配置不接受持久化自动条款同意或 EAB 私密字段。相对路径以当前工作目录解析。配置上限 64 KiB，EAB 文件上限 8 KiB。文件存储使用平台适配：Unix 保留 owner/mode，Windows 继承权限；库仍可注入自有存储。
@@ -110,10 +113,10 @@ aster-acme account register --name personal --yes --accept-terms --contact you@e
 | 命令 | 接受的选项 | 无名称时的交互 |
 | --- | --- | --- |
 | list | --data-dir、--json、--verify；网络选项要求 --verify | 默认本地列举；--verify 逐个查询 CA |
-| register | --data-dir、--json、--name、--ca/--ca-directory、--user-agent、--timeout、--yes、--contact、--accept-terms、EAB | 先选新建/继续（默认新建）；继续才列已有账户，新建输入名称和 CA |
-| recover | --data-dir、--json、--name、--ca/--ca-directory、--user-agent、--timeout | 选择已有本地账户 |
+| register | --data-dir、--json、--name、--ca/--ca-directory、--user-agent、--request-timeout、--yes、--contact、--accept-terms、EAB | 先选新建/继续（默认新建）；继续才列已有账户，新建输入名称和 CA |
+| recover | --data-dir、--json、--name、--ca/--ca-directory、--user-agent、--request-timeout | 选择已有本地账户 |
 | show | --data-dir、--json、--name、--ca/--ca-directory、--verify；网络选项要求 --verify | 选择已有账户，默认离线 |
-| deactivate | --name、--ca/--ca-directory、--user-agent、--timeout、--yes、--data-dir、--json | 选择可用账户，再确认不可恢复的停用操作 |
+| deactivate | --name、--ca/--ca-directory、--user-agent、--request-timeout、--yes、--data-dir、--json | 选择可用账户，再确认不可恢复的停用操作 |
 | switch [NAME] | --name、--data-dir、--json | 只选择本地已注册账户 |
 
 四个命令共用 selection 组件及存储层账户枚举。显式名称/目标不提示选择；JSON 和非终端不交互，使用配置默认账户，switch 必须给目标。默认账户在交互列表中预选，条目显示绑定 CA。
@@ -162,7 +165,7 @@ aster-acme account switch personal --json
 aster-acme account register personal --yes --accept-terms --contact you@example.com --json
 aster-acme account recover personal --json
 aster-acme account deactivate personal --yes --json
-aster-acme account list --verify --timeout 10 --json
+aster-acme account list --verify --request-timeout 10 --json
 aster-acme account remove personal --yes --json
 ```
 
@@ -195,7 +198,7 @@ CLI bin 的 `doc = false` 避免 `aster-acme` 与库 `aster_acme` 生成相同 r
 ```sh
 aster-acme cert issue -a default -d example.com -d '*.example.com' -c manual_dns
 aster-acme cert issue --resume example.com
-aster-acme cert issue --resume example.com --operation <ID> --skip-dns-check
+aster-acme cert issue --resume example.com --operation <ID>
 aster-acme cert list
 aster-acme cert show example.com
 aster-acme cert show example.com --operation <ID> --verify
@@ -203,11 +206,11 @@ aster-acme cert show example.com --operation <ID> --verify
 
 `-n/--name` 指定证书名称，不指定使用主域名加随机后缀，自动碰撞重试；显式名称已存在则拒绝；`-a` 账户、`-d` 域名可重复、`-c` 验证实现、`-f` 跳过本地 DNS 检查。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
 
-只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 --skip-dns-check 不允许绕过过期/失效状态或重新下单。
+只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 不允许绕过过期/失效状态或重新下单。
 
-手动模式展示所有 TXT 值，同名记录必须共存；交互确认后用 Hickory 检查本地 DNS 可见性再通知 CA。--skip-dns-check 仅跳过本地可见性检查，CA 必须照常验证。首次 JSON/非交互执行返回 status=action_required 和记录/恢复命令，不因 -f 直接通知 CA；添加记录后再 --resume。action_required 正常退出 0，脚本应检查 status，不能将它当作已签出。完成后明确提示删除本次具体 TXT，客户端不自动改动用户 DNS。
+手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多2秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
---timeout 是单次 HTTP 限制，--wait-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 2 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前仅 manual_dns 可执行（内部使用 DNS-01）；自动 DNS、HTTP/TLS、续期、吊销、部署命令未开放。
+--request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 2 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前仅 manual_dns 可执行（内部使用 DNS-01）；自动 DNS、HTTP/TLS、续期、吊销、部署命令未开放。
 
 每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
 
@@ -228,7 +231,7 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 --help 统一显示 AsterACME <CLI version>、描述和 usage，所有子命令使用相同布局；version 文本按共享表格对齐产品版本与 Revision 等值列。构建时间的人类显示也使用统一 UTC 秒级格式，JSON 保留构建时 RFC3339。
 
 
-cert issue 支持 -y/--yes：恢复已有申请时仅跳过 TXT 人工确认，正常执行 DNS 检查；-f/--skip-dns-check 仅控制本地 DNS 查询。首次自动化申请即使同时带两个选项，也先返回 action_required 和新 TXT 值，发布后显式 resume。--yes 不关闭域名/证书名称选择、不接受条款，也不隐含 --json。公共存储与 HTTP 参数组位于 common/args.rs，各命令领取自己适用的组；完整范围和后续扩展约定见 [CLI 参数契约](../../docs/cli-contract.md)。
+cert issue/renew使用通用-y/--yes确认操作，人工新材料先返回待办，恢复再确认已发布；不猜输入/目标、不接受条款。DNS预检是建议，不再暴露跳过参数。公共存储/HTTP参数按命令作用域组合。
 
 续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
 
@@ -238,7 +241,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
@@ -254,3 +257,18 @@ cert renew --all 提供按托管身份顺序执行的批量入口，复用同一
 main 在 Tokio 创建前安装 registry 的 aster_forge_panic =0.1.0-alpha.2，协议库不修改宿主 hook。common/panic 注入 Unix 私有 writer、共用 UTC 时间及安全 sink；只在发生 panic 时创建 data dir 下 crash.log。报告移除完整原始 payload、保留函数回溯及构建身份，追加上限1MiB；文件链接、宽权限、锁占用/写失败不回退泄漏私有报告。common/session 与普通错误共享 JSON DTO，保持单文档及失败退出码。日志/交互采用显式最小 features，实际依赖合并由 scripts/check-dependency-features.py 检查。
 
 崩溃子进程、release 符号及 feature 负例验证见 [CLI 运行时测试](../../docs/cli-runtime-testing.md)。
+
+
+## HTTP验证与相似申请
+
+`cert issue -c manual_http -d example.com`输出HTTP URL/相对文件路径/精确内容；部署到现有HTTP服务器后`cert issue --resume NAME --yes`继续。`cert issue -c webroot --webroot /srv/www -d example.com`自动发布文件；仅使用同一webroot服务所有SAN，需要公网80端口和文件系统hard-link支持。只清理本次拥有且未变的文件，已有/替换文件保留；取消保留可恢复材料。
+
+CLI的ValidationMethod映射ACME的ChallengeKind，恢复/续期从持久化定义重建适配器。newOrder/finalize/challenge选择/材料派生及可恢复性判断都属于ACME。--if-similar-order支持脚本唯一匹配恢复；终端默认提供选择，多个候选不自动猜最新。DNS预检建议性、限2秒，错误不阻止CA，取消仍有效。无DNS跳过参数。
+
+Local polling defaults to 5 seconds. Set config `poll_interval` or override it with `--poll-interval <SECONDS>` (1–300); CLI > config > built-in default. Valid CA Retry-After still takes precedence. Applies to issue/resume and per-certificate renew, including --all.
+
+Webroot自动化输出：INFO逐项记录实际写入、复用、借用和清理的绝对文件路径；DEBUG展示规范webroot、公开URL和HTTP路径映射，提示服务器对/.well-known/acme-challenge/禁用认证/应用重写，HTTP80入口须可达且可按CA策略跳转HTTPS。只在成功发生文件效果后记录对应动作，用户已有/替换文件不报为已删除。
+
+订单invalid是终态，保留供show/--verify检查，不进入恢复选择，显式resume也在CA发现前拒绝。查询首次发现invalid时保存订单，再按需读取授权challenge的problem补全细节，不重发验证。公开诊断显示类型、说明及标识符子问题，不把HTTP200资源error伪装成HTTP400；无problem明确说明未提供。
+
+Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且内容/身份未变的验证文件及所有权凭据；复用同一cleanup入口。借用、用户替换或修改的文件不删除，站点目录、订单、密钥和CSR保留；修改/权限/保存失败保留cleanup_pending，仍以原始CA problem报告终态。取消、超时、轮询上限及不确定远端结果不触发失败清理；manual实现不自动删文件或DNS记录。既往已记录invalid的申请仍拒绝签发恢复，不以该改动隐式执行用户旧数据清理。

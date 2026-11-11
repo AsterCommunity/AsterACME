@@ -96,30 +96,18 @@ let result = client.issue(IssueRequest {
 
 ## 5. Challenge solver 生命周期
 
-统一生命周期：
+实际前台生命周期：
 
 ```text
-记录准备意图 → prepare → 持久化准备结果 → wait_ready
-    → 编排器通知 CA → 编排器轮询授权 → cleanup
+ACME 选择方法并推导材料 → 保存类型化 requirements → CLI solver 发布/确认
+    → ACME 通知 CA → 轮询授权/订单 → 保存证书 → solver 清理拥有的材料
 ```
 
-通知 CA 与解释授权结果由编排器负责。Solver 不持有 ACME 账户，不自行推进订单。
+库的 `ChallengeKind` 表示 DNS-01/HTTP-01/TLS-ALPN-01；`ValidationRequirement` 按方法保存 DNS TXT、HTTP URL/path/content 或 TLS 摘要，`ChallengeSolver` 是唯一实际注入的 ready/cleanup 边界。CLI 的 `ValidationMethod` 表示 manual_dns/manual_http/webroot，通过穷尽映射选择协议方法。协议 WireChallengeKind 仍无损保留未知线上扩展，不与 CLI 实现枚举混用。
 
-```rust
-// 示意：具体异步 trait 写法在实现时确定。
-trait ChallengeSolver {
-    async fn prepare(&self, input: &ChallengeInput,
-                     operation: &OperationContext) -> Result<PreparedChallenge>;
-    async fn wait_ready(&self, prepared: &PreparedChallenge,
-                        context: &ExecutionContext) -> Result<()>;
-    async fn cleanup(&self, prepared: &PreparedChallenge,
-                     context: &ExecutionContext) -> Result<()>;
-}
-```
+ACME 持有 challenge 选择、token/key authorization 推导、过期检查、CA 通知、轮询及恢复安全规则；CLI 持有输入、方法实现选择、文件/DNS 操作和人类提示。自动 DNS provider 尚未实现，不预留第二套 prepare/wait_ready/receipt API。旧的未接线 OperationContext/PreparedChallenge/ResourceOwnership 已移除，避免两条发布流程。
 
-`ChallengeInput` 是按方法区分的类型化材料：DNS 的 FQDN/TXT 值、HTTP 的 token/key authorization、TLS 的证书材料等。`PreparedChallenge` 包含 solver 类型、配置引用、schema 版本及可持久化资源句柄；provider 专用句柄使用带类型与版本的载荷，不使用不可恢复的进程内指针。恢复时需能根据配置引用重新构造 solver；其中不嵌入原始凭据。
-
-清理必须可重试；资源已不存在视为清理完成。Drop 不承担异步清理保证。取消、超时、验证失败和进程重启均需保留待清理记录。验证处理尚未结束时，不仅因本地超时就立即撤掉材料；恢复流程先对账远端状态，必要时等待或显式终止授权，再执行清理。
+恢复与续期以持久化 challenge/solver_id/solver_config 为准；存储验证它们与固定定义一致，CLI 不得覆盖。webroot 配置从具名 struct 序列化，保存规范绝对路径，无 provider secret。清理仅在证书已成功保存后尝试，失败保留 cleanup_pending 并给出提示，不把已签发结果改成失败；取消/超时不提前撤掉未完成授权的材料。
 
 ### DNS-01
 
@@ -290,7 +278,7 @@ Core 纯决策返回 SendKeyChange / ReconcileKeyChange / FinalizeKeyChange。�
 
 本地名称默认主域名加随机后缀，碰撞重试；-n 显式名称已存在则拒绝。托管定义拥有固定域名集合/账户/CA/验证方式，续期版本沿用身份；名称不是操作 ID：certs/<name>/<UTC-time>-<random8> 保存多轮申请，created_at 是本地请求时间。resume <name> 唯一候选直接恢复，多候选交互仅显示主域名、时间和状态；JSON/无终端多候选要求 --operation。没有候选不创建申请，过期候选可见但不重新验证。OrderStatus 不增加 expired wire 变体；订单 expires、授权 expires、证书 notAfter 单独保存和显示。pending/valid 订单与 valid 授权按 RFC 检查必需 expires；未知状态不执行。
 
-IssueService 注入 `dyn IssueSession` 与 `dyn DnsReadiness`。当前 solver_id 固定 manual_dns，人工 TXT 发布/确认由 CLI 负责，DNS crate 只检查可见性；通用自动 ChallengeSolver 的 provider 发布/receipt 生命周期尚待实现，不将人工操作伪装成自动 DNS provider。force 只跳过本地查询，不跳过用户操作、CA 验证、状态机、有效期或证书检查。首次非交互执行总是 yield action_required，用户添加 TXT 后显式 resume；同名 TXT 多值一起准备才允许通知任一 challenge。
+IssueService 注入 `dyn IssueSession` 与 `dyn ChallengeSolver`，所有方法共用同一签发状态机。当前实现 manual_dns、manual_http、webroot。人工方式首次自动化调用先 yield action_required，恢复必须显式确认；DNS 预检最多2秒，缺失/解析错误/超时只警告并继续 CA，用户取消和整体期限仍停止。webroot 自动准备现有服务器的HTTP文件，不开启监听端口；HTTP 不支持通配符。
 
 newOrder 的持久化创建意图先于 POST；201 的 Location 先存，再解析 body。无 Location 的响应丢失没有标准幂等恢复路径，保留 uncertain，不自动再下单。通知 challenge 使用 `{}`，查询使用零字节 payload。SubmissionState 保存于通知/finalize 前，core 根据 Submitted + pending/ready 返回轮询动作，不能按未变化的远端状态重复提交。badNonce 是 transport 的有限重签例外，保持同一 payload。网络超时/429/5xx 本轮不自动重放；可恢复查询失败由用户显式 resume，服务端 Retry-After 保留在下一次轮询时间中。
 
@@ -318,7 +306,7 @@ IssueSession.record 异步读取最新 durable 状态，不返回创建会话时
 
 根 profile.release 设为 opt-level="z"、lto=true、codegen-units=1、debug=0、panic="unwind"、strip="debuginfo"，对 CLI 与依赖生效；保留函数符号不代表任意 panic 都可恢复。直接依赖均来自 registry 或本地 workspace，不再保留四个 Git 来源；Forge alpha 版本明确锁定，避免 prerelease 选择漂移。HTTP feature 精简已通过 [Forge #64](https://github.com/AsterCommunity/AsterForge/pull/64) 和已发布 alpha.2 接入（原问题为 [Forge #63](https://github.com/AsterCommunity/AsterForge/issues/63)）；panic 输出/私有文件机制由 [Forge #62](https://github.com/AsterCommunity/AsterForge/issues/62) 跟踪，下游接入为 [ACME #1](https://github.com/AsterCommunity/AsterACME/issues/1)，现通过已发布 aster_forge_panic =0.1.0-alpha.2 接入，仅 CLI 入口安装。
 
-公共 LocalArgs/HttpArgs 归 common/args.rs，不再由 account 模块拥有供 cert 导入。--yes 确认当前明确操作，不等于关闭交互，--skip-dns-check/--accept-terms/--verify/--json 各有独立语义；见 [CLI 合同](cli-contract.md)。manual_dns 恢复时 --yes 绕过人工确认后仍调用同一 dyn DnsReadiness，第一次自动化调用保持 action_required。联系人 register/update-contact 都使用 -m；cert show 的位置 NAME 与 -n/--name 互斥；证书名称、账户名称、完整 operation ID 统一在解析边界校验。
+公共 LocalArgs/HttpArgs 归 common/args.rs，不再由 account 模块拥有供 cert 导入。--yes 确认当前明确操作，不等于关闭交互，--accept-terms/--verify/--json 各有独立语义；见 [CLI 合同](cli-contract.md)。manual_dns/manual_http 恢复时 --yes 跳过操作确认，第一次自动化调用保持 action_required。联系人 register/update-contact 都使用 -m；cert show 的位置 NAME 与 -n/--name 互斥；证书名称、账户名称、完整 operation ID 统一在解析边界校验。
 
 ## 续期计划与吊销的当前实现
 
@@ -382,3 +370,18 @@ state_file 集中必要平台差异。Unix 复用 Forge 的目录描述符 IO �
 Windows in_use 是完整副本目录，含 fullchain.pem/cert.pem/ca.pem/private-key.pem 与 .generation 所有权标记；Unix 保持相对符号链接。先在同级 .in_use-<operation> 准备全部文件，再把旧目录保留到 .in_use.previous，最后把完整新目录改名为 in_use。catalog 提交前保留旧副本；持证书锁重启后按已保存选择回滚或清理。它有两次 rename 间的可见空隙，属于可恢复切换，不保证外部读取者跨平台无间隙或原子交换。未知用户内容不删除，失败不逐个覆写正在使用的四个文件。
 
 本地托管名称使用跨平台纯校验，拒绝路径转义、Windows 设备名和尾点；DNS 通配符仍在 identifiers 中，自动托管名使用 wildcard- 前缀，不能把 * 放进 Windows 路径。平台原生 CI 矩阵覆盖 Linux/macOS/Windows；交叉编译只证明构建与类型，运行结果需另行确认。
+
+
+### HTTP webroot 发布与审查边界
+
+webroot 规范化一次根目录，对所有 SAN 使用同一根；用户必须配置现有服务器在公网80端口提供 /.well-known/acme-challenge/<token>。CLI 不查询任意CA提供的URL、不启动HTTP/TLS服务器。已有相同内容借用、不覆盖其他内容；操作ID与token摘要确定同级隐藏所有权文件，并通过独占 hard_link 发布完整已同步内容。两条路径的文件身份在重启后仍可比较，cleanup 只移除身份及内容均未变的拥有文件；用户替换/修改文件和已有内容保留。webroot文件系统必须支持hard links（同目录保证同卷），否则明确失败；已声明根及祖先目录应由部署方控制，后续AsterFs可信根接口可继续收紧路径替换边界。
+
+只对新创建的公开验证文件/目录设Unix 0644/0755，Windows沿用继承权限；不改变已有webroot或用户文件权限。私钥/CSR从不写入webroot。完成后仅清理拥有的验证文件/所有权文件，保留站点目录和无关内容；清理失败不撤销证书保存。
+
+本轮CLI职责审查把域名集合/通配符限制及相似未完成定义匹配收回ACME类型，CA方法/token/通知/恢复由库统一，移除CLI重复账户可用性判断（存储/库仍执行其统一规则）。事务输入只保留IssueRequest或已保存记录，不把完整解析参数再穿过编排调用；避免为Windows枚举体积单纯添加Box。
+
+--debug通过产品target的tracing事件记录安全阶段元数据，common/log统一时间、DEBUG标签与转义；不打印请求/响应正文或nonce。IssueRecord::check_recovery归库，CLI在directory discovery前调用，与嵌入式run共用相同规则；不确定创建无需一次无意义CA查询才报错。
+
+Invalid订单的恢复资格与问题提取归IssueRecord，CLI选择器只调用resume_candidate/check_recovery。服务先保存invalid资源，在缺少订单problem时只读刷新授权，不执行publication/ack/finalize；展示优先订单problem，回退challenge problem。webroot文件操作返回具名FileAction，日志以真实效果生成；发布/清理INFO带绝对路径，DEBUG带根目录/URL映射，借用或用户替换文件单独保留。
+
+Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且内容/身份未变的验证文件及所有权凭据；复用同一cleanup入口。借用、用户替换或修改的文件不删除，站点目录、订单、密钥和CSR保留；修改/权限/保存失败保留cleanup_pending，仍以原始CA problem报告终态。取消、超时、轮询上限及不确定远端结果不触发失败清理；manual实现不自动删文件或DNS记录。既往已记录invalid的申请仍拒绝签发恢复，不以该改动隐式执行用户旧数据清理。

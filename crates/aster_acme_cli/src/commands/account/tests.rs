@@ -92,7 +92,7 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
 #[test]
 fn list_http_options_require_explicit_verification() {
     for command in [
-        vec!["aster-acme", "account", "list", "--timeout", "1"],
+        vec!["aster-acme", "account", "list", "--request-timeout", "1"],
         vec!["aster-acme", "account", "list", "--user-agent", "client"],
     ] {
         assert!(Args::try_parse_from(command).is_err());
@@ -103,7 +103,7 @@ fn list_http_options_require_explicit_verification() {
             "account",
             "list",
             "--verify",
-            "--timeout",
+            "--request-timeout",
             "1",
             "--json"
         ])
@@ -143,7 +143,7 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
         AccountCommand::List(ListArgs {
             verify: true,
             http: HttpArgs {
-                timeout: Some(1),
+                request_timeout: Some(1),
                 ..HttpArgs::default()
             },
             local: LocalArgs {
@@ -260,7 +260,7 @@ fn list_and_deactivate_expose_only_their_own_arguments() {
         "--ca",
         "--ca-directory",
         "--user-agent",
-        "--timeout",
+        "--request-timeout",
         "--yes",
         "--accept-terms",
     ] {
@@ -408,7 +408,7 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
             data_dir: Some(temp.path().into()),
             name: Some("default".into()),
             json: true,
-            timeout: Some(1),
+            request_timeout: Some(1),
             ..AccountArgs::default()
         }
         .into(),
@@ -546,7 +546,7 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
     }
     for flag in [
         "--user-agent",
-        "--timeout",
+        "--request-timeout",
         "--name",
         "--ca",
         "--ca-directory",
@@ -556,8 +556,8 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
                 .is_err()
         );
     }
-    for flag in ["--user-agent", "--timeout"] {
-        let value = if flag == "--timeout" {
+    for flag in ["--user-agent", "--request-timeout"] {
+        let value = if flag == "--request-timeout" {
             "10"
         } else {
             "client/1"
@@ -611,7 +611,7 @@ impl From<super::args::AccountArgs> for super::args::NetworkArgs {
             },
             http: HttpArgs {
                 user_agent: args.user_agent,
-                timeout: args.timeout,
+                request_timeout: args.request_timeout,
             },
             local: LocalArgs {
                 data_dir: args.data_dir,
@@ -698,7 +698,7 @@ async fn existing_registration_requires_confirmation_before_any_mutation_or_http
         contact: vec!["change@example.com".into()],
         accept_terms: true,
         json: true,
-        timeout: Some(1),
+        request_timeout: Some(1),
         ..AccountArgs::default()
     };
     let error = execute::execute(
@@ -768,7 +768,7 @@ async fn registration_saves_explicit_contact_before_discovery_failure() {
                     ca_directory: Some(directory.as_str().into()),
                     contact: vec!["you@example.com".into()],
                     accept_terms: true,
-                    timeout: Some(1),
+                    request_timeout: Some(1),
                     ..AccountArgs::default()
                 }
                 .into()
@@ -1077,7 +1077,7 @@ async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
                 options: AccountArgs {
                     ca_directory: Some(directory.as_str().into()),
                     data_dir: Some(temp.path().into()),
-                    timeout: Some(1),
+                    request_timeout: Some(1),
                     ..AccountArgs::default()
                 }
                 .into()
@@ -1109,16 +1109,28 @@ async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
 #[test]
 fn parser_requires_commands_and_bounds_timeout_and_eab_pairs() {
     assert!(Args::try_parse_from(["aster-acme"]).is_err());
-    for timeout in ["0", "301", "-1", "x"] {
+    for request_timeout in ["0", "301", "-1", "x"] {
         assert!(
-            Args::try_parse_from(["aster-acme", "account", "register", "--timeout", timeout])
-                .is_err()
+            Args::try_parse_from([
+                "aster-acme",
+                "account",
+                "register",
+                "--request-timeout",
+                request_timeout
+            ])
+            .is_err()
         );
     }
-    for timeout in ["1", "300"] {
+    for request_timeout in ["1", "300"] {
         assert!(
-            Args::try_parse_from(["aster-acme", "account", "register", "--timeout", timeout])
-                .is_ok()
+            Args::try_parse_from([
+                "aster-acme",
+                "account",
+                "register",
+                "--request-timeout",
+                request_timeout
+            ])
+            .is_ok()
         );
     }
     assert!(

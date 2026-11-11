@@ -94,10 +94,10 @@ CLI 的 ACME Problem 诊断集中到 common/error/problem，账户/签发/吊销
 ```sh
 aster-acme cert renew web
 aster-acme cert renew web --now
-aster-acme cert renew web --yes --skip-dns-check --json
+aster-acme cert renew web --yes --json
 ```
 
-renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择。不能覆盖域名、账户、算法、验证实现或指定历史版本；使用稳定 cert.toml。默认只到期执行，未到期返回成功的 status=not_due，不创建版本、密钥、订单或发 CA 请求。--now 仅提前续期；--yes 只确认已发布 TXT；--skip-dns-check 只跳过本地 DNS 查询。原 --force/-f 已删除，没有别名，本项目没有其他 force 语义。
+renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择。不能覆盖域名、账户、算法、验证实现或指定历史版本；使用稳定 cert.toml。默认只到期执行，未到期返回成功的 status=not_due，不创建版本、密钥、订单或发 CA 请求。--now仅提前续期；--yes确认操作，不补填输入或条款。DNS预检建议性且有界，CA仍决定授权，取消/总期限不变，无DNS跳过或force参数。
 
 名称选择后按账户→证书锁序取得租约，锁内再次验证 expected_in_use 和计划；已变更 in_use 拒绝，pending 吊销不能绕过，confirmed revoked 仅显式 --now 才允许替换。已存在同一 predecessor 的未完成续期时恢复它，不重复生成 CSR/密钥或新订单。首次自动化续期仍先返回新 TXT，后续 cert renew NAME 或精确 issue --resume NAME --operation ID 继续；多个未完成候选不猜测。
 
@@ -117,11 +117,11 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 
 ## 批量续期
 
-`cert renew --all` 按托管名称排序顺序执行，每份托管证书只处理选用的 in_use 版本，历史版本不单独调度。--all 与位置 NAME / --name 互斥，--now、--yes、--skip-dns-check、HTTP 参数和 --wait-timeout 保持单次含义；wait-timeout 是每项执行预算，不是整个批次预算。
+`cert renew --all` 按托管名称排序顺序执行，每份托管证书只处理选用的 in_use 版本，历史版本不单独调度。--all 与位置 NAME / --name 互斥，--now、--yes、HTTP 参数和 --operation-timeout 保持单次含义；wait-timeout 是每项执行预算，不是整个批次预算。
 
 批量复用单份证书的事务执行入口、账户→证书锁序、到期检查、未完成恢复、ARI/replaces 和产物校验，不另写签发逻辑。一项失败继续后续项；无 in_use 的托管证书标记 skipped，不隐式完成初次申请。目录损坏等无法安全枚举的库存错误在批次开始前整体报错。
 
-批量不弹逐项确认问题。手动 DNS 首次新材料始终先返回 action_required 并保存 TXT；已有材料则调用正常 DNS 检查（除非明确 --skip-dns-check），不会因为 --all 自动假设已发布。逐项 action_required 不阻塞后续证书，也不计为完成。仍可用 `cert renew NAME` 或带完整 operation ID 的 issue --resume 继续。
+批量不弹逐项确认问题。手动 DNS 首次新材料始终先返回 action_required 并保存 TXT；已有材料则调用正常 DNS 检查（除非明确），不会因为 --all 自动假设已发布。逐项 action_required 不阻塞后续证书，也不计为完成。仍可用 `cert renew NAME` 或带完整 operation ID 的 issue --resume 继续。
 
 单次与批量共用 CertificateResult（Issuance/NotDue）及实际 IssueOutcome；批量逐项增加 Skipped/Failed/Cancelled，最终一次渲染。人类输出汇总表、计数、错误建议和 TXT/产物细节；JSON stdout 仅一个对象，包含 status、summary 和 results，每项的 result 为带 status 的结构。失败时 status=partial_failure、退出1；无失败但有待办时 status=action_required、退出0；全部处理完毕为completed（不代表每份证书都新签出，需检查计数）；取消为cancelled、退出130。空库存成功返回空列表及零计数。退出边界不会另加第二份JSON错误。
 

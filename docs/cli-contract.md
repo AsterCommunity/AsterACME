@@ -8,7 +8,6 @@
 | --- | --- | --- |
 | `-y / --yes` | 自动接受当前命令所有操作确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
 | `--accept-terms` | 注册时同意所选 CA 当前实际公布的条款 | 不确认复用已有账户，不作为永久自动接受配置 |
-| `--skip-dns-check` | 在 cert issue/renew 跳过本地 DNS 可见性检查 | 不免除 CA 验证，不忽略过期/身份/密钥/CSR/证书检查，不覆盖用户文件 |
 | `--verify` | 查询已有资源的 CA 状态，更新观察快照 | 不启动验证、不 finalize、不新建订单 |
 | `--json` | 输出结构化命令结果/诊断，禁止提示、ANSI 和人类阶段日志 | 不隐含确认或强制，不猜测歧义目标 |
 
@@ -27,7 +26,7 @@
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
 | `cert issue --resume <NAME>` | 跳过“Have you published these TXT values?”，然后正常检查 DNS |
 
-首次手动 DNS 自动化申请必须先让用户/脚本取得新 TXT 值；即使传 --yes/--skip-dns-check 也返回 action_required，不因“确认”假设记录已发布。首次终端申请未带 --yes 时仍可以现场输入和继续。发布后 resume，仍由 CA 完成实际验证。没有 --yes 的非 TTY/JSON resume 也不弹提示，按已有脚本行为直接检查 DNS；--yes 是显式确认语义，保持非终端一律不提示的统一规则。
+人工验证首次脚本调用先返回新材料待办，--yes不能让尚未展示的材料被当作已发布。非TTY/JSON恢复不弹问题；必须--yes显式确认，否则仍返回action_required。终端未带--yes可现场确认；CA始终决定实际授权。
 
 --yes 不出现在 list/show/switch/recover/version；这些命令没有相同的危险操作确认。issue/renew及后续验证实现均按这里的通用确认语义扩展，不让 --yes 获得额外隐式权限。
 
@@ -54,7 +53,6 @@
 | `-c` | `--challenge` | 验证实现，目前只有 manual_dns |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
-| — | `--skip-dns-check` | cert issue 的本地 DNS 检查覆盖 |
 
 其他参数保留明确长名称，不为每个选项硬配短字母。删除的 order、--solver、-c dns-01、--config 不保留兼容别名。
 
@@ -64,7 +62,7 @@
 
 | 命令 | 业务参数 |
 | --- | --- |
-| account list | --verify；--user-agent / --timeout 仅在 verify 时可用 |
+| account list | --verify；--user-agent / --request-timeout 仅在 verify 时可用 |
 | account show | [NAME] / -n；--verify；已有账户 CA 选择；HTTP 参数要求 verify |
 | account switch | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
 | account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、HTTP、-y、成对 EAB |
@@ -73,8 +71,8 @@
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
 | account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account remove | [NAME] / -n、-y；仅本地操作 |
-| cert renew | [NAME] / -n 或 --all；--now、-y、--skip-dns-check、HTTP、--wait-timeout；定义固定，未到期返回 not_due |
-| cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、--skip-dns-check、HTTP、--wait-timeout |
+| cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
+| cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
@@ -87,7 +85,7 @@
 
 - `--data-dir PATH`：唯一状态根覆盖；配置固定为其中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
 - `--ca` 与 `--ca-directory` 互斥；内置只有公开生产提供商 letsencrypt/zerossl/google。已有账户始终绑定原 CA，显式不同 CA 拒绝，不因选项换成新账户。
-- `--user-agent` 与 `--timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；wait-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
+- `--user-agent` 与 `--request-timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；wait-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。
 - `--contact` 是完整替换列表，`--clear-contacts` 明确清空，二者互斥；缺省输入不当作清空。
 - `--eab-kid` 与 `--eab-key-file` 必须成对且只属于注册。秘密从文件读取，不直接放 CLI 参数中。
@@ -106,11 +104,11 @@ cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / auth
 
 证书密钥和吊销原因共用库/协议枚举产生 CLI 选项；支持算法与 RFC 原因码、CA 可拒绝边界见生命周期契约。账户 register/rotate-key 同样支持 -k/--key-type，但独立于证书选项；普通账户操作沿用已保存密钥。
 
---now 只在 cert renew 提前执行，不隐含 --yes/--skip-dns-check。--force/-f 已移除，无兼容别名。issue/renew 共享 RunArgs，但续期不暴露定义覆盖参数。账户list JSON使用ca_query.requested/refreshed/failed，remove仅描述本次ca_request_performed。
+--now只在cert renew提前执行，不隐含--yes。DNS跳过及force参数已移除，无别名；issue/renew共享RunArgs，续期不允许定义覆盖。账户list JSON按ca_query记录查询证据，remove只描述本次CA请求。
 
 批量入口为 cert renew --all，与NAME/--name互斥；顺序检查托管身份，not_due/待办/跳过/完成/失败分开计数，单项失败继续，Ctrl-C停止整个批次。批量不弹TXT确认，首次新TXT仍yield。JSON一次输出完整汇总：失败退出1，取消130，待办无失败退出0；不会再追加第二份错误JSON。细节见生命周期契约。
 
-cert issue --resume 不带名称时在真实终端选择未完成申请，选择行包含名称/SAN摘要/UTC申请时间/状态；--resume NAME继续直接定位，脚本/JSON需提供名称或--operation完整ID，不猜最新。只筛选未完成记录，完成版本不进入恢复选择。DNS未就绪的人类日志提示--skip-dns-check只跳本地查询，CA仍验证；JSON不增加人类日志。
+cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN摘要/UTC时间/状态；脚本提供名称或完整operation ID，不猜最新。完成版本不参与签发恢复选择，DNS预检仅建议，JSON不输出人类日志。
 
 新建 cert issue 必须显式 -c/--challenge，无默认验证方式；终端可在 -c 已指定时引导域名输入。--yes不补填验证方式。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
 
@@ -131,3 +129,49 @@ cert issue --resume 不带名称时在真实终端选择未完成申请，选择
 ## 意外 panic
 
 仅可执行入口安装 Forge panic alpha.2，使用已解析的数据根；不额外增加 CLI 参数。panic 诊断写 stderr，JSON 沿用单个 `{error:{message,hint}}` 对象，进程退出1；已完成输出不追加第二文档。提示含私有报告位置或不可用原因的安全指引，不包含原始 panic、私钥/凭据或回溯。crash.log 仅 panic 时产生，0600、追加、上限1MiB，原始 Message 移除；不改变已保存申请和密钥，不自动重试远端操作。help/version 与正常执行不创建 crash.log。
+
+
+## 方法驱动签发及相似请求
+
+新申请显式 -c manual_dns/manual_http/webroot，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
+
+本地DNS预检限2秒，仅建议：不存在TXT、系统解析器失败和查询超时均WARN后继续CA。用户取消/整体deadline仍终止。DNS skip/force参数已删除，无别名。`--yes`只接受操作确认，不补填验证方式、名称或条款；恢复人工材料才可提交确认。
+
+--if-similar-order 与--resume/--name互斥。新请求没有显式名称时，完整定义匹配库返回的未完成候选；终端默认选择恢复或新建。脚本不带该参数且存在匹配则失败并输出精确恢复命令；带该参数时唯一匹配恢复、零匹配新建、多匹配失败。--yes不承担目标选择。创建已提交而缺少订单URL的记录也是候选，避免静默重复；选中后库仍返回CreationUncertain而不重发newOrder。已过期、invalid及明确CSR拒绝不自动恢复。
+
+Creating ACME order日志同时带实现ID和协议名；创建密钥/CSR日志带托管名称。列表纯文本对齐后着色，至少保留两列空格，恢复命令保留可直接复制的空格。
+
+
+## Debug诊断
+
+--debug是跨命令诊断选项，可放根命令或具体子命令后。它只打开产品target的安全DEBUG事件，时间/配色/转义复用common/log和输出会话。显示检查点phase、creation_submitted、是否保存order URL、请求类别、HTTP状态/耗时及有限nonce重试序号；不记录私钥、CSR/JWS正文、响应正文、nonce值或带凭据的原始URL。JSON模式仍关闭人类诊断并只输出一份结果/错误；需要详细人类诊断时去掉--json。未传--debug时保留RUST_LOG环境过滤机制。
+
+```sh
+aster-acme cert issue --resume <NAME> --yes --debug
+```
+
+缺少Location且已记录newOrder意图时，在访问CA directory前由库的check_recovery判断CreationUncertain；不会在公开输出里重复给出无效的“不断resume”建议。Debug无法补回先前已丢失的Location，用户需保留材料并检查后显式决定是否新建独立请求。
+
+
+--max-polls适用于issue/renew，默认30、范围1–1000，每次调用/每份证书独立计数，只计算订单轮询轮次（其内可有必要授权查询），不计算directory/nonce/挑战通知/finalize。每轮显示(n/limit)，等待注明持久化期限来自Retry-After还是local polling interval；不缩短CA规定的等待，Retry-After为0仍使用100ms最小延迟防止忙循环。达到上限返回PollLimit并保留全部检查点，下次resume重新计数且不新下单。有效授权不重复查询。HTTP预检使用共享池，最多2秒、8192字节、最多跟随10次HTTP/HTTPS重定向（TLS证书仍校验）；缺失/错误/超时只WARN继续CA，取消/整体deadline仍停止。
+
+
+## 三种独立执行限制
+
+| CLI参数 | config.toml字段 | 内置默认 | 范围/含义 |
+| --- | --- | --- | --- |
+| --request-timeout | request_timeout | 30秒 | 1–300秒；单个HTTP请求连接到响应读取 |
+| --operation-timeout | operation_timeout | 600秒 | 1–86400秒；单次证书签发/恢复执行预算，包含确认与轮询等待 |
+| --max-polls | max_polls | 30轮 | 1–1000；每份证书每次调用的订单轮询次数 |
+
+优先级统一为显式CLI > 配置 > 内置。CLI不写回这些单次覆盖，配置缺省可用内置默认；生成模板写明三项用途。批量续期为每份证书独立应用预算，Retry-After仍限制下次查询，不被轮数覆盖。未发布：timeout配置字段、--timeout及--wait-timeout删除，无兼容别名/自动迁移；已有timeout需由用户改成request_timeout。operation预算目前围绕实际签发执行，不包含进入执行前的账户/证书目标选择。
+
+每轮实际等待均显示来源，取消等待日志节流以免隐藏来源变化。Retry-After未返回或无法解析时使用local polling interval；debug显示响应中解析后的retry_after和调度间隔。HTTP-01从HTTP80入口可按CA策略跳转HTTPS；本地预检最多10次跳转，共享原有时间/内容上限，仍验证HTTPS证书。CA可能采用不同证书校验策略，预检失败仍只是建议。ACME签名请求的禁跳转规则不受影响。
+
+本地轮询默认5秒；config的`poll_interval`或`--poll-interval <SECONDS>`可覆盖（1–300秒），CLI > 配置 > 内置。有效CA Retry-After仍优先；适用于issue/resume及每份证书renew（含--all），配置缺省不写回也能使用5秒。
+
+Webroot自动化输出：INFO逐项记录实际写入、复用、借用和清理的绝对文件路径；DEBUG展示规范webroot、公开URL和HTTP路径映射，提示服务器对/.well-known/acme-challenge/禁用认证/应用重写，HTTP80入口须可达且可按CA策略跳转HTTPS。只在成功发生文件效果后记录对应动作，用户已有/替换文件不报为已删除。
+
+订单invalid是终态，保留供show/--verify检查，不进入恢复选择，显式resume也在CA发现前拒绝。查询首次发现invalid时保存订单，再按需读取授权challenge的problem补全细节，不重发验证。公开诊断显示类型、说明及标识符子问题，不把HTTP200资源error伪装成HTTP400；无problem明确说明未提供。
+
+Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且内容/身份未变的验证文件及所有权凭据；复用同一cleanup入口。借用、用户替换或修改的文件不删除，站点目录、订单、密钥和CSR保留；修改/权限/保存失败保留cleanup_pending，仍以原始CA problem报告终态。取消、超时、轮询上限及不确定远端结果不触发失败清理；manual实现不自动删文件或DNS记录。既往已记录invalid的申请仍拒绝签发恢复，不以该改动隐式执行用户旧数据清理。

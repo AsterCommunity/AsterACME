@@ -2,6 +2,32 @@
 use crate::common::{error::CliResult, terminal};
 use aster_acme::issuance::{CertificateName, IssueRecord};
 
+/// Return a saved terminal problem for an explicit target, without hiding valid
+/// unfinished siblings under the same managed name or performing a CA query.
+pub(super) fn check_explicit_resume(
+    records: &[IssueRecord],
+    explicit: &super::args::ResumeTarget,
+    operation: Option<&str>,
+) -> CliResult<()> {
+    if let super::args::ResumeTarget::Named(name) = explicit {
+        let matches = |record: &&IssueRecord| {
+            record.name.as_str() == name && operation.is_none_or(|id| id == record.operation_id)
+        };
+        if !records
+            .iter()
+            .filter(matches)
+            .any(IssueRecord::resume_candidate)
+            && let Some(invalid) = records
+                .iter()
+                .filter(matches)
+                .find(|record| record.unfinished() && !record.resume_candidate())
+        {
+            invalid.check_recovery(time::OffsetDateTime::now_utc())?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn certificate_name(
     records: &[IssueRecord],
     explicit: Option<&str>,
@@ -102,7 +128,7 @@ pub(super) fn choose(
         .filter(|record| {
             record.name == *name
                 && match mode {
-                    RequestSelection::Unfinished => record.unfinished(),
+                    RequestSelection::Unfinished => record.resume_candidate(),
                     RequestSelection::InUse | RequestSelection::Any => true,
                 }
                 && id.is_none_or(|id| id == record.operation_id)

@@ -22,7 +22,6 @@ fn issue_arguments_keep_resume_and_new_requests_separate() {
             "issue",
             "-d",
             "example.com",
-            "--skip-dns-check",
             "-a",
             "work",
             "-n",
@@ -65,7 +64,7 @@ fn record(id: char, created: &str) -> aster_acme::issuance::IssueRecord {
         "operation_id":id.to_string().repeat(43),"name":"example.com","created_at":created,
         "account_name":"default","account_id":"account","directory":"https://ca.example/directory",
         "account_url":"https://ca.example/account","account_thumbprint":"key","identifiers":["example.com"],
-        "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","phase":"creating_order","creation_submitted":false,"order_url":null,"order":null,
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","phase":"creating_order","creation_submitted":false,"order_url":null,"order":null,
         "authorizations":[],"finalize_submitted":"not_submitted","next_poll_at":null,"certificate_not_after":null
     })).unwrap()
 }
@@ -174,7 +173,7 @@ fn one_challenge_option_selects_publication_without_exposing_wire_method() {
         };
         assert!(matches!(
             args.challenge,
-            Some(super::super::args::Challenge::ManualDns)
+            Some(super::super::validation::ValidationMethod::ManualDns)
         ));
     }
     for flag in [
@@ -213,7 +212,7 @@ fn manual_action_is_a_warning_but_json_retains_a_typed_action_result() {
     let record = record('a', "2026-01-01T00:00:00Z");
     let outcome = aster_acme::issuance::IssueOutcome::ActionRequired {
         record: Box::new(record),
-        records: vec![aster_acme::issuance::DnsRequirement {
+        records: vec![aster_acme::issuance::ValidationRequirement::Dns01 {
             name: "_acme-challenge.example.com".into(),
             value: "opaque-TXT-value".into(),
         }],
@@ -238,7 +237,7 @@ fn manual_action_is_a_warning_but_json_retains_a_typed_action_result() {
 fn issued_certificate_has_a_done_summary_and_independent_manual_cleanup() {
     let outcome = aster_acme::issuance::IssueOutcome::Completed {
         record: Box::new(record('a', "2026-01-01T00:00:00Z")),
-        cleanup: vec![aster_acme::issuance::DnsRequirement {
+        cleanup: vec![aster_acme::issuance::ValidationRequirement::Dns01 {
             name: "_acme-challenge.example.com".into(),
             value: "manual-value".into(),
         }],
@@ -452,7 +451,6 @@ fn certificate_yes_has_short_and_long_forms_without_implying_force_or_other_perm
             panic!("expected issue");
         };
         assert!(args.run.yes);
-        assert!(!args.run.skip_dns_check);
         assert!(!args.run.local.json);
     }
     for command in ["list", "show"] {

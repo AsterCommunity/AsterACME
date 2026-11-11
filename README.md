@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  An embeddable Rust ACME client and CLI for account management, manual DNS validation, and recoverable certificate issuance.
+  An embeddable Rust ACME client and CLI for account management, DNS and HTTP validation, and recoverable certificate issuance.
   <br />
   Explicit protocol states, durable checkpoints, and certificate files you can deploy.
 </p>
@@ -27,9 +27,9 @@
 
 ## What is AsterACME?
 
-AsterACME implements ACME account operations and manual DNS-01 certificate issuance as a Rust library and command-line application. You request a certificate; the library creates the order, tracks authorizations, submits the fixed CSR, downloads the issued chain, and persists the result. The CLI supplies terminal interaction and local storage.
+AsterACME implements ACME account operations and DNS-01/HTTP-01 certificate issuance as a Rust library and command-line application. You request a certificate; the library creates the order, tracks authorizations, submits the fixed CSR, downloads the issued chain, and persists the result. The CLI supplies terminal interaction, publication implementations and local storage.
 
-The project is under active development and has not released its ACME packages. Manual issuance and recovery, ARI renewal planning, and account-signed certificate revocation are implemented. Automated DNS providers, HTTP/TLS validation, automatic renewal, daemon scheduling, and deployment hooks remain planned.
+The project is under active development and has not released its ACME packages. Manual issuance and recovery, ARI renewal planning, and account-signed certificate revocation are implemented. Automated DNS providers, standalone HTTP/TLS validation, automatic renewal, daemon scheduling, and deployment hooks remain planned.
 
 ## Where it fits
 
@@ -128,6 +128,26 @@ Each new issue creates an independent managed certificate. Default names combine
 
 `cert show` without a name guides terminal selection. Certificate listing and inspection do not advance validation or issuance. Expired requests remain visible but cannot continue validation or finalization.
 
+## Validation implementations
+
+| `-c/--challenge` | Protocol | Behavior |
+| --- | --- | --- |
+| `manual_dns` | DNS-01 | Publish TXT yourself; local DNS precheck is advisory (up to 2 seconds) |
+| `manual_http` | HTTP-01 | Serve the exact saved URL/path/content yourself, then resume |
+| `webroot` | HTTP-01 | Write/clean owned challenge files below an existing HTTP server root |
+
+```sh
+aster-acme cert issue -d example.com -c manual_http
+aster-acme cert issue --resume example.com-xxxxxxxx --yes
+aster-acme cert issue -d example.com -c webroot --webroot /srv/www
+```
+
+HTTP methods do not support wildcard identifiers. The existing server must expose port 80 and the challenge path for every SAN; this is not standalone mode. Webroot requires hard-link support and never overwrites conflicting files or deletes borrowed/changed files. The root/configuration is persisted for resume and renewal. New public files use Unix 0644/0755; existing site permissions are retained and Windows inherits permissions.
+
+Without an explicit new name, terminal issuance offers matching unfinished requests before creating keys. Automation stops with explicit resume commands, or use `--if-similar-order` to resume a unique full match (zero matches creates new; multiple matches fail). Matching includes the full domain set, account/CA, method/configuration and key type. Unconfirmed newOrder creation remains visible but cannot be automatically reposted without its saved Location. `--name <NEW_NAME>` explicitly starts an independent identity.
+
+Local DNS absence, resolver failure and precheck timeout warn and continue after publication confirmation. There is no DNS skip/force flag; CA validation, cancellation and overall expiry still apply. Standalone HTTP, TLS-ALPN, DNS-PERSIST and CNAME delegation remain unimplemented.
+
 ## Certificate key algorithms
 
 Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed25519`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `rsa-8192`. These are client generation capabilities; CA acceptance varies. The choice is persisted and retained on recovery and renewal generations. Account signing uses the same key-choice enum independently; see the account options below.
@@ -149,6 +169,14 @@ aster-acme cert remove example-cert --all --yes
 
 Revocation uses the bound issuing account and requires confirmation. Select the exact generation when ambiguous. Local files remain; a timeout is recorded as unconfirmed. `cert remove` defaults to one exact request. `--history` cleans issued non-in_use versions, `--revoked` matches saved revocation confirmations, and `--all` explicitly deletes the whole group. Clearing in_use never promotes an old version. Files not managed by AsterACME are preserved; an otherwise empty certificate directory is removed. No CA request is made. See the [renewal and revocation contract](docs/certificate-lifecycle.md).
 
+Use `--debug` on a command to show safe checkpoint and HTTP status/timing diagnostics. Request bodies, keys and nonce values are excluded. JSON mode suppresses human diagnostics; debug cannot reconstruct a previously lost newOrder Location.
+
+Order polling is bounded by `--max-polls` (default 30, range 1–1000) and the overall timeout. Each round shows its counter; waits identify CA `Retry-After` versus the local polling interval. Reaching the limit retains the request for resume. Manual HTTP and webroot perform an advisory, two-second HTTP content check using the shared pool; failures or unsupported redirects warn and continue to CA validation.
+
+Local polling defaults to 5 seconds. Set config `poll_interval` or override it with `--poll-interval <SECONDS>` (1–300); CLI > config > built-in default. Valid CA Retry-After still takes precedence. Applies to issue/resume and per-certificate renew, including --all.
+
+Webroot logs each file publication/cleanup at INFO; --debug shows root-to-URL mapping for server setup. Invalid orders retain CA problem details for inspection and cannot be resumed.
+
 ## Scripts and confirmation
 
 ```sh
@@ -165,11 +193,10 @@ An `action_required` result exits successfully but is not an issued certificate;
 | --- | --- |
 | `-y`, `--yes` | Confirm the in_use command's action; on certificate resume, skip the TXT publication question. It does not disable name selection, accept CA terms, or bypass DNS checks. |
 | `--accept-terms` | Explicitly accept the selected CA's current terms during registration. |
-| `-f`, `--skip-dns-check` | Skip only the local DNS visibility check; CA validation, expiry, and artifact checks still apply. |
 | `--json` | Structured output; no prompts, terminal styling, or human progress messages. |
 | `--verify` | Explicitly query the CA for an existing resource. Offline reads remain the default. |
 
-First automated/manual-DNS requests expose their fresh TXT instructions even with `--yes` and `--skip-dns-check`; resume after publication. `--yes` never guesses missing inputs. HTTP `--timeout` and foreground `--wait-timeout` are independent of the CA's expiry times. See the [CLI contract](docs/cli-contract.md) for command scopes and short options.
+First automated/manual-DNS requests expose their fresh TXT instructions even with `--yes`; resume after publication. `--yes` never guesses missing inputs. Single-request HTTP `--request-timeout` and foreground `--operation-timeout` are independent of the CA's expiry times. See the [CLI contract](docs/cli-contract.md) for command scopes and short options.
 
 ## Data and certificate files
 

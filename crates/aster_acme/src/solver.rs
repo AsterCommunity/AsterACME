@@ -1,23 +1,12 @@
 //! Runtime contracts for independently implemented challenge solvers.
 
-use std::{num::NonZeroU32, time::Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::challenge::{ChallengeKind, ChallengeMaterial};
-
-/// Stable identity used to reconcile publication after a crash.
-#[derive(Debug, Clone)]
-pub struct OperationContext {
-    /// Persistent operation identifier, assigned by the caller.
-    pub operation_id: String,
-    /// Persistent preparation identifier, unchanged across retries of this publication.
-    pub preparation_id: String,
-}
+use crate::challenge::ChallengeKind;
 
 /// Bounded execution scope, provided separately for preparation, readiness, and cleanup.
 #[derive(Debug, Clone)]
@@ -44,51 +33,6 @@ impl ExecutionContext {
     }
 }
 
-/// Whether this preparation owns a published resource.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResourceOwnership {
-    /// Created by this operation; cleanup must verify ownership before deletion.
-    Created,
-    /// Preexisting resource, which cleanup must not delete.
-    Borrowed,
-}
-
-/// Durable receipt used for readiness checks, recovery and cleanup.
-///
-/// `state` must contain resource identifiers and reconciliation data, never credentials.
-/// The storage adapter must treat this entire record as sensitive operation metadata.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PreparedChallenge {
-    /// Method of the publication.
-    pub kind: ChallengeKind,
-    /// Stable solver implementation identifier used to restore the correct implementation.
-    pub solver_id: String,
-    /// Configuration reference, not the raw provider credential.
-    pub config_ref: String,
-    /// Receipt schema version understood by that solver.
-    pub schema_version: NonZeroU32,
-    /// Identity used by this publication.
-    pub operation_id: String,
-    /// Stable reconciliation key persisted before calling prepare.
-    pub preparation_id: String,
-    /// Whether the preparation created the resource.
-    pub ownership: ResourceOwnership,
-    /// Solver-specific versioned resource handle, interpreted only by its solver.
-    pub state: Value,
-}
-
-impl std::fmt::Debug for PreparedChallenge {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PreparedChallenge")
-            .field("kind", &self.kind)
-            .field("schema_version", &self.schema_version)
-            .field("ownership", &self.ownership)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Solver failure; whether to retry is decided using the operation's side effects.
 #[derive(Debug, Error)]
 pub enum SolverError {
@@ -98,64 +42,39 @@ pub enum SolverError {
     /// The invocation's execution budget expired.
     #[error("solver invocation deadline exceeded")]
     DeadlineExceeded,
-    /// Material does not match this implementation's method.
-    #[error("challenge method is not supported by this solver")]
-    UnsupportedMethod,
-    /// A receipt cannot be interpreted by this implementation or configuration.
-    #[error("challenge receipt is incompatible with this solver")]
-    IncompatibleReceipt,
-    /// The remote outcome or ownership cannot be safely established.
-    #[error("publication requires reconciliation before retry or cleanup")]
-    ReconciliationRequired,
-    /// Adapter-specific failure; message must be sanitized by the implementation.
-    #[error("solver adapter failure: {message}")]
-    Adapter {
-        /// Credential-free description suitable for diagnostics.
-        message: String,
-    },
 }
 
-/// Injectable challenge publication interface; CA acknowledgement and polling stay upstream.
-///
-/// The caller persists the intent and stable preparation ID before `prepare`, then
-/// persists its receipt before notifying the CA. Implementations must reconcile retries
-/// with the same preparation ID, including a crash between publication and receipt storage.
-/// Uncertain ownership must not be guessed. No method here may acknowledge an ACME challenge.
+/// Application publication boundary. ACME persists requirements before calling it,
+/// then owns CA acknowledgement/polling. Implementations must reconcile publication
+/// with the same saved operation identity; they never send an ACME request themselves.
 #[async_trait]
 pub trait ChallengeSolver: Send + Sync {
-    /// Method actually implemented by this solver.
+    /// Protocol method implemented by this adapter; checked before network mutations.
     fn kind(&self) -> ChallengeKind;
 
-    /// Publish or reconcile the challenge material.
+    /// Publish or ask for publication, and establish local readiness. False yields
+    /// durable `action_required`. Publication policy is owned by the implementation.
     ///
     /// # Errors
-    /// May fail after partial publication; the caller must retain the intent for recovery.
-    async fn prepare(
+    /// Reports sanitized adapter failure, cancellation or deadline expiry.
+    async fn ready(
         &self,
-        material: &ChallengeMaterial,
-        operation: &OperationContext,
-        execution: &ExecutionContext,
-    ) -> Result<PreparedChallenge, SolverError>;
+        requirements: &[crate::issuance::ValidationRequirement],
 
-    /// Wait until publication meets local readiness policy; does not guarantee CA access.
+        execution: &ExecutionContext,
+    ) -> Result<bool, crate::issuance::IssueError>;
+
+    /// Remove only owned unchanged publication after issuance succeeds or the CA
+    /// marks the order invalid. Cancellation and uncertain outcomes retain it. Manual
+    /// implementations return false so their independent cleanup instructions remain.
     ///
     /// # Errors
-    /// Returns publication, cancellation, timeout, or incompatible-receipt failures.
-    async fn wait_ready(
-        &self,
-        prepared: &PreparedChallenge,
-        execution: &ExecutionContext,
-    ) -> Result<(), SolverError>;
-
-    /// Idempotently remove only owned resources; missing or borrowed resources are a no-op.
-    ///
-    /// The caller reconciles CA state before withdrawing active validation material.
-    ///
-    /// # Errors
-    /// Failure leaves cleanup pending and must not erase an issued certificate result.
+    /// A cleanup failure never replaces the saved CA outcome; material stays pending.
     async fn cleanup(
         &self,
-        prepared: &PreparedChallenge,
-        execution: &ExecutionContext,
-    ) -> Result<(), SolverError>;
+        _requirements: &[crate::issuance::ValidationRequirement],
+        _execution: &ExecutionContext,
+    ) -> Result<bool, crate::issuance::IssueError> {
+        Ok(false)
+    }
 }

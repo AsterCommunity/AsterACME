@@ -100,8 +100,24 @@ struct CertificateSelection {
     account_name: String,
     account_id: String,
     directory: aster_acme_protocol::url::AcmeUrl,
+    challenge: aster_acme::challenge::ChallengeKind,
+    solver_config: serde_json::Value,
     solver_id: String,
     in_use: Option<String>,
+}
+
+impl CertificateSelection {
+    fn matches_record(&self, record: &IssueRecord) -> bool {
+        self.name == record.name
+            && self.identifiers == record.identifiers
+            && self.key_algorithm == record.key_algorithm
+            && self.account_name == record.account_name
+            && self.account_id == record.account_id
+            && self.directory == record.directory
+            && self.challenge == record.challenge
+            && self.solver_id == record.solver_id
+            && self.solver_config == record.solver_config
+    }
 }
 
 struct Session {
@@ -122,6 +138,8 @@ impl Session {
             || record.directory != self.initial.directory
             || record.account_url != self.initial.account_url
             || record.account_thumbprint != self.initial.account_thumbprint
+            || record.challenge != self.initial.challenge
+            || record.solver_config != self.initial.solver_config
             || record.solver_id != self.initial.solver_id
             || record.renewal_of != self.initial.renewal_of
             || record.identifiers != self.initial.identifiers
@@ -349,7 +367,9 @@ impl CliIssueStore {
             let record = IssueRecord {
                 is_in_use: false,
                 renewal_of,
-                solver_id: "manual_dns".into(),
+                solver_id: request.solver_id.clone(),
+                challenge: request.challenge,
+                solver_config: request.solver_config.clone(),
                 operation_id,
                 name: request.name,
                 created_at: time::OffsetDateTime::now_utc(),
@@ -371,6 +391,7 @@ impl CliIssueStore {
                 finalize_submitted: SubmissionState::NotSubmitted,
                 finalize_rejection: None,
                 next_poll_at: None,
+                poll_wait_source: None,
                 certificate_not_after: None,
                 renewal: None,
                 revocation: aster_acme::revocation::RevocationRecord::default(),
@@ -568,19 +589,9 @@ enum Initialization {
 }
 
 fn validate_request(request: &IssueRequest, account: &AccountRecord) -> Result<(), IssueError> {
-    if request.identifiers.is_empty()
-        || request.identifiers.len() > 100
-        || request
-            .identifiers
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            != request.identifiers.len()
-        || !account.is_usable()
-    {
-        return Err(failure(
-            "issuance requires unique domains and an active account",
-        ));
+    request.validate()?;
+    if !account.is_usable() {
+        return Err(failure("issuance requires an active account"));
     }
     Ok(())
 }
@@ -615,7 +626,9 @@ fn initialize_definition(
                         account_name: request.account_name.clone(),
                         account_id: account.account_id.clone(),
                         directory: account.directory_url.clone(),
-                        solver_id: "manual_dns".into(),
+                        solver_id: request.solver_id.clone(),
+                        challenge: request.challenge,
+                        solver_config: request.solver_config.clone(),
                         in_use: None,
                     },
                 },
@@ -627,25 +640,23 @@ fn initialize_definition(
             if config.cert.name != name
                 || config.cert.account_id != account.account_id
                 || config.cert.directory != account.directory_url
-                || config.cert.solver_id != "manual_dns"
             {
                 return Err(failure(
                     "renewal definition does not match the selected account",
                 ));
             }
-            if read_generations(slot, &name)?.iter().any(|record| {
-                record.identifiers != config.cert.identifiers
-                    || record.key_algorithm != config.cert.key_algorithm
-                    || record.account_id != config.cert.account_id
-                    || record.directory != config.cert.directory
-                    || record.account_name != config.cert.account_name
-                    || record.solver_id != config.cert.solver_id
-            }) {
+            if read_generations(slot, &name)?
+                .iter()
+                .any(|record| !config.cert.matches_record(record))
+            {
                 return Err(failure(
                     "saved generations do not match the managed certificate definition",
                 ));
             }
             let request = IssueRequest {
+                challenge: config.cert.challenge,
+                solver_id: config.cert.solver_id,
+                solver_config: config.cert.solver_config,
                 name,
                 identifiers: config.cert.identifiers,
                 key_algorithm: config.cert.key_algorithm,
@@ -712,7 +723,7 @@ impl IssueStore for CliIssueStore {
             ensure_real_dir(&generation)?;
             if record.name != name
                 || record.operation_id != operation_id
-                || selection(&slot)?.cert.name != name
+                || !selection(&slot)?.cert.matches_record(&record)
             {
                 return Err(failure("issuance path and identity mismatch"));
             }

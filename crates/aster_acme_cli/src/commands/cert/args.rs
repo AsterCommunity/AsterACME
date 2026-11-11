@@ -3,11 +3,11 @@
 use crate::common::args::{HttpArgs, LocalArgs, key_algorithm_parser, parse_account_name};
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_protocol::revocation::RevocationReason;
-use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
+use clap::{Args, Subcommand, builder::TypedValueParser as _};
 
 #[derive(Subcommand)]
 pub(crate) enum CertCommand {
-    /// Issue a certificate with manual DNS publication, or resume a saved request.
+    /// Issue using a selected validation implementation, or resume a saved request.
     Issue(IssueArgs),
     /// Renew the `in_use` certificate using its saved definition, or resume its renewal.
     Renew(RenewArgs),
@@ -23,7 +23,7 @@ pub(crate) enum CertCommand {
         local: LocalArgs,
     },
     /// Show a local certificate request, or explicitly refresh its CA resources without advancing it.
-    #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","timeout"]).multiple(true).requires("verify")))]
+    #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","request_timeout"]).multiple(true).requires("verify")))]
     Show {
         #[command(flatten)]
         target: SavedTargetArgs,
@@ -103,14 +103,6 @@ fn revocation_reason_parser() -> impl clap::builder::TypedValueParser<Value = Re
         })
 }
 
-/// User-facing verification implementation; the ACME wire method stays internal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum Challenge {
-    /// Publish the requested DNS TXT records yourself.
-    #[value(name = "manual_dns")]
-    ManualDns,
-}
-
 /// Explicit recovery intent distinguishes an omitted flag from terminal selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResumeTarget {
@@ -152,7 +144,20 @@ pub(crate) struct IssueArgs {
         required_unless_present = "resume",
         conflicts_with = "resume"
     )]
-    pub challenge: Option<Challenge>,
+    pub challenge: Option<super::validation::ValidationMethod>,
+    /// Resume one fully matching unfinished request; multiple matches require an explicit target.
+    #[arg(long, conflicts_with_all = ["resume", "name"])]
+    pub if_similar_order: bool,
+    /// Document root of your existing public HTTP server; persisted for resume/renew.
+    #[arg(
+        short = 'w',
+        long,
+        value_name = "PATH",
+        required_if_eq("challenge", "webroot"),
+        requires = "challenge",
+        conflicts_with = "resume"
+    )]
+    pub webroot: Option<std::path::PathBuf>,
     /// Resume a saved request; omit the name to choose unfinished requests interactively.
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
     pub resume: Option<ResumeTarget>,
@@ -166,19 +171,36 @@ pub(crate) struct IssueArgs {
 /// Foreground validation policy shared by initial issuance and renewal.
 #[derive(Args, Clone)]
 pub(crate) struct RunArgs {
+    /// Local CA polling interval in seconds (1–300); config `poll_interval`, default 5; Retry-After wins.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..=300))]
+    pub poll_interval: Option<u64>,
+    /// Maximum order-poll rounds per certificate/invocation; CA Retry-After still applies.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
+    pub max_polls: Option<u32>,
     /// Automatically accept all operation confirmations; does not supply inputs or bypass validation.
     #[arg(short = 'y', long)]
     pub yes: bool,
-    /// Skip only local DNS visibility checks; the CA still validates the challenge.
-    #[arg(long)]
-    pub skip_dns_check: bool,
     /// Overall invocation budget in seconds; expiry is an independent CA deadline.
-    #[arg(long,default_value="600",value_parser=clap::value_parser!(u64).range(1..=86400))]
-    pub wait_timeout: u64,
+    #[arg(long,value_parser=clap::value_parser!(u64).range(1..=86400))]
+    pub operation_timeout: Option<u64>,
     #[command(flatten)]
     pub http: HttpArgs,
     #[command(flatten)]
     pub local: LocalArgs,
+}
+
+/// Resolve execution defaults once for all issue/resume/renew paths. Clap keeps
+/// omitted options as None so its defaults never mask explicit configuration.
+impl RunArgs {
+    pub(super) fn limits(&self, config: &crate::config::Config) -> (u64, u32, u64) {
+        (
+            self.operation_timeout
+                .or(config.operation_timeout)
+                .unwrap_or(600),
+            self.max_polls.or(config.max_polls).unwrap_or(30),
+            self.poll_interval.or(config.poll_interval).unwrap_or(5),
+        )
+    }
 }
 
 #[derive(Args)]
@@ -333,7 +355,7 @@ mod tests {
             ],
             vec!["--verify"],
             vec!["--skip-dns-check"],
-            vec!["--timeout", "30"],
+            vec!["--request-timeout", "30"],
             vec!["--reason", "key-compromise"],
             vec!["--accept-terms"],
         ] {
@@ -427,7 +449,7 @@ mod tests {
         for args in [
             vec![],
             vec!["web"],
-            vec!["-n", "web", "--now", "--skip-dns-check", "--yes", "--json"],
+            vec!["-n", "web", "--now", "--yes", "--json"],
         ] {
             assert!(
                 Args::try_parse_from(["aster-acme", "cert", "renew"].into_iter().chain(args))
@@ -473,14 +495,10 @@ mod tests {
         };
         assert!(args.now);
         assert!(!args.run.yes);
-        assert!(!args.run.skip_dns_check);
     }
     #[test]
     fn batch_renewal_all_conflicts_with_names_but_not_explicit_execution_policies() {
-        for args in [
-            vec!["--all"],
-            vec!["--all", "--now", "--yes", "--skip-dns-check", "--json"],
-        ] {
+        for args in [vec!["--all"], vec!["--all", "--now", "--yes", "--json"]] {
             let parsed =
                 Args::try_parse_from(["aster-acme", "cert", "renew"].into_iter().chain(args))
                     .unwrap();

@@ -144,7 +144,7 @@ async fn list(
 ) -> CliResult<AccountReport> {
     let options = AccountArgs {
         user_agent: args.http.user_agent,
-        timeout: args.http.timeout,
+        request_timeout: args.http.request_timeout,
         ..args.local.into()
     };
     let settings = CliSettings::load(&options).await?;

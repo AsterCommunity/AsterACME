@@ -29,9 +29,24 @@ fn template() -> DocumentMut {
             "\n# Default local account; changed by account switch.\n",
         ),
         (
-            "timeout",
+            "request_timeout",
             value(30),
-            "\n# Whole-request timeout in seconds (1-300).\n",
+            "\n# Single HTTP request timeout in seconds (1-300).\n",
+        ),
+        (
+            "operation_timeout",
+            value(600),
+            "\n# Total seconds for each certificate issue/resume/renew invocation (1-86400).\n",
+        ),
+        (
+            "poll_interval",
+            value(5),
+            "\n# Local CA polling interval in seconds (1-300); valid Retry-After takes precedence.\n",
+        ),
+        (
+            "max_polls",
+            value(30),
+            "\n# Maximum order-poll rounds per certificate invocation (1-1000).\n",
         ),
         (
             "contact",
@@ -92,10 +107,31 @@ fn parse(text: &str) -> CliResult<Config> {
                 .into(),
         );
     }
-    if let Some(timeout) = document.config.timeout
-        && !(1..=300).contains(&timeout)
+    if let Some(request_timeout) = document.config.request_timeout
+        && !(1..=300).contains(&request_timeout)
     {
-        return Err("Configuration timeout must be between 1 and 300 seconds.".into());
+        return Err("Configuration request_timeout must be between 1 and 300 seconds.".into());
+    }
+    if document
+        .config
+        .operation_timeout
+        .is_some_and(|value| !(1..=86400).contains(&value))
+    {
+        return Err("Configuration operation_timeout must be between 1 and 86400 seconds.".into());
+    }
+    if document
+        .config
+        .max_polls
+        .is_some_and(|value| !(1..=1000).contains(&value))
+    {
+        return Err("Configuration max_polls must be between 1 and 1000.".into());
+    }
+    if document
+        .config
+        .poll_interval
+        .is_some_and(|value| !(1..=300).contains(&value))
+    {
+        return Err("Configuration poll_interval must be between 1 and 300 seconds.".into());
     }
     if let Some(directory) = &document.config.ca_directory {
         aster_acme_protocol::url::AcmeUrl::new(directory)?;
@@ -199,7 +235,10 @@ pub(crate) struct Config {
     pub(crate) default_account: Option<String>,
     #[serde(default)]
     pub(crate) contact: Vec<String>,
-    pub(crate) timeout: Option<u64>,
+    pub(crate) request_timeout: Option<u64>,
+    pub(crate) operation_timeout: Option<u64>,
+    pub(crate) max_polls: Option<u32>,
+    pub(crate) poll_interval: Option<u64>,
 }
 
 /// Resolve platform paths like gcop-rs, keeping config and private state under one root.
@@ -249,8 +288,8 @@ mod tests {
             "directory='https://ca.example/directory'",
             "data_dir='./elsewhere'",
             "user_agent='legacy-global-agent'",
-            "timeout=0",
-            "timeout=301",
+            "request_timeout=0",
+            "request_timeout=301",
             "default_account='../bad'",
             "ca_directory='https://ca.example/#fragment'",
             "contact=['not-an-email']",
@@ -273,7 +312,7 @@ mod tests {
     async fn targeted_edits_preserve_comments_and_serialize_concurrent_updates() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        let text = "# header\nversion=1 # schema\n\n[config]\ndefault_account = 'default' # selection\ncontact = [] # emails\ntimeout=17 # keep\n";
+        let text = "# header\nversion=1 # schema\n\n[config]\ndefault_account = 'default' # selection\ncontact = [] # emails\nrequest_timeout=17 # keep\n";
         std::fs::write(&path, text).unwrap();
         let (a, b) = tokio::join!(
             persist(path.clone(), Some("personal".into()), None),
@@ -294,7 +333,7 @@ mod tests {
             "# schema",
             "# selection",
             "# emails",
-            "timeout=17 # keep",
+            "request_timeout=17 # keep",
         ] {
             assert!(result.contains(preserved), "{result}");
         }
@@ -323,7 +362,8 @@ mod tests {
         ] {
             assert!(parse(input).is_err());
         }
-        let config = parse("version=1\n[config]\ndefault_account='work'\ntimeout=20").unwrap();
+        let config =
+            parse("version=1\n[config]\ndefault_account='work'\nrequest_timeout=20").unwrap();
         assert_eq!(config.default_account.as_deref(), Some("work"));
     }
 
@@ -376,7 +416,7 @@ mod tests {
             Some("personal")
         );
         assert_eq!(std::fs::read_to_string(&explicit).unwrap(), custom);
-        for malformed in ["bad = [", "accept_terms = true", "timeout = 'slow'"] {
+        for malformed in ["bad = [", "accept_terms = true", "request_timeout = 'slow'"] {
             std::fs::write(&explicit, malformed).unwrap();
             assert!(config::load(root).await.is_err());
             assert_eq!(std::fs::read_to_string(&explicit).unwrap(), malformed);
@@ -386,8 +426,7 @@ mod tests {
     async fn optional_config_fields_can_be_added_removed_and_recreated_without_panics() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
-        let original =
-            "# keep header\nversion = 1\n\n[config]\n# keep timeout\ntimeout = 17 # retained\n";
+        let original = "# keep header\nversion = 1\n\n[config]\n# keep request_timeout\nrequest_timeout = 17 # retained\n";
         std::fs::write(&path, original).unwrap();
         persist(
             path.clone(),
@@ -398,7 +437,7 @@ mod tests {
         .unwrap();
         let first = std::fs::read_to_string(&path).unwrap();
         assert!(first.contains("# keep header"));
-        assert!(first.contains("timeout = 17 # retained"));
+        assert!(first.contains("request_timeout = 17 # retained"));
         assert_eq!(
             parse(&first).unwrap().default_account.as_deref(),
             Some("default")
@@ -473,5 +512,73 @@ mod tests {
         let config = load(temp.path()).await.unwrap();
         assert_eq!(config.default_account.as_deref(), Some("work"));
         assert_eq!(config.contact, ["a@example.com"]);
+    }
+
+    #[test]
+    fn all_three_limits_have_explicit_validated_config_defaults_without_old_aliases() {
+        let generated = template().to_string();
+        let config = parse(&generated).unwrap();
+        assert_eq!(config.request_timeout, Some(30));
+        assert_eq!(config.operation_timeout, Some(600));
+        assert_eq!(config.max_polls, Some(30));
+        for (field, invalid) in [
+            ("request_timeout", "0"),
+            ("request_timeout", "301"),
+            ("operation_timeout", "0"),
+            ("operation_timeout", "86401"),
+            ("max_polls", "0"),
+            ("max_polls", "1001"),
+            ("max_polls", "-1"),
+            ("timeout", "30"),
+            ("wait_timeout", "600"),
+        ] {
+            assert!(
+                parse(&format!("version=1\n[config]\n{field}={invalid}\n")).is_err(),
+                "{field}={invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn absent_and_partial_limits_deserialize_without_requiring_generated_defaults() {
+        let empty = parse("version=1\n[config]\n").unwrap();
+        assert_eq!(empty.request_timeout.unwrap_or(30), 30);
+        assert_eq!(empty.operation_timeout.unwrap_or(600), 600);
+        assert_eq!(empty.max_polls.unwrap_or(30), 30);
+        for (field, expected) in [
+            ("request_timeout=12", (12, 600, 30)),
+            ("operation_timeout=90", (30, 90, 30)),
+            ("max_polls=8", (30, 600, 8)),
+        ] {
+            let config = parse(&format!("version=1\n[config]\n{field}\n")).unwrap();
+            assert_eq!(
+                (
+                    config.request_timeout.unwrap_or(30),
+                    config.operation_timeout.unwrap_or(600),
+                    config.max_polls.unwrap_or(30)
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn polling_interval_config_is_optional_bounded_and_generated_as_five_seconds() {
+        assert_eq!(
+            parse(&template().to_string()).unwrap().poll_interval,
+            Some(5)
+        );
+        assert_eq!(parse("version=1\n[config]\n").unwrap().poll_interval, None);
+        for value in ["0", "301", "-1", "'slow'"] {
+            assert!(parse(&format!("version=1\n[config]\npoll_interval={value}\n")).is_err());
+        }
+        for value in [1, 5, 300] {
+            assert_eq!(
+                parse(&format!("version=1\n[config]\npoll_interval={value}\n"))
+                    .unwrap()
+                    .poll_interval,
+                Some(value)
+            );
+        }
     }
 }

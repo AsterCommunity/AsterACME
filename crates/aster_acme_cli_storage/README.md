@@ -103,7 +103,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 账户元数据必需保存 key_algorithm；AccountKeyStore 使用 KeyAccess::Existing/Create(Option<KeyAlgorithm>)，真实 PKCS#8、指纹及保存类型必须一致。轮换缺省继承原类型；暂存钥存在时恢复其实际类型，显式不同选择拒绝。只有确认换钥提交才原子更新主钥和算法字段，常规 save 不能修改算法；无旧 schema 默认值或迁移。
 
@@ -113,3 +113,5 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 当前使用标准库文件锁，不再直接依赖 AsterFs。state_file 是临时的跨平台文件适配，模块顶部 TODO 关联 AsterFs #3/#4；上游能力尚未交付，不保留 fs2/fs4 转发接口。普通文件 IO 保持标准库，缺失的句柄相对打开/平台文件身份/同步原语将按上游实际 API 接入。
 
 Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副本与 .generation 标记；同级 staging/previous 目录保证可按 catalog 恢复，双 rename 不是跨平台原子交换。Unix 继续使用链接，两个平台的 CLI 输出路径都为 in_use 下的四个文件。复制模式的正常、失败、回滚、用户内容保留测试在每个主机执行，Windows 原生结果由 CI 单独提供。
+
+证书定义和每个版本新增必需challenge/solver_id/solver_config；HTTP webroot保存规范绝对路径，manual实现保存空配置。open/save/renew均校验不可变定义，未知修改拒绝；未发布格式无旧读取/迁移。授权材料为按method区分的validation，保留cleanup_pending；清理成功后保存，不因清理失败回滚已完成产物。

@@ -1,6 +1,38 @@
 //! One CLI mapping for typed ACME problems across account, issuance and revocation.
 use aster_acme::transport::RetryAfter;
 use aster_acme_protocol::problem::{Problem, ProblemKind};
+use std::fmt::Write as _;
+
+/// Format a problem embedded in an invalid resource, whose HTTP query succeeded.
+/// Do not invent HTTP 400: the resource status and problem are separate evidence.
+pub(crate) fn invalid_order(problem: Option<&Problem>) -> (String, Option<String>) {
+    let Some(problem) = problem else {
+        return ("CA order is invalid; the CA did not provide problem details.".into(), Some("Correct validation and start a new cert issue. The retained invalid order cannot be resumed.".into()));
+    };
+    let mut message = format!(
+        "CA order is invalid: {} ({})",
+        problem
+            .detail
+            .as_deref()
+            .unwrap_or("no explanation provided"),
+        problem.kind
+    );
+    for sub in problem.subproblems.iter().take(8) {
+        let identifier = sub
+            .extensions
+            .get("identifier")
+            .and_then(|value| value.get("value"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("identifier not provided");
+        let _ = write!(
+            message,
+            "; {identifier}: {} ({})",
+            sub.detail.as_deref().unwrap_or("no detail"),
+            sub.kind
+        );
+    }
+    (message, Some("Correct validation and start a new cert issue. This invalid order cannot be resumed; retain its files for inspection.".into()))
+}
 
 pub(super) fn diagnostic(
     status: u16,

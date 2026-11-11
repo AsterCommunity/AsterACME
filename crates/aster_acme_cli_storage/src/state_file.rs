@@ -146,6 +146,44 @@ pub fn sync_directory(path: &Path) -> io::Result<()> {
     platform::sync_directory(path)
 }
 
+/// Give a newly created public validation file read permissions on Unix.
+/// Callers must only use this for public material they created, never existing user files.
+/// Windows retains inherited ACLs.
+///
+/// # Errors
+/// Reports unsupported permissions or IO failures.
+pub fn expose_public_file(file: &File) -> io::Result<()> {
+    platform::expose_public_file(file)
+}
+
+/// Prepare permissions on a newly created public validation directory.
+///
+/// # Errors
+/// Rejects linked/non-directory paths and permission failures.
+pub fn expose_public_directory(path: &Path) -> io::Result<()> {
+    ensure_directory(path)?;
+    platform::expose_public_directory(path)
+}
+
+/// Open a regular published file without following its final symbolic/reparse link.
+/// Unlike private state reads this permits public permissions and hard links used
+/// as publication ownership receipts; the caller controls/trusts ancestor directories.
+///
+/// # Errors
+/// Rejects final links, special files and inaccessible paths.
+pub fn open_regular(path: &Path) -> io::Result<File> {
+    platform::open_regular(path)
+}
+
+/// Compare already-open handles without relying on path spelling or timestamps.
+/// Useful when a publication adapter must prove it still owns a file before removal.
+///
+/// # Errors
+/// Reports unavailable platform identity information or invalid handles.
+pub fn same_file(left: &File, right: &File) -> io::Result<bool> {
+    Ok(platform::identity(left)? == platform::identity(right)?)
+}
+
 /// Unix publishes a relative symlink; platforms without unprivileged symlinks use copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewKind {

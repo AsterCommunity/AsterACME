@@ -11,6 +11,7 @@ publish.workspace = true
 readme = "README.md"
 
 [dependencies]
+tracing.workspace = true
 rcgen.workspace = true
 x509-parser.workspace = true
 aster_forge_http.workspace = true

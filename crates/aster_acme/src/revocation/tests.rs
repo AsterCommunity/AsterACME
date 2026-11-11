@@ -80,7 +80,7 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RevocationSe
         "last_status":"valid","deactivation":"not_requested","key_rotation":null,"accepted_terms_url":null,"state":"registered"
     })).unwrap();
     let record:IssueRecord=serde_json::from_value(serde_json::json!({
-        "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"local-id","account_thumbprint":account.key_thumbprint,
         "directory":url("/directory"),"account_url":url("/account/1"),"identifiers":["example.com"],
         "phase":"completed","creation_submitted":true,"order_url":url("/order/1"),"finalize_submitted":"submitted","authorizations":[]

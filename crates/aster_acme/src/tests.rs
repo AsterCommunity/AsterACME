@@ -3,10 +3,7 @@ use aster_acme_protocol::order::{WireChallengeKind, WireIdentifier};
 
 use base64::Engine as _;
 use serde_json::json;
-use std::{
-    num::NonZeroU32,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::{challenge::*, identifier::*, solver::*};
@@ -407,34 +404,37 @@ fn solver_context_distinguishes_cancellation_and_deadline() {
 }
 
 #[test]
-fn receipts_preserve_recovery_information_but_redact_debug_output() {
-    let receipt = PreparedChallenge {
-        kind: ChallengeKind::Dns01,
-        solver_id: "provider-v1".into(),
-        config_ref: "config-ref".into(),
-        schema_version: NonZeroU32::new(1).unwrap(),
-        operation_id: "operation-1".into(),
-        preparation_id: "prepare-1".into(),
-        ownership: ResourceOwnership::Created,
-        state: json!({"record_id":"private-record-id", "zone":"private-zone"}),
-    };
-    let json = serde_json::to_value(&receipt).unwrap();
-    let decoded: PreparedChallenge = serde_json::from_value(json.clone()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), json);
-    let debug = format!("{receipt:?}");
-    for private in [
-        "private-record-id",
-        "private-zone",
-        "config-ref",
-        "operation-1",
-        "prepare-1",
-    ] {
-        assert!(!debug.contains(private));
+fn validation_requirements_roundtrip_without_a_parallel_unused_receipt_schema() {
+    use crate::issuance::ValidationRequirement;
+    let values = [
+        ValidationRequirement::Dns01 {
+            name: "_acme-challenge.example.com".into(),
+            value: "digest".into(),
+        },
+        ValidationRequirement::Http01 {
+            url: "http://example.com/.well-known/acme-challenge/token".into(),
+            path: "/.well-known/acme-challenge/token".into(),
+            content: "key.authorization".into(),
+        },
+        ValidationRequirement::TlsAlpn01 {
+            domain: "example.com".into(),
+            digest: [1; 32],
+        },
+    ];
+    for requirement in values {
+        let json = serde_json::to_value(&requirement).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ValidationRequirement>(json).unwrap(),
+            requirement
+        );
     }
-    let mut invalid = json;
-    invalid["schema_version"] = json!(0);
-    assert!(serde_json::from_value::<PreparedChallenge>(invalid).is_err());
-    // Compile-time guarantee: the public async interface supports injectable trait objects.
+    assert!(serde_json::from_value::<ValidationRequirement>(json!({"method":"unknown"})).is_err());
+    assert!(
+        serde_json::from_value::<ValidationRequirement>(
+            json!({"method":"http-01","url":"http://example.com"})
+        )
+        .is_err()
+    );
     accepts_solver(None);
 }
 

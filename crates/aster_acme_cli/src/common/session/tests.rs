@@ -164,7 +164,10 @@ fn tracing_respects_json_and_finalization_and_concurrent_progress_is_not_interle
             assert!(text.ends_with("\n\n"));
             assert!(!text.contains("late"));
             for index in 0..8 {
-                assert_eq!(text.matches(&format!("[INFO] worker-{index}\n")).count(), 1);
+                assert_eq!(
+                    text.matches(&format!("[INFO]  worker-{index}\n")).count(),
+                    1
+                );
             }
         }
     }
@@ -217,4 +220,37 @@ fn panic_delivery_never_waits_for_a_held_lock_and_can_finish_a_poisoned_session(
     assert_eq!(json["error"]["hint"], "safe hint");
     assert_eq!(stdout.text(), "");
     assert!(output.finish("duplicate", FinalChannel::Result).is_err());
+}
+
+#[test]
+fn debug_events_share_progress_format_and_remain_suppressed_in_json() {
+    for json in [false, true] {
+        let (output, stdout, stderr) = session(json);
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .event_format(super::super::log::DiagnosticFormat { color: false })
+            .with_writer(output.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(
+                request_kind = "signed_post",
+                status = 201_u16,
+                has_location = true,
+                "Response checkpoint"
+            );
+        });
+        output.finish("{}", FinalChannel::Result).unwrap();
+        assert_eq!(stdout.text(), "{}\n");
+        let diagnostics = stderr.text();
+        if json {
+            assert_eq!(diagnostics, "");
+        } else {
+            assert!(diagnostics.contains("UTC] [DEBUG]"));
+            assert!(
+                diagnostics.contains("status=201") && diagnostics.contains("has_location=true")
+            );
+            assert!(!diagnostics.contains('\x1b'));
+        }
+    }
 }

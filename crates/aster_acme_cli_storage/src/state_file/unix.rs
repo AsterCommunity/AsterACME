@@ -68,3 +68,30 @@ pub(super) fn sync_directory(path: &Path) -> io::Result<()> {
 pub(super) fn create_view_link(target: &Path, path: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, path)
 }
+
+pub(super) fn identity(file: &File) -> io::Result<(u64, u64)> {
+    let metadata = file.metadata()?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+pub(super) fn open_regular(path: &Path) -> io::Result<File> {
+    let file = File::from(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )?);
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("published file is not regular"));
+    }
+    Ok(file)
+}
+
+pub(super) fn expose_public_file(file: &File) -> io::Result<()> {
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+}
+pub(super) fn expose_public_directory(path: &Path) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+}

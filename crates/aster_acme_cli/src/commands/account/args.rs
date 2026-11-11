@@ -9,10 +9,10 @@ use std::path::PathBuf;
 #[derive(Subcommand)]
 pub(crate) enum AccountCommand {
     /// List saved accounts and the default selection without contacting a CA.
-    #[command(group(clap::ArgGroup::new("list_verification_http").args(["user_agent", "timeout"]).multiple(true).requires("verify")))]
+    #[command(group(clap::ArgGroup::new("list_verification_http").args(["user_agent", "request_timeout"]).multiple(true).requires("verify")))]
     List(ListArgs),
     /// Inspect local metadata; --verify explicitly queries the CA.
-    #[command(group(clap::ArgGroup::new("verification_http").args(["user_agent", "timeout"]).multiple(true).requires("verify")))]
+    #[command(group(clap::ArgGroup::new("verification_http").args(["user_agent", "request_timeout"]).multiple(true).requires("verify")))]
     Show {
         #[command(flatten)]
         options: NetworkArgs,
@@ -227,8 +227,8 @@ pub(crate) struct AccountArgs {
     pub(crate) eab_key_file: Option<PathBuf>,
     /// Custom HTTP User-Agent (default: AsterACME/version).
     pub(crate) user_agent: Option<String>,
-    /// Whole-request timeout in seconds (1–300).
-    pub(crate) timeout: Option<u64>,
+    /// Single HTTP request timeout in seconds (1–300).
+    pub(crate) request_timeout: Option<u64>,
     /// Plain structured JSON; no terminal styling.
     pub(crate) json: bool,
 }
@@ -253,7 +253,7 @@ impl From<NetworkArgs> for AccountArgs {
                 .map(|ca| ca.directory().to_owned())
                 .or(args.ca.ca_directory),
             user_agent: args.http.user_agent,
-            timeout: args.http.timeout,
+            request_timeout: args.http.request_timeout,
             ..args.local.into()
         }
     }

@@ -1,11 +1,12 @@
 //! RFC 8555 issuance orchestration. All mutations follow durable checkpoints.
 use super::progress::{IssueEvent, IssueObserver};
 use super::{
-    AuthorizationRecord, DnsReadiness, DnsRequirement, IssueError, IssueExecution, IssueIdentity,
-    IssueOutcome, IssueRecord, IssueSession,
+    AuthorizationRecord, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
+    IssueSession, ValidationRequirement,
 };
+use crate::solver::ChallengeSolver;
 use crate::{
-    challenge::{ChallengeKind, ChallengeMaterial, ChallengeToken},
+    challenge::{ChallengeMaterial, ChallengeToken},
     identifier::{Identifier, authorization_identifier},
     transport::{AcmeClient, AcmeResponse, json_payload},
 };
@@ -20,7 +21,7 @@ use aster_acme_core::{
 use aster_acme_protocol::{
     order::{
         AcknowledgeRequest, AuthorizationObject, ChallengeObject, FinalizeRequest, NewOrderRequest,
-        OrderObject, WireChallengeKind, WireIdentifier,
+        OrderObject, WireIdentifier,
     },
     problem::ProblemKind,
     url::AcmeUrl,
@@ -28,7 +29,7 @@ use aster_acme_protocol::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::{sync::Arc, time::Duration};
 
-/// Embeddable issuance service. Caller owns lifetime, account lease and DNS adapter.
+/// Embeddable issuance service. Caller owns lifetime, account lease and publication adapter.
 pub struct IssueService {
     client: Arc<AcmeClient>,
     identity: IssueIdentity,
@@ -43,6 +44,7 @@ impl IssueService {
         if !identity.account.is_usable()
             || identity.account.directory_url != *client.directory_url()
             || identity.signer.jwk()?.thumbprint()? != identity.account.key_thumbprint
+            || identity.signer.algorithm() != identity.account.key_algorithm
         {
             return Err(IssueError::InvalidInput(
                 "issuance requires an active matching account",
@@ -108,35 +110,18 @@ impl IssueService {
     pub async fn run(
         &self,
         session: &mut dyn IssueSession,
-        dns: &dyn DnsReadiness,
+        solver: &dyn ChallengeSolver,
         execution: &IssueExecution,
     ) -> Result<IssueOutcome, IssueError> {
-        if execution.poll_interval.is_zero() {
-            return Err(IssueError::InvalidInput("poll interval must be nonzero"));
-        }
         let mut record = session.record().await?;
+        tracing::debug!(operation_id = %record.operation_id, phase = ?record.phase, creation_submitted = record.creation_submitted, has_order_url = record.order_url.is_some(), finalize = ?record.finalize_submitted, method = record.challenge.name(), "Loaded issuance checkpoint");
+
+        self.check_execution(&record, solver, execution)?;
         let mut last_order_status = None;
-        self.check_identity(&record)?;
-        if let Some(problem) = &record.finalize_rejection {
-            return Err(crate::transport::TransportError::Problem {
-                status: 400,
-                problem: Box::new(problem.clone()),
-                retry_after: None,
-            }
-            .into());
-        }
-        if !matches!(
-            record.revocation.state,
-            aster_acme_core::revocation::RevocationState::NotRequested
-        ) {
-            return Err(IssueError::InvalidInput(
-                "cannot resume an issuance whose certificate revocation is pending or confirmed",
-            ));
-        }
+        let mut polls = 0_u32;
         if matches!(record.phase, IssuancePhase::Completed) {
-            return Ok(completed(
-                self.plan_renewal(session, &execution.context).await?,
-            ));
+            let record = self.plan_renewal(session, &execution.context).await?;
+            return self.completed(session, record, solver, execution).await;
         }
         if record.order_url.is_none() {
             self.create(session, &mut record, execution).await?;
@@ -146,7 +131,18 @@ impl IssueService {
             if record.expired(time::OffsetDateTime::now_utc()) {
                 return Err(IssueError::Expired);
             }
-            self.wait(&record, execution).await?;
+            if polls == execution.max_polls {
+                return Err(IssueError::PollLimit {
+                    completed: polls,
+                    limit: execution.max_polls,
+                });
+            }
+            self.wait(&record, execution, polls + 1).await?;
+            polls += 1;
+            self.observe(&IssueEvent::Polling {
+                attempt: polls,
+                limit: execution.max_polls,
+            });
             let url = record
                 .order_url
                 .clone()
@@ -171,6 +167,11 @@ impl IssueService {
             if record.expired(time::OffsetDateTime::now_utc()) {
                 return Err(IssueError::Expired);
             }
+            if matches!(order.status, OrderStatus::Invalid) {
+                return Err(self
+                    .invalid_order(session, &mut record, solver, execution)
+                    .await?);
+            }
             let statuses = record
                 .authorizations
                 .iter()
@@ -187,8 +188,9 @@ impl IssueService {
             let action = order_action(&order.status, observations, record.finalize_submitted)?;
             match action {
                 OrderAction::ResolveAuthorizations => {
-                    if let Some(records) =
-                        self.authorize(session, &mut record, dns, execution).await?
+                    if let Some(records) = self
+                        .authorize(session, &mut record, solver, execution)
+                        .await?
                     {
                         return Ok(IssueOutcome::ActionRequired {
                             record: Box::new(record),
@@ -203,8 +205,131 @@ impl IssueService {
                         "valid order omitted certificate URL",
                     ))?;
                     record = self.download(session, &mut record, url, execution).await?;
-                    return Ok(completed(record));
+                    return self.completed(session, record, solver, execution).await;
                 }
+            }
+        }
+    }
+
+    /// Enrich a terminal resource without executing publication or mutations.
+    /// The invalid order was already saved; failed detail queries cannot revive it.
+    async fn invalid_order(
+        &self,
+        session: &dyn IssueSession,
+        record: &mut IssueRecord,
+        solver: &dyn ChallengeSolver,
+        execution: &IssueExecution,
+    ) -> Result<IssueError, IssueError> {
+        let order = record
+            .order
+            .clone()
+            .ok_or(IssueError::InvalidInput("missing invalid order"))?;
+        if order.error.is_none() {
+            for url in &order.authorizations {
+                if let Err(error) = bounded(execution, self.authorization(record, url)).await {
+                    tracing::debug!("Could not enrich invalid order authorization details");
+                    if matches!(error, IssueError::Interrupted) {
+                        break;
+                    }
+                }
+            }
+            session.save(record).await?;
+        }
+        // The saved invalid order is terminal: no later validation/finalization
+        // can succeed, so owned publication can now be withdrawn. Cancellation
+        // or cleanup failure must never replace the original CA problem.
+        self.cleanup_publication(session, record, solver, execution)
+            .await;
+        Ok(IssueError::InvalidOrder {
+            problem: record.failure_problem().cloned().map(Box::new),
+        })
+    }
+
+    // One library-owned guard for new issuance, recovery and renewal. Product
+    // adapters cannot reinterpret the saved method or bypass protocol eligibility.
+    fn check_execution(
+        &self,
+        record: &IssueRecord,
+        solver: &dyn ChallengeSolver,
+        execution: &IssueExecution,
+    ) -> Result<(), IssueError> {
+        if execution.max_polls == 0 || execution.max_polls > 1000 {
+            return Err(IssueError::InvalidInput("max_polls must be in 1..=1000"));
+        }
+        if execution.poll_interval.is_zero() {
+            return Err(IssueError::InvalidInput("poll interval must be nonzero"));
+        }
+        self.check_identity(record)?;
+        if !record.challenge.supports_wildcards()
+            && record
+                .identifiers
+                .iter()
+                .any(crate::identifier::DnsIdentifier::is_wildcard)
+        {
+            return Err(crate::challenge::ChallengeError::WildcardMethod.into());
+        }
+        if solver.kind() != record.challenge {
+            return Err(IssueError::InvalidInput(
+                "publication adapter does not implement the saved challenge method",
+            ));
+        }
+        record.check_recovery(time::OffsetDateTime::now_utc())?;
+        if !matches!(
+            record.revocation.state,
+            aster_acme_core::revocation::RevocationState::NotRequested
+        ) {
+            return Err(IssueError::InvalidInput(
+                "cannot resume an issuance whose certificate revocation is pending or confirmed",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn completed(
+        &self,
+        session: &dyn IssueSession,
+        mut record: IssueRecord,
+        solver: &dyn ChallengeSolver,
+        execution: &IssueExecution,
+    ) -> Result<IssueOutcome, IssueError> {
+        self.cleanup_publication(session, &mut record, solver, execution)
+            .await;
+        Ok(completed(record))
+    }
+
+    /// Shared success/terminal-failure cleanup. Uncertain failures never call this
+    /// boundary. Clear pending state only after the adapter and checkpoint save
+    /// succeed; otherwise retain recovery evidence and the primary outcome.
+    async fn cleanup_publication(
+        &self,
+        session: &dyn IssueSession,
+        record: &mut IssueRecord,
+        solver: &dyn ChallengeSolver,
+        execution: &IssueExecution,
+    ) {
+        let pending = record
+            .authorizations
+            .iter()
+            .filter(|auth| auth.cleanup_pending)
+            .filter_map(|auth| auth.validation.clone())
+            .collect::<Vec<_>>();
+        if !pending.is_empty() {
+            match bounded(execution, solver.cleanup(&pending, &execution.context)).await {
+                Ok(true) => {
+                    let mut cleaned = record.clone();
+                    for auth in &mut cleaned.authorizations {
+                        auth.cleanup_pending = false;
+                    }
+                    // The protocol outcome is already durable; retain the durable
+                    // pending state if cleanup checkpointing fails.
+                    if session.save(&cleaned).await.is_ok() {
+                        *record = cleaned;
+                    } else {
+                        self.observe(&IssueEvent::CleanupPending);
+                    }
+                }
+                Ok(false) => {}
+                Err(_) => self.observe(&IssueEvent::CleanupPending),
             }
         }
     }
@@ -258,8 +383,7 @@ impl IssueService {
     }
 
     fn check_identity(&self, record: &IssueRecord) -> Result<(), IssueError> {
-        if record.solver_id != "manual_dns"
-            || record.account_id != self.identity.account.account_id
+        if record.account_id != self.identity.account.account_id
             || record.directory != *self.client.directory_url()
             || record.account_url
                 != self
@@ -326,8 +450,20 @@ impl IssueService {
         record.creation_submitted = true;
         record.phase = IssuancePhase::CreatingOrder;
         session.save(record).await?;
-        self.observe(&IssueEvent::CreatingOrder);
-        let response = bounded(execution, self.post(endpoint, &body)).await?;
+        tracing::debug!(operation_id = %record.operation_id, "newOrder intent persisted; about to send request");
+        self.observe(&IssueEvent::CreatingOrder {
+            method: record.challenge,
+            solver_id: record.solver_id.clone(),
+        });
+        let started = std::time::Instant::now();
+        let response = match bounded(execution, self.post(endpoint, &body)).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::debug!(operation_id = %record.operation_id, elapsed_ms = started.elapsed().as_millis(), "newOrder ended before a usable response; saved intent remains unconfirmed");
+                return Err(error);
+            }
+        };
+        tracing::debug!(operation_id = %record.operation_id, status = response.status.as_u16(), elapsed_ms = started.elapsed().as_millis(), has_location = response.headers.contains_key(reqwest::header::LOCATION), "newOrder response received");
         if response.status != reqwest::StatusCode::CREATED {
             return Err(IssueError::InvalidInput("newOrder must return HTTP 201"));
         }
@@ -335,6 +471,7 @@ impl IssueService {
         let location = self.client.account_location(&response)?;
         record.order_url = Some(location.clone());
         session.save(record).await?;
+        tracing::debug!(operation_id = %record.operation_id, has_order_url = true, "newOrder Location checkpoint persisted");
         self.observe(&IssueEvent::OrderCreated { url: location });
         record.order = Some(parse_order(&response, record)?);
         record.phase = IssuancePhase::Authorizing;
@@ -391,7 +528,7 @@ impl IssueService {
                 url: url.clone(),
                 resource,
                 challenge_url: None,
-                dns: None,
+                validation: None,
                 cleanup_pending: false,
                 acknowledgement: SubmissionState::NotSubmitted,
             }),
@@ -403,9 +540,9 @@ impl IssueService {
         &self,
         session: &dyn IssueSession,
         record: &mut IssueRecord,
-        dns: &dyn DnsReadiness,
+        solver: &dyn ChallengeSolver,
         execution: &IssueExecution,
-    ) -> Result<Option<Vec<DnsRequirement>>, IssueError> {
+    ) -> Result<Option<Vec<ValidationRequirement>>, IssueError> {
         record.phase = IssuancePhase::Authorizing;
         let urls = record
             .order
@@ -415,10 +552,20 @@ impl IssueService {
             .clone();
         if urls.is_empty() {
             return Err(IssueError::InvalidInput(
-                "pending DNS order omitted authorizations",
+                "pending order omitted authorizations",
             ));
         }
         for url in urls {
+            if record.authorizations.iter().any(|auth| {
+                auth.url == url
+                    && matches!(auth.resource.status, AuthorizationStatus::Valid)
+                    && auth
+                        .resource
+                        .expires
+                        .is_some_and(|at| at > time::OffsetDateTime::now_utc())
+            }) {
+                continue;
+            }
             bounded(execution, self.authorization(record, &url)).await?;
         }
         // Retain expiry/failure observations even when preparation cannot continue.
@@ -427,18 +574,14 @@ impl IssueService {
         session.save(record).await?;
         if !outstanding.is_empty() {
             self.observe(&IssueEvent::PublicationRequired {
+                method: record.challenge,
                 count: outstanding.len(),
             });
-            if !bounded(
-                execution,
-                dns.ready(&outstanding, execution.skip_dns_check, &execution.context),
-            )
-            .await?
-            {
+            if !bounded(execution, solver.ready(&outstanding, &execution.context)).await? {
                 return Ok(Some(outstanding));
             }
-            self.observe(&IssueEvent::DnsReady {
-                forced: execution.skip_dns_check,
+            self.observe(&IssueEvent::PublicationReady {
+                method: record.challenge,
             });
         }
         self.acknowledge(session, record, execution).await?;
@@ -453,6 +596,7 @@ impl IssueService {
         execution: &IssueExecution,
     ) -> Result<(), IssueError> {
         for index in 0..record.authorizations.len() {
+            check(execution)?;
             let auth = &record.authorizations[index];
             if !matches!(auth.resource.status, AuthorizationStatus::Pending) {
                 continue;
@@ -614,13 +758,21 @@ impl IssueService {
         &self,
         record: &IssueRecord,
         execution: &IssueExecution,
+        attempt: u32,
     ) -> Result<(), IssueError> {
         if let Some(at) = record.next_poll_at {
             let delay = (at - time::OffsetDateTime::now_utc())
                 .try_into()
                 .unwrap_or(Duration::ZERO);
             if !delay.is_zero() {
-                self.observe(&IssueEvent::Waiting { delay });
+                self.observe(&IssueEvent::Waiting {
+                    delay,
+                    attempt,
+                    limit: execution.max_polls,
+                    source: record
+                        .poll_wait_source
+                        .unwrap_or(super::PollWaitSource::LocalInterval),
+                });
             }
             bounded(execution, async {
                 tokio::time::sleep(delay).await;
@@ -684,7 +836,14 @@ fn parse_order(response: &AcmeResponse, record: &IssueRecord) -> Result<OrderObj
 
 fn schedule(record: &mut IssueRecord, response: &AcmeResponse, fallback: Duration) {
     let now = time::OffsetDateTime::now_utc();
-    let delay = crate::transport::retry_after(&response.headers)
+    let retry = crate::transport::retry_after(&response.headers);
+    tracing::debug!(retry_after = ?retry, local_interval_ms = fallback.as_millis(), "Scheduling next CA poll");
+    let source = if retry.is_some() {
+        super::PollWaitSource::RetryAfter
+    } else {
+        super::PollWaitSource::LocalInterval
+    };
+    let delay = retry
         .map_or(fallback, |hint| match hint {
             crate::transport::RetryAfter::Delay(delay) => delay,
             crate::transport::RetryAfter::At(at) => at
@@ -695,11 +854,10 @@ fn schedule(record: &mut IssueRecord, response: &AcmeResponse, fallback: Duratio
     let next = now
         .checked_add(time::Duration::try_from(delay).unwrap_or(time::Duration::MAX))
         .unwrap_or_else(|| time::Date::MAX.midnight().assume_utc());
-    record.next_poll_at = Some(
-        record
-            .next_poll_at
-            .map_or(next, |previous| previous.max(next)),
-    );
+    if record.next_poll_at.is_none_or(|previous| next >= previous) {
+        record.next_poll_at = Some(next);
+        record.poll_wait_source = Some(source);
+    }
 }
 
 fn completed(record: IssueRecord) -> IssueOutcome {
@@ -707,7 +865,7 @@ fn completed(record: IssueRecord) -> IssueOutcome {
         .authorizations
         .iter()
         .filter(|auth| auth.cleanup_pending)
-        .filter_map(|auth| auth.dns.clone())
+        .filter_map(|auth| auth.validation.clone())
         .collect();
     IssueOutcome::Completed {
         record: Box::new(record),
@@ -734,7 +892,9 @@ async fn bounded<T>(
     }
 }
 
-fn prepare_authorizations(record: &mut IssueRecord) -> Result<Vec<DnsRequirement>, IssueError> {
+fn prepare_authorizations(
+    record: &mut IssueRecord,
+) -> Result<Vec<ValidationRequirement>, IssueError> {
     let mut outstanding = Vec::new();
     for auth in &mut record.authorizations {
         if auth
@@ -753,62 +913,43 @@ fn prepare_authorizations(record: &mut IssueRecord) -> Result<Vec<DnsRequirement
                         .challenges
                         .iter()
                         .find(|challenge| challenge.url == *url),
-                    None => auth
-                        .resource
-                        .challenges
-                        .iter()
-                        .find(|challenge| matches!(challenge.kind, WireChallengeKind::Dns01)),
+                    None => auth.resource.challenges.iter().find(|challenge| {
+                        crate::challenge::known_method(&challenge.kind) == Some(record.challenge)
+                    }),
                 }
                 .ok_or(IssueError::InvalidInput(
-                    "CA did not offer the selected DNS challenge",
+                    "CA did not offer the selected challenge method",
                 ))?;
-                match &challenge.kind {
-                    WireChallengeKind::Dns01 => {}
-                    WireChallengeKind::Http01
-                    | WireChallengeKind::TlsAlpn01
-                    | WireChallengeKind::Unknown(_) => {
-                        return Err(IssueError::InvalidInput(
-                            "saved challenge is no longer DNS-01",
-                        ));
-                    }
+                if crate::challenge::known_method(&challenge.kind) != Some(record.challenge) {
+                    return Err(IssueError::InvalidInput("saved challenge method changed"));
                 }
                 let token = challenge
                     .parameters
                     .get("token")
                     .and_then(serde_json::Value::as_str)
                     .ok_or(IssueError::InvalidInput(
-                        "DNS-01 challenge omitted its required string token",
+                        "selected challenge omitted its required string token",
                     ))?;
                 let Identifier::Dns(identifier) = authorization_identifier(
                     auth.resource.identifier.clone(),
                     auth.resource.wildcard,
                 )?;
                 let material = ChallengeMaterial::derive(
-                    ChallengeKind::Dns01,
+                    record.challenge,
                     &identifier,
                     &ChallengeToken::new(token)?,
                     &record.account_thumbprint,
                 )?;
-                let ChallengeMaterial::Dns01 {
-                    record_name,
-                    txt_value,
-                } = material
-                else {
-                    return Err(IssueError::InvalidInput("invalid DNS material"));
-                };
-                let requirement = DnsRequirement {
-                    name: record_name.as_str().into(),
-                    value: txt_value,
-                };
+                let requirement = ValidationRequirement::from_material(material);
                 if auth
-                    .dns
+                    .validation
                     .as_ref()
                     .is_some_and(|previous| previous != &requirement)
                 {
-                    return Err(IssueError::InvalidInput("saved challenge token changed"));
+                    return Err(IssueError::InvalidInput("saved challenge material changed"));
                 }
                 auth.challenge_url = Some(challenge.url.clone());
-                auth.dns = Some(requirement.clone());
+                auth.validation = Some(requirement.clone());
                 auth.cleanup_pending = true;
                 match &challenge.status {
                     ChallengeStatus::Pending => {
@@ -818,7 +959,9 @@ fn prepare_authorizations(record: &mut IssueRecord) -> Result<Vec<DnsRequirement
                     }
                     ChallengeStatus::Processing | ChallengeStatus::Valid => {}
                     ChallengeStatus::Invalid => {
-                        return Err(IssueError::InvalidInput("CA rejected the DNS challenge"));
+                        return Err(IssueError::InvalidInput(
+                            "CA rejected the selected challenge",
+                        ));
                     }
                     ChallengeStatus::Unknown(_) => {
                         return Err(IssueError::InvalidInput("unsupported challenge state"));

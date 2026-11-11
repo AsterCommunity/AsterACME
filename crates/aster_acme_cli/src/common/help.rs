@@ -96,4 +96,17 @@ mod tests {
             .unwrap_err();
         assert_ne!(error.kind(), clap::error::ErrorKind::DisplayHelp);
     }
+
+    #[test]
+    fn debug_is_a_cross_cutting_diagnostic_flag_not_an_account_or_validation_override() {
+        use clap::Parser;
+        for args in [
+            vec!["aster-acme", "--debug", "cert", "issue", "--resume", "web"],
+            vec!["aster-acme", "cert", "issue", "--resume", "web", "--debug"],
+            vec!["aster-acme", "account", "list", "--json", "--debug"],
+            vec!["aster-acme", "version", "--debug"],
+        ] {
+            assert!(crate::app::Args::try_parse_from(args).unwrap().debug);
+        }
+    }
 }

@@ -653,3 +653,97 @@ async fn shared_pool_keeps_request_deadlines_independent_and_initializes_lazily(
     assert_eq!(long.unwrap().status, StatusCode::OK);
     assert!(pool.0.get().is_some());
 }
+
+#[tokio::test]
+async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
+    let server = MockServer::start().await;
+    let pool = HttpPool::default();
+    for (path_name, body, expected) in [
+        ("exact", "token.thumb", true),
+        ("newline", "token.thumb\n", true),
+        ("wrong", "other", false),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{path_name}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            pool.check_http_challenge(
+                &format!("{}/{path_name}", server.uri()),
+                b"token.thumb",
+                Duration::from_secs(2)
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+    }
+    Mock::given(method("GET"))
+        .and(path("/redirect"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("Location", format!("{}/exact", server.uri())),
+        )
+        .mount(&server)
+        .await;
+    assert!(
+        pool.check_http_challenge(
+            &format!("{}/redirect", server.uri()),
+            b"token.thumb",
+            Duration::from_secs(2)
+        )
+        .await
+        .unwrap()
+    );
+    Mock::given(method("GET"))
+        .and(path("/large"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(8193)))
+        .mount(&server)
+        .await;
+    assert!(matches!(
+        pool.check_http_challenge(
+            &format!("{}/large", server.uri()),
+            b"token.thumb",
+            Duration::from_secs(2)
+        )
+        .await,
+        Err(TransportError::BodyTooLarge)
+    ));
+}
+
+#[tokio::test]
+async fn advisory_redirect_loops_invalid_schemes_and_missing_locations_are_bounded() {
+    let server = MockServer::start().await;
+    let pool = HttpPool::default();
+    for (name, target) in [
+        ("loop", Some("/loop")),
+        ("file", Some("file:///private/key")),
+        ("missing", None),
+    ] {
+        let mut response = ResponseTemplate::new(302);
+        if let Some(target) = target {
+            response = response.insert_header("Location", target);
+        }
+        Mock::given(method("GET"))
+            .and(path(format!("/{name}")))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+        let result = pool
+            .check_http_challenge(
+                &format!("{}/{name}", server.uri()),
+                b"body",
+                Duration::from_secs(2),
+            )
+            .await;
+        assert!(!matches!(result, Ok(true)));
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/loop")
+            .count(),
+        11
+    );
+}

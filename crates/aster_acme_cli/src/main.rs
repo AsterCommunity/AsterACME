@@ -69,10 +69,17 @@ async fn run(
     tracing_subscriber::fmt()
         .with_env_filter(if json {
             tracing_subscriber::EnvFilter::new("off")
+        } else if args.debug {
+            tracing_subscriber::EnvFilter::new(
+                "off,aster_acme=debug,aster_acme_cli=debug,aster_acme_cli_storage=debug",
+            )
         } else {
             tracing_subscriber::EnvFilter::from_default_env()
         })
-        .with_ansi(cli.output.diagnostic_format().color)
+        .with_ansi(false)
+        .event_format(common::log::DiagnosticFormat {
+            color: cli.output.diagnostic_format().color,
+        })
         .with_writer(cli.output.clone())
         .init();
     dispatch::execute(args, cli).await

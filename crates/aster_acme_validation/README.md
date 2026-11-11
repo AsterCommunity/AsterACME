@@ -14,6 +14,6 @@ cargo check -p aster_acme_validation --locked
 
 依赖与 feature 统一从根 workspace 继承。License: MIT OR Apache-2.0.
 
-`dns01::visibility::DnsVisibility` 实现 `dyn DnsReadiness`，用系统 recursive resolver 查询每个 TXT owner，拼接同一 RR 内的字符片段、匹配完整值，保留同名多条 TXT 共存语义。NXDOMAIN/缺失预期值返回未就绪，网络错误返回可诊断失败。取消和执行 deadline 包含查询等待；force 在任何 DNS 初始化/查询前返回就绪，但仍检查取消/deadline。它不发布、不清理记录，也不能代替 CA 验证或证明公网传播完毕。
+`dns01::visibility::DnsVisibility` 通过 `ChallengeSolver` 边界提供系统DNS查询，TXT RR内部片段拼接、多个RR分别匹配；NXDOMAIN/缺失返回false，解析器错误返回可诊断失败，取消和deadline有效。CLI把这个观察当建议，独立限2秒，失败/缺失/超时只警告并继续CA，不再提供skip标志。它不发布、不清理DNS，也不代替CA授权。
 
-当前模块为 dns01/visibility；未来 HTTP-01、TLS-ALPN-01 分别归 http01、tls_alpn01，不添加空实现。manual_dns 的终端发布提示不进入本 crate。CLI 仅使用 -c manual_dns，ACME wire 方法由实现内部确定。
+HTTP manual/webroot的实现选择、终端确认和站点文件操作归CLI validation模块；ACME只拥有方法及协议材料。本crate当前只实现dns01/visibility，无自动provider，不添加空HTTP/TLS实现。

@@ -8,7 +8,7 @@ use aster_acme::{
 };
 use aster_acme_cli_storage::StorageError;
 
-mod problem;
+pub(crate) mod problem;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -43,10 +43,12 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
             IssueError::RevocationUncertain(error)=>(format!("Certificate revocation outcome is unconfirmed. {}", transport_diagnostic(error).0),Some("Inspect cert show <NAME>. Rerun cert revoke <NAME> --yes with the same reason to request revocation again; local files are retained.".into())),
             IssueError::Transport(error)=>transport_diagnostic(error),
             IssueError::Store(error)=>(format!("Could not access certificate storage: {}", error.message),Some("Check --data-dir, managed files and permissions. Retain any .removing marker and remaining files for inspection.".into())),
-            IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; --skip-dns-check never bypasses CA expiry.".into())),
+            IssueError::PollLimit { .. } => (issue.to_string(), Some("Resume the saved request, or increase --max-polls. Retry-After and the overall --operation-timeout still apply; no new order is created.".into())),
+            IssueError::InvalidOrder { problem } => self::problem::invalid_order(problem.as_deref()),
+            IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; local readiness cannot bypass CA expiry.".into())),
             IssueError::CreationUncertain=>(issue.to_string(),Some("Use cert list to inspect the retained request. Keep its key/CSR; a missing Location cannot be reconstructed safely and no new order will be created automatically.".into())),
-            IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Manual TXT records remain under your control.".into())),
-            IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and manual TXT requirements. Retain the certificate key and CSR.".into())),
+            IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Saved validation files and records remain under your control.".into())),
+            IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and saved validation requirements. Retain the certificate key and CSR.".into())),
         };
     }
     if let Some(account) = error.downcast_ref::<AccountError>() {
@@ -247,5 +249,24 @@ mod tests {
         assert!(hint.contains("--name"));
         assert!(hint.contains("account list"));
         assert!(!hint.contains("--ca-directory"));
+    }
+
+    #[test]
+    fn invalid_resource_problem_is_not_reported_as_http_failure_or_a_resume_action() {
+        let problem = serde_json::from_value(serde_json::json!({"type":"urn:ietf:params:acme:error:unauthorized","detail":"HTTP returned 404","subproblems":[{"type":"urn:ietf:params:acme:error:connection","detail":"Connection refused","identifier":{"type":"dns","value":"example.com"}}]})).unwrap();
+        let error = aster_acme::issuance::IssueError::InvalidOrder {
+            problem: Some(Box::new(problem)),
+        };
+        let (message, hint) = diagnostic(&error);
+        assert!(
+            message.contains("HTTP returned 404")
+                && message.contains("example.com")
+                && message.contains("Connection refused")
+        );
+        assert!(!message.contains("HTTP 400"));
+        assert!(hint.unwrap().contains("cannot be resumed"));
+        let (message, _) =
+            diagnostic(&aster_acme::issuance::IssueError::InvalidOrder { problem: None });
+        assert!(message.contains("did not provide problem details"));
     }
 }

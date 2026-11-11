@@ -5,7 +5,7 @@ use crate::common::output::Style;
 use crate::common::output::field;
 use crate::common::session::Format;
 use crate::common::time::timestamp;
-use aster_acme::issuance::{DnsRequirement, IssueOutcome, IssueRecord};
+use aster_acme::issuance::{IssueOutcome, IssueRecord, ValidationRequirement};
 use aster_acme_core::revocation::RevocationState;
 use serde::Serialize;
 
@@ -199,7 +199,7 @@ pub(super) fn list(records: &[IssueRecord], format: Format) -> CliResult<String>
         }),
     ));
     lines.push(output::tips(
-        "Use cert show <NAME> for request IDs, CA details and TXT records.",
+        "Use cert show <NAME> for request IDs, CA details and saved validation requirements.",
         color,
     ));
     Ok(lines.join("\n"))
@@ -374,10 +374,19 @@ fn show_text(
 
 // Immutable request identity and local progress, shared by offline and refreshed details.
 fn request_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         output::styled(&output::safe(record.name.as_str()), Style::BoldCyan, color),
         field("Request:", &record.operation_id, color),
         field("Key type:", record.key_algorithm.name(), color),
+        field(
+            "Validation:",
+            &output::safe(&format!(
+                "{} ({})",
+                record.solver_id,
+                record.challenge.name()
+            )),
+            color,
+        ),
         field("Requested:", &timestamp(Some(record.created_at)), color),
         field(
             "Domains:",
@@ -399,7 +408,24 @@ fn request_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
             color,
         ),
         field("CA:", &output::safe(record.directory.as_str()), color),
-    ]
+    ];
+    if matches!(
+        super::validation::ValidationMethod::from_record(record),
+        Ok(super::validation::ValidationMethod::Webroot)
+    ) && let Ok(config) =
+        serde_json::from_value::<super::validation::WebrootConfig>(record.solver_config.clone())
+    {
+        lines.push(field(
+            "Webroot:",
+            &output::safe(&config.root.display().to_string()),
+            color,
+        ));
+    }
+    if let Some(problem) = record.failure_problem() {
+        let (message, _) = crate::common::error::problem::invalid_order(Some(problem));
+        lines.push(field("CA problem:", &output::safe(&message), color));
+    }
+    lines
 }
 
 fn revocation_lines(record: &IssueRecord, color: bool) -> Vec<String> {
@@ -546,13 +572,42 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
             ),
             color,
         ));
-        if let Some(dns) = &authorization.dns {
-            lines.push(format!(
-                "    {} {} = {}",
-                output::styled("Saved validation TXT:", Style::Yellow, color),
-                output::safe(&dns.name),
-                output::safe(&dns.value)
-            ));
+        if let Some(requirement) = &authorization.validation {
+            lines.extend(
+                requirement_lines(std::slice::from_ref(requirement))
+                    .into_iter()
+                    .map(|line| format!("    Saved validation: {line}")),
+            );
+        }
+    }
+    lines
+}
+
+/// Shared method-specific material presentation for prompts and final outcomes.
+/// All strings are escaped before reaching the terminal.
+pub(super) fn requirement_lines(requirements: &[ValidationRequirement]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for requirement in requirements {
+        match requirement {
+            ValidationRequirement::Dns01 { name, value } => lines.push(format!(
+                "{}  TXT  {}",
+                output::safe(name),
+                output::safe(value)
+            )),
+            ValidationRequirement::Http01 { url, path, content } => {
+                lines.push(format!("URL: {}", output::safe(url)));
+                lines.push(format!(
+                    "File: {}",
+                    output::safe(path.trim_start_matches('/'))
+                ));
+                lines.push(format!(
+                    "Content (exact, no newline required): {}",
+                    output::safe(content)
+                ));
+            }
+            ValidationRequirement::TlsAlpn01 { domain, .. } => {
+                lines.push(format!("TLS-ALPN: {}", output::safe(domain)));
+            }
         }
     }
     lines
@@ -564,12 +619,12 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
 enum ResultOutput<'a> {
     ActionRequired {
         operation: &'a IssueRecord,
-        records: &'a [DnsRequirement],
+        records: &'a [ValidationRequirement],
         resume: String,
     },
     Completed {
         operation: &'a IssueRecord,
-        records: &'a [DnsRequirement],
+        records: &'a [ValidationRequirement],
         artifacts: ArtifactPaths,
     },
     NotDue {
@@ -894,21 +949,19 @@ pub(super) fn outcome(
         lines.push(
             match outcome {
                 IssueOutcome::ActionRequired { .. } => {
-                    "Add every TXT value below. Values at the same name must coexist:"
+                    "Publish every validation requirement below; retain unrelated files and records:"
                 }
                 IssueOutcome::Completed { .. } => {
-                    "Validation finished. You may remove these specific manual TXT values:"
+                    "Validation finished. You may remove these specific saved manual validation values/files:"
                 }
             }
             .into(),
         );
-        for record in records {
-            lines.push(format!(
-                "  {}  TXT  {}",
-                output::safe(&record.name),
-                output::safe(&record.value)
-            ));
-        }
+        lines.extend(
+            requirement_lines(records)
+                .into_iter()
+                .map(|line| format!("  {line}")),
+        );
     }
     if let IssueOutcome::ActionRequired { .. } = outcome {
         lines.push(format!(
@@ -1061,7 +1114,7 @@ mod tests {
     use super::*;
     fn detailed_record() -> IssueRecord {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
-            "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00.123456Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
             "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
@@ -1228,7 +1281,7 @@ mod tests {
     fn rejected_csr_local_failure_keeps_ready_order_status_and_distinct_colors() {
         use aster_acme_protocol::problem::{Problem, ProblemKind};
         let mut record:IssueRecord=serde_json::from_value(serde_json::json!({
-            "key_algorithm":"ecdsa-p521","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+            "key_algorithm":"ecdsa-p521","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
             "phase":"finalizing","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
@@ -1275,11 +1328,11 @@ mod tests {
     #[test]
     fn final_output_variants_cannot_mix_manual_actions_artifacts_or_not_due_results() {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
-            "key_algorithm":"ecdsa-p256","solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","creation_submitted":true,"authorizations":[],"finalize_submitted":"not_submitted"
+            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","creation_submitted":true,"authorizations":[],"finalize_submitted":"not_submitted"
         })).unwrap();
         let pending = IssueOutcome::ActionRequired {
             record: Box::new(record.clone()),
-            records: vec![DnsRequirement {
+            records: vec![ValidationRequirement::Dns01 {
                 name: "_acme-challenge.example.com".into(),
                 value: "txt-value".into(),
             }],
@@ -1349,6 +1402,31 @@ mod tests {
             let mut record = record.clone();
             record.revocation.state = state;
             assert!(revoked(&record, crate::common::session::Format::plain(true)).is_err());
+        }
+    }
+
+    #[test]
+    fn authorizing_status_and_order_status_keep_their_own_aligned_columns_with_or_without_color() {
+        let mut record = detailed_record();
+        record.phase = aster_acme_core::workflow::IssuancePhase::Authorizing;
+        record.order.as_mut().unwrap().status = aster_acme_core::protocol::OrderStatus::Pending;
+        for color in [false, true] {
+            let rendered =
+                list(std::slice::from_ref(&record), Format { json: false, color }).unwrap();
+            let plain = rendered
+                .replace("\x1b[1;36m", "")
+                .replace("\x1b[33m", "")
+                .replace("\x1b[0m", "");
+            let header = plain
+                .lines()
+                .find(|line| line.contains("ORDER STATUS"))
+                .unwrap();
+            let row = plain
+                .lines()
+                .find(|line| line.contains("authorizing domains"))
+                .unwrap();
+            assert!(row.contains("authorizing domains  "));
+            assert_eq!(row.find("pending"), header.find("ORDER STATUS"));
         }
     }
 }

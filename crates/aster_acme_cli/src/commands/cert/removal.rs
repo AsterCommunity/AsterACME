@@ -175,6 +175,9 @@ mod tests {
         let session = store
             .create(
                 &IssueRequest {
+                    challenge: aster_acme::challenge::ChallengeKind::Dns01,
+                    solver_id: "manual_dns".into(),
+                    solver_config: serde_json::Value::Object(serde_json::Map::default()),
                     key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                     name: name.clone(),
                     identifiers: vec![

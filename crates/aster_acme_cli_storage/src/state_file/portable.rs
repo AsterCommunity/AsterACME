@@ -163,3 +163,31 @@ pub(super) fn create_view_link(_target: &Path, _path: &Path) -> io::Result<()> {
         "this platform publishes certificate copies",
     ))
 }
+
+#[cfg(windows)]
+pub(super) fn identity(file: &File) -> io::Result<(u64, u64)> {
+    let information = winapi_util::file::information(file)?;
+    Ok((information.volume_serial_number(), information.file_index()))
+}
+#[cfg(not(windows))]
+pub(super) fn identity(_file: &File) -> io::Result<(u64, u64)> {
+    Err(io::Error::other(
+        "stable file identity is unavailable on this platform",
+    ))
+}
+
+pub(super) fn open_regular(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    configure_open(&mut options);
+    let file = options.open(path)?;
+    check_private(&file.metadata()?)?;
+    Ok(file)
+}
+
+pub(super) fn expose_public_file(file: &File) -> io::Result<()> {
+    check_private(&file.metadata()?)
+}
+pub(super) fn expose_public_directory(path: &Path) -> io::Result<()> {
+    super::ensure_directory(path)
+}

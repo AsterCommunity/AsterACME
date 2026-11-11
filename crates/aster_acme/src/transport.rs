@@ -151,6 +151,88 @@ impl HttpPool {
             .await
     }
 
+    /// Advisory HTTP-01 observation through the shared pool. Follow at most ten
+    /// explicit HTTP/HTTPS redirects; signed ACME requests still never redirect.
+    /// TLS verification remains enabled, unlike some CAs' validation policy.
+    ///
+    /// # Errors
+    /// Reports unsafe URLs, transport failures, exhausted deadlines or oversized bodies.
+    pub async fn check_http_challenge(
+        &self,
+        url: &str,
+        expected: &[u8],
+        timeout: Duration,
+    ) -> Result<bool, TransportError> {
+        let mut current = url::Url::parse(url).map_err(|_| TransportError::InvalidOptions)?;
+        if current.scheme() != "http" || timeout.is_zero() {
+            return Err(TransportError::InvalidOptions);
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        for hop in 0..=10 {
+            if !matches!(current.scheme(), "http" | "https")
+                || !current.username().is_empty()
+                || current.password().is_some()
+                || current.fragment().is_some()
+            {
+                return Err(TransportError::InvalidOptions);
+            }
+            // Public validation starts on port 80. Loopback fixture ports are also
+            // accepted for tests; redirects on public hosts stay on 80/443.
+            if hop > 0
+                && !matches!(current.port_or_known_default(), Some(80 | 443))
+                && !current.host_str().is_some_and(|host| {
+                    host.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+                })
+            {
+                return Err(TransportError::InvalidOptions);
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            let mut response = self
+                .client()
+                .await?
+                .get(current.as_str())
+                .timeout(remaining)
+                .send()
+                .await?;
+            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+                if hop == 10 {
+                    return Ok(false);
+                }
+                let Some(location) = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                else {
+                    return Ok(false);
+                };
+                current = current
+                    .join(location)
+                    .map_err(|_| TransportError::InvalidOptions)?;
+                continue;
+            }
+            if response.status() != StatusCode::OK {
+                return Ok(false);
+            }
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if body.len().saturating_add(chunk.len()) > 8192 {
+                    return Err(TransportError::BodyTooLarge);
+                }
+                body.extend_from_slice(&chunk);
+            }
+            return Ok(body
+                .strip_suffix(b"\r\n")
+                .or_else(|| body.strip_suffix(b"\n"))
+                .unwrap_or(&body)
+                == expected);
+        }
+        Ok(false)
+    }
+
     /// Discover a CA using verified TLS, without redirects or automatic mutation retries.
     ///
     /// # Errors
@@ -163,12 +245,27 @@ impl HttpPool {
         options.validate()?;
         check_transport(&directory_url, &options)?;
         let http = self.client().await?;
-        let response = read_response(
-            request(http, Method::GET, &directory_url, &options)
-                .send()
-                .await?,
-        )
-        .await?;
+        let started = std::time::Instant::now();
+        tracing::debug!(request_kind = "directory", "ACME request started");
+        let sent = request(http, Method::GET, &directory_url, &options)
+            .send()
+            .await;
+        if let Err(error) = &sent {
+            tracing::debug!(
+                request_kind = "directory",
+                timeout = error.is_timeout(),
+                connect_error = error.is_connect(),
+                elapsed_ms = started.elapsed().as_millis(),
+                "ACME transport failed"
+            );
+        }
+        let response = read_response(sent?).await?;
+        tracing::debug!(
+            request_kind = "directory",
+            status = response.status.as_u16(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "ACME response received"
+        );
         if response.status != StatusCode::OK {
             return Err(response_error(&response));
         }
@@ -290,19 +387,41 @@ impl AcmeClient {
                 None => RequestIdentity::Jwk { jwk: &jwk },
             };
             let jws = sign_request(signer, identity, &current_nonce, url.as_str(), payload)?;
-            let response = read_response(
-                request(
-                    self.http_pool.client().await?,
-                    Method::POST,
-                    url,
-                    &self.options,
-                )
-                .header("Content-Type", "application/jose+json")
-                .json(&jws)
-                .send()
-                .await?,
+            let started = std::time::Instant::now();
+            tracing::debug!(
+                request_kind = "signed_post",
+                nonce_retry = attempt,
+                "ACME request started"
+            );
+            let sent = request(
+                self.http_pool.client().await?,
+                Method::POST,
+                url,
+                &self.options,
             )
-            .await?;
+            .header("Content-Type", "application/jose+json")
+            .json(&jws)
+            .send()
+            .await;
+            if let Err(error) = &sent {
+                tracing::debug!(
+                    request_kind = "signed_post",
+                    nonce_retry = attempt,
+                    timeout = error.is_timeout(),
+                    connect_error = error.is_connect(),
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "ACME transport failed"
+                );
+            }
+            let response = read_response(sent?).await?;
+            tracing::debug!(
+                request_kind = "signed_post",
+                nonce_retry = attempt,
+                status = response.status.as_u16(),
+                has_location = response.headers.contains_key(LOCATION), retry_after = ?retry_after(&response.headers),
+                elapsed_ms = started.elapsed().as_millis(),
+                "ACME response received"
+            );
             let fresh = nonce(&response.headers);
             if response.status.is_success() {
                 // RFC 8555 section 6.5.1: ignore invalid Replay-Nonce values.

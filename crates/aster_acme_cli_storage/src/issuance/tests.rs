@@ -4,9 +4,10 @@ use aster_acme::account::KeyAccess;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme::identifier::DnsIdentifier;
 use aster_acme::issuance::service::IssueService;
+use aster_acme::solver::ChallengeSolver;
 use aster_acme::{
     account::{AccountKeyStore, AccountStore},
-    issuance::{DnsReadiness, DnsRequirement, IssueExecution, IssueIdentity, IssueOutcome},
+    issuance::{IssueExecution, IssueIdentity, IssueOutcome, ValidationRequirement},
     solver::ExecutionContext,
     transport::TransportOptions,
 };
@@ -88,6 +89,9 @@ async fn fixture() -> Fixture {
 
 fn request() -> IssueRequest {
     IssueRequest {
+        challenge: aster_acme::challenge::ChallengeKind::Dns01,
+        solver_id: "manual_dns".into(),
+        solver_config: serde_json::Value::Object(serde_json::Map::default()),
         key_algorithm: KeyAlgorithm::EcdsaP256,
         name: CertificateName::new("example.com").unwrap(),
         identifiers: vec![
@@ -100,27 +104,44 @@ fn request() -> IssueRequest {
 
 fn execution() -> IssueExecution {
     IssueExecution {
+        max_polls: 30,
         context: ExecutionContext {
             cancellation: CancellationToken::new(),
             deadline: Instant::now() + Duration::from_secs(5),
         },
-        skip_dns_check: false,
+
         poll_interval: Duration::from_millis(100),
     }
 }
 
 struct Dns(bool);
 #[async_trait]
-impl DnsReadiness for Dns {
+impl ChallengeSolver for Dns {
+    fn kind(&self) -> aster_acme::challenge::ChallengeKind {
+        aster_acme::challenge::ChallengeKind::Dns01
+    }
     async fn ready(
         &self,
-        records: &[DnsRequirement],
-        _force: bool,
+        records: &[ValidationRequirement],
         _execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].name, records[1].name);
-        assert_ne!(records[0].value, records[1].value);
+        let ValidationRequirement::Dns01 {
+            name: first_name,
+            value: first_value,
+        } = &records[0]
+        else {
+            panic!("expected DNS");
+        };
+        let ValidationRequirement::Dns01 {
+            name: second_name,
+            value: second_value,
+        } = &records[1]
+        else {
+            panic!("expected DNS");
+        };
+        assert_eq!(first_name, second_name);
+        assert_ne!(first_value, second_value);
         Ok(self.0)
     }
 }
@@ -338,8 +359,7 @@ async fn expired_order_is_retained_and_force_cannot_advance_it() {
         .create(&request(), &fixture.account)
         .await
         .unwrap();
-    let mut execution = execution();
-    execution.skip_dns_check = true;
+    let execution = execution();
     assert!(matches!(
         fixture
             .service
@@ -710,7 +730,7 @@ async fn order_inspection_only_observes_and_preserves_pending_publication_state(
     assert_eq!(observed.finalize_submitted, SubmissionState::NotSubmitted);
     for authorization in &observed.authorizations {
         assert_eq!(authorization.acknowledgement, SubmissionState::NotSubmitted);
-        assert!(authorization.dns.is_some());
+        assert!(authorization.validation.is_some());
     }
     assert!(
         !fixture
@@ -820,11 +840,13 @@ async fn reusing_one_embedded_session_reads_its_latest_checkpoint_instead_of_rec
 
 struct DelayedPublication(std::sync::atomic::AtomicBool);
 #[async_trait]
-impl DnsReadiness for DelayedPublication {
+impl ChallengeSolver for DelayedPublication {
+    fn kind(&self) -> aster_acme::challenge::ChallengeKind {
+        aster_acme::challenge::ChallengeKind::Dns01
+    }
     async fn ready(
         &self,
-        _records: &[DnsRequirement],
-        _force: bool,
+        _records: &[ValidationRequirement],
         _execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
         self.0.store(true, Ordering::SeqCst);
@@ -860,8 +882,7 @@ async fn expiry_during_manual_publication_is_rechecked_before_ca_notification() 
         .await
         .unwrap();
     let dns = DelayedPublication(std::sync::atomic::AtomicBool::new(false));
-    let mut execution = execution();
-    execution.skip_dns_check = true;
+    let execution = execution();
     assert!(matches!(
         fixture
             .service
@@ -968,7 +989,7 @@ async fn issuance_reports_typed_progress_in_order_without_private_or_txt_materia
         panic!("expected publication action");
     };
     let observed = events.0.lock().unwrap();
-    assert!(matches!(observed[0], IssueEvent::CreatingOrder));
+    assert!(matches!(observed[0], IssueEvent::CreatingOrder { .. }));
     assert!(matches!(observed[1], IssueEvent::OrderCreated { .. }));
     assert!(observed.iter().any(|event| matches!(
         event,
@@ -978,11 +999,13 @@ async fn issuance_reports_typed_progress_in_order_without_private_or_txt_materia
     )));
     assert!(matches!(
         observed.last().unwrap(),
-        IssueEvent::PublicationRequired { count: 2 }
+        IssueEvent::PublicationRequired { count: 2, .. }
     ));
     let formatted = format!("{observed:?}");
     for requirement in records {
-        assert!(!formatted.contains(&requirement.value));
+        if let ValidationRequirement::Dns01 { value, .. } = requirement {
+            assert!(!formatted.contains(&value));
+        }
     }
     assert!(!observed.iter().any(|event| matches!(
         event,

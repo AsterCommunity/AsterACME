@@ -94,7 +94,7 @@ git diff HEAD --check
 - update-contact 按 RFC 8555 §7.3.2 只 POST contact 到原账户 URL；清空必须显式，成功观察与本地意图分开。rotate-key 按 §7.3.5 双层 JWS，内层新钥 jwk/无 nonce，外层旧钥 kid，URL 一致，200 可空 body。事务租约覆盖双钥持久化、pending/confirmed、对账和本地提交；pending 不自动重放，confirmed 不再发 keyChange。CLI bin 禁用 rustdoc 输出以避免与库同名目录碰撞，二进制名不变。
 
 - cert issue 是完整签发入口，cert list/show 只读/显式刷新，删除根 order 命令；不保留旧 order 参数或别名。默认名称为主域名加随机后缀，碰撞重试；显式已有名称拒绝；内部 ID 区分世代。恢复同名多候选必须交互选择并显示申请时间，脚本显式 --operation，不猜最新。
-- 当前只执行 manual_dns，人工确认属于 CLI，DNS 查询属于 aster_acme_validation，dyn DnsReadiness 不发布/删除记录。--skip-dns-check 仅跳过本地 DNS 可见性，不跳过首次非交互待办、CA 验证、过期或证书检查。order/auth expires 与证书 notAfter 分开，不捏造远端 expired order 状态。
+- 当前执行 manual_dns/manual_http/webroot，人工确认属于 CLI，DNS 查询属于 aster_acme_validation，ChallengeSolver实现由CLI/嵌入者注入；ACME只负责协议方法、材料和状态推进。DNS预检建议性限2秒，无跳过参数；人工首次非交互仍先返回待办。order/auth expires 与证书 notAfter 分开，不捏造远端 expired order 状态。
 - Issuance 使用账户→证书锁序，阻塞持久化保留租约；generation 固定密钥/CSR。先保存意图再 newOrder/ack/finalize，Location 先存后解析 body；响应丢失不自动下新单，Submitted 的 pending/ready 只轮询。保存验证后的 fullchain，再切换 in_use，最后 Completed；失败保留旧有效版本，人工 TXT 清理独立提示。
 
 - 人类输出统一 common/output、time、log、table；时间为 YYYY-MM-DD HH:MM:SS UTC，机器时间保持 RFC3339。show 字段标签统一宽度，颜色只在 TTY/非 NO_COLOR；Tips: 蓝色，待人工操作 WARN，最终签发 DONE。account show 的 verify 与离线共用完整快照模板；cert/account 只有成功 CA 查询才标 verified。
@@ -103,7 +103,7 @@ git diff HEAD --check
 
 - 所有已有账户操作先检查本地身份，再进行交互/CA discovery；rotate-key 还需验证原密钥/事务资格。只有 register 可创建新身份。注册成功后 default_account 缺省才补回，不覆盖已有/并发选择；失败或 pending 不设默认。toml_edit 对用户文档的可选字段用 get/get_mut/insert，集中锁内解析/编辑并保留 trivia，不用索引读取缺省值。
 
-- 公共 LocalArgs/HttpArgs 位于 common/args.rs；参数语义以 docs/cli-contract.md 为准。--yes 仅确认当前操作，不隐含 skip-dns-check、accept-terms 或关闭选择；cert resume 可跳过 TXT 确认但继续 DNS 检查，首次自动化申请必须先 yield TXT 指令。account contact 统一 -m，cert show 位置与 --name 互斥。
+- 公共 LocalArgs/HttpArgs 位于 common/args.rs；参数语义以 docs/cli-contract.md 为准。--yes 仅确认当前操作，不接受条款或关闭选择；cert resume 可跳过 TXT 确认但执行建议性DNS预检，首次自动化申请必须先 yield TXT 指令。account contact 统一 -m，cert show 位置与 --name 互斥。
 - README.md / README.zh.md、CHANGELOG.md / CHANGELOG.zh.md 配对维护；官网为 https://acme.astercosm.com。release 体积配置在根 profile，不在成员声明被 Cargo 忽略的 profile。
 
 - ARI 对照 RFC 9773：签发提交前保存原有效期 2/3 回退，提交后立即尝试 RenewalInfo，无签名 GET；窗口随机选时持久化且相同窗口不重抽，按 Retry-After 保存重查期限；失败保留计划，超时/5xx 有限退避，周期唤醒留给未来 daemon。吊销按 RFC 8555 §7.6 独立状态：pending 不是成功，200/alreadyRevoked 才确认；显式同证书同原因重试安全，网络不自动重放，已确认不发 HTTP，文件/in_use 保留。
@@ -118,7 +118,7 @@ git diff HEAD --check
 
 - CLI ANSI 码只归 common/output::Style，调用方使用枚举，不传数字字符串。table::align 是唯一布局入口，可选逐格样式，无 align→align_styled 薄转发；先按纯文本宽度对齐再着色。
 
-- cert renew 默认到期才执行，--now 仅提前；未到期输出not_due，续期沿用固定定义，持久化旧in_use及实际submitted_replaces，未完成优先恢复，旧版本不覆写新in_use。--skip-dns-check取代--force/-f，无旧别名。对象锁只在根.locks下，删除对象可清空目录而不破坏稳定锁inode。当前所有包分别声明0.1.0-alpha.1。结果渲染从枚举匹配，不以resume/路径字段反推完成状态。
+- cert renew 默认到期才执行，--now 仅提前；未到期输出not_due，续期沿用固定定义，持久化旧in_use及实际submitted_replaces，未完成优先恢复，旧版本不覆写新in_use。DNS预检有界且建议性，不提供DNS跳过/force参数。对象锁只在根.locks下，删除对象可清空目录而不破坏稳定锁inode。当前所有包分别声明0.1.0-alpha.1。结果渲染从枚举匹配，不以resume/路径字段反推完成状态。
 
 - 选用版本内部字段和稳定链接统一in_use（is_in_use、expected_in_use等），无current兼容。人类只在版本选择/历史详情用in use；普通证书选择不显示重复标记。ChoiceLabel统一账户/证书行展示，产品筛选策略仍由各自模块负责。
 
@@ -131,3 +131,6 @@ git diff HEAD --check
 
 
 - AsterFs 的生态定位以 [#4](https://github.com/AsterCommunity/AsterFs/issues/4) 为准：标准库优先，只补缺失的平台机制，不要求 fs2/fs4 API/feature/MSRV 兼容。ACME 目前不依赖 AsterFs；安全文件能力由 [#3](https://github.com/AsterCommunity/AsterFs/issues/3) 跟踪，临时适配模块顶部保留 TODO。业务层不散落平台 cfg；Windows 继承权限是有效策略，专用 ACL 非必需。in_use 在 Unix 使用链接，在 Windows 发布完整四文件副本并按持久化 catalog 恢复；目录双 rename 不是原子交换。
+
+
+- HTTP-01的manual_http/webroot复用IssueService，同一ChallengeSolver边界ready/cleanup，无第二套协议状态机。Webroot通过独占hard-link及同级操作ID凭据证明文件所有权；不覆盖用户内容、不删借用/修改文件，取消保留材料；公开验证文件仅新建时Unix0644/0755，平台差异仍归state_file。方法和实现配置持久化，不接受resume/renew覆盖。--if-similar-order唯一匹配恢复、多个报错、零匹配新建；相似未完成判断归ACME，未知创建必须提示但不能自动重发newOrder。

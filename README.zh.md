@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  可嵌入的 Rust ACME 客户端与 CLI，支持账户管理、手动 DNS 验证及可恢复的证书签发。
+  可嵌入的 Rust ACME 客户端与 CLI，支持账户管理、DNS/HTTP 验证及可恢复的证书签发。
   <br />
   明确的协议状态、持久化检查点，以及可以直接部署的证书文件。
 </p>
@@ -27,9 +27,9 @@
 
 ## AsterACME 是什么？
 
-AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与手动 DNS-01 证书签发。用户声明证书需求，库负责创建订单、跟踪授权、提交固定 CSR、下载证书链并持久化结果；CLI 提供终端交互和本地存储。
+AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与 DNS-01/HTTP-01 证书签发。用户声明证书需求，库负责创建订单、跟踪授权、提交固定 CSR、下载证书链并持久化结果；CLI 提供终端交互和本地存储。
 
-项目正在开发，ACME 包尚未正式发布。手动签发与恢复、ARI 续期计划及账户签名证书吊销已经实现；自动 DNS provider、HTTP/TLS 验证、自动续期、daemon 和部署 hook 仍是计划能力。
+项目正在开发，ACME 包尚未正式发布。手动签发与恢复、ARI 续期计划及账户签名证书吊销已经实现；自动 DNS provider、HTTP/TLS standalone 验证、自动续期、daemon 和部署 hook 仍是计划能力。
 
 ## 适用场景
 
@@ -113,7 +113,7 @@ aster-acme cert issue \
   --data-dir ./data
 ```
 
-添加程序要求的全部 TXT 值，同时保留无关的已有记录。同一 owner 可能需要多个值共存。CLI 先检查本地 DNS 可见性，再通知 CA 验证；本地查询是就绪证据，授权是否有效最终由 CA 决定。
+添加程序要求的全部 TXT 值，同时保留无关的已有记录。同一 owner 可能需要多个值共存。确认发布后可进行最多2秒的建议性 DNS 预检；缺失、解析错误或超时只警告后继续 CA 验证，取消和总期限仍生效。
 
 如果暂时无法完成，可以稍后继续：
 
@@ -127,6 +127,26 @@ aster-acme cert show example-cert --verify --data-dir ./data
 每次新的 issue 创建独立托管证书，默认名为主域名加随机后缀，碰撞时自动换串重试；显式 -n/--name 必须尚未使用。cert.toml 保存域名集合、账户、CA、验证方式等稳定定义，后续续期版本沿用该名称。--resume 继续已有操作。list/show 默认围绕 in_use，list --history 展开版本，show --history 或 --operation 查看具体历史；只有 in_use 的续期计划参与活跃调度。
 
 不带名称的 `cert show` 会在终端引导选择。列举和查看证书不会推进验证或签发。过期申请仍可见，但不能继续验证或提交 finalize。
+
+## 验证实现
+
+| `-c/--challenge` | 协议 | 行为 |
+| --- | --- | --- |
+| `manual_dns` | DNS-01 | 自行添加 TXT；本地 DNS 预检最多2秒且只作建议 |
+| `manual_http` | HTTP-01 | 按保存的 URL、文件路径及内容部署，随后恢复 |
+| `webroot` | HTTP-01 | 在现有 HTTP 服务器的网站根目录发布并清理拥有的文件 |
+
+```sh
+aster-acme cert issue -d example.com -c manual_http
+aster-acme cert issue --resume example.com-xxxxxxxx --yes
+aster-acme cert issue -d example.com -c webroot --webroot /srv/www
+```
+
+HTTP 不支持通配符；现有服务器须为全部 SAN 在公网80端口提供验证路径，不是程序自行监听。webroot 需要同目录 hard-link 支持；不覆盖已有不同内容，不删除借用或被用户修改/替换的文件。规范绝对路径及配置持久化，恢复/续期沿用。只为新文件/目录设置Unix 0644/0755，已有站点权限不变，Windows沿用继承权限。
+
+未显式设置新名称时，终端会在生成密钥前提示是否恢复完整匹配的未完成申请。脚本默认停止并给出恢复命令；`--if-similar-order` 在唯一匹配时恢复、零匹配时新建、多个匹配时报错。匹配完整域名集合、账户/CA、方法/配置及密钥类型。newOrder结果未确认的记录也会提示，但没有保存Location就不会自动重发；`--name <NEW_NAME>` 明确创建独立身份。
+
+删除DNS跳过/force参数。DNS预检不代替CA决定；用户取消、总期限和CA过期照常生效。HTTP standalone、TLS-ALPN、DNS-PERSIST及CNAME委托仍未实现。
 
 ## 证书密钥算法
 
@@ -149,6 +169,14 @@ aster-acme cert remove example-cert --all --yes
 
 吊销使用绑定账户，默认需要确认；多版本必须明确选择。成功后保留本地文件，超时保留未确认状态。`cert remove` 默认精确删除一次申请；--history 清理非当前的已签发版本，--revoked 匹配已保存的吊销确认，--all 才删除整个分组。清空 in_use 不自动切回旧版本，不访问 CA，仅保留非 AsterACME 管理的文件，无其他内容时删除证书目录。详见 [续期与吊销契约](docs/certificate-lifecycle.md)。
 
+命令带 `--debug` 可查看安全的检查点和HTTP状态/耗时，不输出正文、私钥或nonce值。JSON模式不混入人类诊断；debug不能补回之前已丢失的newOrder Location。
+
+订单轮询由 `--max-polls`（默认30，范围1–1000）和总超时共同限制；每轮显示次数，等待注明CA `Retry-After`或本地轮询间隔。达到上限保留申请供恢复。HTTP人工/webroot共用HTTP池做最多2秒的建议性内容预检，失败或跳转只警告，继续交给CA验证。
+
+本地轮询默认5秒；config的`poll_interval`或`--poll-interval <SECONDS>`可覆盖（1–300秒），CLI > 配置 > 内置。有效CA Retry-After仍优先；适用于issue/resume及每份证书renew（含--all），配置缺省不写回也能使用5秒。
+
+Webroot在INFO逐项显示文件发布/清理路径，--debug显示根目录到URL映射供配置服务器。invalid订单保留CA problem供查看，不能继续恢复。
+
 ## 脚本与确认
 
 ```sh
@@ -165,11 +193,10 @@ aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
 | --- | --- |
 | `-y`、`--yes` | 确认当前命令的操作；证书恢复时跳过 TXT 发布确认。不关闭名称选择，不代替同意条款，不跳过 DNS 检查。 |
 | `--accept-terms` | 注册时明确同意所选 CA 当前公布的条款。 |
-| `--skip-dns-check` | 只跳过本地 DNS 可见性检查；CA 验证、过期判断、产物校验照常执行。 |
 | `--json` | 结构化输出，不弹交互、不输出颜色和人类进度日志。 |
 | `--verify` | 显式查询已有资源的 CA 状态；默认查看仍离线。 |
 
-首次自动化手动 DNS 申请，即使带 `--yes` 和 `--skip-dns-check`，仍先给出新 TXT 待办，发布后再恢复。`--yes` 不猜测缺失输入。HTTP 的 `--timeout`、前台执行的 `--wait-timeout` 与 CA 过期时间分别生效。完整参数范围与短参数见 [CLI 参数契约](docs/cli-contract.md)。
+首次自动化手动 DNS 申请，即使带 `--yes`，仍先给出新 TXT 待办，发布后再恢复。`--yes` 不猜测缺失输入。HTTP 的 `--request-timeout`、前台执行的 `--operation-timeout` 与 CA 过期时间分别生效。完整参数范围与短参数见 [CLI 参数契约](docs/cli-contract.md)。
 
 ## 数据与证书文件
 

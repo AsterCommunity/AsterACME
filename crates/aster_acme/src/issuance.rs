@@ -87,6 +87,12 @@ impl From<CertificateName> for String {
 /// A requested complete certificate, before creating the remote order.
 #[derive(Clone)]
 pub struct IssueRequest {
+    /// Required protocol method; independent of a product implementation name.
+    pub challenge: crate::challenge::ChallengeKind,
+    /// Product-owned publication adapter ID.
+    pub solver_id: String,
+    /// Non-secret implementation configuration retained unchanged for resume/renew.
+    pub solver_config: serde_json::Value,
     /// Defaults to the first normalized DNS identifier in the CLI.
     pub name: CertificateName,
     /// Canonical, duplicate-free domains; first is the primary domain.
@@ -97,13 +103,114 @@ pub struct IssueRequest {
     pub account_name: String,
 }
 
-/// DNS requirements are grouped for display; multiple values at one owner must coexist.
+impl IssueRequest {
+    /// Validate protocol input before storage allocates keys or the client contacts a CA.
+    /// Product implementation IDs/configuration stay opaque to the ACME library.
+    ///
+    /// # Errors
+    /// Rejects duplicate/empty identifiers and wildcard requests using non-DNS methods.
+    pub fn validate(&self) -> Result<(), IssueError> {
+        if self.identifiers.is_empty()
+            || self.identifiers.len() > 100
+            || self
+                .identifiers
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.identifiers.len()
+            || self.solver_id.is_empty()
+            || self.solver_id.len() > 128
+            || self.solver_id.chars().any(char::is_control)
+        {
+            return Err(IssueError::InvalidInput(
+                "issuance requires unique domains and a valid publication implementation",
+            ));
+        }
+        if !self.challenge.supports_wildcards()
+            && self.identifiers.iter().any(DnsIdentifier::is_wildcard)
+        {
+            return Err(crate::challenge::ChallengeError::WildcardMethod.into());
+        }
+        Ok(())
+    }
+}
+
+/// Durable public validation instructions, independent of publication implementation.
+/// A method enum belongs to ACME; CLI implementations decide how to publish it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DnsRequirement {
-    /// TXT owner including `_acme-challenge`.
-    pub name: String,
-    /// Exact TXT value, without presentation quotes.
-    pub value: String,
+#[serde(tag = "method")]
+pub enum ValidationRequirement {
+    /// All TXT values at a shared owner must coexist.
+    #[serde(rename = "dns-01")]
+    Dns01 {
+        /// TXT owner including `_acme-challenge`.
+        name: String,
+        /// Exact TXT value without presentation quotes.
+        value: String,
+    },
+    /// Serve the exact key authorization at the HTTP-01 URL on public port 80.
+    #[serde(rename = "http-01")]
+    Http01 {
+        /// Public URL constructed from the requested identifier, never a CA URL.
+        url: String,
+        /// Absolute HTTP request path, also the relative path below webroot.
+        path: String,
+        /// Unhashed key authorization; no account private key is exposed.
+        content: String,
+    },
+    /// TLS-ALPN material is defined even when the product has no executable solver.
+    #[serde(rename = "tls-alpn-01")]
+    TlsAlpn01 {
+        /// Exact non-wildcard identifier for SNI/SAN.
+        domain: String,
+        /// SHA-256 key authorization digest for the critical acmeIdentifier extension.
+        digest: [u8; 32],
+    },
+}
+
+impl ValidationRequirement {
+    /// Method used by this material.
+    #[must_use]
+    pub const fn kind(&self) -> crate::challenge::ChallengeKind {
+        use crate::challenge::ChallengeKind;
+        match self {
+            Self::Dns01 { .. } => ChallengeKind::Dns01,
+            Self::Http01 { .. } => ChallengeKind::Http01,
+            Self::TlsAlpn01 { .. } => ChallengeKind::TlsAlpn01,
+        }
+    }
+
+    fn from_material(material: crate::challenge::ChallengeMaterial) -> Self {
+        use crate::challenge::ChallengeMaterial;
+        match material {
+            ChallengeMaterial::Dns01 {
+                record_name,
+                txt_value,
+            } => Self::Dns01 {
+                name: record_name.as_str().into(),
+                value: txt_value,
+            },
+            ChallengeMaterial::Http01 {
+                identifier,
+                token,
+                key_authorization,
+            } => {
+                let path = format!("/.well-known/acme-challenge/{}", token.as_str());
+                Self::Http01 {
+                    url: format!("http://{}{path}", identifier.value()),
+                    path,
+                    content: key_authorization.as_str().into(),
+                }
+            }
+            ChallengeMaterial::TlsAlpn01 {
+                identifier,
+                authorization_digest,
+            } => Self::TlsAlpn01 {
+                domain: identifier.value(),
+                digest: authorization_digest,
+            },
+        }
+    }
 }
 
 /// Saved authorization observation and local publication receipt.
@@ -113,11 +220,11 @@ pub struct AuthorizationRecord {
     pub url: AcmeUrl,
     /// Most recent authoritative resource.
     pub resource: AuthorizationObject,
-    /// Chosen DNS challenge, kept stable across resume.
+    /// Chosen challenge, kept stable across resume.
     pub challenge_url: Option<AcmeUrl>,
-    /// Material shown to the user; manual publication is always borrowed.
-    pub dns: Option<DnsRequirement>,
-    /// Whether the user still needs removal instructions after CA validation ends.
+    /// Persisted public material; publication must not change on recovery.
+    pub validation: Option<ValidationRequirement>,
+    /// Whether publication cleanup is still pending after CA validation ends.
     pub cleanup_pending: bool,
     /// Persisted before acknowledging the CA.
     pub acknowledgement: SubmissionState,
@@ -132,9 +239,22 @@ pub struct RenewalPredecessor {
     pub certificate_id: Option<String>,
 }
 
+/// Why the next CA query must wait. This records the winning deadline, not an
+/// unparsed HTTP header; a minimum delay still avoids a zero-delay busy loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PollWaitSource {
+    RetryAfter,
+    LocalInterval,
+}
+
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueRecord {
+    /// Immutable selected ACME verification method.
+    pub challenge: crate::challenge::ChallengeKind,
+    /// Non-secret implementation configuration, interpreted only by the caller.
+    pub solver_config: serde_json::Value,
     /// Adapter-provided `in_use` selection snapshot; never persisted in the journal.
     #[serde(skip)]
     pub is_in_use: bool,
@@ -187,6 +307,8 @@ pub struct IssueRecord {
     /// Earliest next query, respecting CA Retry-After across process restart.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub next_poll_at: Option<time::OffsetDateTime>,
+    /// Source of the persisted query deadline; retained across recovery.
+    pub poll_wait_source: Option<PollWaitSource>,
     /// Certificate revocation is independent of issuance completion.
     #[serde(default)]
     pub revocation: crate::revocation::RevocationRecord,
@@ -214,6 +336,114 @@ impl IssueRecord {
         )
     }
 
+    /// Match an unfinished saved request against a complete desired definition.
+    /// Domain ordering is presentation only; CA/account/method/config/key must match.
+    /// Rejected/expired requests are excluded. Unconfirmed creation remains a candidate
+    /// so callers must explicitly choose recovery/new issuance; matching never authorizes
+    /// replaying a submitted newOrder without its saved Location.
+    #[must_use]
+    pub fn matches_unfinished_request(
+        &self,
+        request: &IssueRequest,
+        account: &AccountRecord,
+        now: time::OffsetDateTime,
+    ) -> bool {
+        self.unfinished()
+            && self.finalize_rejection.is_none()
+            && !self.expired(now)
+            && matches!(
+                self.revocation.state,
+                aster_acme_core::revocation::RevocationState::NotRequested
+            )
+            && self.order.as_ref().is_none_or(|order| {
+                !matches!(
+                    order.status,
+                    aster_acme_core::protocol::OrderStatus::Invalid
+                )
+            })
+            && (self.order.as_ref().is_some_and(|order| {
+                matches!(order.status, aster_acme_core::protocol::OrderStatus::Valid)
+            }) || self.authorizations.iter().all(|auth| {
+                matches!(
+                    auth.resource.status,
+                    aster_acme_core::protocol::AuthorizationStatus::Pending
+                        | aster_acme_core::protocol::AuthorizationStatus::Valid
+                ) && auth.resource.expires.is_none_or(|expires| expires > now)
+            }))
+            && self.account_id == account.account_id
+            && self.account_name == request.account_name
+            && self.directory == account.directory_url
+            && self.account_thumbprint == account.key_thumbprint
+            && self.challenge == request.challenge
+            && self.solver_id == request.solver_id
+            && self.solver_config == request.solver_config
+            && self.key_algorithm == request.key_algorithm
+            && self.identifiers.len() == request.identifiers.len()
+            && self
+                .identifiers
+                .iter()
+                .all(|identifier| request.identifiers.contains(identifier))
+    }
+
+    /// Reject deterministic recovery failures before transport discovery or mutations.
+    /// This cannot reconstruct a missing newOrder Location and never authorizes replay.
+    ///
+    /// # Errors
+    /// Reports rejected fixed CSR, unknown creation outcome or saved order expiry.
+    pub fn check_recovery(&self, now: time::OffsetDateTime) -> Result<(), IssueError> {
+        if let Some(problem) = &self.finalize_rejection {
+            return Err(crate::transport::TransportError::Problem {
+                status: 400,
+                problem: Box::new(problem.clone()),
+                retry_after: None,
+            }
+            .into());
+        }
+        if self.order.as_ref().is_some_and(|order| {
+            matches!(
+                order.status,
+                aster_acme_core::protocol::OrderStatus::Invalid
+            )
+        }) {
+            return Err(IssueError::InvalidOrder {
+                problem: self.failure_problem().cloned().map(Box::new),
+            });
+        }
+        if self.creation_submitted && self.order_url.is_none() {
+            return Err(IssueError::CreationUncertain);
+        }
+        if self.expired(now) {
+            return Err(IssueError::Expired);
+        }
+        Ok(())
+    }
+
+    /// Known terminal orders are retained for inspection but excluded from resume selection.
+    #[must_use]
+    pub fn resume_candidate(&self) -> bool {
+        self.unfinished()
+            && !self.order.as_ref().is_some_and(|order| {
+                matches!(
+                    order.status,
+                    aster_acme_core::protocol::OrderStatus::Invalid
+                )
+            })
+    }
+
+    /// Prefer the order explanation; fall back to an authorization's challenge problem.
+    #[must_use]
+    pub fn failure_problem(&self) -> Option<&aster_acme_protocol::problem::Problem> {
+        self.order
+            .as_ref()
+            .and_then(|order| order.error.as_ref())
+            .or_else(|| {
+                self.authorizations
+                    .iter()
+                    .flat_map(|auth| &auth.resource.challenges)
+                    .find_map(|challenge| challenge.error.as_ref())
+            })
+    }
+
     /// Pending operations can be selected for recovery; expiry is reported separately.
     #[must_use]
     pub fn unfinished(&self) -> bool {
@@ -227,23 +457,6 @@ impl IssueRecord {
                 && order.expires.is_some_and(|expires| expires <= now)
         })
     }
-}
-
-/// Readiness is an adapter: implementations may query DNS or ask the caller for publication.
-/// The service owns CA notification and never accesses a terminal itself.
-#[async_trait]
-pub trait DnsReadiness: Send + Sync {
-    /// All required values must coexist, including wildcard/base-domain authorization pairs.
-    /// Return false to yield `action_required`; `skip_dns_check` bypasses only local DNS lookup.
-    ///
-    /// # Errors
-    /// Reports cancellation, deadline and sanitized resolver/adapter failures.
-    async fn ready(
-        &self,
-        records: &[DnsRequirement],
-        skip_dns_check: bool,
-        execution: &ExecutionContext,
-    ) -> Result<bool, IssueError>;
 }
 
 /// Locked recoverable generation. Blocking persistence must retain its lease on cancellation.
@@ -343,6 +556,14 @@ pub enum IssueError {
     /// Order/authorization expiry prevents further validation/finalization.
     #[error("the order or required authorization has expired; start a new issuance explicitly")]
     Expired,
+    /// This invocation reached its configured order-poll budget.
+    #[error("CA polling limit reached ({completed}/{limit}); resume the saved request to continue")]
+    PollLimit { completed: u32, limit: u32 },
+    /// The CA made this order terminal; embedded problems remain available offline.
+    #[error("CA order is invalid; start a new request after correcting validation")]
+    InvalidOrder {
+        problem: Option<Box<aster_acme_protocol::problem::Problem>>,
+    },
     /// Execution deadline or cancellation; checkpoint remains available.
     #[error("issuance interrupted or execution deadline exceeded; resume the saved certificate")]
     Interrupted,
@@ -368,10 +589,11 @@ pub enum IssueError {
 
 /// One invocation's controls; deadlines are monotonic and never persisted as Instants.
 pub struct IssueExecution {
+    /// Maximum order-poll rounds in this invocation; excludes discovery and mutations.
+    pub max_polls: u32,
     /// Cancellation and overall execution budget.
     pub context: ExecutionContext,
-    /// Bypass only local DNS visibility checks, never CA validation or expiry.
-    pub skip_dns_check: bool,
+
     /// Default polling delay when the CA omits Retry-After.
     pub poll_interval: Duration,
 }
@@ -379,15 +601,15 @@ pub struct IssueExecution {
 /// A foreground invocation can finish or yield durable manual action without an error.
 /// The owned snapshot is boxed to avoid inlining the full journal into each async result.
 pub enum IssueOutcome {
-    /// User must publish these TXT records then resume the named certificate.
+    /// Caller must publish the method-specific requirements then resume.
     ActionRequired {
         record: Box<IssueRecord>,
-        records: Vec<DnsRequirement>,
+        records: Vec<ValidationRequirement>,
     },
     /// Persisted certificate and independent manual cleanup instructions.
     Completed {
         record: Box<IssueRecord>,
-        cleanup: Vec<DnsRequirement>,
+        cleanup: Vec<ValidationRequirement>,
     },
 }
 
@@ -431,5 +653,30 @@ mod tests {
             assert!(name.as_str().len() <= 253);
             assert_eq!(domain.value(), value);
         }
+    }
+
+    #[test]
+    fn protocol_method_validation_prevents_http_wildcards_before_material_or_network() {
+        let mut request = IssueRequest {
+            name: CertificateName::new("web").unwrap(),
+            identifiers: vec![DnsIdentifier::new("*.example.com").unwrap()],
+            key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            account_name: "default".into(),
+            challenge: crate::challenge::ChallengeKind::Http01,
+            solver_id: "webroot".into(),
+            solver_config: serde_json::Value::Object(serde_json::Map::default()),
+        };
+        assert!(matches!(
+            request.validate(),
+            Err(IssueError::Challenge(
+                crate::challenge::ChallengeError::WildcardMethod
+            ))
+        ));
+        request.challenge = crate::challenge::ChallengeKind::Dns01;
+        request.validate().unwrap();
+        request.identifiers.push(request.identifiers[0].clone());
+        assert!(request.validate().is_err());
+        request.identifiers.clear();
+        assert!(request.validate().is_err());
     }
 }
