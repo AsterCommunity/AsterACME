@@ -20,6 +20,7 @@ impl Rotation {
             || record.key_thumbprint != self.record.key_thumbprint
             || record.account_id != self.record.account_id
             || record.account_url != self.record.account_url
+            || record.key_algorithm != self.record.key_algorithm
         {
             return Err(store_error(
                 "rotation cannot change the existing account identity",
@@ -81,6 +82,9 @@ impl AccountRotationStore for CliAccountStore {
                 Err(_) => return Err(store_error("rotation backup is unsafe")),
             };
             verify_identity(&record, &directory, &thumbprint(old.as_ref())?)?;
+            if old.algorithm() != record.key_algorithm {
+                return Err(store_error("account key algorithm does not match metadata"));
+            }
             Ok(Box::new(Rotation {
                 slot,
                 lease,
@@ -99,6 +103,9 @@ pub(super) fn cleanup(slot: &Path, record: &AccountRecord) -> Result<(), Account
         return Ok(());
     }
     let primary = load_key(&slot.join("account-key.pk8"))?;
+    if primary.algorithm() != record.key_algorithm {
+        return Err(store_error("account key algorithm does not match metadata"));
+    }
     verify_identity(
         record,
         &record.directory_url,
@@ -130,17 +137,31 @@ impl AccountRotation for Rotation {
         self.old.clone()
     }
 
-    async fn stage(&self) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
+    async fn stage(
+        &self,
+        algorithm: Option<aster_acme::crypto::key_algorithm::KeyAlgorithm>,
+    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
         let slot = self.slot.clone();
         let lease = self.lease.clone();
         let pending = self.record.key_rotation.is_some();
+        let fallback = self.old.algorithm();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
             let path = slot.join("account-key.next.pk8");
             match read_private(&path, MAX_KEY_FILE) {
-                Ok(_) => load_key(&path),
+                Ok(_) => {
+                    // The on-disk proposal is authoritative after a restart: changing
+                    // its algorithm would silently change the remote rotation intent.
+                    let key = load_key(&path)?;
+                    if algorithm.is_some_and(|choice| choice != key.algorithm()) {
+                        return Err(store_error(
+                            "requested algorithm differs from the staged rotation key",
+                        ));
+                    }
+                    Ok(key)
+                }
                 Err(StorageError::NotFound) if !pending => {
-                    let key = AccountKey::generate()
+                    let key = AccountKey::generate(algorithm.unwrap_or(fallback))
                         .map_err(|_| store_error("cannot generate rotation key"))?;
                     atomic_write(
                         &path,
@@ -213,6 +234,9 @@ impl AccountRotation for Rotation {
             }
             atomic_write(&primary, &bytes)
                 .map_err(|_| store_error("cannot install rotated key"))?;
+            // Switch algorithm metadata together with the confirmed primary key,
+            // never while the old key still authorizes ordinary ACME requests.
+            record.key_algorithm = new.algorithm();
             record.key_thumbprint = new_thumbprint;
             record.key_rotation = None;
             write_record(&slot.join("account.toml"), &record)?;

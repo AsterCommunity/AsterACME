@@ -101,6 +101,8 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 已提供单次执行，后台调度仍未实现。
 
-证书 key_algorithm 使用公共 CertificateKeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
+证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
 0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+
+账户元数据必需保存 key_algorithm；AccountKeyStore 使用 KeyAccess::Existing/Create(Option<KeyAlgorithm>)，真实 PKCS#8、指纹及保存类型必须一致。轮换缺省继承原类型；暂存钥存在时恢复其实际类型，显式不同选择拒绝。只有确认换钥提交才原子更新主钥和算法字段，常规 save 不能修改算法；无旧 schema 默认值或迁移。

@@ -24,11 +24,14 @@ enum Operation {
 }
 
 impl Operation {
-    fn creates_key(&self) -> bool {
+    fn key_access(
+        &self,
+        algorithm: Option<aster_acme::crypto::key_algorithm::KeyAlgorithm>,
+    ) -> aster_acme::account::KeyAccess {
         match self {
-            Self::Register => true,
+            Self::Register => aster_acme::account::KeyAccess::Create(algorithm),
             Self::Recover | Self::Deactivate | Self::Show { .. } | Self::Switch | Self::Remove => {
-                false
+                aster_acme::account::KeyAccess::Existing
             }
         }
     }
@@ -38,22 +41,13 @@ pub(crate) async fn execute(
     command: AccountCommand,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
-    let command = match command {
+    let (mut options, operation) = match command {
         AccountCommand::UpdateContact(args) => {
             return super::mutation::update_contacts(args, cli).await;
         }
         AccountCommand::RotateKey(args) => return super::mutation::rotate_key(args, cli).await,
-        command => command,
-    };
-    if let AccountCommand::List(options) = command {
-        return list(options, cli).await;
-    }
-    let (mut options, operation) = match command {
-        AccountCommand::UpdateContact(_) | AccountCommand::RotateKey(_) => {
-            return Err("Mutation was not dispatched.".into());
-        }
+        AccountCommand::List(args) => return list(args, cli).await,
         AccountCommand::Remove(options) => (AccountArgs::from(options), Operation::Remove),
-        AccountCommand::List(_) => return Err("List command was not dispatched.".into()),
         AccountCommand::Deactivate(options) => (AccountArgs::from(options), Operation::Deactivate),
         AccountCommand::Register(options) => (AccountArgs::from(options), Operation::Register),
         AccountCommand::Recover(options) => (AccountArgs::from(options), Operation::Recover),
@@ -112,7 +106,11 @@ pub(crate) async fn execute(
     let name = context.name.clone();
     let signer = context
         .store
-        .signer(&context.directory, &name, operation.creates_key())
+        .signer(
+            &context.directory,
+            &name,
+            operation.key_access(options.key_algorithm),
+        )
         .await?;
     if matches!(operation, Operation::Deactivate) {
         return deactivate(context, signer, options, cli).await;
@@ -162,7 +160,11 @@ async fn list(
                 let context = settings.clone().account(&selected).await?;
                 let signer = context
                     .store
-                    .signer(&context.directory, &context.name, false)
+                    .signer(
+                        &context.directory,
+                        &context.name,
+                        aster_acme::account::KeyAccess::Existing,
+                    )
                     .await?;
                 let transport = context.transport_options(&options)?;
                 let client = Arc::new(cli.http.discover(context.directory, transport).await?);
@@ -268,6 +270,7 @@ async fn deactivate(
                 name: context.name,
                 verified: false,
                 account: aster_acme::account::AcmeAccount {
+                    key_algorithm: record.key_algorithm,
                     times: record.times,
                     account_id: record.account_id,
                     directory_url: context.directory,
@@ -317,7 +320,11 @@ async fn switch(context: CliContext) -> CliResult<AccountReport> {
     let target = context.name.clone();
     let signer = context
         .store
-        .signer(&context.directory, &target, false)
+        .signer(
+            &context.directory,
+            &target,
+            aster_acme::account::KeyAccess::Existing,
+        )
         .await?;
     let thumbprint = signer.jwk()?.thumbprint()?;
     let _lease = context

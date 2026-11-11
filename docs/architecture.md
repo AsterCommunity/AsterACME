@@ -351,3 +351,12 @@ IssueSession.record 异步读取最新 durable 状态，不返回创建会话时
 | clap 的 dyn Iterator | 由 TypedValueParser trait 签名规定 |
 
 当前 aarch64 开发构建测量：IssueRecord 1000 B、IssueOutcome 40 B、Problem 120 B、TransportError 40 B、AccountReport 384 B、CertificateReport/CommandReport 80 B、RenewalPreparation 16 B。数值依赖目标平台；布局测试约束相对大小，不把平台数值当作 ABI。Box 不用于消除任意 Clippy 提示，而由对象所有权或布局收益决定。
+
+
+## 账户多算法签名与轮换
+
+`crypto::key_algorithm::KeyAlgorithm` 统一账户和证书八种密钥选择及生成/恢复校验，但不把两者的算法配置绑定。`crypto::key::AccountKey` 按真实 PKCS#8 选择 AWS-LC EC、RSA 或 Ed25519 实现；`AccountSigner` 提供实际算法、公共 JWK 和可变长签名。协议层的 `SignatureAlgorithm` 枚举限制 ES256/ES384/ES512/EdDSA/RS256，JWS 不再硬编码 ES256。EC 签名为固定宽度 R||S（64/96/132 B），RSA 为 PKCS#1 v1.5/SHA-256，Ed25519 为 64 B 原始签名；无 CA 拒绝后的自动换算法。
+
+`crypto::jwk` 对 EC/RSA/OKP 分型，按 RFC 7638/8037 仅序列化按字典排序的必需成员；RSA n/e 为最短无符号 base64url 整数，EC 坐标保留固定宽度。EAB 仍使用独立 HS256，对所选账户公钥绑定，不随账户 JWS 算法改变。
+
+`KeyAccess::Existing/Create(Option<KeyAlgorithm>)` 取代创建布尔值。显式已有身份的类型必须匹配；账户元数据必需记录实际算法，原子保存和恢复检查指纹与真实密钥类型。轮换按 RFC 8555 §7.3.5：新钥签内层（jwk、无 nonce），旧钥签外层（kid、nonce），两层绑定同一 keyChange URL。暂存/未确认阶段保留原算法元数据；CA 确认后才一起提交主钥和新算法。取消后重读同一暂存钥对账，不替换、不重发 keyChange。双钥的“旧/新”是协议授权关系，无旧版本兼容含义。

@@ -1,6 +1,8 @@
 //! Local durability, locking, permissions and key identity tests.
 use super::toml_file::open_lock;
 use super::*;
+use aster_acme::account::KeyAccess;
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_core::account::AccountRecordState;
 use tokio::time::sleep;
 
@@ -47,8 +49,14 @@ async fn local_removal_is_scoped_and_does_not_require_a_valid_key() {
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
     let store = CliAccountStore::open(temp.path(), "personal", Duration::from_secs(1)).unwrap();
     let other = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
-    store.signer(&ca, "personal", true).await.unwrap();
-    other.signer(&ca, "work", true).await.unwrap();
+    store
+        .signer(&ca, "personal", KeyAccess::Create(None))
+        .await
+        .unwrap();
+    other
+        .signer(&ca, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let untouched = fs::read(other.account_slot().join("account-key.pk8")).unwrap();
     atomic_write(&store.account_slot().join("account-key.pk8"), b"corrupt").unwrap();
     store.remove().await.unwrap();
@@ -68,7 +76,7 @@ async fn removal_lock_timeout_and_cleanup_collision_preserve_account() {
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
     let store = CliAccountStore::open(temp.path(), "personal", Duration::from_millis(30)).unwrap();
     let thumb = store
-        .signer(&ca, "personal", true)
+        .signer(&ca, "personal", KeyAccess::Create(None))
         .await
         .unwrap()
         .jwk()
@@ -92,7 +100,10 @@ async fn removal_rejects_key_links_without_touching_the_target() {
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "personal", Duration::from_secs(1)).unwrap();
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
-    store.signer(&ca, "personal", true).await.unwrap();
+    store
+        .signer(&ca, "personal", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let key_path = store.account_slot().join("account-key.pk8");
     fs::remove_file(&key_path).unwrap();
     let outside = temp.path().join("outside");
@@ -105,6 +116,7 @@ async fn removal_rejects_key_links_without_touching_the_target() {
 
 fn fixture(directory: &AcmeUrl, thumbprint: &str) -> AccountRecord {
     AccountRecord {
+        key_algorithm: KeyAlgorithm::EcdsaP256,
         user_agent: None,
         times: aster_acme::account::AccountTimes::default(),
         account_id: "a".repeat(43),
@@ -130,7 +142,7 @@ async fn listing_is_offline_sorted_filters_uninitialized_and_rejects_corrupt_ent
     for name in ["zebra", "alpha"] {
         let store = CliAccountStore::open(temp.path(), name, Duration::from_secs(1)).unwrap();
         let thumb = store
-            .signer(&ca, name, true)
+            .signer(&ca, name, KeyAccess::Create(None))
             .await
             .unwrap()
             .jwk()
@@ -175,7 +187,7 @@ async fn listing_ignores_unmanaged_symlink_but_explicit_account_open_rejects_it(
             .signer(
                 &AcmeUrl::new("https://ca.example/directory").unwrap(),
                 "alias",
-                true
+                KeyAccess::Create(None)
             )
             .await
             .is_err()
@@ -187,7 +199,10 @@ async fn named_account_is_one_directory_and_missing_identity_or_key_is_an_error(
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "personal", Duration::from_secs(1)).unwrap();
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
-    let key = store.signer(&ca, "personal", true).await.unwrap();
+    let key = store
+        .signer(&ca, "personal", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let thumb = key.jwk().unwrap().thumbprint().unwrap();
     let slot = temp.path().join("accounts/personal");
     assert_eq!(store.account_slot(), slot);
@@ -201,18 +216,36 @@ async fn named_account_is_one_directory_and_missing_identity_or_key_is_an_error(
     let record = fs::read(slot.join("account.toml")).unwrap();
     let private_key = fs::read(slot.join("account-key.pk8")).unwrap();
     fs::remove_file(slot.join("account.toml")).unwrap();
-    assert!(store.signer(&ca, "personal", true).await.is_err());
+    assert!(
+        store
+            .signer(&ca, "personal", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read(slot.join("account-key.pk8")).unwrap(), private_key);
     atomic_write(&slot.join("account.toml"), &record).unwrap();
     fs::remove_file(slot.join("account-key.pk8")).unwrap();
-    assert!(store.signer(&ca, "personal", true).await.is_err());
+    assert!(
+        store
+            .signer(&ca, "personal", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read(slot.join("account.toml")).unwrap(), record);
     atomic_write(
         &slot.join("account-key.pk8"),
-        &AccountKey::generate().unwrap().to_pkcs8().unwrap(),
+        &AccountKey::generate(KeyAlgorithm::EcdsaP256)
+            .unwrap()
+            .to_pkcs8()
+            .unwrap(),
     )
     .unwrap();
-    assert!(store.signer(&ca, "personal", true).await.is_err());
+    assert!(
+        store
+            .signer(&ca, "personal", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     assert!(
         store
             .load(
@@ -230,15 +263,23 @@ async fn key_is_durable_and_ca_and_name_scoped_and_recover_never_creates() {
     let directory = AcmeUrl::new("https://staging.example/directory").unwrap();
     let store = CliAccountStore::open(temp.path().join("state"), "default", Duration::from_secs(1))
         .unwrap();
-    assert!(store.signer(&directory, "default", false).await.is_err());
-    let key = store.signer(&directory, "default", true).await.unwrap();
+    assert!(
+        store
+            .signer(&directory, "default", KeyAccess::Existing)
+            .await
+            .is_err()
+    );
+    let key = store
+        .signer(&directory, "default", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let jwk = key.jwk().unwrap();
     let reopened =
         CliAccountStore::open(temp.path().join("state"), "default", Duration::from_secs(1))
             .unwrap();
     assert_eq!(
         reopened
-            .signer(&directory, "default", false)
+            .signer(&directory, "default", KeyAccess::Existing)
             .await
             .unwrap()
             .jwk()
@@ -246,12 +287,17 @@ async fn key_is_durable_and_ca_and_name_scoped_and_recover_never_creates() {
         jwk
     );
     let other_ca = AcmeUrl::new("https://production.example/directory").unwrap();
-    assert!(store.signer(&other_ca, "default", true).await.is_err());
+    assert!(
+        store
+            .signer(&other_ca, "default", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     let other =
         CliAccountStore::open(temp.path().join("state"), "other", Duration::from_secs(1)).unwrap();
     assert_ne!(
         other
-            .signer(&other_ca, "other", true)
+            .signer(&other_ca, "other", KeyAccess::Create(None))
             .await
             .unwrap()
             .jwk()
@@ -292,7 +338,7 @@ async fn concurrent_first_key_initialization_reuses_one_identity() {
         let directory = directory.clone();
         tasks.spawn(async move {
             store
-                .signer(&directory, "default", true)
+                .signer(&directory, "default", KeyAccess::Create(None))
                 .await
                 .unwrap()
                 .jwk()
@@ -379,18 +425,36 @@ async fn malformed_or_lost_private_keys_are_not_silently_replaced() {
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "default", Duration::from_secs(1)).unwrap();
     let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
-    store.signer(&directory, "default", true).await.unwrap();
+    store
+        .signer(&directory, "default", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let path = store.account_slot().join("account-key.pk8");
     atomic_write(&path, b"corrupt").unwrap();
-    assert!(store.signer(&directory, "default", true).await.is_err());
+    assert!(
+        store
+            .signer(&directory, "default", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     fs::remove_file(&path).unwrap();
-    assert!(store.signer(&directory, "default", true).await.is_err());
+    assert!(
+        store
+            .signer(&directory, "default", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     atomic_write(
         &path,
         &vec![0; aster_forge_utils::numbers::u64_to_usize(MAX_KEY_FILE, "key limit").unwrap() + 1],
     )
     .unwrap();
-    assert!(store.signer(&directory, "default", false).await.is_err());
+    assert!(
+        store
+            .signer(&directory, "default", KeyAccess::Existing)
+            .await
+            .is_err()
+    );
 }
 
 #[cfg(unix)]
@@ -401,7 +465,10 @@ async fn private_permissions_and_symlink_boundaries_are_enforced() {
     let root = temp.path().join("state");
     let store = CliAccountStore::open(&root, "default", Duration::from_secs(1)).unwrap();
     let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
-    let key = store.signer(&directory, "default", true).await.unwrap();
+    let key = store
+        .signer(&directory, "default", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let path = store.account_slot().join("account-key.pk8");
     assert_eq!(
         fs::metadata(&root).unwrap().permissions().mode() & 0o777,
@@ -412,12 +479,22 @@ async fn private_permissions_and_symlink_boundaries_are_enforced() {
         0o600
     );
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(store.signer(&directory, "default", false).await.is_err());
+    assert!(
+        store
+            .signer(&directory, "default", KeyAccess::Existing)
+            .await
+            .is_err()
+    );
     fs::remove_file(&path).unwrap();
     let target = temp.path().join("untouched");
     fs::write(&target, b"private target").unwrap();
     symlink(&target, &path).unwrap();
-    assert!(store.signer(&directory, "default", true).await.is_err());
+    assert!(
+        store
+            .signer(&directory, "default", KeyAccess::Create(None))
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read(&target).unwrap(), b"private target");
     let alias = temp.path().join("alias");
     symlink(&root, &alias).unwrap();
@@ -463,7 +540,10 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
     let temp = tempfile::tempdir().unwrap();
     let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
     let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
-    store.signer(&directory, "work", true).await.unwrap();
+    store
+        .signer(&directory, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let slot = store.account_slot();
     fs::write(slot.join("notes.txt"), b"user notes").unwrap();
     fs::create_dir(slot.join("backup")).unwrap();
@@ -478,7 +558,10 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
     assert!(accounts(temp.path().into()).await.unwrap().is_empty());
     // The leftover directory is uninitialized, and future explicit registration can
     // use the retained lock without touching user contents.
-    store.signer(&directory, "work", true).await.unwrap();
+    store
+        .signer(&directory, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
     assert_eq!(fs::read(slot.join("notes.txt")).unwrap(), b"user notes");
 }
 
@@ -489,13 +572,89 @@ async fn account_removal_leaves_no_empty_object_directory_and_reuses_external_lo
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "clean", Duration::from_secs(1)).unwrap();
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
-    store.signer(&ca, "clean", true).await.unwrap();
+    store
+        .signer(&ca, "clean", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let lock = store.lock_path().unwrap();
     let inode = fs::metadata(&lock).unwrap().ino();
     store.remove().await.unwrap();
     assert!(!store.account_slot().exists());
     assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
-    store.signer(&ca, "clean", true).await.unwrap();
+    store
+        .signer(&ca, "clean", KeyAccess::Create(None))
+        .await
+        .unwrap();
     assert_eq!(fs::metadata(&lock).unwrap().ino(), inode);
     assert!(!store.account_slot().join("account.lock").exists());
+}
+
+#[tokio::test]
+async fn account_algorithms_survive_restart_and_mismatched_requests_never_replace_keys() {
+    use aster_acme::{account::KeyAccess, crypto::key_algorithm::KeyAlgorithm};
+    let temp = tempfile::tempdir().unwrap();
+    let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+    for algorithm in KeyAlgorithm::ALL {
+        let name = algorithm.name();
+        let store = CliAccountStore::open(temp.path(), name, Duration::from_secs(1)).unwrap();
+        let key = store
+            .signer(&directory, name, KeyAccess::Create(Some(algorithm)))
+            .await
+            .unwrap();
+        assert_eq!(key.algorithm(), algorithm);
+        let before = fs::read(store.account_slot().join("account-key.pk8")).unwrap();
+        let record = store.metadata().await.unwrap().unwrap();
+        assert_eq!(record.key_algorithm, algorithm);
+        let inventory = accounts(temp.path().into()).await.unwrap();
+        assert_eq!(
+            inventory
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+                .key_algorithm,
+            algorithm
+        );
+        let restarted = CliAccountStore::open(temp.path(), name, Duration::from_secs(1)).unwrap();
+        for access in [
+            KeyAccess::Existing,
+            KeyAccess::Create(None),
+            KeyAccess::Create(Some(algorithm)),
+        ] {
+            let restored = restarted.signer(&directory, name, access).await.unwrap();
+            assert_eq!(restored.algorithm(), algorithm);
+            assert_eq!(restored.jwk().unwrap(), key.jwk().unwrap());
+        }
+        let wrong = match algorithm {
+            KeyAlgorithm::EcdsaP256 => KeyAlgorithm::Ed25519,
+            _ => KeyAlgorithm::EcdsaP256,
+        };
+        assert!(
+            restarted
+                .signer(&directory, name, KeyAccess::Create(Some(wrong)))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(store.account_slot().join("account-key.pk8")).unwrap(),
+            before
+        );
+        let path = store.account_slot().join("account.toml");
+        let metadata = fs::read(&path).unwrap();
+        let mut tampered = record.clone();
+        tampered.key_algorithm = wrong;
+        assert!(store.save(&tampered).await.is_err());
+        assert_eq!(fs::read(&path).unwrap(), metadata);
+        write_record(&path, &tampered).unwrap();
+        assert!(
+            restarted
+                .signer(&directory, name, KeyAccess::Existing)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(store.account_slot().join("account-key.pk8")).unwrap(),
+            before
+        );
+        atomic_write(&path, &metadata).unwrap();
+    }
 }

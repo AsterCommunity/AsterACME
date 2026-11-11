@@ -1,9 +1,9 @@
 # aster_acme
 
-面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、ES256 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；自动 DNS 发布和 daemon 尚未实现。
+面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；自动 DNS 发布和 daemon 尚未实现。
 
 - `account`：账户服务、注册恢复、不可恢复停用、条款/EAB、对象安全的 `AccountStore` / `AccountKeyStore`。
-- `crypto`：`dyn AccountSigner`、软件 P-256 密钥、JWK/thumbprint、原始 R||S ES256 JWS 和 HS256 EAB。
+- `crypto`：`dyn AccountSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
 - `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。
 - `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization 和三种验证材料。
@@ -54,7 +54,7 @@ Transport 不跟随重定向、默认验证系统信任的 TLS；仅显式本地
 
 1. 获取 CA directory，读取 `newNonce`、`newAccount`、条款地址和 EAB 要求。
 2. 在本地生成或加载 P-256 账户密钥，先持久化密钥及 pending 注册意图。
-3. 获取 nonce，向 `newAccount` 发出 ES256 签名请求，payload 为 `{"onlyReturnExisting":true}`。已有账户直接复用；只有明确 `accountDoesNotExist` 才创建。
+3. 获取 nonce，向 `newAccount` 发出由实际账户钥决定算法的签名请求，payload 为 `{"onlyReturnExisting":true}`。已有账户直接复用；只有明确 `accountDoesNotExist` 才创建。
 4. 创建请求的 payload 可包含 `contact`、`termsOfServiceAgreed` 和 CA 要求时的 `externalAccountBinding`。`--accept-terms` 对应布尔字段，实际条款 URL 留在本地审计元数据中。
 5. CA 返回账户资源与 `Location` 账户 URL。保存为 registered；后续查询以账户 URL 作为 JWS 的 `kid`，使用空 payload 的 POST-as-GET。
 
@@ -67,7 +67,7 @@ Transport 不跟随重定向、默认验证系统信任的 TLS；仅显式本地
 }
 ```
 
-JWS protected header 包含 `alg=ES256`、账户公钥 `jwk`、防重放 `nonce` 和精确目标 `url`。账户名称、默认账户选择、本地路径和私钥不发给 CA。联系人在协议中可选，具体 CA 可有额外策略。EAB 使用 CA 发放的 ID 和 HMAC 秘密签出绑定对象，发送对象及 ID，不发送秘密本身。
+JWS protected header 包含 由密钥决定的 `alg`（ES256/ES384/ES512/EdDSA/RS256）、账户公钥 `jwk`、防重放 `nonce` 和精确目标 `url`。账户名称、默认账户选择、本地路径和私钥不发给 CA。联系人在协议中可选，具体 CA 可有额外策略。EAB 使用 CA 发放的 ID 和 HMAC 秘密签出绑定对象，发送对象及 ID，不发送秘密本身。
 
 账户不是邮箱/密码登录，身份控制依赖账户私钥。注册阶段不发送域名、CSR、证书私钥或 DNS 供应商凭据；域名属于后续订单，CSR 属于 finalize。HTTP 层会带 User-Agent，CA 也能观察请求来源 IP。
 
@@ -81,7 +81,7 @@ JWS protected header 包含 `alg=ES256`、账户公钥 `jwk`、防重放 `nonce`
 
 AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at，UTC RFC 3339。registered_at 是本地首次成功确认（找回也算），不是 CA 原始创建时间；只写一次。成功认证查询/注册/找回/停用时更新状态观察和使用时间；失败、离线读取、已确认停用的本地返回不更新。AccountClock 支持 dyn 注入，默认 UTC 系统时钟。未知时间不猜测回填。
 
-`AccountService::rotate_key(&dyn AccountRotationStore)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。当前仅生成 ES256/P-256，不支持 CLI 导入新钥或选择其他算法。
+`AccountService::rotate_key(&dyn AccountRotationStore, Option<KeyAlgorithm>)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。新钥支持统一 KeyAlgorithm 八种选择；省略算法时新轮换沿用原类型，恢复沿用已保存新钥；显式选择不得替换不匹配的暂存钥。未实现 CLI 私钥导入。
 
 `http_client` 通过 registry 的 aster_forge_http =0.1.0-alpha.2 构造连接池，根 workspace 仅选择 json/rustls-aws-lc-rs/system-proxy，客户端显式选择 TlsBackend::Rustls，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本；不单独打开 features，由 Forge 的 workspace 配置选择。`TransportOptions::validate` 在副作用前校验设置。
 
@@ -99,7 +99,7 @@ CA 的订单/授权 expires 与证书 notAfter 分开处理；订单没有虚构
 
 续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
 
-证书 key_algorithm 使用公共 CertificateKeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
+证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
 0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 

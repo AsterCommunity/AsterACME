@@ -43,4 +43,57 @@ mod tests {
         assert!(help.starts_with(concat!("AsterACME ", env!("CARGO_PKG_VERSION"), "\n")));
         assert!(help.contains("[NAME]"));
     }
+
+    #[test]
+    fn every_command_supports_standard_flag_help_and_help_paths() {
+        let root = configure(crate::app::Args::command());
+        let mut paths = vec![vec![], vec!["account"], vec!["cert"], vec!["version"]];
+        for group in ["account", "cert"] {
+            paths.extend(
+                root.find_subcommand(group)
+                    .unwrap()
+                    .get_subcommands()
+                    .map(|command| vec![group, command.get_name()]),
+            );
+        }
+        for path in paths {
+            let mut native = vec!["aster-acme", "help"];
+            native.extend_from_slice(&path);
+            let native = root.clone().try_get_matches_from(native).unwrap_err();
+            assert_eq!(native.kind(), clap::error::ErrorKind::DisplayHelp);
+            assert!(native.to_string().starts_with("AsterACME "));
+            for flag in ["-h", "--help"] {
+                let mut direct = vec!["aster-acme"];
+                direct.extend_from_slice(&path);
+                direct.push(flag);
+                let direct = root.clone().try_get_matches_from(direct).unwrap_err();
+                assert_eq!(direct.kind(), clap::error::ErrorKind::DisplayHelp);
+                assert!(direct.to_string().starts_with("AsterACME "));
+            }
+        }
+    }
+
+    #[test]
+    fn a_positional_account_named_help_remains_an_account_target() {
+        let command = configure(crate::app::Args::command());
+        let matches = command
+            .clone()
+            .try_get_matches_from(["aster-acme", "account", "rotate-key", "help"])
+            .unwrap();
+        let target = matches
+            .subcommand_matches("account")
+            .unwrap()
+            .subcommand_matches("rotate-key")
+            .unwrap();
+        assert_eq!(
+            target
+                .get_one::<String>("positional_name")
+                .map(String::as_str),
+            Some("help")
+        );
+        let error = command
+            .try_get_matches_from(["aster-acme", "account", "help", "rotate-key", "--help"])
+            .unwrap_err();
+        assert_ne!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
 }

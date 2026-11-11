@@ -89,6 +89,18 @@ aster-acme account switch default --data-dir ./data
 
 `show` 默认离线，显式 `--verify` 才查询 CA。注册、按密钥找回、联系人更新、换钥、CA 停用、本地移除分别是独立操作。删除本地文件不会停用 CA 账户，也不会吊销证书。
 
+### 账户密钥算法
+
+账户和证书各自选择密钥，共用上述八种选项；新账户默认 ECDSA P-256。`account rotate-key` 不传 `-k` 时沿用原类型，恢复则沿用已暂存的新钥；显式冲突拒绝。CA 接受范围各异，RFC 8555 强制 ES256、建议 Ed25519，不支持时不会静默换算法。
+
+```sh
+aster-acme account register work -k rsa-3072 --accept-terms
+aster-acme account rotate-key work -k ed25519 --yes
+aster-acme account show work
+```
+
+账户 TOML 和 list/show 展示实际密钥类型，JWS 对应 ES256/ES384/ES512/EdDSA/RS256；不改变独立的证书密钥选择。尚未发布：账户格式新增必需 key_algorithm，无旧格式读取或迁移。
+
 ### 申请证书
 
 ```sh
@@ -118,7 +130,7 @@ aster-acme cert show example-cert --verify --data-dir ./data
 
 ## 证书密钥算法
 
-`-k/--key-type` 支持 ecdsa-p256（默认）、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。这是客户端生成能力，是否接受由 CA 决定。选项持久化并在恢复和续期版本中沿用，账户签名仍为 ES256。issue 进度及 list/show 同时显示实际类型。
+`-k/--key-type` 支持 ecdsa-p256（默认）、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。这是客户端生成能力，是否接受由 CA 决定。选项持久化并在恢复和续期版本中沿用，账户签名独立选择，使用同一密钥算法枚举。issue 进度及 list/show 同时显示实际类型。
 
 ## 续期计划与吊销
 

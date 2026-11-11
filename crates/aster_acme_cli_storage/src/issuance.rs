@@ -5,7 +5,7 @@ use super::{
 };
 use aster_acme::{
     account::AccountRecord,
-    crypto::{AccountKey, AccountSigner},
+    crypto::{AccountSigner, key::AccountKey},
     issuance::{
         CertificateName, IssueError, IssueRecord, IssueRequest, IssueSession, IssueStore,
         certificate,
@@ -72,7 +72,7 @@ struct CertificateConfig {
 struct CertificateSelection {
     name: CertificateName,
     identifiers: Vec<aster_acme::identifier::DnsIdentifier>,
-    key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm,
+    key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm,
     account_name: String,
     account_id: String,
     directory: aster_acme_protocol::url::AcmeUrl,
@@ -377,7 +377,10 @@ impl CliIssueStore {
             if read_generations(&slot, &request.name)?.len() >= 1024 {
                 return Err(failure("certificate generation limit reached"));
             }
-            let operation_id = AccountKey::generate()?.jwk()?.thumbprint()?;
+            let operation_id =
+                AccountKey::generate(aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256)?
+                    .jwk()?
+                    .thumbprint()?;
             let material = certificate::generate(&request.identifiers, request.key_algorithm)?;
             let record = IssueRecord {
                 is_in_use: false,

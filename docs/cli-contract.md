@@ -67,10 +67,10 @@
 | account list | --verify；--user-agent / --timeout 仅在 verify 时可用 |
 | account show | [NAME] / -n；--verify；已有账户 CA 选择；HTTP 参数要求 verify |
 | account switch | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
-| account register | [NAME] / -n、-m、--ca / --ca-directory、--accept-terms、HTTP、-y、成对 EAB |
+| account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
 | account update-contact | [NAME] / -n、-m 或 --clear-contacts、已有账户 CA 选择、HTTP、-y |
-| account rotate-key | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
+| account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
 | account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、--skip-dns-check、HTTP、--wait-timeout；定义固定，未到期返回 not_due |
@@ -104,7 +104,7 @@
 
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
 
-证书密钥和吊销原因共用库/协议枚举产生 CLI 选项；支持算法与 RFC 原因码、CA 可拒绝边界见生命周期契约。账户 key/rotate-key 仍使用 ES256，不因证书 -k 改变。
+证书密钥和吊销原因共用库/协议枚举产生 CLI 选项；支持算法与 RFC 原因码、CA 可拒绝边界见生命周期契约。账户 register/rotate-key 同样支持 -k/--key-type，但独立于证书选项；普通账户操作沿用已保存密钥。
 
 --now 只在 cert renew 提前执行，不隐含 --yes/--skip-dns-check。--force/-f 已移除，无兼容别名。issue/renew 共享 RunArgs，但续期不暴露定义覆盖参数。账户list JSON使用ca_query.requested/refreshed/failed，remove仅描述本次ca_request_performed。
 
@@ -119,3 +119,10 @@ cert issue --resume 不带名称时在真实终端选择未完成申请，选择
 批量结果表使用 NAME / STATUS / NEXT RENEWAL (UTC)，未到期或本次完成续期的记录显示下次续期时间；待办、失败、跳过和取消不猜测时间，具体说明放在表后。批量不输出重复计划表或逐项Checking日志；有续期/恢复工作时只先报告任务数和未到期数，实际事务持锁复核。仅实际执行项输出进度和Using CA；全未到期时只保留结果表及检查数量总结，其他汇总只展示非零计数。JSON完整计数不变。
 
 每个命令的 `CommandContext` 持有一个惰性 `HttpPool`，批量续期和账户逐项查询共用它；纯本地命令不构造 HTTP 客户端。`AcmeClient` 自己保留池句柄，调用操作无需额外传池。User-Agent 和请求总期限逐请求设置，不改变池或其他账户；CA directory 和 Replay-Nonce 仍归各自 ACME 客户端。共享池不保证代理/服务器始终保留 TCP 连接。
+
+
+## 账户密钥算法与帮助入口
+
+账户与证书共用 `crypto::key_algorithm::KeyAlgorithm` 和 CLI 解析器，分别选择自己的密钥。`account register -k/--key-type` 接受 ecdsa-p256、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192；新账户缺省 P-256，已有身份缺省沿用，显式不同类型拒绝复用。`account rotate-key -k` 选择新钥；不指定时新轮换沿用原类型，恢复时沿用已暂存的新钥，显式冲突拒绝且不改文件。recover/show/list 等命令不接受算法覆盖。账户 TOML 必须保存实际 `key_algorithm`，加载按真实 PKCS#8/指纹交叉检查；未发布格式直接更新，不读旧格式或增加迁移。
+
+`-h`、`--help`、`help <command>` 共用 common/help 的产品版本、宽度和配色。不增加参数改写：`account help rotate-key` 与 `account rotate-key --help` 为标准入口，`account rotate-key help` 中的 help 仍是账户名。帮助不读取配置、不初始化 HTTP、不生成密钥。

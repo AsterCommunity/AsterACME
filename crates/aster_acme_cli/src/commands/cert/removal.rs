@@ -157,7 +157,14 @@ mod tests {
         let directory = AcmeUrl::new("https://127.0.0.1:1/directory").unwrap();
         let accounts =
             CliAccountStore::open(temp.path(), "default", Duration::from_secs(1)).unwrap();
-        let signer = accounts.signer(&directory, "default", true).await.unwrap();
+        let signer = accounts
+            .signer(
+                &directory,
+                "default",
+                aster_acme::account::KeyAccess::Create(None),
+            )
+            .await
+            .unwrap();
         let thumb = signer.jwk().unwrap().thumbprint().unwrap();
         let mut account = accounts.load(&directory, &thumb).await.unwrap().unwrap();
         account.state = AccountRecordState::Registered;
@@ -168,8 +175,7 @@ mod tests {
         let session = store
             .create(
                 &IssueRequest {
-                    key_algorithm:
-                        aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
+                    key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                     name: name.clone(),
                     identifiers: vec![
                         aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),

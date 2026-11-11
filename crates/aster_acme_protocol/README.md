@@ -28,7 +28,7 @@ MIT OR Apache-2.0.
 
 续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
 
-证书 key_algorithm 使用公共 CertificateKeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
+证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
 ProblemKind 用 Forge wire_enum 表达 RFC8555 §6.7 的24种标准问题，未知 URI 进入 Unknown(String)，序列化仍为 URI；不保留散落的旧字符串常量。
 

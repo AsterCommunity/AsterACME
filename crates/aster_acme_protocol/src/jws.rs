@@ -1,6 +1,27 @@
 //! RFC 7515 flattened JWS and RFC 8555 protected headers, independent of signing keys.
 use serde::{Deserialize, Serialize};
 
+/// Account JWS algorithms implemented by this client. CA acceptance is independent.
+/// RFC 8555 mandates ES256 and recommends RFC 8037 `EdDSA` with Ed25519.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignatureAlgorithm {
+    /// P-256 / SHA-256, fixed 64-byte R || S.
+    #[serde(rename = "ES256")]
+    Es256,
+    /// P-384 / SHA-384, fixed 96-byte R || S.
+    #[serde(rename = "ES384")]
+    Es384,
+    /// P-521 / SHA-512, fixed 132-byte R || S (not 128 bytes).
+    #[serde(rename = "ES512")]
+    Es512,
+    /// Ed25519 using the RFC 8037 JOSE name accepted by ACME.
+    #[serde(rename = "EdDSA")]
+    EdDsa,
+    /// RSA PKCS#1 v1.5 / SHA-256; modulus size is a separate key property.
+    #[serde(rename = "RS256")]
+    Rs256,
+}
+
 /// Flattened JWS. No Debug implementation, to discourage signed request logging.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlattenedJws {
@@ -22,11 +43,11 @@ pub enum RequestIdentity<'a, J> {
     Kid { kid: &'a str },
 }
 
-/// Standard ACME ES256 header. EAB uses its own nonce-free type.
+/// Standard ACME asymmetric-signature header. EAB uses its own nonce-free type.
 #[derive(Serialize)]
 pub struct ProtectedHeader<'a, J> {
     /// Signing algorithm.
-    pub alg: &'a str,
+    pub alg: SignatureAlgorithm,
     /// Exactly one identity member.
     #[serde(flatten)]
     pub identity: RequestIdentity<'a, J>,
@@ -51,7 +72,7 @@ pub struct EabHeader<'a> {
 #[derive(Serialize)]
 pub struct KeyChangeHeader<'a, J> {
     /// Signing algorithm.
-    pub alg: &'a str,
+    pub alg: SignatureAlgorithm,
     /// New account key.
     pub jwk: &'a J,
     /// Same keyChange endpoint as the outer JWS.

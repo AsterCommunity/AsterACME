@@ -1,6 +1,7 @@
 //! Typed CLI JSON contracts, distinct from the CA's wire protocol and local storage schema.
 use super::report::AccountReport;
 use aster_acme::account::AcmeAccount;
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_core::account::{AccountRecordState, DeactivationState};
 use aster_acme_core::protocol::AccountStatus;
 use aster_acme_protocol::url::AcmeUrl;
@@ -10,6 +11,7 @@ use serde::Serialize;
 #[serde(untagged)]
 pub(super) enum Output<'a> {
     KeyRotated {
+        key_algorithm: KeyAlgorithm,
         name: &'a str,
         account_url: Option<&'a AcmeUrl>,
         key_thumbprint: &'a str,
@@ -33,6 +35,7 @@ pub(super) enum Output<'a> {
 
 #[derive(Serialize)]
 pub(super) struct SavedAccount<'a> {
+    key_algorithm: Option<KeyAlgorithm>,
     user_agent: Option<&'a str>,
     key_rotation: Option<&'a aster_acme_core::account::KeyRotation>,
     #[serde(flatten)]
@@ -59,6 +62,7 @@ struct AccountQuery {
 
 #[derive(Serialize)]
 struct Identity<'a> {
+    key_algorithm: KeyAlgorithm,
     #[serde(flatten)]
     times: aster_acme::account::AccountTimes,
     name: &'a str,
@@ -74,6 +78,7 @@ struct Identity<'a> {
 impl<'a> Identity<'a> {
     fn new(name: &'a str, account: &'a AcmeAccount, verified: bool) -> Self {
         Self {
+            key_algorithm: account.key_algorithm,
             times: account.times,
             name,
             source: if verified { "remote" } else { "local" },
@@ -141,6 +146,7 @@ impl AccountListQuery {
 
 #[derive(Serialize)]
 struct ListEntry<'a> {
+    key_algorithm: KeyAlgorithm,
     key_rotation: Option<&'a aster_acme_core::account::KeyRotation>,
     #[serde(flatten)]
     times: aster_acme::account::AccountTimes,
@@ -157,6 +163,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
     fn from(report: &'a AccountReport) -> Self {
         match report {
             AccountReport::KeyRotated { name, record } => Self::KeyRotated {
+                key_algorithm: record.key_algorithm,
                 name,
                 account_url: record.account_url.as_ref(),
                 key_thumbprint: &record.key_thumbprint,
@@ -171,6 +178,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
             AccountReport::Local(local) => {
                 let record = local.record.as_ref();
                 Self::Local(SavedAccount {
+                    key_algorithm: record.map(|record| record.key_algorithm),
                     user_agent: record.and_then(|record| record.user_agent.as_deref()),
                     key_rotation: record.and_then(|record| record.key_rotation.as_ref()),
                     times: record
@@ -233,6 +241,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 accounts: accounts
                     .iter()
                     .map(|account| ListEntry {
+                        key_algorithm: account.key_algorithm,
                         key_rotation: account.key_rotation.as_ref(),
                         times: account.times,
                         name: &account.name,

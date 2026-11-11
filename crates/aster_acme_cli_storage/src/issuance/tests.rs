@@ -1,5 +1,7 @@
 //! Loopback CA exercises real journals, fixed CSR and restartable foreground execution.
 use super::*;
+use aster_acme::account::KeyAccess;
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme::identifier::DnsIdentifier;
 use aster_acme::issuance::service::IssueService;
 use aster_acme::{
@@ -44,7 +46,10 @@ async fn fixture() -> Fixture {
         super::super::CliAccountStore::open(temp.path(), "default", Duration::from_secs(1))
             .unwrap();
     let directory = AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap();
-    let signer = accounts.signer(&directory, "default", true).await.unwrap();
+    let signer = accounts
+        .signer(&directory, "default", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let thumb = signer.jwk().unwrap().thumbprint().unwrap();
     let mut account = accounts.load(&directory, &thumb).await.unwrap().unwrap();
     account.state = AccountRecordState::Registered;
@@ -83,7 +88,7 @@ async fn fixture() -> Fixture {
 
 fn request() -> IssueRequest {
     IssueRequest {
-        key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
+        key_algorithm: KeyAlgorithm::EcdsaP256,
         name: CertificateName::new("example.com").unwrap(),
         identifiers: vec![
             DnsIdentifier::new("example.com").unwrap(),
@@ -1413,7 +1418,7 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
         super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
             .unwrap();
     let signer = accounts
-        .signer(&record.directory, "default", false)
+        .signer(&record.directory, "default", KeyAccess::Existing)
         .await
         .unwrap();
     let service = RevocationService::new(
@@ -2160,8 +2165,8 @@ async fn renewed_generation_keeps_the_managed_definition_and_rejects_changed_acc
 
 #[tokio::test]
 async fn certificate_algorithm_is_fixed_in_definition_journal_recovery_and_new_renewal_material() {
-    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
-    for algorithm in CertificateKeyAlgorithm::ALL {
+    use aster_acme::crypto::key_algorithm::KeyAlgorithm;
+    for algorithm in KeyAlgorithm::ALL {
         let fixture = fixture().await;
         let mut requested = request();
         requested.key_algorithm = algorithm;
@@ -2191,8 +2196,8 @@ async fn certificate_algorithm_is_fixed_in_definition_journal_recovery_and_new_r
         assert_eq!(reopened.csr().await.unwrap(), csr);
         let mut mutated = record.clone();
         mutated.key_algorithm = match algorithm {
-            CertificateKeyAlgorithm::EcdsaP256 => CertificateKeyAlgorithm::EcdsaP384,
-            _ => CertificateKeyAlgorithm::EcdsaP256,
+            KeyAlgorithm::EcdsaP256 => KeyAlgorithm::EcdsaP384,
+            _ => KeyAlgorithm::EcdsaP256,
         };
         assert!(reopened.save(&mutated).await.is_err());
         let mut issued = record.clone();
@@ -2224,7 +2229,7 @@ async fn certificate_algorithm_is_fixed_in_definition_journal_recovery_and_new_r
 
 #[tokio::test]
 async fn recovery_refuses_key_algorithm_mismatch_even_when_material_digest_is_unchanged() {
-    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    use aster_acme::crypto::key_algorithm::KeyAlgorithm;
     let fixture = fixture().await;
     let session = fixture
         .store
@@ -2238,7 +2243,7 @@ async fn recovery_refuses_key_algorithm_mismatch_even_when_material_digest_is_un
         .join(record.generation_name())
         .join("operation.toml");
     drop(session);
-    record.key_algorithm = CertificateKeyAlgorithm::Rsa2048;
+    record.key_algorithm = KeyAlgorithm::Rsa2048;
     write_journal(&path, &record).unwrap();
     assert!(
         fixture
@@ -2258,14 +2263,14 @@ async fn recovery_refuses_key_algorithm_mismatch_even_when_material_digest_is_un
 
 #[tokio::test]
 async fn rejected_fixed_csr_survives_restart_even_when_another_request_completes_the_same_order() {
-    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    use aster_acme::crypto::key_algorithm::KeyAlgorithm;
     use aster_acme_protocol::problem::ProblemKind;
     let fixture = fixture().await;
     let stage = mount_flow(&fixture).await;
     // Skip authorizing only in this fixture: the CA reports an already-ready order.
     stage.store(2, Ordering::SeqCst);
     let mut requested = request();
-    requested.key_algorithm = CertificateKeyAlgorithm::EcdsaP521;
+    requested.key_algorithm = KeyAlgorithm::EcdsaP521;
     let mut session = fixture
         .store
         .create(&requested, &fixture.account)
@@ -2348,11 +2353,11 @@ async fn complete_shared_order_with_p384(
     stage: Arc<AtomicUsize>,
     expected_order: &AcmeUrl,
 ) {
-    use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+    use aster_acme::crypto::key_algorithm::KeyAlgorithm;
     // A second managed certificate receives the identical CA order URL and succeeds.
     let mut other = request();
     other.name = CertificateName::new("another-cert").unwrap();
-    other.key_algorithm = CertificateKeyAlgorithm::EcdsaP384;
+    other.key_algorithm = KeyAlgorithm::EcdsaP384;
     let mut second = fixture
         .store
         .create(&other, &fixture.account)
@@ -2441,7 +2446,11 @@ async fn renewal_client(fixture: &Fixture, ari: bool) -> Arc<IssueService> {
         super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
             .unwrap();
     let signer = accounts
-        .signer(&fixture.account.directory_url, "default", false)
+        .signer(
+            &fixture.account.directory_url,
+            "default",
+            KeyAccess::Existing,
+        )
         .await
         .unwrap();
     Arc::new(

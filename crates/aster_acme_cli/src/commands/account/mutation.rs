@@ -33,7 +33,11 @@ pub(super) async fn update_contacts(
     let context = context(&mut options, cli).await?;
     let signer = context
         .store
-        .signer(&context.directory, &context.name, false)
+        .signer(
+            &context.directory,
+            &context.name,
+            aster_acme::account::KeyAccess::Existing,
+        )
         .await?;
     let record = context
         .store
@@ -86,12 +90,20 @@ pub(super) async fn rotate_key(
     // Opening a rotation session validates the existing old/staged key identity without
     // generating material. Release it before user input; service revalidates under lease.
     let checked = context.store.rotation(&context.directory).await?;
+    let old_algorithm = checked.old_signer().algorithm();
+    let new_label = match args.key_algorithm {
+        Some(algorithm) => algorithm.name(),
+        None if checked.record().key_rotation.is_some() => "saved staged key",
+        None => old_algorithm.name(),
+    };
     drop(checked);
     terminal::confirm_action(
         &format!(
-            "Rotate account signing key\n  Name: {}\n  CA: {}\n\nThe new key will replace this account's signing key.\nAn unfinished rotation will be reconciled using its saved new key.",
+            "Rotate account signing key\n  Name: {}\n  CA: {}\n  Key type: {} → {}\n\nThe new key will replace this account's signing key.\nAn unfinished rotation will be reconciled using its saved new key.",
             output::safe(&context.name),
-            output::safe(context.directory.as_str())
+            output::safe(context.directory.as_str()),
+            old_algorithm.name(),
+            new_label
         ),
         "Rotate or reconcile this key?",
         args.yes,
@@ -100,7 +112,7 @@ pub(super) async fn rotate_key(
     let transport = context.transport_options(&options)?;
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let record = AccountService::new(client, context.store.clone())
-        .rotate_key(context.store.as_ref())
+        .rotate_key(context.store.as_ref(), args.key_algorithm)
         .await?;
     Ok(AccountReport::KeyRotated {
         name: context.name,

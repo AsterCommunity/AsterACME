@@ -1,5 +1,6 @@
 //! Controlled wall-clock tests of successful observations and failure/no-I/O paths.
 use super::*;
+use crate::crypto::key_algorithm::KeyAlgorithm;
 use std::sync::atomic::AtomicI64;
 
 struct Clock(AtomicI64);
@@ -17,7 +18,7 @@ async fn first_confirmation_is_stable_success_updates_and_failures_do_not_touch_
     let store = Arc::new(MemoryStore::default());
     let clock = Arc::new(Clock(AtomicI64::new(10)));
     let service = AccountService::new(Arc::new(client), store.clone()).with_clock(clock.clone());
-    let key = AccountKey::generate().unwrap();
+    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     Mock::given(method("POST"))
         .and(path("/account"))
         .respond_with(

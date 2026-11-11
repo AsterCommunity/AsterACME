@@ -2,6 +2,7 @@
 //! Shared groups are composed in declaration order, matching the public help sequence.
 
 use crate::common::args::{HttpArgs, LocalArgs, parse_account_name};
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -136,6 +137,9 @@ pub(crate) struct RegisterArgs {
     /// Contact email; repeat for multiple addresses (mailto: is also accepted).
     #[arg(short = 'm', long)]
     pub(crate) contact: Vec<String>,
+    /// Account signing key; new accounts default to ecdsa-p256, existing keys must match.
+    #[arg(short = 'k', long = "key-type", value_parser = crate::common::args::key_algorithm_parser())]
+    pub(crate) key_algorithm: Option<KeyAlgorithm>,
     #[command(flatten)]
     pub(crate) ca: CaArgs,
     /// Explicitly accept the selected CA's current terms; otherwise ask interactively.
@@ -191,6 +195,9 @@ pub(crate) struct UpdateContactArgs {
 
 #[derive(clap::Args, Default)]
 pub(crate) struct RotateKeyArgs {
+    /// New account key type; omit to keep the old type or resume the staged key.
+    #[arg(short = 'k', long = "key-type", value_parser = crate::common::args::key_algorithm_parser())]
+    pub(crate) key_algorithm: Option<KeyAlgorithm>,
     #[command(flatten)]
     pub(crate) network: NetworkArgs,
     /// Confirm key rotation or reconciliation without prompting.
@@ -201,6 +208,7 @@ pub(crate) struct RotateKeyArgs {
 /// Resolved execution input, shared by CLI parsing and interactive completion.
 #[derive(Default)]
 pub(crate) struct AccountArgs {
+    pub(crate) key_algorithm: Option<KeyAlgorithm>,
     /// Confirm this command's action only; never accept terms or bypass validation.
     pub(crate) yes: bool,
     /// Explicit ACME directory URL (default: Let's Encrypt).
@@ -255,6 +263,7 @@ impl From<RegisterArgs> for AccountArgs {
     fn from(args: RegisterArgs) -> Self {
         Self {
             yes: args.yes,
+            key_algorithm: args.key_algorithm,
             contact: args.contact,
             accept_terms: args.accept_terms,
             eab_kid: args.eab_kid,

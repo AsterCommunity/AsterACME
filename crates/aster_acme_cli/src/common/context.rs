@@ -213,7 +213,11 @@ mod tests {
         assert!(context.transport_options(&invalid).is_err());
         let key = context
             .store
-            .signer(&context.directory, "work", false)
+            .signer(
+                &context.directory,
+                "work",
+                aster_acme::account::KeyAccess::Existing,
+            )
             .await
             .unwrap();
         let record = context
@@ -246,7 +250,11 @@ mod tests {
             .unwrap();
         plain
             .store
-            .signer(&plain.directory, "plain", true)
+            .signer(
+                &plain.directory,
+                "plain",
+                aster_acme::account::KeyAccess::Create(None),
+            )
             .await
             .unwrap();
         assert_eq!(

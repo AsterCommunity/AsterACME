@@ -1,5 +1,6 @@
 //! Shared storage/output and HTTP flags. Command owners compose only applicable groups.
 
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use std::path::PathBuf;
 
 #[derive(clap::Args, Default, Clone)]
@@ -29,6 +30,15 @@ pub(crate) fn parse_account_name(value: &str) -> Result<String, String> {
     } else {
         Err("Use 1–64 ASCII letters, digits, hyphens or underscores for the account name.".into())
     }
+}
+
+pub(crate) fn key_algorithm_parser() -> impl clap::builder::TypedValueParser<Value = KeyAlgorithm> {
+    clap::builder::TypedValueParser::try_map(
+        clap::builder::PossibleValuesParser::new(KeyAlgorithm::ALL.map(KeyAlgorithm::name)),
+        |value: String| {
+            KeyAlgorithm::from_name(&value).ok_or_else(|| "unknown key algorithm".to_owned())
+        },
+    )
 }
 
 #[cfg(test)]
@@ -189,5 +199,67 @@ mod tests {
         };
         assert!(!args.run.yes);
         assert!(!args.run.skip_dns_check);
+    }
+
+    #[test]
+    fn account_key_choices_share_certificate_spellings_and_only_apply_to_registration_or_rotation()
+    {
+        use crate::commands::account::args::AccountCommand;
+        use aster_acme::crypto::key_algorithm::KeyAlgorithm;
+        for algorithm in KeyAlgorithm::ALL {
+            for command in ["register", "rotate-key"] {
+                let args = Args::try_parse_from([
+                    "aster-acme",
+                    "account",
+                    command,
+                    "-k",
+                    algorithm.name(),
+                ])
+                .unwrap();
+                let Command::Account { command } = args.command else {
+                    panic!("expected account");
+                };
+                let choice = match command {
+                    AccountCommand::Register(args) => args.key_algorithm,
+                    AccountCommand::RotateKey(args) => args.key_algorithm,
+                    _ => panic!("wrong command"),
+                };
+                assert_eq!(choice, Some(algorithm));
+            }
+        }
+        for command in ["register", "rotate-key"] {
+            for unsupported in ["rsa-1024", "ec-256", "ES256", "unknown"] {
+                assert!(
+                    Args::try_parse_from([
+                        "aster-acme",
+                        "account",
+                        command,
+                        "--key-type",
+                        unsupported
+                    ])
+                    .is_err()
+                );
+            }
+        }
+        for command in [
+            "show",
+            "list",
+            "recover",
+            "switch",
+            "remove",
+            "deactivate",
+            "update-contact",
+        ] {
+            assert!(
+                Args::try_parse_from([
+                    "aster-acme",
+                    "account",
+                    command,
+                    "--key-type",
+                    "ecdsa-p256"
+                ])
+                .is_err()
+            );
+        }
     }
 }

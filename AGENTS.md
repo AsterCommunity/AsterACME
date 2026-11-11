@@ -112,7 +112,7 @@ git diff HEAD --check
 
 - 托管证书身份独立于主域名/订单；cert.toml 保存稳定域名集合、账户、CA 和验证定义。IssueStore::create 只原子新建，NameAlreadyExists 是唯一可重试的自动分配错误（上限16次）；renew 使用同定义新版本，CLI renew 已实现，daemon 未实现。list/show 默认 in_use，显式历史不参与活跃续期，删除 in_use 不回退旧证书。
 
-- CertificateKeyAlgorithm 统一证书生成/CLI/持久化选项（默认 ECDSA P256），恢复必须校验实际密钥算法/位数，续期版本沿用稳定定义；不要将账户 JWS 的 ES256 要求当成证书算法限制。RevocationReason 为 protocol 中已分配 RFC5280 代码，无自设 CA 白名单，无7；removeFromCRL 不作重新激活，CA 拒绝细节保留。
+- crypto::key_algorithm::KeyAlgorithm 统一账户与证书生成/CLI/持久化选项（默认 ECDSA P256），恢复必须校验实际密钥算法/位数，续期版本沿用稳定定义；不要将账户 JWS 的 ES256 要求当成证书算法限制。RevocationReason 为 protocol 中已分配 RFC5280 代码，无自设 CA 白名单，无7；removeFromCRL 不作重新激活，CA 拒绝细节保留。
 
 - ACME problem 按 protocol::problem::ProblemKind 分发，24种RFC8555标准值使用现有wire_enum宏，Unknown(String)无损保留；不增加散落的URI常量。固定CSR明确badCSR须保存，恢复优先显示原拒绝，不能把共享订单被别的密钥签出的证书当作自己的产物。
 
@@ -122,6 +122,6 @@ git diff HEAD --check
 
 - 选用版本内部字段和稳定链接统一in_use（is_in_use、expected_in_use等），无current兼容。人类只在版本选择/历史详情用in use；普通证书选择不显示重复标记。ChoiceLabel统一账户/证书行展示，产品筛选策略仍由各自模块负责。
 
-- cert renew --all 与NAME/--name互斥，按托管身份顺序执行；批量不逐项提示，首次TXT仍action_required、保存后继续。单次和批量共用事务返回CertificateResult，汇总区分完成/待办/未到期/跳过/失败/取消；JSON仅一个对象，失败1/取消130，保留已经提交的完成结果。账户签名算法不在此任务范围。
+- cert renew --all 与NAME/--name互斥，按托管身份顺序执行；批量不逐项提示，首次TXT仍action_required、保存后继续。单次和批量共用事务返回CertificateResult，汇总区分完成/待办/未到期/跳过/失败/取消；JSON仅一个对象，失败1/取消130，保留已经提交的完成结果。账户注册与轮换共用 KeyAlgorithm；默认 P256、轮换缺省沿用原类型，暂存钥存在时不能静默替换或降级。
 
 - 新建cert issue强制显式-c验证实现，无默认；resume/renew从持久化记录选择，不允许覆盖。--yes为通用操作确认，不绑定manual_dns，不补填输入/选择/条款，不绕过DNS或CA验证；首次新TXT仍yield。

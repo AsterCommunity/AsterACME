@@ -15,7 +15,7 @@ use aster_acme_protocol::url::AcmeUrl;
 
 use aster_acme::{
     account::{AccountKeyStore, AccountLease, AccountRecord, AccountStore, AccountStoreError},
-    crypto::{AccountKey, AccountSigner, CryptoError},
+    crypto::{AccountSigner, CryptoError, key::AccountKey},
 };
 use std::{
     fs,
@@ -39,6 +39,8 @@ const MAX_KEY_FILE: u64 = 64 * 1024;
 /// Public local metadata used by interactive account selection; never includes key bytes.
 #[derive(Debug, Clone)]
 pub struct LocalAccount {
+    /// Saved signing key choice; enumeration does not load private keys.
+    pub key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm,
     /// Outstanding key rollover, retained until durable local commit.
     pub key_rotation: Option<aster_acme_core::account::KeyRotation>,
     /// Local observation timestamps; enumeration never updates them.
@@ -98,6 +100,7 @@ pub async fn accounts(root: PathBuf) -> Result<Vec<LocalAccount>, AccountStoreEr
             if let Some(record) = read_record(&entry.path().join("account.toml"))? {
                 let usable = record.is_usable();
                 accounts.push(LocalAccount {
+                    key_algorithm: record.key_algorithm,
                     key_rotation: record.key_rotation,
                     times: record.times,
                     name,
@@ -261,6 +264,11 @@ impl AccountStore for CliAccountStore {
         tokio::task::spawn_blocking(move || {
             if let Some(previous) = read_record(&path)? {
                 verify_identity(&previous, &record.directory_url, &record.key_thumbprint)?;
+                if previous.key_algorithm != record.key_algorithm {
+                    return Err(store_error(
+                        "only a confirmed key rotation may change the account key algorithm",
+                    ));
+                }
             }
             write_record(&path, &record)
         })
@@ -275,8 +283,13 @@ impl AccountKeyStore for CliAccountStore {
         &self,
         directory: &AcmeUrl,
         name: &str,
-        create: bool,
+        access: aster_acme::account::KeyAccess,
     ) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
+        let create = matches!(access, aster_acme::account::KeyAccess::Create(_));
+        let requested = match access {
+            aster_acme::account::KeyAccess::Existing => None,
+            aster_acme::account::KeyAccess::Create(algorithm) => algorithm,
+        };
         if name != self.name.as_ref() {
             return Err(store_error(
                 "account name does not match the selected store",
@@ -305,13 +318,17 @@ impl AccountKeyStore for CliAccountStore {
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = previous.ok_or_else(|| store_error("account key exists without its identity record; refusing to guess its CA"))?;
                     verify_identity(&record, &directory, &thumbprint)?;
+                    if record.key_algorithm != key.algorithm() || requested.is_some_and(|choice| choice != key.algorithm()) {
+                        return Err(store_error("account key does not match the requested or saved algorithm"));
+                    }
                     rotation::cleanup(&slot, &record)?;
                     Ok(Arc::new(key) as Arc<dyn AccountSigner>)
                 }
                 Err(StorageError::NotFound) if create && previous.is_none() => {
-                    let key = AccountKey::generate().map_err(|_| store_error("cannot generate account key"))?;
+                    let key = AccountKey::generate(requested.unwrap_or_default()).map_err(|_| store_error("cannot generate account key"))?;
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = AccountRecord {
+            key_algorithm: key.algorithm(),
             user_agent: None, times: aster_acme::account::AccountTimes::default(),                        account_id: local_account_id(&directory, &thumbprint), directory_url: directory,
                         key_thumbprint: thumbprint, account_url: None, contacts: Vec::new(),
                         server_contacts: None,

@@ -1,8 +1,9 @@
 //! Real account signatures, exact DER payloads and durable revocation failure boundaries.
 use super::*;
+use crate::crypto::key_algorithm::KeyAlgorithm;
 use crate::{
     account::AccountRecord,
-    crypto::{AccountKey, AccountSigner},
+    crypto::{AccountSigner, key::AccountKey},
     transport::TransportOptions,
 };
 use aster_acme_protocol::{jws::FlattenedJws, url::AcmeUrl};
@@ -72,8 +73,8 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RevocationSe
         )
         .await
         .unwrap();
-    let signer = Arc::new(AccountKey::generate().unwrap());
-    let account:AccountRecord=serde_json::from_value(serde_json::json!({
+    let signer = Arc::new(AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
+    let account:AccountRecord=serde_json::from_value(serde_json::json!({"key_algorithm":"ecdsa-p256",
         "account_id":"local-id","directory_url":url("/directory"),"account_url":url("/account/1"),
         "key_thumbprint":signer.jwk().unwrap().thumbprint().unwrap(),"contacts":[],"server_contacts":null,
         "last_status":"valid","deactivation":"not_requested","key_rotation":null,"accepted_terms_url":null,"state":"registered"

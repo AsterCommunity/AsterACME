@@ -89,6 +89,18 @@ aster-acme account switch default --data-dir ./data
 
 `show` is offline unless `--verify` is supplied. Registration, key-based recovery, contact updates, key rotation, CA deactivation, and local removal are separate operations. Removing local files does not deactivate the CA account or revoke certificates.
 
+### Account key algorithms
+
+Accounts and certificates independently support the same eight key choices. New accounts default to ECDSA P-256. `account rotate-key` without `-k` retains the existing type, or resumes the saved staged key; an explicit conflicting type is rejected. CA support varies: RFC 8555 requires ES256 and recommends Ed25519; unsupported algorithms are not silently replaced.
+
+```sh
+aster-acme account register work -k rsa-3072 --accept-terms
+aster-acme account rotate-key work -k ed25519 --yes
+aster-acme account show work
+```
+
+Account metadata and `list/show` expose the actual key type. Account signing uses ES256/ES384/ES512/EdDSA/RS256 as appropriate; certificate key choices remain independent. ACME packages are unreleased: the account schema now requires `key_algorithm`, without legacy readers or migration.
+
 ### Issue a certificate
 
 ```sh
@@ -118,7 +130,7 @@ Each new issue creates an independent managed certificate. Default names combine
 
 ## Certificate key algorithms
 
-Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed25519`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `rsa-8192`. These are client generation capabilities; CA acceptance varies. The choice is persisted and retained on recovery and renewal generations. Account signing remains ES256.
+Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed25519`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `rsa-8192`. These are client generation capabilities; CA acceptance varies. The choice is persisted and retained on recovery and renewal generations. Account signing uses the same key-choice enum independently; see the account options below.
 
 ## Renewal planning and revocation
 

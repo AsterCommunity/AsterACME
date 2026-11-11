@@ -73,9 +73,9 @@ account show 的核验输出统一为 CA query: account refreshed / not performe
 
 RFC 8555 §7.4 没有封闭的证书公钥算法列表；CSR 表达公钥及自签名，CA 决定接受范围。§6.2 的 ES256 必须支持/Ed25519 建议支持针对账户 JWS，不约束证书公钥，也不决定 CA 证书签名算法。
 
-公共 CertificateKeyAlgorithm 定义八个真实可生成选项：ecdsa-p256（默认）、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。CLI `cert issue -k/--key-type` 直接从该枚举产生可选值，不复制第二套算法表，不按 CA 预设过滤。Let’s Encrypt 官方 integration guide 当前列出 P-256/P-384 和 RSA 2048/3072/4096；其他选项可用于接受它们的自定义 CA，拒绝时保留实际 badCSR 等错误，不自动换算法重下单。
+公共 KeyAlgorithm 定义八个真实可生成选项：ecdsa-p256（默认）、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。CLI `cert issue -k/--key-type` 直接从该枚举产生可选值，不复制第二套算法表，不按 CA 预设过滤。Let’s Encrypt 官方 integration guide 当前列出 P-256/P-384 和 RSA 2048/3072/4096；其他选项可用于接受它们的自定义 CA，拒绝时保留实际 badCSR 等错误，不自动换算法重下单。
 
-ECDSA CSR 分别用 SHA-256/384/512，RSA CSR 用 PKCS#1 SHA-256，Ed25519 用原算法。全部由现有 AWS-LC/rcgen 后端生成，无 OpenSSL 或新密码学依赖；RSA 8192 通过 AWS-LC 标准 PKCS#8 接入 rcgen，耗时可能较长。账户签名仍 ES256，与证书选项独立。
+ECDSA CSR 分别用 SHA-256/384/512，RSA CSR 用 PKCS#1 SHA-256，Ed25519 用原算法。全部由现有 AWS-LC/rcgen 后端生成，无 OpenSSL 或新密码学依赖；RSA 8192 通过 AWS-LC 标准 PKCS#8 接入 rcgen，耗时可能较长。账户与证书的选择相互独立，共用 crypto::key_algorithm::KeyAlgorithm。
 
 key_algorithm 同时保存于稳定 cert.toml 和各 operation.toml；创建后不可变。恢复使用原密钥和固定 CSR，不能同时指定 --resume 与 --key-type；后续续期存储入口继承相同选择。读取时校验实际曲线或 RSA modulus 位数与保存选择一致，不以 digest 正确替代算法校验；返回证书继续验证公钥/SAN/有效期和链。issue 创建前输出 Certificate key type，恢复输出保存值，list/show/JSON 显示同一字段。未发布格式直接演进，不做缺字段兼容或迁移。
 
@@ -125,6 +125,6 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 
 单次与批量共用 CertificateResult（Issuance/NotDue）及实际 IssueOutcome；批量逐项增加 Skipped/Failed/Cancelled，最终一次渲染。人类输出汇总表、计数、错误建议和 TXT/产物细节；JSON stdout 仅一个对象，包含 status、summary 和 results，每项的 result 为带 status 的结构。失败时 status=partial_failure、退出1；无失败但有待办时 status=action_required、退出0；全部处理完毕为completed（不代表每份证书都新签出，需检查计数）；取消为cancelled、退出130。空库存成功返回空列表及零计数。退出边界不会另加第二份JSON错误。
 
-整个批次共用取消令牌。Ctrl-C 停止进行中的异步执行，不再开始后续项，剩余项为 skipped/batch_cancelled；已返回的完成结果保留，不因提交后的取消改报失败。已启动的存储阻塞写入持有自身租约至完成，取消后状态与是否切换in_use以持久化记录为准。没有自动后台重试、定时调度或并行写DNS行为；账户签名仍ES256，未扩展账户算法。
+整个批次共用取消令牌。Ctrl-C 停止进行中的异步执行，不再开始后续项，剩余项为 skipped/batch_cancelled；已返回的完成结果保留，不因提交后的取消改报失败。已启动的存储阻塞写入持有自身租约至完成，取消后状态与是否切换in_use以持久化记录为准。没有自动后台重试、定时调度或并行写DNS行为；账户密钥算法独立选择，不由证书续期改变。
 
 批量显示收敛为一次结果表，不再展示重复本地计划表和逐项Checking renewal日志。仅有实际续期/恢复工作时先简报数量，执行时保持原进度；全部未到期时用“certificates checked; none due for renewal.”总结，混合结果只列非零计数，JSON仍完整。库存和执行结果按托管名称统一排序。

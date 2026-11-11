@@ -133,7 +133,11 @@ pub(super) async fn transact(
     let context = settings.account(&options).await?;
     let signer = context
         .store
-        .signer(&context.directory, &context.name, false)
+        .signer(
+            &context.directory,
+            &context.name,
+            aster_acme::account::KeyAccess::Existing,
+        )
         .await?;
     let thumbprint = signer.jwk()?.thumbprint()?;
     // Lock order is account, then certificate. Rotation/deactivation/removal cannot
@@ -621,7 +625,11 @@ async fn remote_operation(
 ) -> CliResult<IssueRecord> {
     let signer = context
         .store
-        .signer(&context.directory, &context.name, false)
+        .signer(
+            &context.directory,
+            &context.name,
+            aster_acme::account::KeyAccess::Existing,
+        )
         .await?;
     let thumbprint = signer.jwk()?.thumbprint()?;
     let _lease = context
@@ -901,7 +909,7 @@ mod tests {
     }
     fn allocation_account() -> aster_acme::account::AccountRecord {
         serde_json::from_value(serde_json::json!({
-            "account_id":"test-account","directory_url":"https://ca.example/directory","account_url":"https://ca.example/account",
+            "key_algorithm":"ecdsa-p256","account_id":"test-account","directory_url":"https://ca.example/directory","account_url":"https://ca.example/account",
             "key_thumbprint":"test-key","contacts":[],"server_contacts":null,"last_status":"valid","deactivation":"not_requested",
             "key_rotation":null,"accepted_terms_url":null,"state":"registered"
         })).unwrap()
@@ -913,7 +921,7 @@ mod tests {
         let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
         let account = allocation_account();
         let request = IssueRequest {
-            key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             name: CertificateName::new("example.com-collision").unwrap(),
             identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
             account_name: "default".into(),
@@ -956,7 +964,7 @@ mod tests {
         let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
         let account = allocation_account();
         let request = IssueRequest {
-            key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP256,
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             name: CertificateName::new("example.com-existing").unwrap(),
             identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
             account_name: "default".into(),
@@ -988,7 +996,10 @@ mod tests {
             Duration::from_secs(1),
         )
         .unwrap();
-        let signer = accounts.signer(&ca, "default", true).await.unwrap();
+        let signer = accounts
+            .signer(&ca, "default", aster_acme::account::KeyAccess::Create(None))
+            .await
+            .unwrap();
         let thumb = signer.jwk().unwrap().thumbprint().unwrap();
         let mut account = accounts.load(&ca, &thumb).await.unwrap().unwrap();
         account.state = aster_acme_core::account::AccountRecordState::Registered;
@@ -1000,7 +1011,7 @@ mod tests {
         let request = IssueRequest {
             name: CertificateName::new("web").unwrap(),
             identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
-            key_algorithm: aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm::EcdsaP384,
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP384,
             account_name: "default".into(),
         };
         let session = store.create(&request, &account).await.unwrap();

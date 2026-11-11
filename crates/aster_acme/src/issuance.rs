@@ -16,7 +16,7 @@ use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 
 pub mod certificate;
-pub mod key_algorithm;
+
 pub mod progress;
 pub mod service;
 
@@ -89,7 +89,7 @@ pub struct IssueRequest {
     /// Canonical, duplicate-free domains; first is the primary domain.
     pub identifiers: Vec<DnsIdentifier>,
     /// Certificate key choice, independent of the account signing key.
-    pub key_algorithm: key_algorithm::CertificateKeyAlgorithm,
+    pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
     /// Stable local account name, never transmitted to the CA.
     pub account_name: String,
 }
@@ -158,7 +158,7 @@ pub struct IssueRecord {
     /// Thumbprint used to derive the outstanding key authorizations.
     pub account_thumbprint: String,
     /// Immutable certificate key choice used by this generation.
-    pub key_algorithm: key_algorithm::CertificateKeyAlgorithm,
+    pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
     /// Ordered canonical DNS identifiers.
     pub identifiers: Vec<DnsIdentifier>,
     /// Local execution stage, independent of order status.

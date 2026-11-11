@@ -77,7 +77,7 @@ HTTP 单独升级到 registry 的 =0.1.0-alpha.2，utils/macros 保持 alpha.1�
 
 ## 证书密钥与吊销原因扩展验收
 
-本轮 261 项 workspace 测试通过：八种 CertificateKeyAlgorithm 均实际生成 PKCS#8/CSR，并用独立 AWS-LC 验证器核验 CSR 签名（P-521 SHA-512 单独选择其验证算法），校验证书公钥/SAN、PEM 与 DER 私钥一致、错钥拒绝。真实文件会话逐项完成落盘、重启打开、固定 CSR 不变、算法不可篡改、续期准备保留类型并生成新密钥；digest 未变但保存算法不符也拒绝。包含实际 RSA 8192 生成，无 OpenSSL 或新密码学依赖。
+本轮 261 项 workspace 测试通过：八种 KeyAlgorithm 均实际生成 PKCS#8/CSR，并用独立 AWS-LC 验证器核验 CSR 签名（P-521 SHA-512 单独选择其验证算法），校验证书公钥/SAN、PEM 与 DER 私钥一致、错钥拒绝。真实文件会话逐项完成落盘、重启打开、固定 CSR 不变、算法不可篡改、续期准备保留类型并生成新密钥；digest 未变但保存算法不符也拒绝。包含实际 RSA 8192 生成，无 OpenSSL 或新密码学依赖。
 
 CLI 枚举驱动八种 key-type 解析、默认 ecdsa-p256、短参数 -k、resume/显式 key-type 互斥、未知算法拒绝，issue 新建/恢复输出实际选择，列表/详情/JSON 显示一致字段。十种 RFC5280 已分配原因逐项核验 struct→JSON 数字编码；7/越界/负值拒绝，CA badRevocationReason 保留且不冒报吊销成功。账户签名仍 ES256。没有真实 CA 签发/吊销，本地生成能力不等于所有公开 CA 接受。
 

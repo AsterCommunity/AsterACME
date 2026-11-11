@@ -86,3 +86,11 @@ remove 覆盖取消/无 --yes 不改数据、只删目标/其他账户不变、�
 User-Agent 验证显式注册值写账户 TOML、缺省不写、配置无全局字段、重启继承、本次覆盖不改账户和非法值在持久化前拒绝；loopback HTTP 验证默认/显式 header 传输。HTTP 构造与执行使用固定 Forge rev，协议错误/重定向/超时/badNonce 回归通过。短请求超时测试的 directory fixture 使用独立较长设置，随后重建为被测请求 deadline，避免把并行 setup 延迟误判成 mutation 超时。
 
 本轮 `cargo test --workspace --locked` 默认并发和 `--test-threads=4` 均通过；严格 Clippy、格式、workspace 依赖策略和 diff whitespace 检查通过。`cargo doc --workspace --no-deps --locked` 无 bin/lib 输出目录冲突；CLI bin 禁止 rustdoc，库文档保留。独立 CLI 子进程验证新命令帮助/互斥参数、JSON、无确认时零 mutation、显式 UA 落盘及离线 show；所有数据位于独立临时目录，未修改真实 CA 账户。本轮验证使用独立 CARGO_TARGET_DIR，避免占用用户 target 构建锁。
+
+## 账户多算法与标准帮助入口（2026-11-11）
+
+共享 `crypto::key_algorithm::KeyAlgorithm` 覆盖账户/证书八种选择；账户 JWS 按 RFC 7518/8037 选择 ES256/ES384/ES512/EdDSA/RS256。测试分别检查全部选择的 PKCS#8 往返、算法/位数不匹配、损坏/截断/尾部多余字节、规范 EC/RSA/OKP JWK/指纹、kid/jwk 请求、原始签名验签和 HS256 EAB。独立 Python cryptography/OpenSSL 公开测试钥及签名覆盖 P-384/P-521/Ed25519/RSA-2048 互操作；RSA-1024、secp256k1、Ed448 为合法编码但不支持的负例。
+
+真实文件租约与 loopback CA 测试覆盖跨算法连续轮换、缺省沿用原类型、暂存钥重启恢复、显式冲突不写文件、取消后新算法对账且不重发 keyChange、主钥已换而元数据尚未提交的跨算法崩溃恢复。普通 save 不得改变算法，提交后主钥/指纹/算法一致，账户 ID 保持不变。双层 JWS 单独验证外层旧算法及内层新算法、同 URL、内层无 nonce/kid。
+
+工作区 315 项测试通过；后续帮助/呈现调整的 125 项 CLI 测试及跨算法部分提交恢复专项通过，严格 Clippy 零 warning。实际二进制在临时目录检查四种算法注册后的持久化/离线详情/列表、显式不匹配保留原钥，以及各级标准帮助入口。`rotate-key help` 保持位置账户名，不增加参数改写。未访问公网 CA，未验证各公开 CA 对所有算法的接受范围。

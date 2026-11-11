@@ -57,6 +57,8 @@ impl AccountClock for SystemAccountClock {
 /// Provider-neutral account metadata. The private key is kept in a separate key store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountRecord {
+    /// Actual account signing key choice, checked against the stored key.
+    pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
     /// Explicit account HTTP identity; absence uses the client's built-in default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
@@ -161,6 +163,15 @@ pub trait AccountStore: Send + Sync {
     async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError>;
 }
 
+/// Key access intent; creation never replaces a saved identity.
+#[derive(Debug, Clone, Copy)]
+pub enum KeyAccess {
+    /// Load an existing identity without generating material.
+    Existing,
+    /// Create if absent; an explicit choice must match any already saved key.
+    Create(Option<crate::crypto::key_algorithm::KeyAlgorithm>),
+}
+
 /// Object-safe account key lookup. Implementations may return software or remote signers.
 #[async_trait]
 pub trait AccountKeyStore: Send + Sync {
@@ -172,7 +183,7 @@ pub trait AccountKeyStore: Send + Sync {
         &self,
         directory: &AcmeUrl,
         name: &str,
-        create: bool,
+        access: KeyAccess,
     ) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
 }
 
@@ -198,10 +209,15 @@ pub trait AccountRotation: Send + Sync {
     /// Original signer, retained until local commit finishes.
     fn old_signer(&self) -> Arc<dyn AccountSigner>;
     /// Durably stage or reload the same proposed key. Never silently replace it.
+    /// None uses the original algorithm for new material, or the actual saved staged
+    /// key on recovery. An explicit mismatched choice must fail without replacing it.
     ///
     /// # Errors
     /// Reports missing staged keys, encoding, or persistence failures.
-    async fn stage(&self) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
+    async fn stage(
+        &self,
+        algorithm: Option<crate::crypto::key_algorithm::KeyAlgorithm>,
+    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
     /// Save progress while retaining both keys and the operation lease.
     ///
     /// # Errors
@@ -237,6 +253,8 @@ pub struct RegistrationOptions {
 /// Registered account identity returned to the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcmeAccount {
+    /// Actual account signing key choice.
+    pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
     /// Persisted local observation times, independent of CLI rendering.
     pub times: AccountTimes,
     /// Stable local identity.
@@ -337,6 +355,8 @@ impl AccountService {
     }
 
     /// Rotate a durable account key under RFC 8555 section 7.3.5.
+    /// The inner JWS uses the new key/algorithm, while the outer JWS uses the current
+    /// account key/algorithm (RFC 8555 §7.3.5); they need not be the same algorithm.
     /// A previous pending request is reconciled using the new key and original account
     /// URL; failure never authorizes another keyChange POST. No private key enters metadata.
     ///
@@ -346,6 +366,7 @@ impl AccountService {
     pub async fn rotate_key(
         &self,
         keys: &dyn AccountRotationStore,
+        algorithm: Option<crate::crypto::key_algorithm::KeyAlgorithm>,
     ) -> Result<AccountRecord, AccountError> {
         let session = keys.rotation(self.client.directory_url()).await?;
         let mut record = session.record();
@@ -364,10 +385,11 @@ impl AccountService {
         let old = session.old_signer();
         if record.directory_url != *self.client.directory_url()
             || old.jwk()?.thumbprint()? != record.key_thumbprint
+            || old.algorithm() != record.key_algorithm
         {
             return Err(AccountError::IdentityMismatch);
         }
-        let new = session.stage().await?;
+        let new = session.stage(algorithm).await?;
         let new_thumbprint = new.jwk()?.thumbprint()?;
         if new_thumbprint == record.key_thumbprint
             || record
@@ -411,6 +433,7 @@ impl AccountService {
         });
         session.save(&record).await?;
         session.commit(&record).await?;
+        record.key_algorithm = new.algorithm();
         record.key_thumbprint = new_thumbprint;
         record.key_rotation = None;
         Ok(record)
@@ -487,7 +510,10 @@ impl AccountService {
             .load(directory, &thumbprint)
             .await?
             .ok_or(AccountError::AccountDoesNotExist)?;
-        if record.directory_url != *directory || record.key_thumbprint != thumbprint {
+        if record.directory_url != *directory
+            || record.key_thumbprint != thumbprint
+            || record.key_algorithm != signer.algorithm()
+        {
             return Err(AccountError::IdentityMismatch);
         }
         record
@@ -512,6 +538,7 @@ impl AccountService {
         record.observe(&account, self.clock.now());
         self.store.save(&record).await?;
         Ok(AcmeAccount {
+            key_algorithm: signer.algorithm(),
             times: record.times,
             account_id: record.account_id,
             directory_url: directory.clone(),
@@ -541,7 +568,7 @@ impl AccountService {
         let thumbprint = jwk.thumbprint()?;
         let _lease = self.store.lock_account(&directory, &thumbprint).await?;
         let mut record = self
-            .load_or_prepare(&directory, &thumbprint, &options)
+            .load_or_prepare(&directory, &thumbprint, &options, signer.algorithm())
             .await?;
         match record
             .action(AccountOperation::Register)
@@ -564,6 +591,7 @@ impl AccountService {
                 record.observe(&account, self.clock.now());
                 self.store.save(&record).await?;
                 return Ok(AcmeAccount {
+                    key_algorithm: signer.algorithm(),
                     times: record.times,
                     account_id: record.account_id,
                     directory_url: directory,
@@ -610,6 +638,7 @@ impl AccountService {
         record.state = AccountRecordState::Registered;
         self.store.save(&record).await?;
         Ok(AcmeAccount {
+            key_algorithm: signer.algorithm(),
             times: record.times,
             account_id: record.account_id,
             directory_url: directory,
@@ -630,6 +659,7 @@ impl AccountService {
         let _lease = self.store.lock_account(&directory, &thumbprint).await?;
         let previous = self.store.load(&directory, &thumbprint).await?;
         let mut record = previous.unwrap_or_else(|| AccountRecord {
+            key_algorithm: signer.algorithm(),
             user_agent: None,
             times: AccountTimes::default(),
             account_id: account_id(&directory, &thumbprint),
@@ -647,7 +677,10 @@ impl AccountService {
         record
             .action(AccountOperation::Inspect)
             .map_err(AccountError::from)?;
-        if record.directory_url != directory || record.key_thumbprint != thumbprint {
+        if record.directory_url != directory
+            || record.key_thumbprint != thumbprint
+            || record.key_algorithm != signer.algorithm()
+        {
             return Err(AccountError::IdentityMismatch);
         }
         let response = self
@@ -664,6 +697,7 @@ impl AccountService {
         record.state = AccountRecordState::Registered;
         self.store.save(&record).await?;
         Ok(AcmeAccount {
+            key_algorithm: signer.algorithm(),
             times: record.times,
             account_id: record.account_id,
             directory_url: directory,
@@ -687,7 +721,10 @@ impl AccountService {
                 record
                     .action(AccountOperation::Inspect)
                     .map_err(AccountError::from)?;
-                if record.directory_url != *directory || record.key_thumbprint != thumbprint {
+                if record.directory_url != *directory
+                    || record.key_thumbprint != thumbprint
+                    || record.key_algorithm != signer.algorithm()
+                {
                     return Err(AccountError::IdentityMismatch);
                 }
                 if let Some(account_url) = record.account_url.clone() {
@@ -703,6 +740,7 @@ impl AccountService {
                     record.observe(&account, self.clock.now());
                     self.store.save(&record).await?;
                     return Ok(AcmeAccount {
+                        key_algorithm: signer.algorithm(),
                         times: record.times,
                         account_id: record.account_id,
                         directory_url: directory.clone(),
@@ -738,7 +776,10 @@ impl AccountService {
             .load(directory, &thumbprint)
             .await?
             .ok_or(AccountError::AccountDoesNotExist)?;
-        if record.directory_url != *directory || record.key_thumbprint != thumbprint {
+        if record.directory_url != *directory
+            || record.key_thumbprint != thumbprint
+            || record.key_algorithm != signer.algorithm()
+        {
             return Err(AccountError::IdentityMismatch);
         }
         let account_url = record
@@ -751,6 +792,7 @@ impl AccountService {
         {
             AccountAction::AlreadyDeactivated => {
                 return Ok(AcmeAccount {
+                    key_algorithm: signer.algorithm(),
                     times: record.times,
                     account_id: record.account_id,
                     directory_url: directory.clone(),
@@ -795,6 +837,7 @@ impl AccountService {
         record.observe(&account, self.clock.now());
         self.store.save(&record).await?;
         Ok(AcmeAccount {
+            key_algorithm: signer.algorithm(),
             times: record.times,
             account_id: record.account_id,
             directory_url: directory.clone(),
@@ -810,9 +853,13 @@ impl AccountService {
         directory: &AcmeUrl,
         thumbprint: &str,
         options: &RegistrationOptions,
+        key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
     ) -> Result<AccountRecord, AccountError> {
         if let Some(mut record) = self.store.load(directory, thumbprint).await? {
-            if &record.directory_url != directory || record.key_thumbprint != thumbprint {
+            if &record.directory_url != directory
+                || record.key_thumbprint != thumbprint
+                || record.key_algorithm != key_algorithm
+            {
                 return Err(AccountError::IdentityMismatch);
             }
             record
@@ -851,6 +898,7 @@ impl AccountService {
             return Err(AccountError::ExternalAccountRequired);
         }
         let record = AccountRecord {
+            key_algorithm,
             user_agent: None,
             times: AccountTimes::default(),
             account_id: account_id(directory, thumbprint),

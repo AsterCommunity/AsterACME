@@ -1,0 +1,69 @@
+[
+  {
+    "algorithm": "ecdsa-p384",
+    "jwk": {
+      "crv": "P-384",
+      "kty": "EC",
+      "x": "mvRroMilegqWn5X2IBRMhrAnYt-t6--jk4ebxijV4mowM6BeR2aj6Qh3VAqcw-SH",
+      "y": "e1fkRJUR7KMKMNJvkuM0-MnnS2MD9aXfekRYBe22bXRvrVmDIYBV6AtGQUXoDdj8"
+    },
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDDrB4AsABSWOts5Yes49d1p27RQc663tlQ2qKYPJR5JZVb2wjIesto9hKjgrzILhj2hZANiAASa9GugyKV6CpaflfYgFEyGsCdi363r76OTh5vGKNXiajAzoF5HZqPpCHdUCpzD5Id7V-RElRHsowow0m-S4zT4yedLYwP1pd96RFgF7bZtdG-tWYMhgFXoC0ZBRegN2Pw",
+    "signature": "hqQg1FFJoSOO2e9FNlkzwgIQ33Hj7NN6rb1sWmi5eh127vfT8RK3Di6RdzAN-Li2nK2id2sHmg2hv5mj7xLUjd6dYGPyK4agsWZl8GzpfbGieslFVR4xdb74hpCeSe8C"
+  },
+  {
+    "algorithm": "ecdsa-p521",
+    "jwk": {
+      "crv": "P-521",
+      "kty": "EC",
+      "x": "ADnHlM8pm_j56CYlLMGnAddVB729jMEvNVUG7xrBBPzdqQVNNA6uEt1ov1xnx89ajqf43u3Cb6M6sjyU4CaM0DQB",
+      "y": "ASnAVmSxhoz_IrfLuWzU2VoBNwdacvtQV1LTTEZMo730TgiT9UZ13Mkme1AiaSW5mZ8ohRpoTJCK0mzwkUgFtprt"
+    },
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MIHuAgEAMBAGByqGSM49AgEGBSuBBAAjBIHWMIHTAgEBBEIBmqrYliWp7iIX1v1xXDNRZOjb2XkTCPobxoy0_f5asCy7wmo_f7GWqlNJmJmHxwT-WzQHwe1lfBaHET-vW0R1yOahgYkDgYYABAA5x5TPKZv4-egmJSzBpwHXVQe9vYzBLzVVBu8awQT83akFTTQOrhLdaL9cZ8fPWo6n-N7twm-jOrI8lOAmjNA0AQEpwFZksYaM_yK3y7ls1NlaATcHWnL7UFdS00xGTKO99E4Ik_VGddzJJntQImkluZmfKIUaaEyQitJs8JFIBbaa7Q",
+    "signature": "ALeoyYhEt3ZGwHhzzK25NFxYAhKdrbEhL154VMbaPWXHkf9K3PF1qr91Jdt983rZFBM-MWD5bdYDf1ea5Ch6MC_zARgDkL6jDwTkZuHxz6yZuvd5O6RSyBYDJGoz7zTi9obV2TTmJDUDsxJU_Er1YoXOPrO2Ztok-O2tDs5wulIF2FnD"
+  },
+  {
+    "algorithm": "ed25519",
+    "jwk": {
+      "crv": "Ed25519",
+      "kty": "OKP",
+      "x": "G7k2f2khr2gpMJxlSPoDmR2ad94Lq4q3Vj2Ri-xFJQ8"
+    },
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MC4CAQAwBQYDK2VwBCIEIDdwmCvmqLp6THfUttsoaFp-KooVgkqhwsDxsmQLiUIr",
+    "signature": "sm3IZeqF3OFHaXgjtc_2RifAGalDRHacwPDOU8FWl-kIdrBBp3WUUq32Oa-b2IremB9imV0ahlkRHRpmpmctAA"
+  },
+  {
+    "algorithm": "rsa-2048",
+    "jwk": {
+      "e": "AQAB",
+      "kty": "RSA",
+      "n": "qDL8LQoLGNLvjeVblRMQ11L_pymayt4fJyp23jmogf6ch-QEiotFPgCQzMFvN2dublWSWM5wA0B3OLdnVHMuTyVZR9VuXdquJltyaQR2UyBAXNUot73wIV-ifO0SB31D1SFsmWVERiCeZZzpG0Ksu0Y46WPD-uJ6dFeZnlIAu4BzCP6BH0JSxH6LvYTYiJ6p9y7c8w8396ZtVQaSUiWTBTjrOIdgeLSM-C89dNZS7OS5iVTf6DFaNr11Jq4ADaUV388GPPQkphVQtbtqZGzFwRSaAMPz9FjY2P0zdfwIsSzfnyU1bgusabn0Tlzm0r6P9BHDEIBPWVMH9HeZDOYFZw"
+    },
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCoMvwtCgsY0u-N5VuVExDXUv-nKZrK3h8nKnbeOaiB_pyH5ASKi0U-AJDMwW83Z25uVZJYznADQHc4t2dUcy5PJVlH1W5d2q4mW3JpBHZTIEBc1Si3vfAhX6J87RIHfUPVIWyZZURGIJ5lnOkbQqy7RjjpY8P64np0V5meUgC7gHMI_oEfQlLEfou9hNiInqn3LtzzDzf3pm1VBpJSJZMFOOs4h2B4tIz4Lz101lLs5LmJVN_oMVo2vXUmrgANpRXfzwY89CSmFVC1u2pkbMXBFJoAw_P0WNjY_TN1_AixLN-fJTVuC6xpufROXObSvo_0EcMQgE9ZUwf0d5kM5gVnAgMBAAECggEADYI2xalCVeaPDc7naZQj7J9CYBsTzwpC50LeVB--XF5mFPXntXbVA1NJTeCVPZZlhKADxnUiAujZCmmUd3BevkWKI55NJGWNShBbInsUw71Z3frSr9sl35BOPQlPQuG5InNyROmgr58sCY4uHJ3gwJO1u2zjTxGEczab5F7Cp0xalYDn-7YpOGReLjmrDfUSbPw7FJJJiH89Qgmh2lqSyJnc5abUug3d7PDD_x5W3BW4B3bqjj0sPFutP2VyIlwt6hq4oPSNL58XnyFAEFvR8HDVLLTQmLyXb-5IjVwuTnu5lmghtv-MR3C11rzAR8JsN6GniKW-iWQYF6iiBX18XQKBgQDr73Jbv7VHxXsU-G2Ys25x4OHY81MZqqIyUzgpOHbgStm9Kdzt8hC6eNeUtSeZ06UJovGKvzwF_WJaQ-cTJ9RMxMq4GEjag2_hhqxe6Lh3cGB4y-BFVc3_W1ppZZE8YroRZpC8UbdKlKdFg7dzd4l_L4rhYk-0jn2fXp5WN3ApVQKBgQC2gNpB5J1EQ3D3XHS9dKNZIhA3ZLYbS70cbOK4xKT9CWAOMw80WW1sRayVCDt6pxHqD4mVpRe9pJR9yQnr0BV-_la7vN6LwyiYllhncz9FbSSYx0Mwq_T9syZmw9n5SZuJE8zDqiRQwuha638AmN5xxW7SlpyePSwnNIPxe5RDywKBgCNyJ-Ys2RldS-6MnDqSyocFWCj19YgnoJKa-hcHSqTL2gaXYX_GHElHmmvXA4oSx_q4pj1IGcZ0mPAiv3abR0P5VNNvopJhqM9jIkZoBD69fWDokFsaVwaEPQMUpUtDMd0nYZtJU5Y62x6QeWE5lkirZdwSnxLrTWhCGNuvHIS5AoGBAId8Xwud-baszpeEltHzXjUUma9V3--hqZIJr8L1kXqcVCgWdcoqPZasnvPAuc9TanQ19rEWb-qE3QwIjIn434x4qtES5LAjQOcObjDWmPkkjo-xFktyzRzuu6p86TwtDf-UqGX10KH4IGEnBRDfa_xQUvaZg0niJf4w-WbzlF1DAoGAZqbVYEQK05FDvbuNLchqbA4GCUp6oyitigbfH2h_eD6hkzp5ub0RhM_dtrcg8PN6LNdCagdTGxxvawnX_Knnrj91gDFq4XlaRuBxAzMOuULpvVZo5zjhAM13_KZgx3URDE3s42fC_8xNDrjH-jORZhixP8ZUWkTUKNGJl0hYzbE",
+    "signature": "o7N1ov1ERHWve0w2JAy9GjDo04c2SJV5ytw5ekSpIp0J6AJMN2SY8T7WUzK20lr2Nhod33lV67sefKkknHIq7NgvZxL03cN2WttSXoplORCe1qUaZ9bKhuLMonOGXj3r4IzNMpIAKIK_GrvkcNLaij_KoKaI4xwxRuQZapcX1dJ3E_EExtN3rsCNtYMtAOkvX4rZda89uE929qXeJJq-2H72XbUKA1uZ1H6CyLXG4IZNtNVRHwBmdvk_prphVF7LBRdDLLJX7jLh1-jgHKz2hoOI7BSAubvcZa1jllDoj6aUypTCl69WjYAvCqkmF_q9w8d3UUys40wphUyBn2JFmg"
+  },
+  {
+    "algorithm": null,
+    "jwk": null,
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAMeu0D5UkIqE9FJGGpf2OX083tyTODav3WUAmxiCF_NDMI-ck3mtYj3ecu95jBvuU6qL3rZqQ8r8cXAUSxrOTmTsM48xeRh3annqj2Gm3iZQGkJxdJAiVAxhoDCZ5aQj41zQkm9oYQmjtTdqXZwXXScmJtzdlWV08iUNFfslJKtHAgMBAAECgYA77Qap7g8CwyvflRJeEJLoNuBbKgNwxg6XRTtGe6RcaQmlz8OifJpDHwM3Qy79IuURBbDs5a86t9ADZtOzU77KmphKIJX3bf8eja_6itbEpIord-ivqOnWlBciNaryUr23saDT1TNpu5cR9vKThwzoGCWPrK6uScNAKJhTIbBggQJBAPh_FGjXk-iqMQjvXqMP1P8bqEn4eacz7-V7Pr_ap8RkNPzxrXIESMnhhmlNJI04sNlKIUdOVtryZhmmw8RRnnECQQDNtmWHtKAMTASdVfkwqxOuac1pFWw1wZ8JefzhASVTXX2IcLxCzW8szpGinNogz45xwRbGQAqw4yM6jEWQyDE3AkA-mNyOUIfs2zqA8rOXRfy0ysXI5HPYv8eVukcjUzRhz5Bdi4_SoeuoF0yhqBImFPrPsdHSQZS1kMxRd-XmxVyxAkEAoysNB4Im_PoDIwVBne_ksZBshPCgH1eQHUUsZxCwmZprayD4wwgOKf1DmTdO8X2Qn_wnY2MC1-GiXNtMhpW0KwJAQTgwaZg65CipKV0UUUipafOKatQEOyniPlOp5wvrHJ0VRVt1C1Vhqs2EGczhXMXfoK1XJUGoxgqOyLwuDxqgeQ",
+    "signature": null
+  },
+  {
+    "algorithm": null,
+    "jwk": null,
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MIGEAgEAMBAGByqGSM49AgEGBSuBBAAKBG0wawIBAQQgriZhjzJUx-j8_NleZKsOK0U7PsrO4Zw97HcQx0tR3M2hRANCAASeVIPZjSqSPyMJNqRnpyr5MpW5u8SJ_DVOvUUVpwq7HB5GxzPuTXxM08xasXcYPPcvfid4ds2ruqbKJXj2AT5J",
+    "signature": null
+  },
+  {
+    "algorithm": null,
+    "jwk": null,
+    "message": "AsterACME public test key interoperability; never use these keys",
+    "pkcs8": "MEcCAQAwBQYDK2VxBDsEOW-WIFh2tDBf-WU1iLx5Egr_PzkvWFE_wpKjcdz3T69qlOou7C9Dk_r-Q98cfAfkW9DiMKzWAL5nkQ",
+    "signature": null
+  }
+]

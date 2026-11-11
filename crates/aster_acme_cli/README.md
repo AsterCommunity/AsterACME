@@ -184,7 +184,7 @@ aster-acme account update-contact work --clear-contacts --yes
 aster-acme account rotate-key work --yes
 ```
 
-支持 NAME / --name、--data-dir、--json 和网络参数，交互终端可选账户并默认否确认；无输入不隐式清空邮箱。`rotate-key` 重复调用会继续同一保存的事务。超时或取消后不删除两个密钥；401/403 不能证明远端换钥失败。list/show 显示待对账或待提交状态，详细契约见架构。当前新钥为 ES256/P-256。
+支持 NAME / --name、--data-dir、--json 和网络参数，交互终端可选账户并默认否确认；无输入不隐式清空邮箱。`rotate-key` 重复调用会继续同一保存的事务。超时或取消后不删除两个密钥；401/403 不能证明远端换钥失败。list/show 显示待对账或待提交状态，详细契约见架构。新钥可由 -k/--key-type 选择，缺省保持原类型；恢复使用实际暂存钥。
 
 注册显式值保存示例：`account.toml` 的 `[account]` 中 `user_agent = "AsterDrive/0.3.7"`。不指定时不写默认值；其他网络命令的同名参数仅覆盖当前请求。已注册的本地账户重用仍要求确认，不能把再次 register 当作新账户创建。
 
@@ -236,7 +236,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 已提供单次执行，后台调度仍未实现。
 
-证书 key_algorithm 使用公共 CertificateKeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
+证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
 0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。DNS跳过参数统一 --skip-dns-check，删除 --force/-f。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
@@ -245,3 +245,5 @@ cert renew --all 提供按托管身份顺序执行的批量入口，复用同一
 新申请必须显式 -c/--challenge，不默认选择验证方式；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
 
 所有账户、证书和 version 命令返回类型化 CommandReport，main 通过 OutputSession 统一写入最终结果；命令执行层不直接打印。渲染接收显式 Format，stdout/stderr 独立控制配色，JSON 只有一个结果或错误文档。会话跟踪真实进度/交互，避免全未到期批次出现开头空行。CommandContext 为一次命令持有同一惰性 HttpPool；批量续期和账户列表核验复用连接池，局部调用无需传入底层 HTTP 客户端。
+
+账户 register/rotate-key 新增 -k/--key-type，共用证书的八种算法名称。注册默认 P256，轮换缺省保持原类型，恢复保持暂存钥；显式不匹配拒绝。帮助所有层级统一产品标题和格式，保留 Clap 标准帮助入口，不改写参数值中的 help。

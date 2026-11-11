@@ -1,6 +1,7 @@
 //! Batch outcomes and cancellation are independent of transport timing and terminal state.
 use super::*;
 use crate::commands::cert::render;
+use aster_acme::account::KeyAccess;
 use aster_acme::issuance::{DnsRequirement, IssueOutcome};
 use std::cell::RefCell;
 
@@ -186,7 +187,10 @@ impl LocalFixture {
             Duration::from_secs(1),
         )
         .unwrap();
-        let signer = accounts.signer(&directory, "default", true).await.unwrap();
+        let signer = accounts
+            .signer(&directory, "default", KeyAccess::Create(None))
+            .await
+            .unwrap();
         let thumb = signer.jwk().unwrap().thumbprint().unwrap();
         let mut account = accounts.load(&directory, &thumb).await.unwrap().unwrap();
         account.state = aster_acme_core::account::AccountRecordState::Registered;
@@ -221,14 +225,15 @@ impl LocalFixture {
     }
 
     async fn seed(&self, name: &str, complete: bool) -> IssueRecord {
-        use aster_acme::issuance::{
-            CertificateName, IssueRequest, key_algorithm::CertificateKeyAlgorithm,
+        use aster_acme::{
+            crypto::key_algorithm::KeyAlgorithm,
+            issuance::{CertificateName, IssueRequest},
         };
         use rcgen::{CertificateParams, Issuer, KeyPair};
         let request = IssueRequest {
             name: CertificateName::new(name).unwrap(),
             identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
-            key_algorithm: CertificateKeyAlgorithm::EcdsaP256,
+            key_algorithm: KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
         };
         let session = self.store.create(&request, &self.account).await.unwrap();
@@ -339,7 +344,11 @@ async fn real_transactions_keep_not_due_material_unchanged_skip_unissued_and_con
     .unwrap();
     assert!(
         accounts
-            .signer(&fixture.account.directory_url, "default", false)
+            .signer(
+                &fixture.account.directory_url,
+                "default",
+                KeyAccess::Existing
+            )
             .await
             .is_ok()
     );

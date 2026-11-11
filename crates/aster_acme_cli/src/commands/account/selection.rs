@@ -253,6 +253,7 @@ mod tests {
     fn accounts() -> Vec<LocalAccount> {
         vec![
             LocalAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "pending".into(),
@@ -263,6 +264,7 @@ mod tests {
                 deactivation: aster_acme_core::account::DeactivationState::NotRequested,
             },
             LocalAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "work".into(),

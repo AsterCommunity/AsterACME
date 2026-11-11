@@ -1,7 +1,7 @@
 //! Certificate issuance and read-only order command arguments.
 
-use crate::common::args::{HttpArgs, LocalArgs, parse_account_name};
-use aster_acme::issuance::key_algorithm::CertificateKeyAlgorithm;
+use crate::common::args::{HttpArgs, LocalArgs, key_algorithm_parser, parse_account_name};
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_protocol::revocation::RevocationReason;
 use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
 
@@ -103,16 +103,6 @@ fn revocation_reason_parser() -> impl clap::builder::TypedValueParser<Value = Re
         })
 }
 
-fn key_algorithm_parser() -> impl clap::builder::TypedValueParser<Value = CertificateKeyAlgorithm> {
-    clap::builder::PossibleValuesParser::new(
-        CertificateKeyAlgorithm::ALL.map(CertificateKeyAlgorithm::name),
-    )
-    .try_map(|value: String| {
-        CertificateKeyAlgorithm::from_name(&value)
-            .ok_or_else(|| "unknown certificate key algorithm".to_owned())
-    })
-}
-
 /// User-facing verification implementation; the ACME wire method stays internal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum Challenge {
@@ -153,7 +143,7 @@ pub(crate) struct IssueArgs {
     pub account: Option<String>,
     /// Certificate key algorithm; CA acceptance varies. Account signing key is unchanged.
     #[arg(short = 'k', long = "key-type", value_parser = key_algorithm_parser(), default_value = "ecdsa-p256", conflicts_with = "resume")]
-    pub key_algorithm: CertificateKeyAlgorithm,
+    pub key_algorithm: KeyAlgorithm,
     /// Required validation implementation for a new certificate; resume uses the saved method.
     #[arg(
         short = 'c',
@@ -355,7 +345,7 @@ mod tests {
     }
     #[test]
     fn all_certificate_key_types_parse_with_default_p256_and_cannot_replace_resumed_material() {
-        for algorithm in CertificateKeyAlgorithm::ALL {
+        for algorithm in KeyAlgorithm::ALL {
             let args = Args::try_parse_from([
                 "aster-acme",
                 "cert",
@@ -392,7 +382,7 @@ mod tests {
         let CertCommand::Issue(options) = command else {
             panic!("issue expected")
         };
-        assert_eq!(options.key_algorithm, CertificateKeyAlgorithm::EcdsaP256);
+        assert_eq!(options.key_algorithm, KeyAlgorithm::EcdsaP256);
         assert!(Args::try_parse_from(["aster-acme", "cert", "issue", "--resume", "web"]).is_ok());
         for args in [
             vec!["--resume", "web", "--key-type", "ecdsa-p256"],

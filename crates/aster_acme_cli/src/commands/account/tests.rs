@@ -2,6 +2,8 @@
 use super::args::AccountCommand;
 use crate::app::{Args, Command};
 use crate::common::args::{HttpArgs, LocalArgs};
+use aster_acme::account::KeyAccess;
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_core::account::{AccountRecordState, DeactivationState};
 use aster_acme_protocol::url::AcmeUrl;
 use clap::Parser;
@@ -28,7 +30,10 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
     .await
     .unwrap();
     let store = CliAccountStore::open(temp.path(), "personal", Duration::from_secs(1)).unwrap();
-    store.signer(&ca, "personal", true).await.unwrap();
+    store
+        .signer(&ca, "personal", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let args = |yes| RemoveArgs {
         yes,
         target: super::args::LocalTargetArgs {
@@ -122,7 +127,10 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
         ))
         .unwrap();
         let store = CliAccountStore::open(temp.path(), name, Duration::from_secs(1)).unwrap();
-        store.signer(&directory, name, true).await.unwrap();
+        store
+            .signer(&directory, name, KeyAccess::Create(None))
+            .await
+            .unwrap();
         peers.push(tokio::spawn(async move {
             let (stream, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
                 .await
@@ -280,7 +288,7 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
     for name in ["zebra", "alpha"] {
         let store = CliAccountStore::open(temp.path(), name, Duration::from_secs(1)).unwrap();
         let thumb = store
-            .signer(&ca, name, true)
+            .signer(&ca, name, KeyAccess::Create(None))
             .await
             .unwrap()
             .jwk()
@@ -377,7 +385,7 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
     crate::config::load(temp.path()).await.unwrap();
     let store = CliAccountStore::open(temp.path(), "default", Duration::from_secs(1)).unwrap();
     let thumb = store
-        .signer(&ca, "default", true)
+        .signer(&ca, "default", KeyAccess::Create(None))
         .await
         .unwrap()
         .jwk()
@@ -464,7 +472,7 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "old", Duration::from_secs(1)).unwrap();
     let thumb = store
-        .signer(&ca, "old", true)
+        .signer(&ca, "old", KeyAccess::Create(None))
         .await
         .unwrap()
         .jwk()
@@ -615,6 +623,7 @@ impl From<super::args::AccountArgs> for super::args::NetworkArgs {
 
 impl From<super::args::AccountArgs> for super::args::RegisterArgs {
     fn from(mut args: super::args::AccountArgs) -> Self {
+        let key_algorithm = args.key_algorithm;
         let (yes, accept_terms) = (args.yes, args.accept_terms);
         let contact = std::mem::take(&mut args.contact);
         let eab_kid = args.eab_kid.take();
@@ -622,6 +631,7 @@ impl From<super::args::AccountArgs> for super::args::RegisterArgs {
         let network = super::args::NetworkArgs::from(args);
         Self {
             identity: network.identity,
+            key_algorithm,
             ca: network.ca,
             http: network.http,
             local: network.local,
@@ -675,7 +685,10 @@ async fn existing_registration_requires_confirmation_before_any_mutation_or_http
     let temp = tempfile::tempdir().unwrap();
     crate::config::load(temp.path()).await.unwrap();
     let store = CliAccountStore::open(temp.path(), "default", Duration::from_secs(1)).unwrap();
-    store.signer(&directory, "default", true).await.unwrap();
+    store
+        .signer(&directory, "default", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let config_path = temp.path().join("config.toml");
     let record_path = temp.path().join("accounts/default/account.toml");
     let key_path = temp.path().join("accounts/default/account-key.pk8");
@@ -770,7 +783,7 @@ async fn registration_saves_explicit_contact_before_discovery_failure() {
     assert_eq!(config.contact, ["you@example.com"]);
     let store = CliAccountStore::open(temp.path(), "default", Duration::from_secs(1)).unwrap();
     let thumb = store
-        .signer(&directory, "default", false)
+        .signer(&directory, "default", KeyAccess::Existing)
         .await
         .unwrap()
         .jwk()
@@ -810,7 +823,7 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     let ca = AcmeUrl::new("https://custom.invalid/directory").unwrap();
     let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
     let thumb = store
-        .signer(&ca, "work", true)
+        .signer(&ca, "work", KeyAccess::Create(None))
         .await
         .unwrap()
         .jwk()
@@ -944,7 +957,10 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
     .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
-    let signer = store.signer(&directory, "work", true).await.unwrap();
+    let signer = store
+        .signer(&directory, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
     for (state, expected) in [
         (None, "registration_pending"),
@@ -963,6 +979,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
             };
             store
                 .save(&AccountRecord {
+                    key_algorithm: KeyAlgorithm::EcdsaP256,
                     user_agent: None,
                     times: aster_acme::account::AccountTimes::default(),
                     account_id: "a".repeat(43),
@@ -1040,7 +1057,7 @@ async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "default", Duration::from_secs(1)).unwrap();
     let jwk = store
-        .signer(&directory, "default", true)
+        .signer(&directory, "default", KeyAccess::Create(None))
         .await
         .unwrap()
         .jwk()
@@ -1073,7 +1090,7 @@ async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
     connection.await.unwrap();
     assert_eq!(
         store
-            .signer(&directory, "default", false)
+            .signer(&directory, "default", KeyAccess::Existing)
             .await
             .unwrap()
             .jwk()

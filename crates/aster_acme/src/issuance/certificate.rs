@@ -19,7 +19,7 @@ pub struct CertificateMaterial {
 /// Rejects generation failures and malformed SAN identifiers.
 pub fn generate(
     identifiers: &[DnsIdentifier],
-    algorithm: super::key_algorithm::CertificateKeyAlgorithm,
+    algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
 ) -> Result<CertificateMaterial, IssueError> {
     let key = algorithm.generate()?;
     let mut params = CertificateParams::new(

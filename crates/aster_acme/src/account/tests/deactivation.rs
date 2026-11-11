@@ -1,4 +1,5 @@
 //! Deactivation signature, durable intent, failure and reconciliation contracts.
+use crate::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_protocol::jws::FlattenedJws;
 
 use super::*;
@@ -14,10 +15,11 @@ pub(super) async fn fixture(
 ) {
     let (server, client) = server(options).await;
     let directory = client.directory_url().clone();
-    let key = AccountKey::generate().unwrap();
+    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let thumbprint = key.jwk().unwrap().thumbprint().unwrap();
     let store = Arc::new(MemoryStore::default());
     *store.record.lock().await = Some(AccountRecord {
+        key_algorithm: KeyAlgorithm::EcdsaP256,
         user_agent: None,
         times: crate::account::AccountTimes::default(),
         account_id: account_id(&directory, &thumbprint),

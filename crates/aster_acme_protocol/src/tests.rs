@@ -103,7 +103,7 @@ fn headers_have_exclusive_identity_and_eab_has_no_nonce() {
         },
     ] {
         let value = serde_json::to_value(ProtectedHeader {
-            alg: "ES256",
+            alg: crate::jws::SignatureAlgorithm::Es256,
             identity,
             nonce: "nonce",
             url: "https://ca.example/a%2fb",

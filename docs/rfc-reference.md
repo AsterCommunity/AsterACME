@@ -40,6 +40,7 @@
 | [RFC 7515 — JSON Web Signature (JWS)](https://www.rfc-editor.org/rfc/rfc7515.html) | ACME 请求签名与 base64url 表示 |
 | [RFC 7517 — JSON Web Key (JWK)](https://www.rfc-editor.org/rfc/rfc7517.html) | 账户公钥表示 |
 | [RFC 7518 — JSON Web Algorithms (JWA)](https://www.rfc-editor.org/rfc/rfc7518.html) | JOSE 签名算法与密钥参数 |
+| [RFC 8037 — CFRG ECDH and Signatures in JOSE](https://www.rfc-editor.org/rfc/rfc8037.html) | Ed25519/EdDSA、OKP 公钥与规范指纹 |
 | [RFC 7638 — JSON Web Key (JWK) Thumbprint](https://www.rfc-editor.org/rfc/rfc7638.html) | Key authorization 所需账户公钥指纹 |
 | [RFC 2986 — PKCS #10: Certification Request Syntax Specification Version 1.7](https://www.rfc-editor.org/rfc/rfc2986.html) | CSR 结构；结合 RFC 8555 的标识符要求使用 |
 | [RFC 5280 — Internet X.509 Public Key Infrastructure Certificate and CRL Profile](https://www.rfc-editor.org/rfc/rfc5280.html) | X.509、扩展及证书链基础 |

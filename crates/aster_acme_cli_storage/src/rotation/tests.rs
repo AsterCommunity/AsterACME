@@ -1,6 +1,8 @@
 //! Actual file transactions against a loopback ACME server, including restart boundaries.
 use super::*;
+use aster_acme::account::KeyAccess;
 use aster_acme::account::{AccountKeyStore, AccountStore};
+use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme::{
     account::{AccountService, AccountTimes},
     transport::TransportOptions,
@@ -58,7 +60,10 @@ async fn setup(endpoint: bool, timeout: Duration) -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let store =
         Arc::new(CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap());
-    let key = store.signer(&directory, "work", true).await.unwrap();
+    let key = store
+        .signer(&directory, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
     let thumb = thumbprint(key.as_ref()).unwrap();
     let mut before = store.load(&directory, &thumb).await.unwrap().unwrap();
     before.state = AccountRecordState::Registered;
@@ -113,7 +118,7 @@ async fn empty_success_commits_both_keys_preserving_account_identity_and_status_
         .await;
     let result = fixture
         .service
-        .rotate_key(fixture.store.as_ref())
+        .rotate_key(fixture.store.as_ref(), None)
         .await
         .unwrap();
     assert_ne!(result.key_thumbprint, fixture.before.key_thumbprint);
@@ -135,7 +140,7 @@ async fn empty_success_commits_both_keys_preserving_account_identity_and_status_
     let restarted =
         CliAccountStore::open(fixture.temp.path(), "work", Duration::from_secs(1)).unwrap();
     let signer = restarted
-        .signer(&result.directory_url, "work", false)
+        .signer(&result.directory_url, "work", KeyAccess::Existing)
         .await
         .unwrap();
     assert_eq!(thumbprint(signer.as_ref()).unwrap(), result.key_thumbprint);
@@ -183,7 +188,11 @@ async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover()
     let task = tokio::spawn({
         let service = fixture.service.clone();
         let store = fixture.store.clone();
-        async move { service.rotate_key(store.as_ref()).await }
+        async move {
+            service
+                .rotate_key(store.as_ref(), Some(KeyAlgorithm::Ed25519))
+                .await
+        }
     });
     for _ in 0..200 {
         if post_count(
@@ -241,9 +250,10 @@ async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover()
         .await;
     let result = fixture
         .service
-        .rotate_key(fixture.store.as_ref())
+        .rotate_key(fixture.store.as_ref(), None)
         .await
         .unwrap();
+    assert_eq!(result.key_algorithm, KeyAlgorithm::Ed25519);
     assert_eq!(
         result.key_thumbprint,
         pending.key_rotation.unwrap().new_thumbprint
@@ -276,7 +286,7 @@ async fn explicit_rejections_and_pending_unauthorized_never_replace_primary_key(
         assert!(
             fixture
                 .service
-                .rotate_key(fixture.store.as_ref())
+                .rotate_key(fixture.store.as_ref(), None)
                 .await
                 .is_err()
         );
@@ -288,7 +298,10 @@ async fn explicit_rejections_and_pending_unauthorized_never_replace_primary_key(
             .mount(&fixture.server)
             .await;
         assert!(matches!(
-            fixture.service.rotate_key(fixture.store.as_ref()).await,
+            fixture
+                .service
+                .rotate_key(fixture.store.as_ref(), None)
+                .await,
             Err(aster_acme::account::AccountError::KeyRotationUncertain)
         ));
         assert_eq!(
@@ -310,7 +323,7 @@ async fn confirmed_partial_local_swap_resumes_without_a_key_change_endpoint() {
         .rotation(&fixture.before.directory_url)
         .await
         .unwrap();
-    let new = session.stage().await.unwrap();
+    let new = session.stage(Some(KeyAlgorithm::Ed25519)).await.unwrap();
     let mut confirmed = fixture.before.clone();
     confirmed.key_rotation = Some(KeyRotation {
         new_thumbprint: thumbprint(new.as_ref()).unwrap(),
@@ -331,7 +344,7 @@ async fn confirmed_partial_local_swap_resumes_without_a_key_change_endpoint() {
     drop(session);
     let record = fixture
         .service
-        .rotate_key(fixture.store.as_ref())
+        .rotate_key(fixture.store.as_ref(), None)
         .await
         .unwrap();
     assert_eq!(record.key_thumbprint, thumbprint(new.as_ref()).unwrap());
@@ -343,13 +356,17 @@ async fn confirmed_partial_local_swap_resumes_without_a_key_change_endpoint() {
         0
     );
     assert_eq!(record.account_id, fixture.before.account_id);
+    assert_eq!(record.key_algorithm, KeyAlgorithm::Ed25519);
 }
 
 #[tokio::test]
 async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
     let fixture = setup(false, Duration::from_secs(30)).await;
     assert!(matches!(
-        fixture.service.rotate_key(fixture.store.as_ref()).await,
+        fixture
+            .service
+            .rotate_key(fixture.store.as_ref(), None)
+            .await,
         Err(aster_acme::account::AccountError::KeyChangeUnavailable)
     ));
     assert!(
@@ -369,7 +386,7 @@ async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
     assert!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref())
+            .rotate_key(fixture.store.as_ref(), None)
             .await
             .is_err()
     );
@@ -392,7 +409,10 @@ async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
     )
     .unwrap();
     assert!(matches!(
-        fixture.service.rotate_key(fixture.store.as_ref()).await,
+        fixture
+            .service
+            .rotate_key(fixture.store.as_ref(), None)
+            .await,
         Err(aster_acme::account::AccountError::IdentityMismatch)
     ));
     assert_eq!(
@@ -422,7 +442,7 @@ async fn timeout_keeps_both_keys_and_never_automatically_reposts_key_change() {
     assert!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref())
+            .rotate_key(fixture.store.as_ref(), None)
             .await
             .is_err()
     );
@@ -446,7 +466,10 @@ async fn timeout_keeps_both_keys_and_never_automatically_reposts_key_change() {
         .mount(&fixture.server)
         .await;
     assert!(matches!(
-        fixture.service.rotate_key(fixture.store.as_ref()).await,
+        fixture
+            .service
+            .rotate_key(fixture.store.as_ref(), None)
+            .await,
         Err(aster_acme::account::AccountError::KeyRotationUncertain)
     ));
     assert_eq!(
@@ -482,7 +505,7 @@ async fn bad_nonce_retries_only_the_outer_signature_with_the_same_durable_new_ke
         .await;
     let result = fixture
         .service
-        .rotate_key(fixture.store.as_ref())
+        .rotate_key(fixture.store.as_ref(), None)
         .await
         .unwrap();
     let requests = fixture.server.received_requests().await.unwrap();
@@ -511,7 +534,7 @@ async fn definitive_conflict_problem_preserves_old_identity_and_allows_later_ope
     assert!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref())
+            .rotate_key(fixture.store.as_ref(), None)
             .await
             .is_err()
     );
@@ -527,7 +550,7 @@ async fn definitive_conflict_problem_preserves_old_identity_and_allows_later_ope
     assert_eq!(record, fixture.before);
     let key = fixture
         .store
-        .signer(&fixture.before.directory_url, "work", false)
+        .signer(&fixture.before.directory_url, "work", KeyAccess::Existing)
         .await
         .unwrap();
     assert_eq!(
@@ -551,7 +574,7 @@ async fn rotation_commit_rejects_changed_identity_and_unconfirmed_journal() {
         .rotation(&fixture.before.directory_url)
         .await
         .unwrap();
-    let new = session.stage().await.unwrap();
+    let new = session.stage(None).await.unwrap();
     let mut record = fixture.before.clone();
     record.key_rotation = Some(KeyRotation {
         new_thumbprint: thumbprint(new.as_ref()).unwrap(),
@@ -570,5 +593,113 @@ async fn rotation_commit_rejects_changed_identity_and_unconfirmed_journal() {
         )
         .unwrap(),
         fixture.before.key_thumbprint
+    );
+}
+
+#[tokio::test]
+async fn cross_algorithm_rotations_commit_actual_type_and_default_to_the_previous_type() {
+    use aster_acme::{account::KeyAccess, crypto::key_algorithm::KeyAlgorithm};
+    let fixture = setup(true, Duration::from_secs(30)).await;
+    Mock::given(method("POST"))
+        .and(path("/vendor/rollover"))
+        .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "next_nonce"))
+        .expect(6)
+        .mount(&fixture.server)
+        .await;
+    let mut previous = KeyAlgorithm::EcdsaP256;
+    for next in [
+        Some(KeyAlgorithm::Rsa2048),
+        None,
+        Some(KeyAlgorithm::Ed25519),
+        Some(KeyAlgorithm::EcdsaP384),
+        Some(KeyAlgorithm::EcdsaP521),
+        Some(KeyAlgorithm::EcdsaP256),
+    ] {
+        let expected = next.unwrap_or(previous);
+        let record = fixture
+            .service
+            .rotate_key(fixture.store.as_ref(), next)
+            .await
+            .unwrap();
+        assert_eq!(record.key_algorithm, expected);
+        assert_eq!(record.account_id, fixture.before.account_id);
+        let key = fixture
+            .store
+            .signer(&record.directory_url, "work", KeyAccess::Existing)
+            .await
+            .unwrap();
+        assert_eq!(key.algorithm(), expected);
+        assert_eq!(
+            key.jwk().unwrap().thumbprint().unwrap(),
+            record.key_thumbprint
+        );
+        let requests = fixture.server.received_requests().await.unwrap();
+        let post = requests
+            .iter()
+            .rev()
+            .find(|request| request.method == "POST")
+            .unwrap();
+        let outer: FlattenedJws = serde_json::from_slice(&post.body).unwrap();
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(outer.protected).unwrap()).unwrap();
+        let inner: FlattenedJws =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(outer.payload).unwrap()).unwrap();
+        let inner_header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(inner.protected).unwrap()).unwrap();
+        assert_eq!(
+            header["alg"],
+            serde_json::to_value(previous.jws_algorithm()).unwrap()
+        );
+        assert_eq!(
+            inner_header["alg"],
+            serde_json::to_value(expected.jws_algorithm()).unwrap()
+        );
+        assert_eq!(
+            inner_header["jwk"],
+            serde_json::to_value(key.jwk().unwrap()).unwrap()
+        );
+        assert!(inner_header.get("nonce").is_none());
+        previous = expected;
+    }
+}
+
+#[tokio::test]
+async fn staged_algorithm_survives_restart_and_conflicting_choices_are_rejected() {
+    use aster_acme::crypto::key_algorithm::KeyAlgorithm;
+    let fixture = setup(true, Duration::from_secs(30)).await;
+    let session = fixture
+        .store
+        .rotation(&fixture.before.directory_url)
+        .await
+        .unwrap();
+    let staged = session.stage(Some(KeyAlgorithm::Ed25519)).await.unwrap();
+    let thumbprint = staged.jwk().unwrap().thumbprint().unwrap();
+    let path = fixture.store.account_slot().join("account-key.next.pk8");
+    let before = fs::read(&path).unwrap();
+    let mut pending = session.record();
+    pending.key_rotation = Some(KeyRotation {
+        new_thumbprint: thumbprint.clone(),
+        phase: KeyRotationPhase::Pending,
+    });
+    session.save(&pending).await.unwrap();
+    drop(session);
+    let restarted =
+        CliAccountStore::open(fixture.temp.path(), "work", Duration::from_secs(1)).unwrap();
+    let session = restarted
+        .rotation(&fixture.before.directory_url)
+        .await
+        .unwrap();
+    assert!(session.stage(Some(KeyAlgorithm::Rsa2048)).await.is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let restored = session.stage(None).await.unwrap();
+    assert_eq!(restored.algorithm(), KeyAlgorithm::Ed25519);
+    assert_eq!(restored.jwk().unwrap().thumbprint().unwrap(), thumbprint);
+    assert_eq!(session.record().key_algorithm, KeyAlgorithm::EcdsaP256);
+    assert_eq!(
+        post_count(
+            &fixture.server.received_requests().await.unwrap(),
+            "/vendor/rollover"
+        ),
+        0
     );
 }

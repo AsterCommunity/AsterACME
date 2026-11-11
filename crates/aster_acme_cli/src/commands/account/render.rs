@@ -101,6 +101,7 @@ fn list_text(
         // Two columns are reserved for the default marker in every data row.
         "  NAME".into(),
         "CA".into(),
+        "KEY TYPE".into(),
         "LOCAL STATE".into(),
         if verification.is_some() {
             "CA STATUS".into()
@@ -132,6 +133,7 @@ fn list_text(
                 safe(&account.name)
             ),
             safe(account.directory.as_str()),
+            account.key_algorithm.name().into(),
             match &account.key_rotation {
                 Some(rotation) => rotation_label(rotation.phase).into(),
                 None => state_label(account.state).into(),
@@ -194,12 +196,13 @@ fn time_lines(times: aster_acme::account::AccountTimes, color: bool) -> [String;
     ]
 }
 
-fn local_state(local: &LocalAccountReport) -> &'static str {
-    match local.record.as_ref().map(|record| record.state) {
-        Some(AccountRecordState::Registered) => "registered",
-        Some(AccountRecordState::RegistrationPending) => "registration_pending",
-        None => "key_only",
-    }
+fn local_state(local: &LocalAccountReport, color: bool) -> String {
+    let (label, style) = match local.record.as_ref().map(|record| record.state) {
+        Some(AccountRecordState::Registered) => ("registered", Style::Green),
+        Some(AccountRecordState::RegistrationPending) => ("registration_pending", Style::Yellow),
+        None => ("key_only", Style::Yellow),
+    };
+    styled(label, style, color)
 }
 
 fn local_text(local: &LocalAccountReport, color: bool) -> String {
@@ -210,19 +213,16 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
             safe(&local.name)
         ),
         field("CA:", &safe(local.directory.as_str()), color),
-        field("Key thumbprint:", &safe(&local.key_thumbprint), color),
         field(
-            "Local state:",
-            &styled(
-                local_state(local),
-                match local.record.as_ref().map(|record| record.state) {
-                    Some(AccountRecordState::Registered) => Style::Green,
-                    Some(AccountRecordState::RegistrationPending) | None => Style::Yellow,
-                },
-                color,
-            ),
+            "Key type:",
+            local
+                .record
+                .as_ref()
+                .map_or("unknown", |record| record.key_algorithm.name()),
             color,
         ),
+        field("Key thumbprint:", &safe(&local.key_thumbprint), color),
+        field("Local state:", &local_state(local, color), color),
     ];
     if let Some(record) = &local.record {
         if let Some(user_agent) = &record.user_agent {
@@ -336,6 +336,7 @@ pub(super) mod tests {
         };
         let report = AccountReport::List {
             accounts: vec![LocalAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 key_rotation: None,
                 times,
                 name: "work".into(),
@@ -363,6 +364,7 @@ pub(super) mod tests {
     fn list_aligns_marker_name_and_columns_before_applying_highlight() {
         let accounts = [
             LocalAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "default".into(),
@@ -373,6 +375,7 @@ pub(super) mod tests {
                 deactivation: DeactivationState::NotRequested,
             },
             LocalAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 key_rotation: None,
                 times: aster_acme::account::AccountTimes::default(),
                 name: "new-account".into(),
@@ -403,6 +406,7 @@ pub(super) mod tests {
         use aster_acme::account::AcmeAccount;
         use aster_acme_core::protocol::AccountStatus;
         let account = AcmeAccount {
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             times: aster_acme::account::AccountTimes::default(),
             account_id: "local-id".into(),
             directory_url: AcmeUrl::new("https://ca.example/directory").unwrap(),
@@ -513,6 +517,7 @@ pub(super) mod tests {
         let directory =
             aster_acme_protocol::url::AcmeUrl::new("https://ca.example/directory").unwrap();
         let account = AccountRecord {
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             user_agent: Some("test/1".into()),
             times: AccountTimes::default(),
             account_id: "id".into(),
