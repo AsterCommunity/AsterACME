@@ -210,7 +210,7 @@ aster-acme cert show example.com --operation <ID> --verify
 
 手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多2秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
---request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 2 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前仅 manual_dns 可执行（内部使用 DNS-01）；自动 DNS、HTTP/TLS、续期、吊销、部署命令未开放。
+--request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone，前台续期和吊销已实现；自动 DNS、TLS-ALPN 和部署未实现。
 
 每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
 
@@ -272,3 +272,9 @@ Webroot自动化输出：INFO逐项记录实际写入、复用、借用和清理
 订单invalid是终态，保留供show/--verify检查，不进入恢复选择，显式resume也在CA发现前拒绝。查询首次发现invalid时保存订单，再按需读取授权challenge的problem补全细节，不重发验证。公开诊断显示类型、说明及标识符子问题，不把HTTP200资源error伪装成HTTP400；无problem明确说明未提供。
 
 Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且内容/身份未变的验证文件及所有权凭据；复用同一cleanup入口。借用、用户替换或修改的文件不删除，站点目录、订单、密钥和CSR保留；修改/权限/保存失败保留cleanup_pending，仍以原始CA problem报告终态。取消、超时、轮询上限及不确定远端结果不触发失败清理；manual实现不自动删文件或DNS记录。既往已记录invalid的申请仍拒绝签发恢复，不以该改动隐式执行用户旧数据清理。
+
+## HTTP standalone
+
+`aster-acme cert issue -c standalone -d example.com`默认临时监听`0.0.0.0:80`，可在新申请通过`--listen-address 0.0.0.0:8080`指定本地socket；公网仍须80端口转发到该socket并保留Host。IPv6需显式选择且确保所有A/AAAA可达。配置持久化，resume/renew沿用；不写挑战文件，不停止其他服务器或自动提权。INFO记录真实启停，DEBUG解释入口要求。成功/invalid/取消/超时/轮询上限均关闭服务；恢复已ack挑战重新提供内容但不重复提交CA。监听使用现有Tokio/Hyper HTTP/1栈、64条活动连接上限和每连接5秒期限，无Web框架。TLS-ALPN仍未实现，后续可共用listener和restore/shutdown生命周期。
+
+RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。

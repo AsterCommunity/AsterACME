@@ -19,6 +19,7 @@ mod http_client;
 pub mod identifier;
 pub mod issuance;
 pub mod renewal;
+mod renewal_calculation;
 pub mod revocation;
 pub mod solver;
 pub mod transport;

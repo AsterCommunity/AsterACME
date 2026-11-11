@@ -65,10 +65,33 @@ pub(super) fn request_status(record: &IssueRecord, now: time::OffsetDateTime) ->
     match record.revocation.state {
         RevocationState::Confirmed => "revoked",
         RevocationState::Pending => "revocation pending",
+        RevocationState::NotRequested if record.creation_failure.is_some() => {
+            let failure = record.creation_failure.as_ref();
+            match failure
+                .and_then(|failure| failure.problem.as_ref())
+                .map(|problem| &problem.kind)
+            {
+                Some(aster_acme_protocol::problem::ProblemKind::RateLimited) => {
+                    return "creation deferred";
+                }
+                Some(aster_acme_protocol::problem::ProblemKind::ServerInternal) => {
+                    return "creation unconfirmed";
+                }
+                _ => {}
+            }
+            match failure.map(|failure| failure.status) {
+                Some(408 | 429) => "creation deferred",
+                Some(400..=499) => "creation rejected",
+                _ => "creation unconfirmed",
+            }
+        }
         RevocationState::NotRequested if record.finalize_rejection.is_some() => {
             "failed (CSR rejected)"
         }
         RevocationState::NotRequested if record.expired(now) => "expired locally",
+        RevocationState::NotRequested if record.authorization_failure().is_some() => {
+            "authorization failed"
+        }
         RevocationState::NotRequested if !record.unfinished() && !record.is_in_use => {
             "completed (historical)"
         }
@@ -209,7 +232,13 @@ fn local_status_style(record: &IssueRecord, now: time::OffsetDateTime) -> Style 
     match record.revocation.state {
         RevocationState::Confirmed => Style::Red,
         RevocationState::Pending => Style::Yellow,
-        RevocationState::NotRequested if record.finalize_rejection.is_some() => Style::Red,
+        RevocationState::NotRequested
+            if record.finalize_rejection.is_some()
+                || record.creation_failure.is_some()
+                || record.authorization_failure().is_some() =>
+        {
+            Style::Red
+        }
         RevocationState::NotRequested if record.expired(now) || record.unfinished() => {
             Style::Yellow
         }
@@ -312,15 +341,22 @@ fn show_text(
         color,
     ));
     lines.extend(authorization_lines(record, color));
+    if let Some(failure) = &record.creation_failure {
+        lines.push(field("newOrder HTTP:", &failure.status.to_string(), color));
+        lines.push(field("Retry after:", &timestamp(failure.retry_at), color));
+    }
     if let Some(problem) = &record.finalize_rejection {
         lines.push(field(
             "CSR rejection:",
-            &output::safe(
-                &problem
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| problem.kind.to_string()),
-            ),
+            &output::safe(&problem.problem.as_ref().map_or_else(
+                || format!("HTTP {}", problem.status),
+                |problem| {
+                    problem
+                        .detail
+                        .clone()
+                        .unwrap_or_else(|| problem.kind.to_string())
+                },
+            )),
             color,
         ));
     }
@@ -422,8 +458,24 @@ fn request_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
         ));
     }
     if let Some(problem) = record.failure_problem() {
-        let (message, _) = crate::common::error::problem::invalid_order(Some(problem));
+        let message = format!(
+            "{} ({})",
+            problem
+                .detail
+                .as_deref()
+                .unwrap_or("no explanation provided"),
+            problem.kind
+        );
         lines.push(field("CA problem:", &output::safe(&message), color));
+    }
+    if let Ok(config) =
+        serde_json::from_value::<super::validation::StandaloneConfig>(record.solver_config.clone())
+    {
+        lines.push(field(
+            "Listen address:",
+            &config.listen_address.to_string(),
+            color,
+        ));
     }
     lines
 }
@@ -490,7 +542,9 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
     }
     let source = match plan.source {
         aster_acme::renewal::RenewalSource::Ari => "ARI",
-        aster_acme::renewal::RenewalSource::Fallback => "fallback (2/3 of certificate validity)",
+        aster_acme::renewal::RenewalSource::Fallback => {
+            "fallback (randomized before validity threshold)"
+        }
     };
     let mut lines = vec![
         field(
@@ -1153,7 +1207,7 @@ mod tests {
         assert!(!plain.contains('\x1b'));
         assert!(plain.contains("Next renewal:"));
         assert!(plain.contains("2026-02-01 00:00:00 UTC"));
-        assert!(plain.contains("fallback (2/3 of certificate validity)"));
+        assert!(plain.contains("fallback (randomized before validity threshold)"));
         assert!(
             list(
                 std::slice::from_ref(&record),
@@ -1287,12 +1341,16 @@ mod tests {
             "phase":"finalizing","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
             "order":{"status":"ready","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"},"authorizations":[]
         })).unwrap();
-        record.finalize_rejection = Some(Problem {
-            kind: ProblemKind::BadCsr,
-            detail: Some("P-521 not allowed".into()),
-            instance: None,
-            subproblems: vec![],
-            extensions: serde_json::Map::new(),
+        record.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+            status: 400,
+            retry_at: None,
+            problem: Some(Problem {
+                kind: ProblemKind::BadCsr,
+                detail: Some("P-521 not allowed".into()),
+                instance: None,
+                subproblems: vec![],
+                extensions: serde_json::Map::new(),
+            }),
         });
         let now = time::OffsetDateTime::now_utc();
         assert_eq!(request_status(&record, now), "failed (CSR rejected)");
@@ -1427,6 +1485,76 @@ mod tests {
                 .unwrap();
             assert!(row.contains("authorizing domains  "));
             assert_eq!(row.find("pending"), header.find("ORDER STATUS"));
+        }
+    }
+    #[test]
+    fn new_order_errors_have_local_status_without_inventing_a_ca_order() {
+        for (status, label) in [
+            (400, "creation rejected"),
+            (403, "creation rejected"),
+            (409, "creation rejected"),
+            (408, "creation deferred"),
+            (429, "creation deferred"),
+            (503, "creation unconfirmed"),
+        ] {
+            let mut record = detailed_record();
+            record.phase = aster_acme_core::workflow::IssuancePhase::CreatingOrder;
+            record.order = None;
+            record.order_url = None;
+            record.authorizations.clear();
+            record.creation_failure = Some(aster_acme::issuance::RequestFailure {
+                status, retry_at: None, problem: Some(serde_json::from_value(serde_json::json!({"type":"urn:ietf:params:acme:error:rejectedIdentifier","detail":"forbidden by policy"})).unwrap()),
+            });
+            assert_eq!(
+                request_status(&record, time::OffsetDateTime::now_utc()),
+                label
+            );
+            for (kind, expected) in [
+                (
+                    aster_acme_protocol::problem::ProblemKind::RateLimited,
+                    "creation deferred",
+                ),
+                (
+                    aster_acme_protocol::problem::ProblemKind::ServerInternal,
+                    "creation unconfirmed",
+                ),
+            ] {
+                let mut atypical = record.clone();
+                let failure = atypical.creation_failure.as_mut().unwrap();
+                failure.status = 400;
+                failure.problem.as_mut().unwrap().kind = kind;
+                assert_eq!(
+                    request_status(&atypical, time::OffsetDateTime::now_utc()),
+                    expected
+                );
+            }
+            let human = show(
+                std::slice::from_ref(&record),
+                crate::common::session::Format::plain(false),
+                false,
+                DetailView::InUse,
+            )
+            .unwrap();
+            assert!(human.contains(label));
+            assert!(human.contains("not observed"));
+            assert!(human.contains("forbidden by policy"));
+            assert!(human.contains("newOrder HTTP:"));
+            let json: serde_json::Value = serde_json::from_str(
+                &show(
+                    &[record],
+                    crate::common::session::Format::plain(true),
+                    false,
+                    DetailView::InUse,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(json[0]["order"].is_null());
+            assert_eq!(json[0]["creation_failure"]["status"], status);
+            assert_eq!(
+                json[0]["creation_failure"]["problem"]["detail"],
+                "forbidden by policy"
+            );
         }
     }
 }

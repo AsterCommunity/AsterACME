@@ -34,6 +34,35 @@ pub(crate) fn invalid_order(problem: Option<&Problem>) -> (String, Option<String
     (message, Some("Correct validation and start a new cert issue. This invalid order cannot be resumed; retain its files for inspection.".into()))
 }
 
+pub(super) fn authorization_failed(
+    status: &aster_acme_core::protocol::AuthorizationStatus,
+    problem: Option<&Problem>,
+) -> (String, Option<String>) {
+    let detail = problem.map_or_else(
+        || "the CA did not provide problem details".into(),
+        |problem| {
+            let mut text = format!(
+                "{} ({})",
+                problem
+                    .detail
+                    .as_deref()
+                    .unwrap_or("no explanation provided"),
+                problem.kind
+            );
+            for sub in problem.subproblems.iter().take(8) {
+                let _ = write!(
+                    text,
+                    "; {} ({})",
+                    sub.detail.as_deref().unwrap_or("no detail"),
+                    sub.kind
+                );
+            }
+            text
+        },
+    );
+    (format!("CA authorization/challenge failed ({status:?}): {detail}"), Some("Inspect cert show <CERTIFICATE> for the saved CA problem. Correct validation and start a new cert issue; this failed authorization cannot be resumed.".into()))
+}
+
 pub(super) fn diagnostic(
     status: u16,
     problem: &Problem,
@@ -88,7 +117,7 @@ fn guidance(kind: &ProblemKind, instance: Option<&str>, retry: Option<&RetryAfte
         ProblemKind::BadNonce=>"The bounded nonce retry budget was exhausted or a usable replacement nonce was missing. Keep the saved operation; do not assume the mutation succeeded.".into(),
         ProblemKind::BadPublicKey|ProblemKind::BadSignatureAlgorithm=>"Check the CA's supported account signing algorithms and key requirements; retain the saved account identity.".into(),
         ProblemKind::BadRevocationReason=>"Choose a revocation --reason accepted by this CA, or omit it for a new request. An unconfirmed prior revocation must retain its original reason.".into(),
-        ProblemKind::AlreadyReplaced=>"The predecessor already has another replacement order. Resume the saved renewal; do not silently drop replaces or create another order.".into(),
+        ProblemKind::AlreadyReplaced=>"The predecessor already has another replacement order. Inspect the saved renewal and existing replacement; do not resume a rejected newOrder, silently drop replaces or create another order.".into(),
         ProblemKind::AlreadyRevoked=>"The CA reports that this certificate has already been revoked; this does not reactivate it or revoke its account.".into(),
         ProblemKind::RateLimited=>super::retry_hint(retry),
         ProblemKind::UserActionRequired=>format!("The CA requires user action: {}",instance.unwrap_or("see your CA account portal")),
@@ -98,7 +127,7 @@ fn guidance(kind: &ProblemKind, instance: Option<&str>, retry: Option<&RetryAfte
         ProblemKind::Connection|ProblemKind::Tls=>"Check that the CA can reach the challenge endpoint with the expected protocol and TLS configuration.".into(),
         ProblemKind::InvalidContact|ProblemKind::UnsupportedContact=>"Check the account contact addresses and the CA's accepted contact URI schemes.".into(),
         ProblemKind::UnsupportedIdentifier|ProblemKind::RejectedIdentifier=>"Check the requested identifiers and this CA's issuance policy before creating another request.".into(),
-        ProblemKind::OrderNotReady=>"Inspect cert show --verify and the saved submission state; wait for authorizations before finalizing. Do not automatically replay an uncertain finalize.".into(),
+        ProblemKind::OrderNotReady=>"Query the order using cert show --verify. An explicit orderNotReady rejection permits another finalize only after the CA reports ready; an uncertain finalize must not be replayed.".into(),
         ProblemKind::Unauthorized=>"Check the bound account and its authorization for this resource. An authorization error does not prove revocation or deactivation succeeded.".into(),
         ProblemKind::ServerInternal=>"The CA reported an internal failure. Retain the saved operation and inspect it before explicitly retrying; mutations are not automatically replayed.".into(),
         ProblemKind::Compound=>"Review the CA's per-identifier subproblems and retain the saved request.".into(),

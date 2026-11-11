@@ -255,6 +255,8 @@ pub(super) async fn transact(
                 return Err(error);
             }
             match session.record().await {
+                Ok(saved) if saved.creation_failure.is_some() => progress.output.progress(MessageKind::Warning, "newOrder error response retained for inspection; no order status was observed. Inspect cert show and the CA problem before explicitly starting a new request; this response cannot be resumed as an order."),
+                Ok(saved) if saved.authorization_failure().is_some() => progress.output.progress(MessageKind::Warning, "Failed authorization retained for inspection. Correct validation and start a new cert issue; this authorization cannot be resumed."),
                 Ok(saved) if saved.finalize_rejection.is_some() => progress.output.progress(MessageKind::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection."),
                 _ => progress.output.progress(MessageKind::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id)),
             }
@@ -665,7 +667,8 @@ fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
     let method = args
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
-    let solver_config = super::validation::configuration(method, args.webroot.as_deref())?;
+    let solver_config =
+        super::validation::configuration(method, args.webroot.as_deref(), args.listen_address)?;
     let identifiers = args.domain.clone();
     let primary = identifiers
         .first()

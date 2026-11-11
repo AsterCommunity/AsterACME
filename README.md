@@ -29,7 +29,7 @@
 
 AsterACME implements ACME account operations and DNS-01/HTTP-01 certificate issuance as a Rust library and command-line application. You request a certificate; the library creates the order, tracks authorizations, submits the fixed CSR, downloads the issued chain, and persists the result. The CLI supplies terminal interaction, publication implementations and local storage.
 
-The project is under active development and has not released its ACME packages. Manual issuance and recovery, ARI renewal planning, and account-signed certificate revocation are implemented. Automated DNS providers, standalone HTTP/TLS validation, automatic renewal, daemon scheduling, and deployment hooks remain planned.
+The project is under active development and has not released its ACME packages. Manual issuance and recovery, ARI renewal planning, and account-signed certificate revocation are implemented. Automated DNS providers, TLS-ALPN validation, daemon scheduling, and deployment hooks remain planned. HTTP standalone and foreground renewal are implemented.
 
 ## Where it fits
 
@@ -39,7 +39,7 @@ The project is under active development and has not released its ACME packages. 
 - Embed the protocol service in an application with injected storage, signing, readiness, and progress interfaces.
 - Use either terminal prompts or explicit arguments and structured JSON in scripts.
 
-An unattended certificate lifecycle still needs automated publication and renewal support, which is not available yet. The filesystem adapter includes Unix mode policy and Windows inherited-permission storage. Native runtime validation is tracked separately from cross-compilation.
+Webroot and standalone support noninteractive foreground renewal; unattended scheduling and deployment are not implemented. The filesystem adapter includes Unix mode policy and Windows inherited-permission storage. Native runtime validation is tracked separately from cross-compilation.
 
 ## Design focus
 
@@ -135,18 +135,25 @@ Each new issue creates an independent managed certificate. Default names combine
 | `manual_dns` | DNS-01 | Publish TXT yourself; local DNS precheck is advisory (up to 2 seconds) |
 | `manual_http` | HTTP-01 | Serve the exact saved URL/path/content yourself, then resume |
 | `webroot` | HTTP-01 | Write/clean owned challenge files below an existing HTTP server root |
+| `standalone` | HTTP-01 | Temporarily listen for challenge requests; default `0.0.0.0:80` |
 
 ```sh
 aster-acme cert issue -d example.com -c manual_http
 aster-acme cert issue --resume example.com-xxxxxxxx --yes
 aster-acme cert issue -d example.com -c webroot --webroot /srv/www
+aster-acme cert issue -d example.com -c standalone
+aster-acme cert issue -d example.com -c standalone --listen-address 0.0.0.0:8080
 ```
 
-HTTP methods do not support wildcard identifiers. The existing server must expose port 80 and the challenge path for every SAN; this is not standalone mode. Webroot requires hard-link support and never overwrites conflicting files or deletes borrowed/changed files. The root/configuration is persisted for resume and renewal. New public files use Unix 0644/0755; existing site permissions are retained and Windows inherits permissions.
+HTTP methods do not support wildcard identifiers. For manual HTTP/webroot, the existing server must expose port 80 and the challenge path for every SAN. Webroot requires hard-link support and never overwrites conflicting files or deletes borrowed/changed files. The root/configuration is persisted for resume and renewal. New public files use Unix 0644/0755; existing site permissions are retained and Windows inherits permissions.
 
 Without an explicit new name, terminal issuance offers matching unfinished requests before creating keys. Automation stops with explicit resume commands, or use `--if-similar-order` to resume a unique full match (zero matches creates new; multiple matches fail). Matching includes the full domain set, account/CA, method/configuration and key type. Unconfirmed newOrder creation remains visible but cannot be automatically reposted without its saved Location. `--name <NEW_NAME>` explicitly starts an independent identity.
 
-Local DNS absence, resolver failure and precheck timeout warn and continue after publication confirmation. There is no DNS skip/force flag; CA validation, cancellation and overall expiry still apply. Standalone HTTP, TLS-ALPN, DNS-PERSIST and CNAME delegation remain unimplemented.
+Local DNS absence, resolver failure and precheck timeout warn and continue after publication confirmation. There is no DNS skip/force flag; CA validation, cancellation and overall expiry still apply. TLS-ALPN, DNS-PERSIST and automated CNAME delegation remain unimplemented.
+
+### HTTP standalone
+
+Standalone serves only active HTTP-01 Host/path GETs and writes no challenge files. The saved local socket is reused for resume/renew; public port 80 must reach it even when `--listen-address` uses a different port. Preserve the original Host header when forwarding. Default IPv4 binding does not advertise IPv6 support: select an IPv6 socket explicitly when needed and ensure every published A/AAAA route reaches the responder. Bind conflicts/permissions fail without replacing another server. INFO records actual listener start/stop; debug describes forwarding. Success, invalid orders, cancellation, timeouts and poll limits stop the service. Resume recreates temporary publication without another challenge acknowledgement. TLS-ALPN is not implemented.
 
 ## Certificate key algorithms
 
@@ -154,7 +161,7 @@ Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed
 
 ## Renewal planning and revocation
 
-After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, schedule renewal after two thirds of the original certificate validity. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Batch renewal uses `cert renew --all`: process each managed certificate sequentially, retain manual TXT tasks, continue after per-item failures, and emit one summary. `--all` conflicts with a certificate name. JSON emits one report; failures exit 1 and cancellation exits 130. Periodic wakeups remain future daemon work.
+After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, use two thirds of the validity as the target for certificates at least 10 days long, half for shorter certificates, then randomize within the preceding day. The window is clamped after local plan creation; if the target has passed, renewal is due immediately. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Batch renewal uses `cert renew --all`: process each managed certificate sequentially, retain manual TXT tasks, continue after per-item failures, and emit one summary. `--all` conflicts with a certificate name. JSON emits one report; failures exit 1 and cancellation exits 130. Periodic wakeups remain future daemon work.
 
 ```sh
 aster-acme cert renew example-cert

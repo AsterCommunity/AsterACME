@@ -4,7 +4,7 @@
 
 实现对照 RFC 8555 原文 §7.1.3（订单与 expires）、§7.1.4–7.1.5（授权/challenge）、§7.4（newOrder、finalize 与 CSR）、§7.4.2（PEM 链下载）、§7.5.1（通知与轮询）、§8.4（TXT 摘要），并复用 §6 的精确 URL、kid/JWS、nonce、POST-as-GET 和错误策略。证书/CSR 采用 PKCS#8、PKCS#10 和 X.509/SAN。
 
-当前实现manual_dns/manual_http/webroot。CLI负责人工/文件发布，ACME负责方法和材料及CA状态推进；DNS预检建议性限2秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+当前实现manual_dns/manual_http/webroot/standalone。CLI负责人工/文件发布，ACME负责方法和材料及CA状态推进；DNS预检建议性限2秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP 显式测试策略，不改生产默认 CA，也不安装任何测试根。
 
 ## 本地证据
 
@@ -16,7 +16,7 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI 续期计划与账户签名吊销已实现并有本地 mock/存储验收；周期调度、HTTP standalone/TLS solver、外部 CSR、自动续期和部署尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI 续期计划与账户签名吊销已实现并有本地 mock/存储验收；周期调度、TLS-ALPN solver、外部 CSR 和部署尚未实现。
 
 ## 常规验证
 
@@ -130,3 +130,17 @@ Webroot实际文件操作返回FileAction区分Published/Reused/Borrowed/Removed
 Webroot终态清理补齐：CA明确invalid时与成功签发共用cleanup_publication，只清理本次拥有且身份/内容未变的文件与所有权凭据。专项覆盖owned正常删除、borrowed保留、changed保留并维持cleanup_pending、replaced同内容不同身份保留；取消后的材料先保留，随后从loopback CA取得invalid才清理，原始418/unauthorized问题、私钥和CSR均保留。工作区377项通过；重构测试fixture后175项CLI及严格Clippy通过。没有自动清理既往用户invalid记录，也没有向公网CA发送新请求。
 
 用户在本轮确认webroot路径已实际成功签发；这是用户提供的真实环境验收记录，与本地loopback测试分开，不据此推断所有反向代理配置或所有平台均已通过。
+
+## HTTP standalone 本地验收（2026-11-12）
+
+本轮 workspace 392项测试通过（ACME88、CLI190、storage88、core14、protocol10、validation2）。新增15项覆盖standalone参数/保存配置、精确Host/path及多域名token、错误方法/请求体/绝对URI/重复Host、超长HTTP头、IPv4/IPv6、端口占用、幂等发布、所有权释放、每连接期限和64条并发上限。Loopback CA真正通过TCP获取挑战内容后才推进签发；已ack后轮询上限→关闭→重新打开申请→恢复监听，不重复newOrder/ack/finalize，续期保留socket定义。取消、总期限和明确invalid均释放端口并保留固定密钥/CSR，原始CA problem不被关闭行为替换。
+
+严格原生及Windows GNU all-targets Clippy、rustdoc、workspace依赖/TLS/生产feature策略及格式/whitespace检查通过。Hyper等组件已存在于依赖树，未新增解析包，只增加直接引用和HTTP/1 server功能；HTTP/2/full等不必要feature由策略拒绝。原生CLI build/help/参数冲突单独验证。此为本地模拟CA/真实socket证据，不代表standalone公网CA或Windows原生运行验收；此前用户报告webroot真实签发成功，与本轮standalone证据分开。
+
+## RFC 错误证据与恢复验收（2026-11-12）
+
+Workspace 399项测试通过（ACME89、CLI191、storage93、core14、protocol10、validation2）。新增错误矩阵覆盖newOrder rejectedIdentifier/unsupportedIdentifier/compound/unauthorized/userActionRequired、ARI409 alreadyReplaced、429 rateLimited、503 serverInternal、未知problem及无problem响应，保存真实HTTP/problem/扩展/子问题/绝对Retry-After；重新打开不发HTTP、不重复下单，固定key/CSR字节保持一致，Order未观测不显示invalid。渲染另验证非标准HTTP400 rateLimited/serverInternal按problem语义展示延后/未确认。
+
+Finalize回归覆盖403 badCSR原状态与重启拒绝、403 orderNotReady先POST-as-GET再ready后重交同一CSR、持续拒绝被max_polls限制；429/5xx/未知错误不解除不确定提交。授权invalid/deactivated/expired/revoked及选中challenge invalid保留problem并离线拒绝恢复，既有valid订单/授权不因旧challenge失败历史而错误阻止下载，无problem终态也保持可诊断。末次边界断言调整后重跑5项storage错误用例和CLI状态渲染用例；严格原生/Windows GNU all-targets Clippy、原生build、rustdoc、依赖/TLS/feature策略和fmt/diff检查通过。
+
+这些均为本地mock与实际存储重启验收，不是公网CA或Windows原生运行证据。不修改用户旧记录；旧记录没有保存的HTTP拒绝原因无法由本地安全还原。错误接入映射及边界见rfc-reference.md的2026-11-12核对表。

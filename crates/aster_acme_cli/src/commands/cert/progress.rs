@@ -175,10 +175,10 @@ fn protocol_messages(
     };
     let timing = match directory.renewal_info {
         Some(_) => {
-            "Renewal timing: RFC 9773 ARI when available; failed queries retain the saved plan, otherwise fallback to 2/3 of certificate validity"
+            "Renewal timing: RFC 9773 ARI when available; fallback randomizes the day before the validity threshold and uses half for certificates shorter than 10 days"
         }
         None => {
-            "Renewal timing: local fallback at 2/3 of certificate validity (no advertised RFC 9773 ARI)"
+            "Renewal timing: randomized local fallback before 2/3 validity (half for certificates shorter than 10 days; no advertised RFC 9773 ARI)"
         }
     };
     vec![
@@ -232,7 +232,7 @@ mod tests {
         });
         let messages = protocol_messages(&directory, &record);
         assert!(messages[1].contains("does not advertise"));
-        assert!(messages[2].contains("2/3"));
+        assert!(messages[2].contains("half") || messages[2].contains("2/3"));
         directory.renewal_info =
             Some(aster_acme_protocol::url::AcmeUrl::new("https://ca.example/ari").unwrap());
         let messages = protocol_messages(&directory, &record);

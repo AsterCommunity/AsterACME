@@ -15,6 +15,16 @@ impl ChallengeSolver for Checked {
     fn kind(&self) -> ChallengeKind {
         self.inner.kind()
     }
+    async fn restore(
+        &self,
+        requirements: &[ValidationRequirement],
+        execution: &ExecutionContext,
+    ) -> Result<(), IssueError> {
+        self.inner.restore(requirements, execution).await
+    }
+    async fn shutdown(&self) {
+        self.inner.shutdown().await;
+    }
     async fn ready(
         &self,
         requirements: &[ValidationRequirement],

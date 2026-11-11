@@ -14,7 +14,7 @@ cert list 默认每份托管证书一行，优先当前版本；没有 in_use �
 
 ## ARI 与回退
 
-1. 校验签发产物时，按叶子证书原始有效期保存回退计划：`renew_at = notBefore + (notAfter - notBefore) * 2 / 3`。这是本地默认策略，不是 RFC 强制值。
+1. 校验签发产物时，从叶子证书的 `notBefore`/`notAfter` 计算回退目标：有效期至少 10 天取经过 2/3，不足 10 天取经过 1/2。随后在目标前一天到目标点之间均匀随机选择 `renew_at`，下界取 `max(notBefore, target - 1 day, 本地生成计划的时刻)`，上界不含目标点。若目标已过去则安排立即续期；若计划生成时已过期则拒绝建立计划。这是本地默认策略，不是 RFC 强制值。
 2. 完整产物提交后立即尝试 ARI。directory 没有 `renewalInfo` 或叶子没有 AKI keyIdentifier 时保留回退计划。
 3. RFC 9773 §4.1 的证书标识为 `base64url(AKI keyIdentifier).base64url(raw DER serial)`；保留正整数序列号的前导零、不带 padding。请求是无签名 GET，不需要账户身份、nonce 或 JWS。
 4. 有效窗口内均匀随机选时并保存；相同窗口刷新时保留已选时间。时间已到表示需要立即续期，不把它挪到未来。RFC 将零长或倒置窗口视为无效；本地还拒绝越过证书到期时间的窗口，保留原计划作为到期保护。

@@ -41,7 +41,7 @@ flowchart TD
 | `aster_acme_cli_storage` | CLI 账户元数据、PKCS#8 文件、锁、权限和原子持久化；实现上层 dyn 契约 | 协议、core、DNS 验证及命令解析 |
 | `aster_acme_cli` | 参数与配置、适配器组装、进度显示、证书输出、部署 hook、退出码 | 协议状态机、challenge 重试与清理算法 |
 
-`aster_acme_validation` 依赖 `aster_acme` 的 solver 契约；`aster_acme` 不反向依赖 DNS 实现，由应用注入 solver。HTTP-01 和后续 TLS-ALPN-01 可先作为 `aster_acme` 内模块，存在独立依赖或复用需求后再拆分。
+`aster_acme_validation` 依赖 `aster_acme` 的 solver 契约；`aster_acme` 不反向依赖 DNS 实现，由应用注入 solver。HTTP/TLS 的协议方法和材料属于 `aster_acme`；CLI standalone 监听及未来 TLS-ALPN 握手适配器属于 CLI publication 层，不进入协议库。
 
 ## 3. Core：资源状态机与客户端流程分离
 
@@ -103,11 +103,11 @@ ACME 选择方法并推导材料 → 保存类型化 requirements → CLI solver
     → ACME 通知 CA → 轮询授权/订单 → 保存证书 → solver 清理拥有的材料
 ```
 
-库的 `ChallengeKind` 表示 DNS-01/HTTP-01/TLS-ALPN-01；`ValidationRequirement` 按方法保存 DNS TXT、HTTP URL/path/content 或 TLS 摘要，`ChallengeSolver` 是唯一实际注入的 ready/cleanup 边界。CLI 的 `ValidationMethod` 表示 manual_dns/manual_http/webroot，通过穷尽映射选择协议方法。协议 WireChallengeKind 仍无损保留未知线上扩展，不与 CLI 实现枚举混用。
+库的 `ChallengeKind` 表示 DNS-01/HTTP-01/TLS-ALPN-01；`ValidationRequirement` 按方法保存 DNS TXT、HTTP URL/path/content 或 TLS 摘要，`ChallengeSolver` 是唯一实际注入的 ready/cleanup/restore/shutdown 边界。CLI 的 `ValidationMethod` 表示 manual_dns/manual_http/webroot/standalone，通过穷尽映射选择协议方法。协议 WireChallengeKind 仍无损保留未知线上扩展，不与 CLI 实现枚举混用。
 
 ACME 持有 challenge 选择、token/key authorization 推导、过期检查、CA 通知、轮询及恢复安全规则；CLI 持有输入、方法实现选择、文件/DNS 操作和人类提示。自动 DNS provider 尚未实现，不预留第二套 prepare/wait_ready/receipt API。旧的未接线 OperationContext/PreparedChallenge/ResourceOwnership 已移除，避免两条发布流程。
 
-恢复与续期以持久化 challenge/solver_id/solver_config 为准；存储验证它们与固定定义一致，CLI 不得覆盖。webroot 配置从具名 struct 序列化，保存规范绝对路径，无 provider secret。清理仅在证书已成功保存后尝试，失败保留 cleanup_pending 并给出提示，不把已签发结果改成失败；取消/超时不提前撤掉未完成授权的材料。
+恢复与续期以持久化 challenge/solver_id/solver_config 为准；存储验证它们与固定定义一致，CLI 不得覆盖。webroot 配置从具名 struct 序列化，保存规范绝对路径，无 provider secret。持久化材料清理在证书成功保存或明确 invalid 后尝试，失败保留 cleanup_pending 并给出提示，不把已签发结果改成失败；取消/超时不提前撤掉未完成授权的材料。
 
 ### DNS-01
 
@@ -213,7 +213,7 @@ DNSO 不作为 crate 依赖。按需迁入 provider 源码，保留原 MIT 版�
 
 已实现 core 资源状态与纯动作决策，上层 DNS 标识符、challenge 类型/策略/材料及 solver trait。`ChallengeSolver` 用 async-trait 提供可注入的 dyn 接口；执行上下文包含取消令牌和单次调用 deadline，但实际 I/O 中的取消与期限执行仍由 solver 实现。恢复句柄带非零 schema 版本，未知方法与状态均保留 wire 文本但不进入执行。
 
-字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。账户网络交互及持久化恢复已实现；manual DNS-01 的完整签发链路已有 loopback CA 验收；HTTP/TLS 与自动 DNS 发布尚未实现，真实 staging 签发尚未验收。
+字符串 wire enum 的通用生成机制位于 Forge 的 `aster_forge_macros`，ACME 枚举声明留在本仓库。枚举分支用穷尽 match；输入长度、字符及 deadline 使用普通条件校验。每个 crate 均维护 README。账户网络交互及持久化恢复已实现；manual DNS-01 的完整签发链路已有 loopback CA 验收；TLS-ALPN 与自动 DNS 发布尚未实现，真实 staging 签发尚未验收。
 
 Forge 宏依赖已固定到远端 master 提交 `beb3d45faad47ca9e53e3f704e0db57c686a4882`；成员仅从根 workspace 继承，不保留本地 path 或 patch。
 
@@ -278,7 +278,7 @@ Core 纯决策返回 SendKeyChange / ReconcileKeyChange / FinalizeKeyChange。�
 
 本地名称默认主域名加随机后缀，碰撞重试；-n 显式名称已存在则拒绝。托管定义拥有固定域名集合/账户/CA/验证方式，续期版本沿用身份；名称不是操作 ID：certs/<name>/<UTC-time>-<random8> 保存多轮申请，created_at 是本地请求时间。resume <name> 唯一候选直接恢复，多候选交互仅显示主域名、时间和状态；JSON/无终端多候选要求 --operation。没有候选不创建申请，过期候选可见但不重新验证。OrderStatus 不增加 expired wire 变体；订单 expires、授权 expires、证书 notAfter 单独保存和显示。pending/valid 订单与 valid 授权按 RFC 检查必需 expires；未知状态不执行。
 
-IssueService 注入 `dyn IssueSession` 与 `dyn ChallengeSolver`，所有方法共用同一签发状态机。当前实现 manual_dns、manual_http、webroot。人工方式首次自动化调用先 yield action_required，恢复必须显式确认；DNS 预检最多2秒，缺失/解析错误/超时只警告并继续 CA，用户取消和整体期限仍停止。webroot 自动准备现有服务器的HTTP文件，不开启监听端口；HTTP 不支持通配符。
+IssueService 注入 `dyn IssueSession` 与 `dyn ChallengeSolver`，所有方法共用同一签发状态机。当前实现 manual_dns、manual_http、webroot、standalone。人工方式首次自动化调用先 yield action_required，恢复必须显式确认；DNS 预检最多2秒，缺失/解析错误/超时只警告并继续 CA，用户取消和整体期限仍停止。webroot 自动准备现有服务器的HTTP文件，不开启监听端口；HTTP 不支持通配符。
 
 newOrder 的持久化创建意图先于 POST；201 的 Location 先存，再解析 body。无 Location 的响应丢失没有标准幂等恢复路径，保留 uncertain，不自动再下单。通知 challenge 使用 `{}`，查询使用零字节 payload。SubmissionState 保存于通知/finalize 前，core 根据 Submitted + pending/ready 返回轮询动作，不能按未变化的远端状态重复提交。badNonce 是 transport 的有限重签例外，保持同一 payload。网络超时/429/5xx 本轮不自动重放；可恢复查询失败由用户显式 resume，服务端 Retry-After 保留在下一次轮询时间中。
 
@@ -374,7 +374,7 @@ Windows in_use 是完整副本目录，含 fullchain.pem/cert.pem/ca.pem/private
 
 ### HTTP webroot 发布与审查边界
 
-webroot 规范化一次根目录，对所有 SAN 使用同一根；用户必须配置现有服务器在公网80端口提供 /.well-known/acme-challenge/<token>。CLI 不查询任意CA提供的URL、不启动HTTP/TLS服务器。已有相同内容借用、不覆盖其他内容；操作ID与token摘要确定同级隐藏所有权文件，并通过独占 hard_link 发布完整已同步内容。两条路径的文件身份在重启后仍可比较，cleanup 只移除身份及内容均未变的拥有文件；用户替换/修改文件和已有内容保留。webroot文件系统必须支持hard links（同目录保证同卷），否则明确失败；已声明根及祖先目录应由部署方控制，后续AsterFs可信根接口可继续收紧路径替换边界。
+webroot 规范化一次根目录，对所有 SAN 使用同一根；用户必须配置现有服务器在公网80端口提供 /.well-known/acme-challenge/<token>。webroot 适配器不启动HTTP/TLS服务器；standalone 使用独立临时监听器。已有相同内容借用、不覆盖其他内容；操作ID与token摘要确定同级隐藏所有权文件，并通过独占 hard_link 发布完整已同步内容。两条路径的文件身份在重启后仍可比较，cleanup 只移除身份及内容均未变的拥有文件；用户替换/修改文件和已有内容保留。webroot文件系统必须支持hard links（同目录保证同卷），否则明确失败；已声明根及祖先目录应由部署方控制，后续AsterFs可信根接口可继续收紧路径替换边界。
 
 只对新创建的公开验证文件/目录设Unix 0644/0755，Windows沿用继承权限；不改变已有webroot或用户文件权限。私钥/CSR从不写入webroot。完成后仅清理拥有的验证文件/所有权文件，保留站点目录和无关内容；清理失败不撤销证书保存。
 
@@ -385,3 +385,13 @@ webroot 规范化一次根目录，对所有 SAN 使用同一根；用户必须�
 Invalid订单的恢复资格与问题提取归IssueRecord，CLI选择器只调用resume_candidate/check_recovery。服务先保存invalid资源，在缺少订单problem时只读刷新授权，不执行publication/ack/finalize；展示优先订单problem，回退challenge problem。webroot文件操作返回具名FileAction，日志以真实效果生成；发布/清理INFO带绝对路径，DEBUG带根目录/URL映射，借用或用户替换文件单独保留。
 
 Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且内容/身份未变的验证文件及所有权凭据；复用同一cleanup入口。借用、用户替换或修改的文件不删除，站点目录、订单、密钥和CSR保留；修改/权限/保存失败保留cleanup_pending，仍以原始CA problem报告终态。取消、超时、轮询上限及不确定远端结果不触发失败清理；manual实现不自动删文件或DNS记录。既往已记录invalid的申请仍拒绝签发恢复，不以该改动隐式执行用户旧数据清理。
+
+### 临时挑战服务生命周期
+
+HTTP standalone位于CLI validation/standalone，复用现有依赖树的Tokio、Hyper HTTP/1、hyper-util TokioIo和http-body-util；不引入Web框架，不自行解析HTTP。共享validation/listener拥有TCP bind、64条并发上限、每连接5秒期限、操作取消/deadline及连接任务回收；handler接收TcpStream，后续TLS-ALPN可在同一边界做rustls握手，当前未实现TLS响应。
+
+ChallengeSolver::restore在恢复pending订单的已保存pending授权材料时调用；默认持久化/人工适配器无动作，临时适配器重新发布，包括已ack的processing挑战。它不提交任何CA请求。IssueService::run在每个返回路径await shutdown，shutdown独立于已到期的operation context，必须有界；持久化cleanup与关闭临时服务是不同职责。宿主直接丢弃run future时应关闭或丢弃solver；CLI在本次调用结束释放所有权，Drop中止任务兜底。成功/invalid清理后重复shutdown幂等；取消和不确定结果保留检查点并关闭临时监听。ready/valid/processing订单不重启不再需要的响应服务。
+
+standalone配置保存单个SocketAddr，默认0.0.0.0:80，支持显式IPv4/IPv6和非零自定义端口，不提供管理员自动提权或业务服务器停启。只响应当前材料的规范Host/path GET；拒绝请求体、代理绝对URI、额外query、未知域名/路径和其他方法；HTTP头缓冲上限8KiB、最多32头，每连接一个请求。响应只包含key authorization，不读取文件或私钥。转发端须保留Host，公网80入口和A/AAAA路由由部署方负责。
+
+RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。

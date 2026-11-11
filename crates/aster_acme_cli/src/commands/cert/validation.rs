@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
 mod http;
+mod listener;
 mod manual;
+mod standalone;
 mod webroot;
 
 /// Stable user-facing implementation IDs; protocol method choices remain in ACME.
@@ -29,12 +31,16 @@ pub(crate) enum ValidationMethod {
     #[value(name = "webroot")]
     #[serde(rename = "webroot")]
     Webroot,
+    /// Temporarily serve HTTP-01 challenges without an existing web server.
+    #[value(name = "standalone")]
+    #[serde(rename = "standalone")]
+    Standalone,
 }
 impl ValidationMethod {
     pub(super) const fn kind(self) -> ChallengeKind {
         match self {
             Self::ManualDns => ChallengeKind::Dns01,
-            Self::ManualHttp | Self::Webroot => ChallengeKind::Http01,
+            Self::ManualHttp | Self::Webroot | Self::Standalone => ChallengeKind::Http01,
         }
     }
     pub(super) const fn id(self) -> &'static str {
@@ -42,6 +48,7 @@ impl ValidationMethod {
             Self::ManualDns => "manual_dns",
             Self::ManualHttp => "manual_http",
             Self::Webroot => "webroot",
+            Self::Standalone => "standalone",
         }
     }
     pub(super) fn from_record(record: &IssueRecord) -> Result<Self, IssueError> {
@@ -67,13 +74,40 @@ pub(super) struct WebrootConfig {
 #[serde(deny_unknown_fields)]
 struct ManualConfig {}
 
+/// The local endpoint is immutable across resume/renew. Public HTTP-01 still uses
+/// port 80; nonstandard local ports require explicit forwarding by the operator.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StandaloneConfig {
+    pub(super) listen_address: std::net::SocketAddr,
+}
+
 /// Resolve paths once before the request is saved. Resume/renew never re-resolve
 /// a different cwd or replace the persisted implementation configuration.
 pub(super) fn configuration(
     method: ValidationMethod,
     root: Option<&std::path::Path>,
+    listen_address: Option<std::net::SocketAddr>,
 ) -> Result<serde_json::Value, IssueError> {
+    if method != ValidationMethod::Standalone && listen_address.is_some() {
+        return Err(IssueError::InvalidInput(
+            "--listen-address is only valid with -c standalone",
+        ));
+    }
     match (method, root) {
+        (ValidationMethod::Standalone, None) => {
+            let address =
+                listen_address.unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 80)));
+            if address.port() == 0 {
+                return Err(IssueError::InvalidInput(
+                    "standalone listen port must be nonzero",
+                ));
+            }
+            serde_json::to_value(StandaloneConfig {
+                listen_address: address,
+            })
+            .map_err(|_| IssueError::InvalidInput("cannot encode standalone configuration"))
+        }
         (ValidationMethod::Webroot, Some(path)) => {
             let root = path.canonicalize().map_err(|_| {
                 IssueError::InvalidInput("webroot must be an existing readable directory")
@@ -92,9 +126,14 @@ pub(super) fn configuration(
                 IssueError::InvalidInput("cannot encode manual validation configuration")
             })
         }
-        (ValidationMethod::ManualDns | ValidationMethod::ManualHttp, Some(_)) => Err(
-            IssueError::InvalidInput("--webroot is only valid with -c webroot"),
-        ),
+        (
+            ValidationMethod::ManualDns
+            | ValidationMethod::ManualHttp
+            | ValidationMethod::Standalone,
+            Some(_),
+        ) => Err(IssueError::InvalidInput(
+            "--webroot is only valid with -c webroot",
+        )),
     }
 }
 
@@ -105,6 +144,19 @@ pub(super) fn adapter(
     progress: Arc<Progress>,
 ) -> Result<Box<dyn ChallengeSolver>, IssueError> {
     match ValidationMethod::from_record(record)? {
+        ValidationMethod::Standalone => {
+            let config: StandaloneConfig = serde_json::from_value(record.solver_config.clone())
+                .map_err(|_| IssueError::InvalidInput("invalid saved standalone configuration"))?;
+            if config.listen_address.port() == 0 {
+                return Err(IssueError::InvalidInput(
+                    "saved standalone listen port must be nonzero",
+                ));
+            }
+            Ok(Box::new(standalone::Standalone::new(
+                config.listen_address,
+                progress,
+            )))
+        }
         ValidationMethod::ManualDns | ValidationMethod::ManualHttp => {
             let _: ManualConfig =
                 serde_json::from_value(record.solver_config.clone()).map_err(|_| {

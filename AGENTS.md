@@ -134,3 +134,7 @@ git diff HEAD --check
 
 
 - HTTP-01的manual_http/webroot复用IssueService，同一ChallengeSolver边界ready/cleanup，无第二套协议状态机。Webroot通过独占hard-link及同级操作ID凭据证明文件所有权；不覆盖用户内容、不删借用/修改文件，取消保留材料；公开验证文件仅新建时Unix0644/0755，平台差异仍归state_file。方法和实现配置持久化，不接受resume/renew覆盖。--if-similar-order唯一匹配恢复、多个报错、零匹配新建；相似未完成判断归ACME，未知创建必须提示但不能自动重发newOrder。
+
+- HTTP standalone使用CLI validation/standalone + listener，复用Tokio/Hyper HTTP/1，不引入Web框架或手写HTTP解析。--listen-address只用于新申请、默认0.0.0.0:80并持久化；恢复/续期重建相同socket。公网80及A/AAAA转发由部署方负责，不能静默提权/停其他服务器。ChallengeSolver::restore重新提供已ack授权材料但不重发通知；IssueService所有返回路径shutdown临时服务，cleanup仍只处理终态材料。listener的TCP任务监督、连接上限及取消期限留给未来TLS-ALPN复用，TLS响应未实现。
+
+- RFC失败证据归IssueRecord：newOrder完整错误存creation_failure，不将4xx伪造成Order invalid；无URL不恢复或重放。finalize badCSR保留真实HTTP状态，orderNotReady只在明确4xx后解除提交标记、先查Order再按ready推进。授权终态/选中challenge invalid保留problem、不再ack/finalize或推荐resume；已valid订单下载不受旧授权历史影响。错误映射表见docs/rfc-reference.md，24个标准problem均有具名解析和诊断，不按每种type虚构资源状态。

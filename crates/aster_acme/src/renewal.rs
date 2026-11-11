@@ -13,13 +13,15 @@ use std::{sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use x509_parser::{extensions::ParsedExtension, pem::parse_x509_pem, prelude::FromDer as _};
 
+use crate::renewal_calculation::fallback_renew_at;
+
 /// Provenance of a saved renewal time, independent of last-query success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RenewalSource {
     /// Uniformly sampled inside the CA's suggested window.
     Ari,
-    /// Two thirds of the certificate's original validity interval have elapsed.
+    /// Local randomized fallback derived from the certificate's validity interval.
     Fallback,
 }
 
@@ -71,12 +73,18 @@ impl RenewalPlan {
                 .map_err(|_| invalid())?;
         let not_after = OffsetDateTime::from_unix_timestamp(cert.validity().not_after.timestamp())
             .map_err(|_| invalid())?;
-        Self::fallback(not_before, not_after, certificate_id)
+        Self::fallback(
+            not_before,
+            not_after,
+            OffsetDateTime::now_utc(),
+            certificate_id,
+        )
     }
 
     fn fallback(
         not_before: OffsetDateTime,
         not_after: OffsetDateTime,
+        issued_at: OffsetDateTime,
         certificate_id: Option<String>,
     ) -> Result<Self, IssueError> {
         if not_after <= not_before {
@@ -88,7 +96,7 @@ impl RenewalPlan {
             certificate_id,
             not_before,
             not_after,
-            renew_at: not_before + (not_after - not_before) * 2 / 3,
+            renew_at: fallback_renew_at(not_before, not_after, issued_at)?,
             source: RenewalSource::Fallback,
             suggested_window: None,
             explanation_url: None,

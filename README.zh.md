@@ -29,7 +29,7 @@
 
 AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与 DNS-01/HTTP-01 证书签发。用户声明证书需求，库负责创建订单、跟踪授权、提交固定 CSR、下载证书链并持久化结果；CLI 提供终端交互和本地存储。
 
-项目正在开发，ACME 包尚未正式发布。手动签发与恢复、ARI 续期计划及账户签名证书吊销已经实现；自动 DNS provider、HTTP/TLS standalone 验证、自动续期、daemon 和部署 hook 仍是计划能力。
+项目正在开发，ACME 包尚未正式发布。手动签发与恢复、ARI 续期计划及账户签名证书吊销已经实现；HTTP standalone 和前台续期已实现；自动 DNS provider、TLS-ALPN 验证、daemon 和部署 hook 仍是计划能力。
 
 ## 适用场景
 
@@ -39,7 +39,7 @@ AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与 DNS-01/HTTP-
 - 将协议服务嵌入应用，注入存储、签名、就绪检查和进度接口。
 - 使用终端提示，或通过显式参数与结构化 JSON 编写脚本。
 
-无人值守的完整证书生命周期仍需要自动发布与续期，目前尚未提供。存储适配器包含 Unix 权限策略及 Windows 继承权限策略；平台运行证据分别记录，不以交叉编译冒充 Windows 验收。
+Webroot和standalone支持非交互前台续期；无人值守调度与部署尚未实现。存储适配器包含 Unix 权限策略及 Windows 继承权限策略；平台运行证据分别记录，不以交叉编译冒充 Windows 验收。
 
 ## 设计重点
 
@@ -135,18 +135,25 @@ aster-acme cert show example-cert --verify --data-dir ./data
 | `manual_dns` | DNS-01 | 自行添加 TXT；本地 DNS 预检最多2秒且只作建议 |
 | `manual_http` | HTTP-01 | 按保存的 URL、文件路径及内容部署，随后恢复 |
 | `webroot` | HTTP-01 | 在现有 HTTP 服务器的网站根目录发布并清理拥有的文件 |
+| `standalone` | HTTP-01 | 临时监听挑战请求，默认 `0.0.0.0:80` |
 
 ```sh
 aster-acme cert issue -d example.com -c manual_http
 aster-acme cert issue --resume example.com-xxxxxxxx --yes
 aster-acme cert issue -d example.com -c webroot --webroot /srv/www
+aster-acme cert issue -d example.com -c standalone
+aster-acme cert issue -d example.com -c standalone --listen-address 0.0.0.0:8080
 ```
 
-HTTP 不支持通配符；现有服务器须为全部 SAN 在公网80端口提供验证路径，不是程序自行监听。webroot 需要同目录 hard-link 支持；不覆盖已有不同内容，不删除借用或被用户修改/替换的文件。规范绝对路径及配置持久化，恢复/续期沿用。只为新文件/目录设置Unix 0644/0755，已有站点权限不变，Windows沿用继承权限。
+HTTP 不支持通配符；manual_http/webroot 须通过现有服务器为全部 SAN 在公网80端口提供验证路径。webroot 需要同目录 hard-link 支持；不覆盖已有不同内容，不删除借用或被用户修改/替换的文件。规范绝对路径及配置持久化，恢复/续期沿用。只为新文件/目录设置Unix 0644/0755，已有站点权限不变，Windows沿用继承权限。
 
 未显式设置新名称时，终端会在生成密钥前提示是否恢复完整匹配的未完成申请。脚本默认停止并给出恢复命令；`--if-similar-order` 在唯一匹配时恢复、零匹配时新建、多个匹配时报错。匹配完整域名集合、账户/CA、方法/配置及密钥类型。newOrder结果未确认的记录也会提示，但没有保存Location就不会自动重发；`--name <NEW_NAME>` 明确创建独立身份。
 
-删除DNS跳过/force参数。DNS预检不代替CA决定；用户取消、总期限和CA过期照常生效。HTTP standalone、TLS-ALPN、DNS-PERSIST及CNAME委托仍未实现。
+删除DNS跳过/force参数。DNS预检不代替CA决定；用户取消、总期限和CA过期照常生效。TLS-ALPN、DNS-PERSIST及自动CNAME委托仍未实现。
+
+### HTTP standalone
+
+Standalone只响应当前HTTP-01挑战对应的Host/path GET，不写验证文件。本地监听地址持久化，恢复/续期沿用；即使用`--listen-address`更换本地端口，公网入口仍须是80，转发须保留原Host。默认仅IPv4；需要时显式选择IPv6地址，并确保所有已公布A/AAAA路由都能到达响应服务。端口占用/权限不足明确失败，不替换其他服务器。INFO显示实际监听启动/停止，DEBUG说明转发要求。成功、invalid、取消、超时、轮询上限均停止服务，恢复时重新提供原材料且不重复通知CA。TLS-ALPN尚未实现。
 
 ## 证书密钥算法
 
@@ -154,7 +161,7 @@ HTTP 不支持通配符；现有服务器须为全部 SAN 在公网80端口提�
 
 ## 续期计划与吊销
 
-签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不支持或首次获取失败时，默认在证书总有效期经过三分之二时续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。cert renew 已支持单次到期续期（--now 提前），批量使用 cert renew --all，按托管名称顺序执行，保留人工 TXT 待办，单项失败继续并输出一次汇总。--all 与名称互斥；JSON 只输出一个报告，存在失败退出1，取消退出130。周期唤醒留给后续 daemon。
+签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不可用时，有效期至少 10 天以经过三分之二为目标，较短证书以经过一半为目标，再在目标前一天内随机选择。窗口下界不会早于本地生成计划的时刻；若目标已过，则安排立即续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。cert renew 已支持单次到期续期（--now 提前），批量使用 cert renew --all，按托管名称顺序执行，保留人工 TXT 待办，单项失败继续并输出一次汇总。--all 与名称互斥；JSON 只输出一个报告，存在失败退出1，取消退出130。周期唤醒留给后续 daemon。
 
 ```sh
 aster-acme cert renew example-cert

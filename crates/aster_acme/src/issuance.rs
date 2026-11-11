@@ -248,6 +248,69 @@ pub enum PollWaitSource {
     LocalInterval,
 }
 
+/// Durable HTTP error evidence, independent of any ACME resource status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestFailure {
+    /// Actual HTTP status, independent of the optional problem body.
+    pub status: u16,
+    /// Structured RFC 8555 problem, including unknown extensions and subproblems.
+    pub problem: Option<aster_acme_protocol::problem::Problem>,
+    /// Absolute retry deadline computed when the response was received.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub retry_at: Option<time::OffsetDateTime>,
+}
+
+impl RequestFailure {
+    /// Retain complete HTTP failures only; dropped/malformed responses remain uncertain.
+    pub(crate) fn from_error(error: &IssueError) -> Option<Self> {
+        use crate::transport::{RetryAfter, TransportError};
+        let (status, problem, retry) = match error {
+            IssueError::Transport(TransportError::Problem {
+                status,
+                problem,
+                retry_after,
+            }) => (*status, Some(*problem.clone()), retry_after),
+            IssueError::Transport(TransportError::HttpStatus {
+                status,
+                retry_after,
+            }) => (*status, None, retry_after),
+            _ => return None,
+        };
+        let retry_at = retry.as_ref().and_then(|retry| match retry {
+            RetryAfter::Delay(delay) => time::Duration::try_from(*delay)
+                .ok()
+                .and_then(|delay| time::OffsetDateTime::now_utc().checked_add(delay)),
+            RetryAfter::At(at) => Some(time::OffsetDateTime::from(*at)),
+        });
+        Some(Self {
+            status,
+            problem,
+            retry_at,
+        })
+    }
+
+    /// Recreate the original response diagnostic without inventing an HTTP status.
+    #[must_use]
+    pub fn error(&self) -> IssueError {
+        let retry_after = self
+            .retry_at
+            .map(|at| crate::transport::RetryAfter::At(at.into()));
+        match &self.problem {
+            Some(problem) => crate::transport::TransportError::Problem {
+                status: self.status,
+                problem: Box::new(problem.clone()),
+                retry_after,
+            }
+            .into(),
+            None => crate::transport::TransportError::HttpStatus {
+                status: self.status,
+                retry_after,
+            }
+            .into(),
+        }
+    }
+}
+
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueRecord {
@@ -288,6 +351,8 @@ pub struct IssueRecord {
     pub phase: IssuancePhase,
     /// Saved before newOrder; missing URL afterwards is an uncertain creation.
     pub creation_submitted: bool,
+    /// A complete newOrder error response; no Order status is inferred from it.
+    pub creation_failure: Option<RequestFailure>,
     /// Actual RFC 9773 replaces value selected before newOrder; a refreshed directory
     /// cannot change the submitted request identity during recovery.
     #[serde(default)]
@@ -303,7 +368,7 @@ pub struct IssueRecord {
     /// Explicit CA rejection of this fixed CSR. Later changes to a reused order
     /// cannot turn this generation into a different certificate/key identity.
     #[serde(default)]
-    pub finalize_rejection: Option<aster_acme_protocol::problem::Problem>,
+    pub finalize_rejection: Option<RequestFailure>,
     /// Earliest next query, respecting CA Retry-After across process restart.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub next_poll_at: Option<time::OffsetDateTime>,
@@ -349,6 +414,8 @@ impl IssueRecord {
         now: time::OffsetDateTime,
     ) -> bool {
         self.unfinished()
+            && self.creation_failure.is_none()
+            && self.authorization_failure().is_none()
             && self.finalize_rejection.is_none()
             && !self.expired(now)
             && matches!(
@@ -392,12 +459,10 @@ impl IssueRecord {
     /// Reports rejected fixed CSR, unknown creation outcome or saved order expiry.
     pub fn check_recovery(&self, now: time::OffsetDateTime) -> Result<(), IssueError> {
         if let Some(problem) = &self.finalize_rejection {
-            return Err(crate::transport::TransportError::Problem {
-                status: 400,
-                problem: Box::new(problem.clone()),
-                retry_after: None,
-            }
-            .into());
+            return Err(problem.error());
+        }
+        if let Some(failure) = &self.creation_failure {
+            return Err(failure.error());
         }
         if self.order.as_ref().is_some_and(|order| {
             matches!(
@@ -412,6 +477,9 @@ impl IssueRecord {
         if self.creation_submitted && self.order_url.is_none() {
             return Err(IssueError::CreationUncertain);
         }
+        if let Some(error) = self.authorization_failure() {
+            return Err(error);
+        }
         if self.expired(now) {
             return Err(IssueError::Expired);
         }
@@ -422,6 +490,9 @@ impl IssueRecord {
     #[must_use]
     pub fn resume_candidate(&self) -> bool {
         self.unfinished()
+            && self.creation_failure.is_none()
+            && self.finalize_rejection.is_none()
+            && self.authorization_failure().is_none()
             && !self.order.as_ref().is_some_and(|order| {
                 matches!(
                     order.status,
@@ -433,15 +504,76 @@ impl IssueRecord {
     /// Prefer the order explanation; fall back to an authorization's challenge problem.
     #[must_use]
     pub fn failure_problem(&self) -> Option<&aster_acme_protocol::problem::Problem> {
-        self.order
+        self.creation_failure
             .as_ref()
-            .and_then(|order| order.error.as_ref())
+            .and_then(|failure| failure.problem.as_ref())
             .or_else(|| {
-                self.authorizations
-                    .iter()
-                    .flat_map(|auth| &auth.resource.challenges)
-                    .find_map(|challenge| challenge.error.as_ref())
+                self.finalize_rejection
+                    .as_ref()
+                    .and_then(|failure| failure.problem.as_ref())
             })
+            .or_else(|| {
+                self.order
+                    .as_ref()
+                    .and_then(|order| order.error.as_ref())
+                    .or_else(|| {
+                        self.authorizations
+                            .iter()
+                            .flat_map(|auth| &auth.resource.challenges)
+                            .find_map(|challenge| challenge.error.as_ref())
+                    })
+            })
+    }
+
+    /// Terminal authorization/challenge observations are distinct from order invalid.
+    /// An already-valid order may still be downloaded despite expired authorization history.
+    #[must_use]
+    pub fn authorization_failure(&self) -> Option<IssueError> {
+        use aster_acme_core::protocol::{AuthorizationStatus, ChallengeStatus, OrderStatus};
+        if self
+            .order
+            .as_ref()
+            .is_some_and(|order| matches!(order.status, OrderStatus::Valid))
+        {
+            return None;
+        }
+        for auth in &self.authorizations {
+            let selected = auth.resource.challenges.iter().find(|challenge| {
+                auth.challenge_url.as_ref().map_or_else(
+                    || crate::challenge::known_method(&challenge.kind) == Some(self.challenge),
+                    |url| &challenge.url == url,
+                )
+            });
+            let failed = match auth.resource.status {
+                AuthorizationStatus::Invalid
+                | AuthorizationStatus::Deactivated
+                | AuthorizationStatus::Expired
+                | AuthorizationStatus::Revoked => true,
+                AuthorizationStatus::Pending
+                | AuthorizationStatus::Valid
+                | AuthorizationStatus::Unknown(_) => false,
+            };
+            if failed
+                || (matches!(auth.resource.status, AuthorizationStatus::Pending)
+                    && selected.is_some_and(|challenge| {
+                        matches!(challenge.status, ChallengeStatus::Invalid)
+                    }))
+            {
+                return Some(IssueError::AuthorizationFailed {
+                    status: auth.resource.status.clone(),
+                    problem: selected
+                        .and_then(|c| c.error.clone())
+                        .or_else(|| {
+                            auth.resource
+                                .challenges
+                                .iter()
+                                .find_map(|c| c.error.clone())
+                        })
+                        .map(Box::new),
+                });
+            }
+        }
+        None
     }
 
     /// Pending operations can be selected for recovery; expiry is reported separately.
@@ -534,9 +666,20 @@ pub trait IssueStore: Send + Sync {
 /// Protocol/service failures without private key material.
 #[derive(Debug, Error)]
 pub enum IssueError {
+    /// Authorization or selected challenge reached a terminal failure independently of order status.
+    #[error("CA authorization/challenge failed (authorization status: {status:?})")]
+    AuthorizationFailed {
+        /// Actual observed authorization status, never synthesized as order invalid.
+        status: aster_acme_core::protocol::AuthorizationStatus,
+        /// The CA's selected challenge explanation when provided.
+        problem: Option<Box<aster_acme_protocol::problem::Problem>>,
+    },
     /// Input invariant or CA resource mismatch.
     #[error("{0}")]
     InvalidInput(&'static str),
+    /// Sanitized application publication failure; never include credentials or keys.
+    #[error("validation publication failed: {0}")]
+    Publication(String),
     /// A managed certificate already owns this name; only automatic names may be retried.
     #[error("a managed certificate named '{0}' already exists")]
     NameAlreadyExists(CertificateName),
@@ -678,5 +821,13 @@ mod tests {
         assert!(request.validate().is_err());
         request.identifiers.clear();
         assert!(request.validate().is_err());
+    }
+    #[test]
+    fn only_complete_error_responses_become_durable_failure_evidence() {
+        assert!(RequestFailure::from_error(&IssueError::Interrupted).is_none());
+        assert!(RequestFailure::from_error(&IssueError::CreationUncertain).is_none());
+        assert!(
+            RequestFailure::from_error(&IssueError::InvalidInput("malformed response")).is_none()
+        );
     }
 }

@@ -384,6 +384,7 @@ impl CliIssueStore {
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
                 creation_submitted: false,
+                creation_failure: None,
                 submitted_replaces: None,
                 order_url: None,
                 order: None,

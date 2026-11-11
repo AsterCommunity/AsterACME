@@ -104,6 +104,8 @@ impl IssueService {
     }
 
     /// Drive one saved issuance using explicit core actions and bounded cancellation-aware I/O.
+    /// Await solver shutdown on every return; hosts abandoning this future must
+    /// explicitly shut down or drop their solver to release temporary publication.
     ///
     /// # Errors
     /// Never automatically recreates an uncertain order or resubmits an uncertain finalize.
@@ -113,10 +115,24 @@ impl IssueService {
         solver: &dyn ChallengeSolver,
         execution: &IssueExecution,
     ) -> Result<IssueOutcome, IssueError> {
+        let result = self.run_active(session, solver, execution).await;
+        // Shutdown has its own bounded local lifecycle: the operation may already
+        // be cancelled/expired, but its listener must not survive this invocation.
+        solver.shutdown().await;
+        result
+    }
+
+    async fn run_active(
+        &self,
+        session: &mut dyn IssueSession,
+        solver: &dyn ChallengeSolver,
+        execution: &IssueExecution,
+    ) -> Result<IssueOutcome, IssueError> {
         let mut record = session.record().await?;
         tracing::debug!(operation_id = %record.operation_id, phase = ?record.phase, creation_submitted = record.creation_submitted, has_order_url = record.order_url.is_some(), finalize = ?record.finalize_submitted, method = record.challenge.name(), "Loaded issuance checkpoint");
 
         self.check_execution(&record, solver, execution)?;
+        self.restore_publication(&record, solver, execution).await?;
         let mut last_order_status = None;
         let mut polls = 0_u32;
         if matches!(record.phase, IssuancePhase::Completed) {
@@ -209,6 +225,31 @@ impl IssueService {
                 }
             }
         }
+    }
+
+    /// Restart ephemeral publication before the first resumed poll. Ready/valid
+    /// orders no longer need a listener, and acknowledged challenges are not acked again.
+    async fn restore_publication(
+        &self,
+        record: &IssueRecord,
+        solver: &dyn ChallengeSolver,
+        execution: &IssueExecution,
+    ) -> Result<(), IssueError> {
+        let pending = record
+            .authorizations
+            .iter()
+            .filter(|auth| matches!(auth.resource.status, AuthorizationStatus::Pending))
+            .filter_map(|auth| auth.validation.clone())
+            .collect::<Vec<_>>();
+        if !pending.is_empty()
+            && record
+                .order
+                .as_ref()
+                .is_some_and(|order| matches!(order.status, OrderStatus::Pending))
+        {
+            bounded(execution, solver.restore(&pending, &execution.context)).await?;
+        }
+        Ok(())
     }
 
     /// Enrich a terminal resource without executing publication or mutations.
@@ -459,7 +500,13 @@ impl IssueService {
         let response = match bounded(execution, self.post(endpoint, &body)).await {
             Ok(response) => response,
             Err(error) => {
-                tracing::debug!(operation_id = %record.operation_id, elapsed_ms = started.elapsed().as_millis(), "newOrder ended before a usable response; saved intent remains unconfirmed");
+                if let Some(failure) = super::RequestFailure::from_error(&error) {
+                    record.creation_failure = Some(failure);
+                    session.save(record).await?;
+                    tracing::debug!(operation_id = %record.operation_id, elapsed_ms = started.elapsed().as_millis(), "newOrder error response persisted; no order status inferred");
+                } else {
+                    tracing::debug!(operation_id = %record.operation_id, elapsed_ms = started.elapsed().as_millis(), "newOrder ended before a usable response; saved intent remains unconfirmed");
+                }
                 return Err(error);
             }
         };
@@ -570,6 +617,11 @@ impl IssueService {
         }
         // Retain expiry/failure observations even when preparation cannot continue.
         session.save(record).await?;
+        if let Some(error) = record.authorization_failure() {
+            self.cleanup_publication(session, record, solver, execution)
+                .await;
+            return Err(error);
+        }
         let outstanding = prepare_authorizations(record)?;
         session.save(record).await?;
         if !outstanding.is_empty() {
@@ -585,6 +637,11 @@ impl IssueService {
             });
         }
         self.acknowledge(session, record, execution).await?;
+        if let Some(error) = record.authorization_failure() {
+            self.cleanup_publication(session, record, solver, execution)
+                .await;
+            return Err(error);
+        }
         Ok(None)
     }
 
@@ -698,52 +755,58 @@ impl IssueService {
         }
         self.observe(&IssueEvent::Finalizing);
         let response = match bounded(execution, self.post(&url, &body)).await {
-            Err(IssueError::Transport(crate::transport::TransportError::Problem {
-                status: 400,
-                problem,
-                retry_after,
-            })) => {
-                match &problem.kind {
-                    ProblemKind::BadCsr => {
-                        record.finalize_rejection = Some(*problem.clone());
-                        session.save(record).await?;
-                    }
-                    // Other problem types do not establish permanent rejection of
-                    // this immutable CSR; preserve their existing transport policy.
-                    ProblemKind::AlreadyReplaced
-                    | ProblemKind::AccountDoesNotExist
-                    | ProblemKind::AlreadyRevoked
-                    | ProblemKind::BadNonce
-                    | ProblemKind::BadPublicKey
-                    | ProblemKind::BadRevocationReason
-                    | ProblemKind::BadSignatureAlgorithm
-                    | ProblemKind::Caa
-                    | ProblemKind::Compound
-                    | ProblemKind::Connection
-                    | ProblemKind::Dns
-                    | ProblemKind::ExternalAccountRequired
-                    | ProblemKind::IncorrectResponse
-                    | ProblemKind::InvalidContact
-                    | ProblemKind::Malformed
-                    | ProblemKind::OrderNotReady
-                    | ProblemKind::RateLimited
-                    | ProblemKind::RejectedIdentifier
-                    | ProblemKind::ServerInternal
-                    | ProblemKind::Tls
-                    | ProblemKind::Unauthorized
-                    | ProblemKind::UnsupportedContact
-                    | ProblemKind::UnsupportedIdentifier
-                    | ProblemKind::UserActionRequired
-                    | ProblemKind::Unknown(_) => {}
-                }
-                return Err(crate::transport::TransportError::Problem {
-                    status: 400,
+            Err(error) => {
+                if let IssueError::Transport(crate::transport::TransportError::Problem {
+                    status,
                     problem,
                     retry_after,
+                }) = &error
+                    && (400..500).contains(status)
+                {
+                    match problem.kind {
+                        ProblemKind::BadCsr => {
+                            record.finalize_rejection = super::RequestFailure::from_error(&error);
+                            session.save(record).await?;
+                        }
+                        ProblemKind::OrderNotReady => {
+                            // RFC 8555 §7.4: this is an explicit refusal, not
+                            // an uncertain submission. Query the order next;
+                            // only an observed ready state permits another finalize.
+                            record.finalize_submitted = SubmissionState::NotSubmitted;
+                            record.phase = IssuancePhase::AwaitingOrderReady;
+                            schedule_retry(record, retry_after.as_ref(), execution.poll_interval);
+                            session.save(record).await?;
+                            return Ok(());
+                        }
+                        ProblemKind::AlreadyReplaced
+                        | ProblemKind::AccountDoesNotExist
+                        | ProblemKind::AlreadyRevoked
+                        | ProblemKind::BadNonce
+                        | ProblemKind::BadPublicKey
+                        | ProblemKind::BadRevocationReason
+                        | ProblemKind::BadSignatureAlgorithm
+                        | ProblemKind::Caa
+                        | ProblemKind::Compound
+                        | ProblemKind::Connection
+                        | ProblemKind::Dns
+                        | ProblemKind::ExternalAccountRequired
+                        | ProblemKind::IncorrectResponse
+                        | ProblemKind::InvalidContact
+                        | ProblemKind::Malformed
+                        | ProblemKind::RateLimited
+                        | ProblemKind::RejectedIdentifier
+                        | ProblemKind::ServerInternal
+                        | ProblemKind::Tls
+                        | ProblemKind::Unauthorized
+                        | ProblemKind::UnsupportedContact
+                        | ProblemKind::UnsupportedIdentifier
+                        | ProblemKind::UserActionRequired
+                        | ProblemKind::Unknown(_) => {}
+                    }
                 }
-                .into());
+                return Err(error);
             }
-            result => result?,
+            Ok(response) => response,
         };
         if response.status != reqwest::StatusCode::OK {
             return Err(IssueError::InvalidInput("finalize must return 200"));
@@ -835,8 +898,16 @@ fn parse_order(response: &AcmeResponse, record: &IssueRecord) -> Result<OrderObj
 }
 
 fn schedule(record: &mut IssueRecord, response: &AcmeResponse, fallback: Duration) {
-    let now = time::OffsetDateTime::now_utc();
     let retry = crate::transport::retry_after(&response.headers);
+    schedule_retry(record, retry.as_ref(), fallback);
+}
+
+fn schedule_retry(
+    record: &mut IssueRecord,
+    retry: Option<&crate::transport::RetryAfter>,
+    fallback: Duration,
+) {
+    let now = time::OffsetDateTime::now_utc();
     tracing::debug!(retry_after = ?retry, local_interval_ms = fallback.as_millis(), "Scheduling next CA poll");
     let source = if retry.is_some() {
         super::PollWaitSource::RetryAfter
@@ -845,7 +916,7 @@ fn schedule(record: &mut IssueRecord, response: &AcmeResponse, fallback: Duratio
     };
     let delay = retry
         .map_or(fallback, |hint| match hint {
-            crate::transport::RetryAfter::Delay(delay) => delay,
+            crate::transport::RetryAfter::Delay(delay) => *delay,
             crate::transport::RetryAfter::At(at) => at
                 .duration_since(std::time::SystemTime::now())
                 .unwrap_or(Duration::ZERO),
@@ -959,9 +1030,10 @@ fn prepare_authorizations(
                     }
                     ChallengeStatus::Processing | ChallengeStatus::Valid => {}
                     ChallengeStatus::Invalid => {
-                        return Err(IssueError::InvalidInput(
-                            "CA rejected the selected challenge",
-                        ));
+                        return Err(IssueError::AuthorizationFailed {
+                            status: auth.resource.status.clone(),
+                            problem: challenge.error.clone().map(Box::new),
+                        });
                     }
                     ChallengeStatus::Unknown(_) => {
                         return Err(IssueError::InvalidInput("unsupported challenge state"));

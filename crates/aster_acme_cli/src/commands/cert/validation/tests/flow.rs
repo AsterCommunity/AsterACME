@@ -94,6 +94,12 @@ impl Fixture {
                 } else {
                     None
                 },
+                if implementation == ValidationMethod::Standalone {
+                    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                    Some(reservation.local_addr().unwrap())
+                } else {
+                    None
+                },
             )
             .unwrap(),
         };
@@ -115,6 +121,7 @@ impl Fixture {
         fixture.mount().await;
         fixture
     }
+
     async fn mount(&self) {
         let stage = Arc::new(AtomicUsize::new(0));
         let base = self.server.uri();
@@ -204,6 +211,38 @@ impl Fixture {
             .mount(&self.server)
             .await;
     }
+
+    async fn mount_standalone_ca(&self, ack_wait: u64) -> (Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let state = Arc::new(AtomicUsize::new(0));
+        let acknowledged = Arc::new(AtomicUsize::new(0));
+        let ack = acknowledged.clone();
+        let base = self.server.uri();
+        Mock::given(method("POST")).and(path("/http-challenge"))
+            .respond_with(move |_: &wiremock::Request| {
+                ack.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "ack").insert_header("Retry-After", ack_wait.to_string()).set_body_json(serde_json::json!({"type":"http-01","url":format!("{base}/http-challenge"),"status":"processing","token":TOKEN}))
+            }).with_priority(2).mount(&self.server).await;
+        let remote = state.clone();
+        let base = self.server.uri();
+        Mock::given(method("POST")).and(path("/order/1"))
+            .respond_with(move |_: &wiremock::Request| {
+                let status = match remote.load(Ordering::SeqCst) { 0 => "pending", 1 => "ready", _ => "valid" };
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "poll").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
+            }).with_priority(2).mount(&self.server).await;
+
+        (state, acknowledged)
+    }
+
+    async fn invalidate_standalone_after_ack(&self, acknowledged: Arc<AtomicUsize>) {
+        let ack = acknowledged;
+        let base = self.server.uri();
+        Mock::given(method("POST")).and(path("/order/1"))
+                .respond_with(move |_: &wiremock::Request| {
+                    let status = if ack.load(Ordering::SeqCst) == 0 { "pending" } else { "invalid" };
+                    ResponseTemplate::new(200).insert_header("Replay-Nonce", "terminal").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"error":{"type":"urn:ietf:params:acme:error:unauthorized","detail":"HTTP validation failed"}}))
+                }).with_priority(1).mount(&self.server).await;
+    }
+
     async fn run(&mut self, yes: bool) -> Result<IssueOutcome, IssueError> {
         let record = self.session.as_ref().unwrap().record().await.unwrap();
         let solver = adapter(&record, false, yes, progress()).unwrap();
@@ -223,6 +262,7 @@ impl Fixture {
             )
             .await
     }
+
     async fn reopen(&mut self) {
         let record = self.session.as_ref().unwrap().record().await.unwrap();
         drop(self.session.take());
@@ -233,6 +273,7 @@ impl Fixture {
                 .unwrap(),
         );
     }
+
     async fn publish_then_cancel(&mut self) {
         let initial = self.session.as_ref().unwrap().record().await.unwrap();
         let solver = CancelAfterPublication(adapter(&initial, false, false, progress()).unwrap());
@@ -251,6 +292,7 @@ impl Fixture {
             Err(IssueError::Interrupted)
         ));
     }
+
     async fn count(&self, endpoint: &str) -> usize {
         self.server
             .received_requests()
@@ -287,6 +329,264 @@ async fn manual_http_yields_public_file_material_then_resumes_without_another_or
     assert_eq!(fixture.count("/orders/create").await, 1);
     assert_eq!(fixture.count("/http-challenge").await, 1);
     assert_eq!(fixture.count("/wrong-dns").await, 0);
+}
+
+async fn validate_standalone_over_http(
+    server: &MockServer,
+    address: std::net::SocketAddr,
+    expected: &str,
+    state: &AtomicUsize,
+    acknowledged: &AtomicUsize,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // A mock CA only advances after fetching the exact challenge over a
+    // real socket, including during an already-acknowledged resume.
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while acknowledged.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let mut stream = loop {
+            match tokio::net::TcpStream::connect(address).await {
+                Ok(stream) => break stream,
+                Err(_) => tokio::time::sleep(Duration::from_millis(1)).await,
+            }
+        };
+        stream
+            .write_all(
+                format!(
+                    "GET /.well-known/acme-challenge/{TOKEN} HTTP/1.1\r\nHost: example.com\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.ends_with(&expected));
+        state.store(1, Ordering::SeqCst);
+        loop {
+            if server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| request.url.path() == "/finalize")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        state.store(2, Ordering::SeqCst);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn standalone_serves_real_http_and_resumes_acknowledged_challenges_without_replay() {
+    for resume in [false, true] {
+        let mut fixture = Fixture::new(ValidationMethod::Standalone).await;
+        let record = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let config: StandaloneConfig =
+            serde_json::from_value(record.solver_config.clone()).unwrap();
+        let address = config.listen_address;
+        let (state, acknowledged) = fixture.mount_standalone_ca(0).await;
+
+        let controls = IssueExecution {
+            max_polls: if resume { 1 } else { 30 },
+            context: ExecutionContext {
+                deadline: Instant::now() + Duration::from_secs(10),
+                ..execution()
+            },
+            poll_interval: Duration::from_millis(1),
+        };
+        if resume {
+            let solver = adapter(&record, false, false, progress()).unwrap();
+            assert!(matches!(
+                fixture
+                    .service
+                    .run(
+                        fixture.session.as_mut().unwrap().as_mut(),
+                        solver.as_ref(),
+                        &controls
+                    )
+                    .await,
+                Err(IssueError::PollLimit { .. })
+            ));
+            assert_eq!(acknowledged.load(Ordering::SeqCst), 1);
+            let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+            drop(rebound);
+            fixture.reopen().await;
+        }
+        let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let solver = with_http_precheck(
+            adapter(&saved, false, false, progress()).unwrap(),
+            HttpPool::default(),
+            progress(),
+        );
+        let controls = IssueExecution {
+            max_polls: 30,
+            ..controls
+        };
+        let expected = format!("{TOKEN}.{}", fixture.account.key_thumbprint);
+        let server = &fixture.server;
+        let validate =
+            validate_standalone_over_http(server, address, &expected, &state, &acknowledged);
+        let (outcome, ()) = tokio::join!(
+            fixture.service.run(
+                fixture.session.as_mut().unwrap().as_mut(),
+                solver.as_ref(),
+                &controls
+            ),
+            validate
+        );
+        let IssueOutcome::Completed {
+            record: completed,
+            cleanup,
+        } = outcome.unwrap()
+        else {
+            panic!("expected certificate");
+        };
+        assert_eq!(cleanup, Vec::<ValidationRequirement>::new());
+        assert_eq!(completed.solver_config, record.solver_config);
+        assert_eq!(fixture.count("/orders/create").await, 1);
+        assert_eq!(fixture.count("/http-challenge").await, 1);
+        assert_eq!(fixture.count("/finalize").await, 1);
+        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        drop(rebound);
+        // Renewal retains the selected local endpoint and protocol implementation.
+        drop(fixture.session.take());
+        let renewed = fixture
+            .store
+            .renew(&completed.name, &fixture.account)
+            .await
+            .unwrap();
+        let renewal = renewed.record().await.unwrap();
+        assert_eq!(renewal.solver_id, "standalone");
+        assert_eq!(renewal.solver_config, completed.solver_config);
+    }
+}
+
+async fn wait_standalone_publication(address: std::net::SocketAddr, acknowledged: &AtomicUsize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while acknowledged.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        loop {
+            if tokio::net::TcpStream::connect(address).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn standalone_releases_listener_on_cancellation_timeout_and_invalid_order() {
+    for mode in ["cancel", "timeout", "invalid"] {
+        let mut fixture = Fixture::new(ValidationMethod::Standalone).await;
+        let record = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let config: StandaloneConfig = serde_json::from_value(record.solver_config).unwrap();
+        let (_state, acknowledged) = fixture
+            .mount_standalone_ca(if mode == "invalid" { 0 } else { 30 })
+            .await;
+        if mode == "invalid" {
+            fixture
+                .invalidate_standalone_after_ack(acknowledged.clone())
+                .await;
+        }
+        let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let solver = adapter(&saved, false, false, progress()).unwrap();
+        let mut controls = IssueExecution {
+            max_polls: 30,
+            context: ExecutionContext {
+                deadline: Instant::now() + Duration::from_secs(10),
+                ..execution()
+            },
+            poll_interval: Duration::from_millis(1),
+        };
+        if mode == "timeout" {
+            // Establish the CA submission first; a short initialization budget
+            // would test CPU/filesystem scheduling instead of listener expiry.
+            controls.max_polls = 1;
+            assert!(matches!(
+                fixture
+                    .service
+                    .run(
+                        fixture.session.as_mut().unwrap().as_mut(),
+                        solver.as_ref(),
+                        &controls
+                    )
+                    .await,
+                Err(IssueError::PollLimit { .. })
+            ));
+            controls.max_polls = 30;
+            controls.context.deadline = Instant::now() + Duration::from_secs(2);
+        }
+        let observe = async {
+            wait_standalone_publication(config.listen_address, &acknowledged).await;
+            if mode == "cancel" {
+                controls.context.cancellation.cancel();
+            }
+        };
+        let (result, ()) = tokio::join!(
+            fixture.service.run(
+                fixture.session.as_mut().unwrap().as_mut(),
+                solver.as_ref(),
+                &controls
+            ),
+            observe
+        );
+        if mode == "invalid" {
+            let Err(IssueError::InvalidOrder {
+                problem: Some(problem),
+            }) = result
+            else {
+                panic!("expected original CA error");
+            };
+            assert_eq!(problem.detail.as_deref(), Some("HTTP validation failed"));
+        } else {
+            assert!(matches!(result, Err(IssueError::Interrupted)));
+        }
+        assert!(
+            tokio::net::TcpListener::bind(config.listen_address)
+                .await
+                .is_ok()
+        );
+        assert_eq!(fixture.count("/orders/create").await, 1);
+        assert_eq!(fixture.count("/http-challenge").await, 1);
+        assert_eq!(fixture.count("/finalize").await, 0);
+        assert_eq!(
+            fixture
+                .session
+                .as_ref()
+                .unwrap()
+                .record()
+                .await
+                .unwrap()
+                .operation_id,
+            saved.operation_id
+        );
+        assert!(
+            fixture
+                .generation
+                .lock()
+                .unwrap()
+                .join("private-key.pk8")
+                .is_file()
+        );
+        assert!(
+            fixture
+                .generation
+                .lock()
+                .unwrap()
+                .join("request.der")
+                .is_file()
+        );
+    }
 }
 
 #[tokio::test]
@@ -432,6 +732,7 @@ impl ChallengeSolver for CancelAfterPublication {
     fn kind(&self) -> ChallengeKind {
         self.0.kind()
     }
+
     async fn ready(
         &self,
         requirements: &[ValidationRequirement],
@@ -501,7 +802,7 @@ async fn saved_method_and_implementation_configuration_cannot_be_changed_on_open
         let mut fixture = Fixture::new(ValidationMethod::Webroot).await;
         let mut record = fixture.session.as_ref().unwrap().record().await.unwrap();
         if change_configuration {
-            record.solver_config = configuration(ValidationMethod::ManualHttp, None).unwrap();
+            record.solver_config = configuration(ValidationMethod::ManualHttp, None, None).unwrap();
         } else {
             record.challenge = ChallengeKind::Dns01;
         }
@@ -565,7 +866,10 @@ async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_
             3 => other.directory = AcmeUrl::new("https://other.example/directory").unwrap(),
             4 => other.challenge = ChallengeKind::Dns01,
             5 => other.solver_id = "manual_http".into(),
-            6 => other.solver_config = configuration(ValidationMethod::ManualHttp, None).unwrap(),
+            6 => {
+                other.solver_config =
+                    configuration(ValidationMethod::ManualHttp, None, None).unwrap();
+            }
             7 => other.key_algorithm = aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP384,
             8 => other.identifiers.pop().map(|_| ()).unwrap(),
             9 => other.phase = aster_acme_core::workflow::IssuancePhase::Completed,
@@ -711,7 +1015,7 @@ async fn expired_invalid_or_csr_rejected_requests_are_not_automatic_recovery_can
     for case in 0..3 {
         let mut other = record.clone();
         if case == 0 {
-            other.finalize_rejection = Some(serde_json::from_value(serde_json::json!({"type":"urn:ietf:params:acme:error:badCSR","detail":"rejected","instance":null})).unwrap());
+            other.finalize_rejection = Some(serde_json::from_value(serde_json::json!({"status":400,"retry_at":null,"problem":{"type":"urn:ietf:params:acme:error:badCSR","detail":"rejected","instance":null}})).unwrap());
         } else {
             other.order = Some(serde_json::from_value(serde_json::json!({"status":if case == 1 { "invalid" } else { "pending" },"expires":"2000-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"})).unwrap());
         }

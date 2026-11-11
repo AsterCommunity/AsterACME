@@ -5,13 +5,13 @@ use clap::Parser;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-fn execution() -> ExecutionContext {
+pub(super) fn execution() -> ExecutionContext {
     ExecutionContext {
         cancellation: CancellationToken::new(),
         deadline: Instant::now() + Duration::from_secs(2),
     }
 }
-fn progress() -> Arc<Progress> {
+pub(super) fn progress() -> Arc<Progress> {
     Arc::new(Progress::new(crate::common::session::OutputSession::new(
         true,
     )))
@@ -128,12 +128,13 @@ fn webroot_arguments_are_scoped_and_resume_cannot_override_saved_configuration()
     assert!(
         configuration(
             ValidationMethod::ManualDns,
-            Some(std::path::Path::new("/tmp"))
+            Some(std::path::Path::new("/tmp")),
+            None
         )
         .is_err()
     );
     let temp = tempfile::tempdir().unwrap();
-    let value = configuration(ValidationMethod::Webroot, Some(temp.path())).unwrap();
+    let value = configuration(ValidationMethod::Webroot, Some(temp.path()), None).unwrap();
     let config: WebrootConfig = serde_json::from_value(value).unwrap();
     assert_eq!(config.root, temp.path().canonicalize().unwrap());
 }
@@ -274,6 +275,108 @@ fn poll_interval_cli_overrides_config_and_does_not_leak_into_read_only_commands(
 }
 
 mod flow;
+
+#[test]
+fn standalone_configuration_defaults_persist_and_reject_irrelevant_flags() {
+    let value = configuration(ValidationMethod::Standalone, None, None).unwrap();
+    let saved: StandaloneConfig = serde_json::from_value(value).unwrap();
+    assert_eq!(saved.listen_address.to_string(), "0.0.0.0:80");
+    for address in ["127.0.0.1:8080", "[::]:80"] {
+        let value = configuration(
+            ValidationMethod::Standalone,
+            None,
+            Some(address.parse().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_value::<StandaloneConfig>(value)
+                .unwrap()
+                .listen_address
+                .to_string(),
+            address
+        );
+    }
+    assert!(
+        configuration(
+            ValidationMethod::Standalone,
+            None,
+            Some("127.0.0.1:0".parse().unwrap())
+        )
+        .is_err()
+    );
+    assert!(
+        configuration(
+            ValidationMethod::Standalone,
+            Some(std::path::Path::new("/tmp")),
+            None
+        )
+        .is_err()
+    );
+    for method in [
+        ValidationMethod::ManualDns,
+        ValidationMethod::ManualHttp,
+        ValidationMethod::Webroot,
+    ] {
+        assert!(configuration(method, None, Some("127.0.0.1:8080".parse().unwrap())).is_err());
+    }
+}
+
+#[test]
+fn standalone_arguments_expose_only_new_issuance_and_preserve_saved_settings() {
+    for address in ["127.0.0.1:8080", "[::]:80"] {
+        assert!(
+            crate::app::Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "-c",
+                "standalone",
+                "-d",
+                "example.com",
+                "--listen-address",
+                address
+            ])
+            .is_ok()
+        );
+    }
+    for address in ["localhost:80", "0.0.0.0", "127.0.0.1:65536"] {
+        assert!(
+            crate::app::Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "-c",
+                "standalone",
+                "-d",
+                "example.com",
+                "--listen-address",
+                address
+            ])
+            .is_err()
+        );
+    }
+    for args in [
+        vec![
+            "aster-acme",
+            "cert",
+            "issue",
+            "--resume",
+            "web",
+            "--listen-address",
+            "127.0.0.1:8080",
+        ],
+        vec![
+            "aster-acme",
+            "cert",
+            "renew",
+            "web",
+            "--listen-address",
+            "127.0.0.1:8080",
+        ],
+    ] {
+        assert!(crate::app::Args::try_parse_from(args).is_err());
+    }
+}
 
 #[tokio::test]
 async fn dns_precheck_missing_values_errors_and_short_timeout_are_advisory_but_cancellation_is_not()

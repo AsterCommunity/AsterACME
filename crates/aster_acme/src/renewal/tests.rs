@@ -19,6 +19,7 @@ fn plan() -> RenewalPlan {
     RenewalPlan::fallback(
         at(0),
         at(90 * 86400),
+        at(0),
         Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
     )
     .unwrap()
@@ -111,17 +112,19 @@ fn execution(seconds: u64) -> ExecutionContext {
 
 #[test]
 fn fallback_uses_original_validity_and_rejects_empty_intervals() {
-    assert_eq!(plan().renew_at, at(60 * 86400));
+    let ninety_day = plan();
+    assert!(ninety_day.renew_at > at(59 * 86400));
+    assert!(ninety_day.renew_at < at(60 * 86400));
     for seconds in [1, 2, 3, 6 * 86400, 90 * 86400] {
-        let p = RenewalPlan::fallback(at(-100), at(-100 + seconds), None).unwrap();
-        assert_eq!(
-            p.renew_at,
-            at(-100) + time::Duration::seconds(seconds) * 2 / 3
-        );
+        let not_before = at(-100);
+        let not_after = at(-100 + seconds);
+        let p = RenewalPlan::fallback(not_before, not_after, not_before, None).unwrap();
+        let target = not_before + time::Duration::seconds(seconds) * 2 / 3;
+        assert!(p.renew_at >= not_before && p.renew_at <= target);
         assert!(p.renew_at >= p.not_before && p.renew_at < p.not_after);
     }
-    assert!(RenewalPlan::fallback(at(1), at(1), None).is_err());
-    assert!(RenewalPlan::fallback(at(2), at(1), None).is_err());
+    assert!(RenewalPlan::fallback(at(1), at(1), at(0), None).is_err());
+    assert!(RenewalPlan::fallback(at(2), at(1), at(0), None).is_err());
 }
 
 #[test]
@@ -304,7 +307,7 @@ async fn server_errors_retry_with_bound_and_then_keep_fallback() {
         .renewal
         .unwrap();
     assert_eq!(p.source, RenewalSource::Fallback);
-    assert_eq!(p.renew_at, at(60 * 86400));
+    assert!(p.renew_at > at(59 * 86400) && p.renew_at < at(60 * 86400));
     assert!(p.last_query_failed);
 }
 
@@ -398,7 +401,7 @@ async fn request_timeouts_retry_but_do_not_erase_fallback() {
         .renewal
         .unwrap();
     assert!(p.last_query_failed);
-    assert_eq!(p.renew_at, at(60 * 86400));
+    assert!(p.renew_at > at(59 * 86400) && p.renew_at < at(60 * 86400));
     assert_eq!(p.source, RenewalSource::Fallback);
 }
 

@@ -39,6 +39,8 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
     if let Some(issue) = error.downcast_ref::<aster_acme::issuance::IssueError>() {
         use aster_acme::issuance::IssueError;
         return match issue {
+            IssueError::AuthorizationFailed { status, problem } => self::problem::authorization_failed(status, problem.as_deref()),
+            IssueError::Publication(_) => (issue.to_string(), Some("Check the challenge listener address, port availability and bind permissions, then resume the saved request. The CA must reach public port 80 for HTTP-01; a custom local port requires forwarding.".into())),
             IssueError::NameAlreadyExists(name)=>(issue.to_string(),Some(format!("Choose another --name, or inspect cert show '{}'. To continue its unfinished request use cert issue --resume '{}'.",name.as_str(),name.as_str()))),
             IssueError::RevocationUncertain(error)=>(format!("Certificate revocation outcome is unconfirmed. {}", transport_diagnostic(error).0),Some("Inspect cert show <NAME>. Rerun cert revoke <NAME> --yes with the same reason to request revocation again; local files are retained.".into())),
             IssueError::Transport(error)=>transport_diagnostic(error),

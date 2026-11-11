@@ -52,6 +52,25 @@ pub trait ChallengeSolver: Send + Sync {
     /// Protocol method implemented by this adapter; checked before network mutations.
     fn kind(&self) -> ChallengeKind;
 
+    /// Re-establish invocation-local publication for saved pending authorizations,
+    /// including challenges already acknowledged. Persistent/manual solvers do
+    /// nothing. A temporary HTTP/TLS listener must restart without another CA ack.
+    ///
+    /// # Errors
+    /// Reports local publication failure before polling the saved order.
+    async fn restore(
+        &self,
+        _requirements: &[crate::issuance::ValidationRequirement],
+        _execution: &ExecutionContext,
+    ) -> Result<(), crate::issuance::IssueError> {
+        Ok(())
+    }
+
+    /// Release invocation-local services on every run outcome, including timeout
+    /// and cancellation. Unlike cleanup, this never deletes durable publication.
+    /// Implementations must bound shutdown and release resources when the solver is dropped.
+    async fn shutdown(&self) {}
+
     /// Publish or ask for publication, and establish local readiness. False yields
     /// durable `action_required`. Publication policy is owned by the implementation.
     ///

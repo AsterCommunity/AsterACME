@@ -6,6 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # Intentional allowlists: adding a dependency or changing a transitive feature must
 # not silently install a second TLS/crypto backend or unused HTTP/UI capabilities.
 ALLOWED = {
+    "hyper": {"default", "client", "http1", "server"},
+    "hyper-util": {"default", "client", "client-legacy", "client-proxy", "client-proxy-system", "http1", "tokio"},
+    "http-body-util": {"default"},
     "aster_forge_http": {"json", "rustls", "rustls-aws-lc-rs", "system-proxy"},
     "aster_forge_panic": set(),
     "reqwest": {"__rustls", "__rustls-aws-lc-rs", "__tls", "json", "rustls", "rustls-no-provider", "system-proxy"},

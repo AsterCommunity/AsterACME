@@ -164,6 +164,9 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "directories",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "inquire",
  "rcgen",
  "serde",
@@ -178,6 +181,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-width",
+ "url",
  "wiremock",
  "zeroize",
 ]

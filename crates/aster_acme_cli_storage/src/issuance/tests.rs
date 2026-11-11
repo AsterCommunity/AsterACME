@@ -1,4 +1,5 @@
 //! Loopback CA exercises real journals, fixed CSR and restartable foreground execution.
+mod rfc_errors;
 use super::*;
 use aster_acme::account::KeyAccess;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
@@ -1318,10 +1319,10 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
     let saved = session.complete(&record, leaf.as_bytes()).await.unwrap();
     let fallback = saved.renewal.as_ref().unwrap();
     assert_eq!(fallback.source, RenewalSource::Fallback);
-    assert_eq!(
-        fallback.renew_at,
-        fallback.not_before + (fallback.not_after - fallback.not_before) * 2 / 3
-    );
+    let fallback_target = fallback.not_before + (fallback.not_after - fallback.not_before) * 2 / 3;
+    assert!(fallback.renew_at > fallback_target - time::Duration::days(1));
+    assert!(fallback.renew_at < fallback_target);
+    assert!(fallback.renew_at < fallback.not_after);
     let id = fallback.certificate_id.as_ref().unwrap();
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -2334,6 +2335,9 @@ async fn rejected_fixed_csr_survives_restart_even_when_another_request_completes
     assert_eq!(
         rejected
             .finalize_rejection
+            .as_ref()
+            .unwrap()
+            .problem
             .as_ref()
             .unwrap()
             .detail

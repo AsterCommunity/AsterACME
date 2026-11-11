@@ -116,3 +116,26 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户 kid 签名、DER 叶子、reason 和 alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 已由 cert renew 接入；只向广告 renewalInfo 的 CA 提交。
 
 密钥扩展依据 RFC 8555 §6.2（账户 JWS）与 §7.4（证书 CSR）分离；CSR 算法没有 ACME 固定枚举，客户端生成能力与 CA 接受范围不同。Let’s Encrypt 当前官方范围见 https://letsencrypt.org/docs/integration-guide/ 。吊销原因按 RFC 8555 §7.6 / RFC 5280 §5.3.1 编码，badRevocationReason 由 CA 返回。
+
+## RFC 错误状态接入核对（2026-11-12）
+
+本次对照RFC8555 §6.7、§7.1.6、§7.4、§7.5、§8及RFC9773 §5。24种RFC8555 problem均已具名解析并提供CLI诊断，RFC9773 alreadyReplaced也已解析；未知type/扩展/subproblems无损保留。以下区分线上资源状态、完整错误响应及未确认网络副作用，不将HTTP错误直接映射成order invalid。
+
+| 结果 | 持久化与恢复策略 |
+| --- | --- |
+| newOrder 201 + Location | 先保存实际URL再解析Order，坏body不丢失恢复入口 |
+| newOrder完整4xx problem或非problem | 保存creation_failure的实际status、problem、绝对retry_at；通常显示creation rejected，408/429显示creation deferred，Order仍not observed；不推荐resume或重复POST |
+| newOrder完整5xx/其他非成功HTTP响应 | 保留错误证据，显示creation unconfirmed，不声称永久拒绝；无Location不自动重新创建 |
+| newOrder断网、取消、超时、未完整读到响应 | 保留提交意图，CreationUncertain；不能由本地重建Location |
+| finalize badCSR（4xx，不限定400） | 保存完整失败证据，拒绝恢复固定CSR；Order可仍ready，不伪造invalid或HTTP400 |
+| finalize orderNotReady（RFC要求403） | 保存明确未提交状态及Retry-After，按max_polls/总期限先查询Order；仅再次观察ready才提交相同CSR |
+| finalize 429/5xx/未知problem或响应丢失 | 不据此允许重复finalize；恢复只观察Order，保留固定CSR/key |
+| Order invalid | 保存原Order并补充授权challenge problem，终态不恢复；清理本次拥有且未变的publication |
+| Authorization invalid/deactivated/expired/revoked或选中Challenge invalid | 保存实际授权状态和原problem/subproblems，以AuthorizationFailed报告；不伪造Order invalid，不继续ack/finalize或推荐resume；已签发valid订单仍可下载 |
+| badNonce | transport在有限预算内用替换nonce重签；预算耗尽不推断请求成功 |
+| accountDoesNotExist | 账户查找明确不存在后才允许注册；不由任意401猜测 |
+| alreadyRevoked | 吊销400+该problem可确认已吊销，文件保留；与账户停用分开 |
+| alreadyReplaced | RFC9773 §5明确409，newOrder错误证据保留；不移除replaces绕过，不建议恢复不存在的Order |
+| CAA、签名/公钥、联系人、EAB、用户操作、compound等 | 原type/detail/instance/子问题及现有专项提示；不为每种problem虚构一个CA资源状态，也不设置通用自动重放 |
+
+newOrder收到明确错误后，当前策略要求用户检查原因并显式新建，不实现同操作重发或自动等待429后重下单。未发布的finalize_rejection改为带HTTP证据的结构；旧JSON/TOML字段形状不兼容、不迁移。本次不操作用户已有失败记录，也不从旧日志猜测补写证据。

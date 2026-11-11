@@ -615,12 +615,16 @@ fn historical_list_and_show_are_explicit_and_do_not_conflict_with_exact_operatio
 fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_valid() {
     use aster_acme_protocol::problem::{Problem, ProblemKind};
     let mut request = record('a', "2026-01-01T00:00:00Z");
-    request.finalize_rejection = Some(Problem {
-        kind: ProblemKind::BadCsr,
-        detail: Some("ECDSA curve P-521 not allowed".into()),
-        instance: None,
-        subproblems: vec![],
-        extensions: serde_json::Map::new(),
+    request.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+        status: 400,
+        retry_at: None,
+        problem: Some(Problem {
+            kind: ProblemKind::BadCsr,
+            detail: Some("ECDSA curve P-521 not allowed".into()),
+            instance: None,
+            subproblems: vec![],
+            extensions: serde_json::Map::new(),
+        }),
     });
     let text = super::super::render::show(
         std::slice::from_ref(&request),
@@ -643,7 +647,7 @@ fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_
     )
     .unwrap();
     assert_eq!(
-        json[0]["finalize_rejection"]["type"],
+        json[0]["finalize_rejection"]["problem"]["type"],
         "urn:ietf:params:acme:error:badCSR"
     );
 }

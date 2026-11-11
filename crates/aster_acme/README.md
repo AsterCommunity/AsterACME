@@ -111,3 +111,7 @@ cert renew --all 提供按托管身份顺序执行的批量入口，复用同一
 ChallengeKind/ValidationRequirement及IssueService归本库；调用方实现ChallengeSolver::kind/ready/cleanup。库保存材料后才调用ready，准备好后由库通知CA；完成产物后尝试cleanup，失败保留清理状态而不抹掉证书。IssueRequest验证域名与通配符约束，IssueRecord::matches_unfinished_request统一完整定义匹配。CLI不复制协议状态机。移除未接线的旧receipt/prepare接口，不保留兼容层。
 
 CLI已实现manual_dns、manual_http和webroot。HTTP材料是未经哈希的key authorization，公开URL/路径由请求标识符和CA token推导；TLS仍只有材料定义、没有可执行实现。本库不写webroot文件、不提示终端、不决定DNS预检是否应阻止用户操作。
+
+临时挑战服务可实现`ChallengeSolver::restore`重建已保存的pending授权响应，包括已经通知CA的挑战；该hook不重发ack。`IssueService::run`在所有返回路径调用有界`shutdown`，与终态持久化材料`cleanup`分开；嵌入者直接丢弃运行future时必须关闭或丢弃solver。CLI HTTP standalone使用该契约；TLS-ALPN可复用生命周期，当前没有TLS监听实现。
+
+RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。

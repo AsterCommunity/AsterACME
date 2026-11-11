@@ -49,6 +49,10 @@ base64 = "0.23.1"
 idna = "1"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
+# Reuse the existing transport stack; the challenge listener only needs HTTP/1.
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = { version = "0.1", default-features = false }
 sha2 = "0.11"
 zeroize = { version = "1", features = ["derive"] }
 aws-lc-rs = { version = "1.19", default-features = false, features = ["non-fips", "alloc"] }

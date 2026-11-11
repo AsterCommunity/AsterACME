@@ -158,6 +158,14 @@ pub(crate) struct IssueArgs {
         conflicts_with = "resume"
     )]
     pub webroot: Option<std::path::PathBuf>,
+    /// Standalone local socket, default 0.0.0.0:80; saved for resume/renew. Public port 80 must reach it.
+    #[arg(
+        long,
+        value_name = "IP:PORT",
+        requires = "challenge",
+        conflicts_with = "resume"
+    )]
+    pub listen_address: Option<std::net::SocketAddr>,
     /// Resume a saved request; omit the name to choose unfinished requests interactively.
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
     pub resume: Option<ResumeTarget>,
