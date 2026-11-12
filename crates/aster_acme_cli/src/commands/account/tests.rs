@@ -1,18 +1,19 @@
 //! Account command parsing, selection, offline inspection and network boundaries.
-use super::args::AccountCommand;
 use crate::app::{Args, Command};
+use crate::commands::account::args::AccountCommand;
 use crate::common::args::{HttpArgs, LocalArgs};
-use aster_acme::account::KeyAccess;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
+use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::query::AccountQuery;
 use aster_acme_core::account::{AccountRecordState, DeactivationState};
 use aster_acme_protocol::url::AcmeUrl;
 use clap::Parser;
 
 #[tokio::test]
 async fn remove_requires_confirmation_clears_matching_default_and_never_connects() {
-    use super::{args::RemoveArgs, execute, render};
-    use aster_acme::account::AccountKeyStore;
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::RemoveArgs, execute, render};
+    use aster_acme::storage::account::AccountKeyStore;
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ca = AcmeUrl::new(&format!(
@@ -113,9 +114,9 @@ fn list_http_options_require_explicit_verification() {
 
 #[tokio::test]
 async fn list_verification_continues_after_failures_and_returns_each_result() {
-    use super::{args::ListArgs, execute, render};
-    use aster_acme::account::AccountKeyStore;
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::ListArgs, execute, render};
+    use aster_acme::storage::account::AccountKeyStore;
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let temp = tempfile::tempdir().unwrap();
     let mut peers = Vec::new();
@@ -176,7 +177,7 @@ async fn list_verification_continues_after_failures_and_returns_each_result() {
 
 #[test]
 fn all_single_account_commands_share_positional_and_named_targets() {
-    use super::args::AccountArgs;
+    use crate::commands::account::args::AccountArgs;
     for command in [
         "show",
         "switch",
@@ -270,9 +271,10 @@ fn list_and_deactivate_expose_only_their_own_arguments() {
 
 #[tokio::test]
 async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
-    use super::{execute, render};
-    use aster_acme::account::{AccountKeyStore, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{execute, render};
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ca = AcmeUrl::new(&format!(
@@ -340,7 +342,7 @@ async fn list_is_offline_sorted_marks_default_and_never_loads_keys() {
 
 #[tokio::test]
 async fn empty_list_is_actionable_and_stale_default_is_explicit() {
-    use super::{execute, render};
+    use crate::commands::account::{execute, render};
     let temp = tempfile::tempdir().unwrap();
     let report = execute::execute(
         AccountCommand::List(
@@ -368,12 +370,13 @@ async fn empty_list_is_actionable_and_stale_default_is_explicit() {
 
 #[tokio::test]
 async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_failure() {
-    use super::{
+    use crate::commands::account::{
         args::{AccountArgs, DeactivateArgs},
         execute,
     };
-    use aster_acme::account::{AccountKeyStore, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ca = AcmeUrl::new(&format!(
@@ -461,12 +464,13 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
 
 #[tokio::test]
 async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() {
-    use super::{
+    use crate::commands::account::{
         args::{AccountArgs, DeactivateArgs},
         execute, render,
     };
-    use aster_acme::account::{AccountKeyStore, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let ca = AcmeUrl::new("https://unreachable.invalid/directory").unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -519,9 +523,12 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
         .await
         .is_err()
     );
-    let listed = aster_acme_cli_storage::accounts(temp.path().into())
-        .await
-        .unwrap();
+    let listed = aster_acme_cli_storage::inventory::query_accounts(
+        temp.path().into(),
+        AccountQuery::default(),
+    )
+    .await
+    .unwrap();
     assert!(!listed[0].usable);
     assert_eq!(
         listed[0].last_status,
@@ -646,7 +653,7 @@ impl From<super::args::AccountArgs> for super::args::RegisterArgs {
 
 #[tokio::test]
 async fn switch_without_a_name_in_automation_fails_without_selecting_the_default() {
-    use super::{args::AccountArgs, execute};
+    use crate::commands::account::{args::AccountArgs, execute};
     let temp = tempfile::tempdir().unwrap();
     let error = execute::execute(
         AccountCommand::Switch(super::args::LocalTargetArgs {
@@ -672,9 +679,9 @@ async fn switch_without_a_name_in_automation_fails_without_selecting_the_default
 
 #[tokio::test]
 async fn existing_registration_requires_confirmation_before_any_mutation_or_http() {
-    use super::{args::AccountArgs, execute};
-    use aster_acme::account::AccountKeyStore;
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::AccountArgs, execute};
+    use aster_acme::storage::account::AccountKeyStore;
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let directory = AcmeUrl::new(&format!(
@@ -742,9 +749,10 @@ async fn existing_registration_requires_confirmation_before_any_mutation_or_http
 
 #[tokio::test]
 async fn registration_saves_explicit_contact_before_discovery_failure() {
-    use super::{args::AccountArgs, execute};
-    use aster_acme::account::{AccountKeyStore, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::AccountArgs, execute};
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let directory = AcmeUrl::new(&format!(
@@ -809,9 +817,10 @@ async fn registration_saves_explicit_contact_before_discovery_failure() {
 
 #[tokio::test]
 async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
-    use super::{args::AccountArgs, execute, report::AccountReport};
-    use aster_acme::account::{AccountKeyStore, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::AccountArgs, execute, report::AccountReport};
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
@@ -906,7 +915,7 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
 
 #[test]
 fn registration_normalizes_cli_and_config_contacts_with_cli_precedence() {
-    use super::{args::AccountArgs, execute::registration_options};
+    use crate::commands::account::{args::AccountArgs, execute::registration_options};
     let configured = vec!["config@example.com".into()];
     let options = registration_options(AccountArgs::default(), configured.clone()).unwrap();
     assert_eq!(options.contacts, ["mailto:config@example.com"]);
@@ -944,9 +953,10 @@ fn verify_is_an_explicit_show_only_option() {
 
 #[tokio::test]
 async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
-    use super::{args::AccountArgs, execute, render, report::AccountReport};
-    use aster_acme::account::{AccountKeyStore, AccountRecord, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::AccountArgs, execute, render, report::AccountReport};
+    use aster_acme::account::AccountRecord;
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1043,9 +1053,10 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
 
 #[tokio::test]
 async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
-    use super::{args::AccountArgs, execute};
-    use aster_acme::account::{AccountKeyStore, AccountStore};
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::account::{args::AccountArgs, execute};
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
+    use aster_acme_cli_storage::account::CliAccountStore;
     use std::time::Duration;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

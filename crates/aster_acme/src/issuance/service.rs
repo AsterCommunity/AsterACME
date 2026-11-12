@@ -1,10 +1,11 @@
 //! RFC 8555 issuance orchestration. All mutations follow durable checkpoints.
-use super::progress::{IssueEvent, IssueObserver};
-use super::{
+use crate::issuance::progress::{IssueEvent, IssueObserver};
+use crate::issuance::{
     AuthorizationRecord, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
-    IssueSession, ValidationRequirement,
+    ValidationRequirement,
 };
 use crate::solver::ChallengeSolver;
+use crate::storage::issuance::IssueSession;
 use crate::{
     challenge::{ChallengeMaterial, ChallengeToken},
     identifier::{Identifier, authorization_identifier},
@@ -403,7 +404,9 @@ impl IssueService {
         }
         record.phase = IssuancePhase::Completed;
         session.complete(record, &response.body).await?;
-        self.observe(&IssueEvent::CertificateSaved);
+        self.observe(&IssueEvent::CertificateSaved {
+            name: record.name.clone(),
+        });
         self.plan_renewal(session, &execution.context).await
     }
 

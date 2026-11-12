@@ -160,7 +160,7 @@ pub fn observed_deactivation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::account::*;
 
     #[test]
     fn rollover_states_block_other_operations_and_only_resume_saved_key() {

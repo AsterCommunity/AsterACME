@@ -7,7 +7,8 @@
 //! <https://github.com/AsterCommunity/AsterFs/issues/3>
 //! <https://github.com/AsterCommunity/AsterFs/issues/4>
 
-use crate::{AccountStoreError, StorageError, store_error};
+use crate::account::{StorageError, store_error};
+use aster_acme::storage::account::AccountStoreError;
 use std::{
     fs::{self, File},
     io,
@@ -226,7 +227,7 @@ pub(crate) fn write_text(path: &Path, text: &str, max: usize) -> io::Result<()> 
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::*;
+    use crate::toml_file::*;
     use std::{
         fs,
         os::unix::fs::{PermissionsExt, symlink},

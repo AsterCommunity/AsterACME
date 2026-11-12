@@ -1,5 +1,7 @@
 //! Bounded advisory observation of public HTTP-01 files after publication.
-use super::{Arc, ChallengeKind, ChallengeSolver, IssueError, Progress};
+use crate::commands::cert::validation::{
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
+};
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext, transport::HttpPool};
 use async_trait::async_trait;

@@ -1,5 +1,5 @@
 //! Public account JWKs with RFC 7638 canonical required-member ordering.
-use super::{CryptoError, key_algorithm::KeyAlgorithm};
+use crate::crypto::{CryptoError, key_algorithm::KeyAlgorithm};
 use aws_lc_rs::signature::{self, ParsedPublicKey};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;

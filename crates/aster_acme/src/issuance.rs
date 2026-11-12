@@ -1,8 +1,7 @@
 //! Persisted issuance contracts. Protocol effects belong to the service, files to adapters.
+use crate::storage::account::AccountStoreError;
 use crate::{
-    account::{AccountRecord, AccountStoreError},
-    crypto::AccountSigner,
-    identifier::DnsIdentifier,
+    account::AccountRecord, crypto::AccountSigner, identifier::DnsIdentifier,
     solver::ExecutionContext,
 };
 use aster_acme_core::workflow::{IssuancePhase, SubmissionState};
@@ -10,7 +9,6 @@ use aster_acme_protocol::{
     order::{AuthorizationObject, OrderObject},
     url::AcmeUrl,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
@@ -321,6 +319,10 @@ pub struct IssueRecord {
     /// Adapter-provided `in_use` selection snapshot; never persisted in the journal.
     #[serde(skip)]
     pub is_in_use: bool,
+    /// Adapter-provided deployment binding count; `None` means unavailable.
+    /// This local inventory snapshot is never persisted in the issuance journal.
+    #[serde(skip)]
+    pub deployment_count: Option<usize>,
     /// Previous `in_use` generation; retained across retries and restart.
     #[serde(default)]
     pub renewal_of: Option<RenewalPredecessor>,
@@ -385,6 +387,14 @@ pub struct IssueRecord {
     pub certificate_not_after: Option<time::OffsetDateTime>,
 }
 impl IssueRecord {
+    /// Whether this completed local generation can be offered for deployment.
+    /// The storage adapter must additionally verify it is still the selected version.
+    #[must_use]
+    pub fn deployment_eligible(&self) -> bool {
+        self.phase == IssuancePhase::Completed
+            && self.revocation.state == aster_acme_core::revocation::RevocationState::NotRequested
+    }
+
     /// Human-readable immutable directory name: UTC request time plus random ID prefix.
     #[must_use]
     pub fn generation_name(&self) -> String {
@@ -591,78 +601,6 @@ impl IssueRecord {
     }
 }
 
-/// Locked recoverable generation. Blocking persistence must retain its lease on cancellation.
-#[async_trait]
-pub trait IssueSession: Send + Sync {
-    /// Latest durable snapshot under the generation/certificate lease, including prior calls.
-    ///
-    /// # Errors
-    /// Reports journal, identity and pending persistence failures.
-    async fn record(&self) -> Result<IssueRecord, IssueError>;
-    /// Persist the next checkpoint before performing an external mutation.
-    ///
-    /// # Errors
-    /// Reports identity, journal and durability failures.
-    async fn save(&self, record: &IssueRecord) -> Result<(), IssueError>;
-    /// Load the fixed DER CSR; never generate a replacement on read failure.
-    ///
-    /// # Errors
-    /// Missing, unsafe or corrupt CSR is an error.
-    async fn csr(&self) -> Result<Vec<u8>, IssueError>;
-    /// Read the issued leaf as DER; no private key is exposed to revocation orchestration.
-    ///
-    /// # Errors
-    /// Rejects missing, corrupt or unsafe certificate artifacts.
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError>;
-    /// Persist a validated chain then atomically select this generation. Populate the
-    /// returned record's `renewal` with `RenewalPlan::from_certificate` before promotion
-    /// so every adapter durably establishes a fallback independently of ARI availability.
-    ///
-    /// # Errors
-    /// Failure must retain the previous `in_use` generation and recoverable checkpoint.
-    async fn complete(&self, record: &IssueRecord, chain: &[u8])
-    -> Result<IssueRecord, IssueError>;
-}
-
-/// Object-safe generation storage contract for files, databases and embedded services.
-#[async_trait]
-pub trait IssueStore: Send + Sync {
-    /// Create a new managed certificate and its first fixed key/CSR generation.
-    /// Existing managed names are rejected atomically; this never appends a version.
-    ///
-    /// # Errors
-    /// Rejects unsafe names, storage errors and incomplete local initialization.
-    async fn create(
-        &self,
-        request: &IssueRequest,
-        account: &AccountRecord,
-    ) -> Result<Box<dyn IssueSession>, IssueError>;
-    /// Prepare another generation using the existing certificate's immutable definition.
-    /// This is storage groundwork for renewal, not a CA request or a scheduler.
-    ///
-    /// # Errors
-    /// Rejects missing definitions, changed account bindings and persistence failures.
-    async fn renew(
-        &self,
-        name: &CertificateName,
-        account: &AccountRecord,
-    ) -> Result<Box<dyn IssueSession>, IssueError>;
-    /// Open one exact generation and acquire an exclusive execution lease.
-    ///
-    /// # Errors
-    /// Rejects missing, mismatched, unsafe or contended generations.
-    async fn open(
-        &self,
-        name: &CertificateName,
-        operation_id: &str,
-    ) -> Result<Box<dyn IssueSession>, IssueError>;
-    /// Enumerate local snapshots only; never load private keys or contact a CA.
-    ///
-    /// # Errors
-    /// Rejects unsafe, oversized or corrupt journals.
-    async fn list(&self) -> Result<Vec<IssueRecord>, IssueError>;
-}
-
 /// Protocol/service failures without private key material.
 #[derive(Debug, Error)]
 pub enum IssueError {
@@ -766,7 +704,7 @@ pub struct IssueIdentity {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::issuance::*;
 
     #[test]
     fn generated_management_names_keep_a_bounded_prefix_and_lowercase_random_suffix() {

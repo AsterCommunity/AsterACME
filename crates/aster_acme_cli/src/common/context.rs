@@ -7,7 +7,7 @@ use crate::{
     config::{self, Config, DEFAULT_CA_DIRECTORY},
 };
 use aster_acme::transport::TransportOptions;
-use aster_acme_cli_storage::CliAccountStore;
+use aster_acme_cli_storage::account::CliAccountStore;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 /// Command lifetime dependencies: one output session and one reusable HTTP pool.
@@ -132,13 +132,13 @@ impl CliContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::commands::account::{
         args::{AccountCommand, CaArgs, NameArgs, RegisterArgs},
         execute,
     };
     use crate::common::args::{HttpArgs, LocalArgs};
-    use aster_acme::account::{AccountKeyStore, AccountStore};
+    use crate::common::context::*;
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 
     #[tokio::test]
     async fn explicit_account_user_agent_survives_restart_and_temporary_override() {
@@ -219,7 +219,7 @@ mod tests {
             .signer(
                 &context.directory,
                 "work",
-                aster_acme::account::KeyAccess::Existing,
+                aster_acme::storage::account::KeyAccess::Existing,
             )
             .await
             .unwrap();
@@ -256,7 +256,7 @@ mod tests {
             .signer(
                 &plain.directory,
                 "plain",
-                aster_acme::account::KeyAccess::Create(None),
+                aster_acme::storage::account::KeyAccess::Create(None),
             )
             .await
             .unwrap();

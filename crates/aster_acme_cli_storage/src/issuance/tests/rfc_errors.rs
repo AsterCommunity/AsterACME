@@ -1,5 +1,5 @@
 //! RFC 8555 error responses are evidence, not synthesized order states.
-use super::*;
+use crate::issuance::tests::*;
 use aster_acme_protocol::problem::ProblemKind;
 
 fn assert_saved_response(

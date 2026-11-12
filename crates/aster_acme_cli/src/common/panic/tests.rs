@@ -1,5 +1,5 @@
 //! Real hooks run in isolated test subprocesses because installation is process-global.
-use super::*;
+use crate::common::panic::*;
 use std::process::Command;
 
 #[test]

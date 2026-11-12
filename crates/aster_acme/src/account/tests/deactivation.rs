@@ -2,7 +2,7 @@
 use crate::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_protocol::jws::FlattenedJws;
 
-use super::*;
+use crate::account::tests::*;
 use crate::transport::{TransportOptions, tests::server};
 
 pub(super) async fn fixture(

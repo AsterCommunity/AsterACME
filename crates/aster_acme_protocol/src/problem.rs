@@ -97,7 +97,7 @@ pub struct Problem {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::problem::*;
 
     #[test]
     fn rfc8555_problem_types_roundtrip_and_extensions_remain_lossless() {

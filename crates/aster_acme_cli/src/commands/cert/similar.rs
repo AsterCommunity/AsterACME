@@ -74,7 +74,7 @@ pub(super) fn choose(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::cert::similar::*;
     #[test]
     fn no_match_remains_new_and_similar_flag_is_explicitly_parsed() {
         use clap::Parser;

@@ -33,7 +33,7 @@ pub(crate) fn normalize(contacts: Vec<String>) -> Result<Vec<String>, AccountErr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::account::contact::*;
 
     #[test]
     fn plain_and_explicit_mailboxes_have_the_same_wire_representation() {

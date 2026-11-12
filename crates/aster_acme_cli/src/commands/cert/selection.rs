@@ -28,10 +28,17 @@ pub(super) fn check_explicit_resume(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum CertificateLabel {
+    Standard,
+    Deployment,
+}
+
 pub(super) fn certificate_name(
     records: &[IssueRecord],
     explicit: Option<&str>,
     operation: Option<&str>,
+    label: CertificateLabel,
     output: &crate::common::session::OutputSession,
 ) -> CliResult<CertificateName> {
     if let Some(name) = explicit {
@@ -47,13 +54,17 @@ pub(super) fn certificate_name(
     if !terminal::interactive(output.is_json()) {
         return Err("Specify a certificate NAME or --operation <ID>, or use an interactive terminal to select a certificate.".into());
     }
-    let certificates = managed_records(records.to_vec())?;
+    let mut names = std::collections::BTreeMap::new();
+    for record in records {
+        names.entry(record.name.as_str()).or_insert(record);
+    }
+    let certificates = names.into_values().collect::<Vec<_>>();
     if certificates.is_empty() {
         return Err("No saved certificates. Use cert issue -d <DOMAIN> to request one.".into());
     }
     let choices = certificates
         .iter()
-        .map(certificate_label)
+        .map(|record| certificate_label(record, label))
         .collect::<Vec<_>>();
     let index = terminal::select_index("Choose a certificate:", &choices, 0, output)?;
     Ok(certificates
@@ -63,7 +74,40 @@ pub(super) fn certificate_name(
         .clone())
 }
 
-fn certificate_label(record: &IssueRecord) -> String {
+/// Resolve a deployment target from the completed `in_use` rows returned by storage.
+pub(super) fn deployment_certificate_name(
+    records: &[IssueRecord],
+    explicit: Option<&str>,
+    output: &crate::common::session::OutputSession,
+) -> CliResult<CertificateName> {
+    if let Some(name) = explicit {
+        let name = CertificateName::new(name)?;
+        if records.iter().any(|record| record.name == name) {
+            return Ok(name);
+        }
+        return Err(format!(
+            "Certificate '{}' has no completed, non-revoked in-use version to deploy.",
+            name.as_str()
+        )
+        .into());
+    }
+    if records.is_empty() {
+        return Err(
+            "No completed, non-revoked in-use certificates are available for deployment.".into(),
+        );
+    }
+    certificate_name(records, None, None, CertificateLabel::Deployment, output)
+}
+
+fn certificate_label(record: &IssueRecord, label: CertificateLabel) -> String {
+    let deployments = match label {
+        CertificateLabel::Standard => None,
+        CertificateLabel::Deployment => Some(match record.deployment_count {
+            Some(0) => "deployments: none".into(),
+            Some(count) => format!("deployments: {count}"),
+            None => "deployments: unknown".into(),
+        }),
+    };
     crate::common::selection::ChoiceLabel {
         name: record.name.as_str(),
         summary: Some(&super::render::domain_summary(record)),
@@ -72,7 +116,7 @@ fn certificate_label(record: &IssueRecord) -> String {
             record,
             time::OffsetDateTime::now_utc(),
         )),
-        marker: None,
+        marker: deployments.as_deref(),
     }
     .to_string()
 }
@@ -80,78 +124,24 @@ fn certificate_label(record: &IssueRecord) -> String {
 /// Selection intent prevents an inactive historical version becoming an implicit `in_use`.
 #[derive(Clone, Copy)]
 pub(super) enum RequestSelection {
-    Unfinished,
     InUse,
     Any,
-}
-
-/// One visible row per managed certificate. Inactive fallback rows are inventory only;
-/// they are never promoted or scheduled, and show still requires explicit history selection.
-pub(super) fn managed_records(records: Vec<IssueRecord>) -> CliResult<Vec<IssueRecord>> {
-    let mut grouped = std::collections::BTreeMap::<String, Vec<IssueRecord>>::new();
-    for record in records {
-        grouped
-            .entry(record.name.as_str().into())
-            .or_default()
-            .push(record);
-    }
-    grouped
-        .into_values()
-        .map(|mut records| {
-            if records.iter().filter(|record| record.is_in_use).count() > 1 {
-                return Err("Multiple in_use versions found for one managed certificate.".into());
-            }
-            records.sort_by(|a, b| {
-                b.is_in_use
-                    .cmp(&a.is_in_use)
-                    .then_with(|| b.unfinished().cmp(&a.unfinished()))
-                    .then(b.created_at.cmp(&a.created_at))
-                    .then(a.operation_id.cmp(&b.operation_id))
-            });
-            records
-                .into_iter()
-                .next()
-                .ok_or_else(|| "Empty certificate inventory group.".into())
-        })
-        .collect()
+    Completed,
 }
 
 pub(super) fn choose(
     records: Vec<IssueRecord>,
     name: &CertificateName,
     id: Option<&str>,
-    mode: RequestSelection,
     output: &crate::common::session::OutputSession,
 ) -> CliResult<IssueRecord> {
-    let mut candidates = records
+    let candidates = records
         .into_iter()
-        .filter(|record| {
-            record.name == *name
-                && match mode {
-                    RequestSelection::Unfinished => record.resume_candidate(),
-                    RequestSelection::InUse | RequestSelection::Any => true,
-                }
-                && id.is_none_or(|id| id == record.operation_id)
-        })
+        .filter(|record| record.name == *name && id.is_none_or(|id| record.operation_id == id))
         .collect::<Vec<_>>();
-    if matches!(mode, RequestSelection::InUse) && id.is_none() {
-        let in_use_count = candidates.iter().filter(|record| record.is_in_use).count();
-        match in_use_count {
-            0 => candidates.retain(IssueRecord::unfinished),
-            1 => candidates.retain(|record| record.is_in_use),
-            _ => {
-                return Err(
-                    "Multiple in_use versions found; inspect local certificate storage.".into(),
-                );
-            }
-        }
-        if candidates.is_empty() {
-            return Err("No in_use or unfinished request is selected. Use cert show --history or --operation <ID> to inspect retained versions.".into());
-        }
-    }
-    match candidates.as_slice() {
-        [] => Err("No matching saved request. Use cert list to inspect existing requests; a new request must be started explicitly.".into()),
-        [record] => Ok(record.clone()),
+    match candidates.len() {
+        0 => Err("No matching saved request. Use cert list to inspect existing requests; a new request must be started explicitly.".into()),
+        1 => candidates.into_iter().next().ok_or_else(|| "Missing selected request.".into()),
         _ if !terminal::interactive(output.is_json()) => Err("Several saved requests match. Use cert list and specify --operation <ID>; no request was selected automatically.".into()),
         _ => {
             let choices=candidates.iter().map(choice_label).collect::<Vec<_>>();

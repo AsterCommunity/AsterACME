@@ -22,6 +22,7 @@ pub mod renewal;
 mod renewal_calculation;
 pub mod revocation;
 pub mod solver;
+pub mod storage;
 pub mod transport;
 
 #[cfg(test)]

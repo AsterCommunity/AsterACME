@@ -2,7 +2,8 @@
 
 面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；自动 DNS 发布和 daemon 尚未实现。
 
-- `account`：账户服务、注册恢复、不可恢复停用、条款/EAB、对象安全的 `AccountStore` / `AccountKeyStore`。
+- `account`：账户服务、注册恢复、不可恢复停用、条款/EAB。
+- `storage::{account,issuance}`：对象安全的账户/签名器/轮换与证书会话契约；`storage::query` 提供类型化查询及纯版本投影，库不依赖文件系统。
 - `crypto`：`dyn AccountSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
 - `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。

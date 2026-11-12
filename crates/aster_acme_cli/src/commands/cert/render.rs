@@ -9,7 +9,9 @@ use aster_acme::issuance::{IssueOutcome, IssueRecord, ValidationRequirement};
 use aster_acme_core::revocation::RevocationState;
 use serde::Serialize;
 
-use super::report::{
+pub(crate) mod deployment;
+
+use crate::commands::cert::report::{
     BatchDisposition, CertificateResult, RenewalBatch, RenewalResult, RenewalSummary, SkipReason,
 };
 
@@ -17,7 +19,7 @@ pub(crate) fn render(
     report: &super::report::CertificateReport,
     format: Format,
 ) -> CliResult<String> {
-    use super::report::CertificateReport;
+    use crate::commands::cert::report::CertificateReport;
     match report {
         CertificateReport::Result {
             result: report,
@@ -42,6 +44,23 @@ pub(crate) fn render(
             ids,
             in_use_removed,
         } => removed(name, scope, ids, *in_use_removed, format),
+        CertificateReport::Deployment(report) => deployment_report(report, format),
+        CertificateReport::DeploymentDetails { name, binding } => {
+            deployment::details(name, binding, format)
+        }
+        CertificateReport::DeploymentUpdated { name, binding } => {
+            if format.json {
+                return deployment::details(name, binding, format);
+            }
+            Ok(format!(
+                "{} Deployment '{}' updated. Run cert deploy run {} -n {} to publish it.",
+                output::MessageKind::Done.badge(format.color),
+                output::safe(&binding.id),
+                output::safe(name),
+                output::safe(&binding.id)
+            ))
+        }
+        CertificateReport::DeploymentRemoved { name, id } => deployment_removed(name, id, format),
     }
 }
 
@@ -680,6 +699,8 @@ enum ResultOutput<'a> {
         operation: &'a IssueRecord,
         records: &'a [ValidationRequirement],
         artifacts: ArtifactPaths,
+        deployments: Vec<DeploymentStatusView<'a>>,
+        deployment_events: &'a [super::report::DeploymentEvent],
     },
     NotDue {
         operation: &'a IssueRecord,
@@ -692,6 +713,31 @@ struct ArtifactPaths {
     certificate: std::path::PathBuf,
     ca_chain: std::path::PathBuf,
     private_key: std::path::PathBuf,
+}
+
+#[derive(Serialize)]
+struct DeploymentStatusView<'a> {
+    id: &'a str,
+    generation: Option<&'a str>,
+    phase: aster_acme_cli_storage::issuance::DeploymentPhase,
+    attempts: u8,
+    last_error: Option<&'a str>,
+    execution_error: Option<&'a str>,
+}
+
+impl<'a> From<&'a aster_acme_cli_storage::issuance::DeploymentBinding>
+    for DeploymentStatusView<'a>
+{
+    fn from(binding: &'a aster_acme_cli_storage::issuance::DeploymentBinding) -> Self {
+        Self {
+            id: &binding.id,
+            generation: binding.generation.as_deref(),
+            phase: binding.phase,
+            attempts: binding.attempts,
+            last_error: binding.last_error.as_deref(),
+            execution_error: None,
+        }
+    }
 }
 
 fn artifact_lines(paths: &ArtifactPaths) -> Vec<String> {
@@ -722,7 +768,202 @@ pub(super) fn result(
 ) -> CliResult<String> {
     match result {
         CertificateResult::Issuance(issued) => outcome(issued, format, data_dir),
+        CertificateResult::Issued {
+            outcome: issued,
+            deployments,
+            deployment_events,
+        } => issued_result(issued, deployments, deployment_events, format, data_dir),
         CertificateResult::NotDue(record) => not_due(record, format),
+    }
+}
+
+fn issued_result(
+    issued: &IssueOutcome,
+    deployments: &[aster_acme_cli_storage::issuance::DeploymentBinding],
+    deployment_events: &[super::report::DeploymentEvent],
+    format: Format,
+    data_dir: &std::path::Path,
+) -> CliResult<String> {
+    if format.json {
+        return Ok(serde_json::to_string_pretty(
+            &ResultOutput::from_outcome(issued, data_dir, deployments)
+                .with_events(deployment_events),
+        )?);
+    }
+    let text = outcome(issued, format, data_dir)?;
+    if deployments.is_empty() && deployment_events.is_empty() {
+        return Ok(text);
+    }
+    let mut lines = vec![text, String::new()];
+    lines.extend(
+        deployment_events
+            .iter()
+            .map(|event| deployment::event(event, format.color)),
+    );
+    if !deployments.is_empty() {
+        lines.push(String::new());
+        let name = match issued {
+            IssueOutcome::Completed { record, .. }
+            | IssueOutcome::ActionRequired { record, .. } => record.name.as_str(),
+        };
+        lines.push(deployment_table(
+            name,
+            deployments,
+            true,
+            deployment_events,
+            format,
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn deployment_removed(name: &str, id: &str, format: Format) -> CliResult<String> {
+    #[derive(Serialize)]
+    struct View<'a> {
+        status: &'static str,
+        certificate: &'a str,
+        deployment: &'a str,
+    }
+    if format.json {
+        return Ok(serde_json::to_string_pretty(&View {
+            status: "removed",
+            certificate: name,
+            deployment: id,
+        })?);
+    }
+    Ok(format!(
+        "{} Deployment '{}' removed.",
+        output::MessageKind::Done.badge(format.color),
+        output::safe(id)
+    ))
+}
+
+fn deployment_report(
+    report: &super::report::DeploymentReport,
+    format: Format,
+) -> CliResult<String> {
+    #[derive(Serialize)]
+    struct View<'a> {
+        certificate: &'a str,
+        deployments: Vec<DeploymentStatusView<'a>>,
+        events: &'a [super::report::DeploymentEvent],
+    }
+    if format.json {
+        return Ok(serde_json::to_string_pretty(&View {
+            certificate: &report.name,
+            events: &report.events,
+            deployments: report
+                .entries
+                .iter()
+                .map(|binding| {
+                    let mut view = DeploymentStatusView::from(binding);
+                    view.execution_error = current_error(&report.events, &binding.id);
+                    view
+                })
+                .collect(),
+        })?);
+    }
+    if report.entries.is_empty() {
+        return Ok(format!(
+            "No deployment targets configured for {}.\n{}",
+            output::safe(&report.name),
+            output::tips(
+                "Use cert deploy add --help to configure a target.",
+                format.color
+            ),
+        ));
+    }
+    Ok(deployment_table(
+        &report.name,
+        &report.entries,
+        report.attempted,
+        &report.events,
+        format,
+    ))
+}
+
+fn deployment_table(
+    name: &str,
+    entries: &[aster_acme_cli_storage::issuance::DeploymentBinding],
+    attempted: bool,
+    events: &[super::report::DeploymentEvent],
+    format: Format,
+) -> String {
+    let mut rows = vec![[
+        "DEPLOYMENT".into(),
+        "GENERATION".into(),
+        "STATUS".into(),
+        "ATTEMPTS".into(),
+        "ERROR".into(),
+    ]];
+    for entry in entries {
+        let error = current_error(events, &entry.id);
+        rows.push([
+            entry.id.clone(),
+            entry.generation.clone().unwrap_or_else(|| "—".into()),
+            if error.is_some() {
+                "execution failed".into()
+            } else {
+                deployment_phase(entry.phase).0.into()
+            },
+            entry.attempts.to_string(),
+            error
+                .map(str::to_owned)
+                .or_else(|| entry.last_error.clone())
+                .unwrap_or_else(|| "—".into()),
+        ]);
+    }
+    let mut lines = vec![format!(
+        "Local deployments for {} (saved execution status):",
+        output::safe(name)
+    )];
+    lines.extend(crate::common::table::align(
+        &rows,
+        Some(&|row, column, cell| {
+            let style = match (row, column) {
+                (0, _) => Style::BoldCyan,
+                (_, 2) if current_error(events, &entries[row - 1].id).is_some() => Style::Red,
+                (_, 2) => deployment_phase(entries[row - 1].phase).1,
+                _ => Style::Plain,
+            };
+            output::styled(cell, style, format.color)
+        }),
+    ));
+    lines.push(output::tips(
+        "Use cert deploy show CERT_NAME DEPLOY_NAME for configuration and saved execution details.",
+        format.color,
+    ));
+    if attempted {
+        lines.push(output::tips(
+            "After checking the service, retry with cert deploy run CERT_NAME -n DEPLOY_NAME.",
+            format.color,
+        ));
+    }
+    lines.join("\n")
+}
+
+fn current_error<'a>(events: &'a [super::report::DeploymentEvent], id: &str) -> Option<&'a str> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.kind == output::MessageKind::Error && event.deployment.as_deref() == Some(id)
+        })
+        .map(|event| event.message.as_str())
+}
+
+fn deployment_phase(
+    phase: aster_acme_cli_storage::issuance::DeploymentPhase,
+) -> (&'static str, Style) {
+    use aster_acme_cli_storage::issuance::DeploymentPhase;
+    match phase {
+        DeploymentPhase::Configured => ("configured", Style::Yellow),
+        DeploymentPhase::Publishing => ("publishing", Style::Yellow),
+        DeploymentPhase::PublishFailed => ("publication failed", Style::Red),
+        DeploymentPhase::Reloading => ("reloading", Style::Yellow),
+        DeploymentPhase::ReloadFailed => ("reload failed", Style::Red),
+        DeploymentPhase::ReloadUncertain => ("reload unconfirmed", Style::Yellow),
+        DeploymentPhase::Deployed => ("deployed", Style::Green),
     }
 }
 
@@ -733,12 +974,37 @@ fn result_output<'a>(
 ) -> ResultOutput<'a> {
     match result {
         CertificateResult::NotDue(record) => ResultOutput::NotDue { operation: record },
-        CertificateResult::Issuance(outcome) => ResultOutput::from_outcome(outcome, data_dir),
+        CertificateResult::Issuance(outcome) => ResultOutput::from_outcome(outcome, data_dir, &[]),
+        CertificateResult::Issued {
+            outcome,
+            deployments,
+            deployment_events,
+        } => ResultOutput::from_outcome(outcome, data_dir, deployments)
+            .with_events(deployment_events),
     }
 }
 
 impl<'a> ResultOutput<'a> {
-    fn from_outcome(outcome: &'a IssueOutcome, data_dir: &std::path::Path) -> Self {
+    fn with_events(mut self, events: &'a [super::report::DeploymentEvent]) -> Self {
+        if let Self::Completed {
+            deployment_events,
+            deployments,
+            ..
+        } = &mut self
+        {
+            *deployment_events = events;
+            for binding in deployments {
+                binding.execution_error = current_error(events, binding.id);
+            }
+        }
+        self
+    }
+
+    fn from_outcome(
+        outcome: &'a IssueOutcome,
+        data_dir: &std::path::Path,
+        deployments: &'a [aster_acme_cli_storage::issuance::DeploymentBinding],
+    ) -> Self {
         match outcome {
             IssueOutcome::ActionRequired { record, records } => Self::ActionRequired {
                 operation: record,
@@ -757,6 +1023,8 @@ impl<'a> ResultOutput<'a> {
                 Self::Completed {
                     operation: record,
                     records: cleanup,
+                    deployments: deployments.iter().map(DeploymentStatusView::from).collect(),
+                    deployment_events: &[],
                     artifacts: ArtifactPaths {
                         fullchain: generation.join("fullchain.pem"),
                         certificate: generation.join("cert.pem"),
@@ -862,51 +1130,10 @@ pub(super) fn batch(
     let mut rows = vec![["NAME".into(), "STATUS".into(), "NEXT RENEWAL (UTC)".into()]];
     let mut details = Vec::new();
     for entry in &report.entries {
-        let (status, renew_at) = match &entry.result {
-            RenewalResult::Outcome(CertificateResult::NotDue(record)) => {
-                ("not due", record.renewal.as_ref().map(|plan| plan.renew_at))
-            }
-            RenewalResult::Outcome(CertificateResult::Issuance(outcome)) => {
-                details.push(self::outcome(outcome, format, data_dir)?);
-                match outcome {
-                    IssueOutcome::Completed { record, .. } => (
-                        "completed",
-                        record.renewal.as_ref().map(|plan| plan.renew_at),
-                    ),
-                    IssueOutcome::ActionRequired { .. } => ("action required", None),
-                }
-            }
-            RenewalResult::Skipped(reason) => {
-                details.push(format!(
-                    "{} {}: {}",
-                    output::MessageKind::Warning.badge(color),
-                    output::safe(&entry.name),
-                    reason.message()
-                ));
-                ("skipped", None)
-            }
-            RenewalResult::Failed { message, hint } => {
-                details.push(format!(
-                    "{} {}: {}{}",
-                    output::MessageKind::Error.badge(color),
-                    output::safe(&entry.name),
-                    output::safe(message),
-                    hint.as_ref().map_or_else(String::new, |hint| format!(
-                        "\n{}",
-                        output::tips(hint, color)
-                    ))
-                ));
-                ("failed", None)
-            }
-            RenewalResult::Cancelled => {
-                details.push(format!(
-                    "{} {}: stopped; inspect the saved request and selected certificate",
-                    output::MessageKind::Warning.badge(color),
-                    output::safe(&entry.name)
-                ));
-                ("cancelled", None)
-            }
-        };
+        let (status, renew_at, detail) = render_batch_entry(entry, format, data_dir)?;
+        if let Some(detail) = detail {
+            details.push(detail);
+        }
         rows.push([
             output::safe(&entry.name),
             status.into(),
@@ -945,15 +1172,135 @@ pub(super) fn batch(
     Ok(lines.join("\n"))
 }
 
+fn render_batch_entry(
+    entry: &super::report::RenewalEntry,
+    format: Format,
+    data_dir: &std::path::Path,
+) -> CliResult<(&'static str, Option<time::OffsetDateTime>, Option<String>)> {
+    let color = format.color;
+    match &entry.result {
+        RenewalResult::Outcome(CertificateResult::NotDue(record)) => Ok((
+            "not due",
+            record.renewal.as_ref().map(|plan| plan.renew_at),
+            None,
+        )),
+        RenewalResult::Outcome(CertificateResult::Issuance(outcome)) => {
+            let status = match outcome {
+                IssueOutcome::Completed { record, .. } => (
+                    "completed",
+                    record.renewal.as_ref().map(|plan| plan.renew_at),
+                ),
+                IssueOutcome::ActionRequired { .. } => ("action required", None),
+            };
+            Ok((
+                status.0,
+                status.1,
+                Some(self::outcome(outcome, format, data_dir)?),
+            ))
+        }
+        RenewalResult::Outcome(CertificateResult::Issued {
+            outcome,
+            deployments,
+            deployment_events,
+        }) => {
+            let (status, renew_at) = match outcome {
+                IssueOutcome::Completed { record, .. }
+                    if deployment_events
+                        .iter()
+                        .any(|event| event.kind == output::MessageKind::Error)
+                        || deployments.iter().any(|entry| {
+                            entry.phase
+                                != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                        }) =>
+                {
+                    (
+                        "deployment failed",
+                        record.renewal.as_ref().map(|p| p.renew_at),
+                    )
+                }
+                IssueOutcome::Completed { record, .. } => {
+                    ("completed", record.renewal.as_ref().map(|p| p.renew_at))
+                }
+                IssueOutcome::ActionRequired { .. } => ("action required", None),
+            };
+            Ok((
+                status,
+                renew_at,
+                Some(issued_result(
+                    outcome,
+                    deployments,
+                    deployment_events,
+                    format,
+                    data_dir,
+                )?),
+            ))
+        }
+        RenewalResult::Skipped(reason) => Ok((
+            "skipped",
+            None,
+            Some(format!(
+                "{} {}: {}",
+                output::MessageKind::Warning.badge(color),
+                output::safe(&entry.name),
+                reason.message()
+            )),
+        )),
+        RenewalResult::Failed { message, hint } => Ok((
+            "failed",
+            None,
+            Some(format!(
+                "{} {}: {}{}",
+                output::MessageKind::Error.badge(color),
+                output::safe(&entry.name),
+                output::safe(message),
+                hint.as_ref().map_or_else(String::new, |hint| format!(
+                    "\n{}",
+                    output::tips(hint, color)
+                ))
+            )),
+        )),
+        RenewalResult::Cancelled => Ok((
+            "cancelled",
+            None,
+            Some(format!(
+                "{} {}: stopped; inspect the saved request and selected certificate",
+                output::MessageKind::Warning.badge(color),
+                output::safe(&entry.name)
+            )),
+        )),
+    }
+}
+
 fn batch_status_style(result: &RenewalResult) -> Style {
     match result {
         RenewalResult::Outcome(CertificateResult::Issuance(IssueOutcome::Completed { .. })) => {
             Style::Green
         }
-        RenewalResult::Outcome(CertificateResult::NotDue(_)) => Style::Cyan,
-        RenewalResult::Outcome(CertificateResult::Issuance(IssueOutcome::ActionRequired {
+        RenewalResult::Outcome(CertificateResult::Issued {
+            outcome: IssueOutcome::Completed { .. },
+            deployments,
+            deployment_events,
+        }) if deployment_events
+            .iter()
+            .any(|event| event.kind == output::MessageKind::Error)
+            || deployments.iter().any(|entry| {
+                entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+            }) =>
+        {
+            Style::Red
+        }
+        RenewalResult::Outcome(CertificateResult::Issued {
+            outcome: IssueOutcome::Completed { .. },
             ..
-        }))
+        }) => Style::Green,
+        RenewalResult::Outcome(CertificateResult::NotDue(_)) => Style::Cyan,
+        RenewalResult::Outcome(
+            CertificateResult::Issuance(IssueOutcome::ActionRequired { .. })
+            | CertificateResult::Issued {
+                outcome: IssueOutcome::ActionRequired { .. },
+                ..
+            },
+        )
         | RenewalResult::Skipped(_)
         | RenewalResult::Cancelled => Style::Yellow,
         RenewalResult::Failed { .. } => Style::Red,
@@ -969,7 +1316,7 @@ pub(super) fn outcome(
         IssueOutcome::ActionRequired { record, records } => (record.as_ref(), records.as_slice()),
         IssueOutcome::Completed { record, cleanup } => (record.as_ref(), cleanup.as_slice()),
     };
-    let result = ResultOutput::from_outcome(outcome, data_dir);
+    let result = ResultOutput::from_outcome(outcome, data_dir, &[]);
     if format.json {
         return Ok(serde_json::to_string_pretty(&result)?);
     }
@@ -1165,7 +1512,95 @@ pub(super) fn revoked(record: &IssueRecord, format: Format) -> CliResult<String>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::cert::render::*;
+
+    #[test]
+    fn deployment_list_empty_and_json_match_other_local_lists() {
+        let report = super::super::report::DeploymentReport {
+            events: Vec::new(),
+            name: "web".into(),
+            entries: Vec::new(),
+            attempted: false,
+        };
+        let text = deployment_report(&report, Format::plain(false)).unwrap();
+        assert!(text.starts_with("No deployment targets configured for web."));
+        assert!(!text.contains("GENERATION"));
+        assert!(text.contains("Tips:"));
+        assert!(!text.contains('\x1b'));
+        let json: serde_json::Value =
+            serde_json::from_str(&deployment_report(&report, Format::plain(true)).unwrap())
+                .unwrap();
+        assert_eq!(json["certificate"], "web");
+        assert_eq!(json["deployments"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn deployment_list_uses_shared_alignment_and_semantic_styles_for_every_phase() {
+        use aster_acme_cli_storage::issuance::{
+            DeploymentBinding, DeploymentPhase, DeploymentTarget,
+        };
+        let phases = [
+            DeploymentPhase::Configured,
+            DeploymentPhase::Publishing,
+            DeploymentPhase::PublishFailed,
+            DeploymentPhase::Reloading,
+            DeploymentPhase::ReloadFailed,
+            DeploymentPhase::ReloadUncertain,
+            DeploymentPhase::Deployed,
+        ];
+        let report = super::super::report::DeploymentReport {
+            events: Vec::new(),
+            name: "web\n".into(),
+            entries: phases
+                .iter()
+                .enumerate()
+                .map(|(index, phase)| DeploymentBinding {
+                    permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
+                    id: format!("target-{index}"),
+                    target: DeploymentTarget::Directory {
+                        path: "/tmp".into(),
+                    },
+                    reload_command: vec!["secret-command".into()],
+                    timeout_seconds: 30,
+                    max_retries: 0,
+                    generation: None,
+                    phase: *phase,
+                    attempts: 0,
+                    last_error: Some("error\nvalue".into()),
+                })
+                .collect(),
+            attempted: false,
+        };
+        let plain = deployment_report(&report, Format::plain(false)).unwrap();
+        let colored = deployment_report(
+            &report,
+            Format {
+                json: false,
+                color: true,
+            },
+        )
+        .unwrap();
+        assert!(plain.starts_with("Local deployments for web\\n (saved execution status):"));
+        assert!(plain.contains("reload unconfirmed"));
+        assert!(plain.contains("error\\nvalue"));
+        assert!(!plain.contains("secret-command"));
+        assert!(colored.contains("\x1b[1;36mDEPLOYMENT"));
+        assert!(colored.contains("\x1b[31mreload failed"));
+        assert!(colored.contains("\x1b[32mdeployed"));
+        let header = plain.lines().nth(1).unwrap();
+        for line in plain
+            .lines()
+            .skip(2)
+            .filter(|line| !line.starts_with("Tips:"))
+        {
+            use unicode_width::UnicodeWidthStr as _;
+            assert_eq!(
+                line[..line.find("error\\nvalue").unwrap()].width(),
+                header[..header.find("ERROR").unwrap()].width()
+            );
+        }
+    }
+
     fn detailed_record() -> IssueRecord {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
             "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
@@ -1556,5 +1991,169 @@ mod tests {
                 "forbidden by policy"
             );
         }
+    }
+
+    #[test]
+    fn deployment_json_status_never_serializes_reload_command_arguments() {
+        let entry = aster_acme_cli_storage::issuance::DeploymentBinding {
+            permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
+            id: "nginx".into(),
+            target: aster_acme_cli_storage::issuance::DeploymentTarget::Directory {
+                path: std::path::PathBuf::from("/etc/nginx/certs"),
+            },
+            reload_command: vec!["systemctl".into(), "--password=secret".into()],
+            timeout_seconds: 30,
+            max_retries: 3,
+            generation: Some("generation-1".into()),
+            phase: aster_acme_cli_storage::issuance::DeploymentPhase::Deployed,
+            attempts: 1,
+            last_error: None,
+        };
+        let serialized = serde_json::to_string(&DeploymentStatusView::from(&entry)).unwrap();
+        assert!(serialized.contains("generation-1"));
+        assert!(!serialized.contains("systemctl"));
+        assert!(!serialized.contains("secret"));
+    }
+
+    #[test]
+    fn issued_deployment_failure_is_visible_in_single_and_batch_json_and_exit_status() {
+        use crate::commands::cert::report::{CertificateReport, RenewalEntry, RenewalResult};
+        use aster_acme_cli_storage::issuance::{
+            DeploymentBinding, DeploymentPhase, DeploymentTarget,
+        };
+        for phase in [
+            DeploymentPhase::Deployed,
+            DeploymentPhase::ReloadFailed,
+            DeploymentPhase::ReloadUncertain,
+        ] {
+            let result_value = CertificateResult::Issued {
+                deployment_events: Vec::new(),
+                outcome: IssueOutcome::Completed {
+                    record: Box::new(detailed_record()),
+                    cleanup: Vec::new(),
+                },
+                deployments: vec![DeploymentBinding {
+                    permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
+                    id: "nginx".into(),
+                    target: DeploymentTarget::Directory {
+                        path: "/tmp".into(),
+                    },
+                    reload_command: vec!["secret-command".into()],
+                    timeout_seconds: 30,
+                    max_retries: 0,
+                    generation: Some("generation".into()),
+                    phase,
+                    attempts: 1,
+                    last_error: None,
+                }],
+            };
+            let failed = phase != DeploymentPhase::Deployed;
+            let report = CertificateReport::Result {
+                result: result_value,
+                data_dir: "/tmp".into(),
+            };
+            assert!(matches!(
+                (report.exit_status(), failed),
+                (crate::common::session::ExitStatus::Failed, true)
+                    | (crate::common::session::ExitStatus::Success, false)
+            ));
+            let text = render(&report, Format::plain(true)).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(json["deployments"][0]["id"], "nginx");
+            assert!(!text.contains("secret-command"));
+            let CertificateReport::Result { result, .. } = report else {
+                panic!("expected result");
+            };
+            let batch_report = RenewalBatch {
+                entries: vec![RenewalEntry {
+                    name: "web".into(),
+                    result: RenewalResult::Outcome(result),
+                }],
+                cancelled: false,
+            };
+            assert_eq!(batch_report.summary().failed, usize::from(failed));
+            assert_eq!(batch_report.summary().completed, usize::from(!failed));
+            let json: serde_json::Value = serde_json::from_str(
+                &batch(
+                    &batch_report,
+                    Format::plain(true),
+                    std::path::Path::new("/tmp"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                json["results"][0]["result"]["deployments"][0]["id"],
+                "nginx"
+            );
+            assert!(
+                batch(
+                    &batch_report,
+                    Format::plain(false),
+                    std::path::Path::new("/tmp")
+                )
+                .unwrap()
+                .contains(if failed {
+                    "deployment failed"
+                } else {
+                    "completed"
+                })
+            );
+        }
+    }
+    #[test]
+    fn automatic_deployment_uses_same_table_and_orders_events_after_certificate_summary() {
+        use crate::commands::cert::report::{DeploymentEvent, DeploymentReport};
+        use aster_acme_cli_storage::issuance::{
+            DeploymentBinding, DeploymentPhase, DeploymentTarget,
+        };
+        let record = detailed_record();
+        let entry = DeploymentBinding {
+            permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
+            id: "nginx".into(),
+            target: DeploymentTarget::Directory {
+                path: "/tmp".into(),
+            },
+            reload_command: vec!["private-command".into()],
+            timeout_seconds: 30,
+            max_retries: 0,
+            generation: Some("generation".into()),
+            phase: DeploymentPhase::Deployed,
+            attempts: 1,
+            last_error: None,
+        };
+        let events = vec![DeploymentEvent {
+            deployment: Some("nginx".into()),
+            kind: output::MessageKind::Info,
+            message: "Started deployment 'nginx'".into(),
+            at: record.created_at,
+        }];
+        let manual = deployment_report(
+            &DeploymentReport {
+                events: Vec::new(),
+                name: record.name.as_str().into(),
+                entries: vec![entry.clone()],
+                attempted: true,
+            },
+            Format::plain(false),
+        )
+        .unwrap();
+        let outcome = IssueOutcome::Completed {
+            record: Box::new(record),
+            cleanup: Vec::new(),
+        };
+        let automatic = issued_result(
+            &outcome,
+            &[entry],
+            &events,
+            Format::plain(false),
+            std::path::Path::new("/tmp"),
+        )
+        .unwrap();
+        assert!(automatic.ends_with(&manual));
+        assert!(automatic.contains("\n\n[2026-01-01 00:00:00 UTC] [INFO]"));
+        assert!(automatic.find("[DONE]").unwrap() < automatic.find("Started deployment").unwrap());
+        assert!(!automatic.contains("Deployment targets:"));
+        assert!(!automatic.contains("private-command"));
     }
 }

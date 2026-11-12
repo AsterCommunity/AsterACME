@@ -1,5 +1,5 @@
 //! CLI policy does not become protocol logic; persisted definitions are authoritative.
-use super::*;
+use crate::commands::cert::validation::*;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
 use clap::Parser;
 use std::time::{Duration, Instant};
@@ -74,7 +74,7 @@ fn webroot_arguments_are_scoped_and_resume_cannot_override_saved_configuration()
             "-c",
             "webroot"
         ])
-        .is_err()
+        .is_ok()
     );
     assert!(
         Args::try_parse_from([

@@ -1,15 +1,13 @@
 //! Private issuance generations, fixed key/CSR, and atomic `in_use`-generation selection.
-use super::{
-    StorageError, store_error,
+use crate::{
+    account::store_error,
     toml_file::{self, FileLease, atomic_write, ensure_real_dir, private_dir, read_private},
 };
+use aster_acme::storage::issuance::{IssueSession, IssueStore};
+use aster_acme::storage::query::IssueQuery;
 use aster_acme::{
     account::AccountRecord,
-    crypto::{AccountSigner, key::AccountKey},
-    issuance::{
-        CertificateName, IssueError, IssueRecord, IssueRequest, IssueSession, IssueStore,
-        certificate,
-    },
+    issuance::{CertificateName, IssueError, IssueRecord, IssueRequest, certificate},
 };
 use aster_acme_core::workflow::{IssuancePhase, SubmissionState};
 use async_trait::async_trait;
@@ -21,7 +19,16 @@ use std::{
     time::Duration,
 };
 
+mod deployment;
+mod generation;
 mod publication;
+mod query;
+mod session;
+use crate::issuance::generation::Initialization;
+pub use deployment::{
+    DeploymentArtifacts, DeploymentBinding, DeploymentDefinition, DeploymentPatch,
+    DeploymentPermissions, DeploymentPhase, DeploymentSession, DeploymentTarget,
+};
 pub mod removal;
 
 const MAX_JOURNAL: u64 = 1024 * 1024;
@@ -57,15 +64,21 @@ impl CliIssueStore {
                 removal::ensure_idle(&slot).map_err(std::io::Error::other)?;
                 let config = selection(&slot).map_err(std::io::Error::other)?;
                 let expected = match config.cert.in_use.as_ref() {
-                    Some(id) => read_generations(&slot, &config.cert.name)
-                        .map_err(std::io::Error::other)?
-                        .into_iter()
-                        .find(|record| &record.operation_id == id)
-                        .map(|record| record.generation_name())
-                        .ok_or_else(|| {
-                            std::io::Error::other("selected certificate generation missing")
-                        })
-                        .map(Some)?,
+                    Some(id) => query::read(
+                        slot.parent()
+                            .ok_or_else(|| std::io::Error::other("missing catalog parent"))?,
+                        &IssueQuery {
+                            name: Some(config.cert.name.clone()),
+                            operation_id: Some(id.clone()),
+                            ..IssueQuery::default()
+                        },
+                    )
+                    .map_err(std::io::Error::other)?
+                    .into_iter()
+                    .find(|record| &record.operation_id == id)
+                    .map(|record| record.generation_name())
+                    .ok_or_else(|| std::io::Error::other("selected certificate generation missing"))
+                    .map(Some)?,
                     None => None,
                 };
                 publication::NATIVE
@@ -82,9 +95,9 @@ impl CliIssueStore {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Journal {
+struct Journal<T = IssueRecord> {
     version: u32,
-    operation: IssueRecord,
+    operation: T,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -104,6 +117,8 @@ struct CertificateSelection {
     solver_config: serde_json::Value,
     solver_id: String,
     in_use: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deployments: Vec<deployment::DeploymentBinding>,
 }
 
 impl CertificateSelection {
@@ -155,7 +170,14 @@ fn failure(message: &str) -> IssueError {
     IssueError::Store(store_error(message))
 }
 
-/// IDs are opaque base64url thumbprints generated locally, never paths from the CA.
+fn new_operation_id() -> Result<String, IssueError> {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let mut random = [0_u8; 32];
+    aws_lc_rs::rand::fill(&mut random).map_err(|_| aster_acme::crypto::CryptoError::Randomness)?;
+    Ok(URL_SAFE_NO_PAD.encode(random))
+}
+
+/// IDs are opaque 32-byte base64url random values generated locally, never CA paths.
 #[must_use]
 pub fn valid_operation_id(value: &str) -> bool {
     value.len() == 43
@@ -195,7 +217,7 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
 fn write_journal(path: &Path, record: &IssueRecord) -> Result<(), IssueError> {
     let text = toml::to_string_pretty(&Journal {
         version: 1,
-        operation: record.clone(),
+        operation: record,
     })
     .map_err(|_| failure("cannot encode issuance journal"))?;
     toml_file::write_text(
@@ -267,6 +289,7 @@ fn material_digest(key: &[u8], csr: &[u8]) -> String {
 fn read_generations(slot: &Path, name: &CertificateName) -> Result<Vec<IssueRecord>, IssueError> {
     ensure_real_dir(slot)?;
     let mut records = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for (index, entry) in fs::read_dir(slot)
         .map_err(|_| failure("cannot enumerate certificate requests"))?
         .enumerate()
@@ -292,10 +315,7 @@ fn read_generations(slot: &Path, name: &CertificateName) -> Result<Vec<IssueReco
         {
             return Err(failure("managed certificate generation identity mismatch"));
         }
-        if records
-            .iter()
-            .any(|saved: &IssueRecord| saved.operation_id == record.operation_id)
-        {
+        if !seen.insert(record.operation_id.clone()) {
             return Err(failure("duplicate managed operation ID"));
         }
         records.push(record);
@@ -309,114 +329,6 @@ pub enum RenewalPreparation {
     NotDue(Box<IssueRecord>),
     /// New or recovered generation with its exclusive lease.
     Ready(Box<dyn IssueSession>),
-}
-
-impl CliIssueStore {
-    async fn initialize(
-        &self,
-        input: Initialization,
-        account: &AccountRecord,
-    ) -> Result<RenewalPreparation, IssueError> {
-        match &input {
-            Initialization::New(request) => validate_request(request, account)?,
-            Initialization::Renewal(_) | Initialization::Scheduled { .. }
-                if !account.is_usable() =>
-            {
-                return Err(failure("renewal requires an active account"));
-            }
-            Initialization::Renewal(_) | Initialization::Scheduled { .. } => {}
-        }
-        let name = match &input {
-            Initialization::New(request) => &request.name,
-            Initialization::Renewal(name) | Initialization::Scheduled { name, .. } => name,
-        };
-        let lease = self.lease(name).await?;
-        let slot = self.slot(name);
-        let account = account.clone();
-        tokio::task::spawn_blocking(move || {
-            if let Initialization::Scheduled {
-                expected_in_use,
-                immediate,
-                ..
-            } = &input
-                && let Some(in_use) = check_renewal_schedule(&slot, expected_in_use, *immediate)?
-            {
-                return Ok(RenewalPreparation::NotDue(Box::new(in_use)));
-            }
-            let renewal_of = prepare_initialization(&slot, &input)?;
-            let request = initialize_definition(&slot, input, &account)?;
-            if let Some(record) = existing_renewal(&slot, &request.name, renewal_of.as_ref())? {
-                let generation = slot.join(record.generation_name());
-                check_material(&generation, &record)?;
-                return Ok(RenewalPreparation::Ready(Box::new(Session {
-                    slot,
-                    generation,
-                    lease,
-                    initial: record,
-                    io: Arc::new(tokio::sync::Mutex::new(())),
-                })));
-            }
-            if read_generations(&slot, &request.name)?.len() >= 1024 {
-                return Err(failure("certificate generation limit reached"));
-            }
-            let operation_id =
-                AccountKey::generate(aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256)?
-                    .jwk()?
-                    .thumbprint()?;
-            let material = certificate::generate(&request.identifiers, request.key_algorithm)?;
-            let record = IssueRecord {
-                is_in_use: false,
-                renewal_of,
-                solver_id: request.solver_id.clone(),
-                challenge: request.challenge,
-                solver_config: request.solver_config.clone(),
-                operation_id,
-                name: request.name,
-                created_at: time::OffsetDateTime::now_utc(),
-                account_name: request.account_name,
-                account_id: account.account_id,
-                directory: account.directory_url,
-                account_url: account
-                    .account_url
-                    .ok_or_else(|| failure("missing account URL"))?,
-                account_thumbprint: account.key_thumbprint,
-                key_algorithm: request.key_algorithm,
-                identifiers: request.identifiers,
-                phase: IssuancePhase::CreatingOrder,
-                creation_submitted: false,
-                creation_failure: None,
-                submitted_replaces: None,
-                order_url: None,
-                order: None,
-                authorizations: Vec::new(),
-                finalize_submitted: SubmissionState::NotSubmitted,
-                finalize_rejection: None,
-                next_poll_at: None,
-                poll_wait_source: None,
-                certificate_not_after: None,
-                renewal: None,
-                revocation: aster_acme::revocation::RevocationRecord::default(),
-            };
-            let generation = slot.join(record.generation_name());
-            fs::create_dir(&generation)
-                .map_err(|_| failure("cannot create unique issuance generation"))?;
-            private_dir(&generation)?;
-            // Make the generation visible before writing private material. An interrupted
-            // initialization is listed and fails closed on resume, never generates a new key.
-            write_journal(&generation.join("operation.toml"), &record)?;
-            write_material(&generation, &material)?;
-            write_journal(&generation.join("operation.toml"), &record)?;
-            Ok(RenewalPreparation::Ready(Box::new(Session {
-                slot,
-                generation,
-                lease,
-                initial: record,
-                io: Arc::new(tokio::sync::Mutex::new(())),
-            })))
-        })
-        .await
-        .map_err(|_| failure("issuance initialization worker failed"))?
-    }
 }
 
 impl CliIssueStore {
@@ -441,231 +353,6 @@ impl CliIssueStore {
             account,
         )
         .await
-    }
-}
-
-fn check_renewal_schedule(
-    slot: &Path,
-    expected_in_use: &str,
-    immediate: bool,
-) -> Result<Option<IssueRecord>, IssueError> {
-    use aster_acme_core::renewal::{RenewalDecision, renewal_decision};
-    removal::ensure_idle(slot)?;
-    let config = selection(slot)?;
-    if config.cert.in_use.as_deref() != Some(expected_in_use) {
-        return Err(failure(
-            "in_use changed while selecting renewal; inspect cert show before retrying",
-        ));
-    }
-    let records = read_generations(slot, &config.cert.name)?;
-    let mut in_use = records
-        .iter()
-        .find(|record| record.operation_id == expected_in_use)
-        .cloned()
-        .ok_or_else(|| failure("in_use certificate is missing"))?;
-    if in_use.unfinished() || !publication::NATIVE.matches(slot, &in_use)? {
-        return Err(failure(
-            "in_use certificate selection is inconsistent; refusing renewal",
-        ));
-    }
-    in_use.is_in_use = true;
-    let pending = records.iter().any(|record| {
-        record.unfinished()
-            && record
-                .renewal_of
-                .as_ref()
-                .is_some_and(|previous| previous.operation_id == expected_in_use)
-    });
-    let due = in_use
-        .renewal
-        .as_ref()
-        .map(|plan| plan.renew_at)
-        .ok_or_else(|| failure("in_use certificate has no renewal plan"))?;
-    match renewal_decision(
-        pending,
-        in_use.revocation.state,
-        due.unix_timestamp(),
-        time::OffsetDateTime::now_utc().unix_timestamp(),
-        immediate,
-    ) {
-        RenewalDecision::NotDue => Ok(Some(in_use)),
-        RenewalDecision::Start | RenewalDecision::Resume => Ok(None),
-        RenewalDecision::RevocationUncertain => Err(failure(
-            "certificate revocation is unconfirmed; resolve it before renewing",
-        )),
-    }
-}
-
-// Validate the live selection under the object lease before key generation.
-fn prepare_initialization(
-    slot: &Path,
-    input: &Initialization,
-) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
-    match input {
-        Initialization::New(_) => {
-            fs::create_dir_all(slot).map_err(|_| failure("cannot create certificate directory"))?;
-        }
-        Initialization::Renewal(_) | Initialization::Scheduled { .. } => {}
-    }
-    ensure_real_dir(slot)?;
-    private_dir(slot)?;
-    removal::ensure_idle(slot)?;
-    let renewal_of = match input {
-        Initialization::New(_) => None,
-        Initialization::Renewal(_) | Initialization::Scheduled { .. } => predecessor(slot)?,
-    };
-    Ok(renewal_of)
-}
-
-// Persist the immutable key/CSR pair and digest together while the caller holds
-// the certificate lease; a partially written set remains non-resumable.
-fn write_material(
-    generation: &Path,
-    material: &certificate::CertificateMaterial,
-) -> Result<(), IssueError> {
-    atomic_write(&generation.join("private-key.pk8"), &material.key)
-        .map_err(|_| failure("cannot persist certificate key"))?;
-    atomic_write(&generation.join("request.der"), &material.csr)
-        .map_err(|_| failure("cannot persist fixed CSR"))?;
-    atomic_write(
-        &generation.join("material.sha256"),
-        material_digest(&material.key, &material.csr).as_bytes(),
-    )
-    .map_err(|_| failure("cannot persist key/CSR manifest"))?;
-    Ok(())
-}
-
-fn existing_renewal(
-    slot: &Path,
-    name: &CertificateName,
-    previous: Option<&aster_acme::issuance::RenewalPredecessor>,
-) -> Result<Option<IssueRecord>, IssueError> {
-    let Some(previous) = previous else {
-        return Ok(None);
-    };
-    let pending = read_generations(slot, name)?
-        .into_iter()
-        .filter(|record| record.unfinished() && record.renewal_of.as_ref() == Some(previous))
-        .collect::<Vec<_>>();
-    match pending.as_slice() {
-        [] => Ok(None),
-        [record] => Ok(Some(record.clone())),
-        _ => Err(failure(
-            "several unfinished renewals match in_use; select an exact operation",
-        )),
-    }
-}
-
-fn predecessor(
-    slot: &Path,
-) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
-    let config = selection(slot)?;
-    let Some(in_use) = config.cert.in_use else {
-        return Ok(None);
-    };
-    let record = read_generations(slot, &config.cert.name)?
-        .into_iter()
-        .find(|record| record.operation_id == in_use)
-        .ok_or_else(|| failure("in_use generation is missing"))?;
-    let chain = read_private(
-        &slot.join(record.generation_name()).join("fullchain.pem"),
-        1024 * 1024,
-    )
-    .map_err(|_| failure("in_use certificate is missing or unsafe"))?;
-    let plan = aster_acme::renewal::RenewalPlan::from_certificate(&chain)?;
-    Ok(Some(aster_acme::issuance::RenewalPredecessor {
-        operation_id: in_use,
-        certificate_id: plan.certificate_id,
-    }))
-}
-
-enum Initialization {
-    New(IssueRequest),
-    Renewal(CertificateName),
-    Scheduled {
-        name: CertificateName,
-        expected_in_use: String,
-        immediate: bool,
-    },
-}
-
-fn validate_request(request: &IssueRequest, account: &AccountRecord) -> Result<(), IssueError> {
-    request.validate()?;
-    if !account.is_usable() {
-        return Err(failure("issuance requires an active account"));
-    }
-    Ok(())
-}
-
-// The certificate lease covers definition lookup, name claiming and generation writes.
-fn initialize_definition(
-    slot: &Path,
-    input: Initialization,
-    account: &AccountRecord,
-) -> Result<IssueRequest, IssueError> {
-    match input {
-        Initialization::New(request) => {
-            match read_private(&slot.join("cert.toml"), 64 * 1024) {
-                Ok(_) => {
-                    selection(slot)?;
-                    return Err(IssueError::NameAlreadyExists(request.name));
-                }
-                Err(StorageError::NotFound) => {}
-                Err(_) => return Err(failure("unsafe certificate configuration")),
-            }
-            if !read_generations(slot, &request.name)?.is_empty() {
-                return Err(IssueError::NameAlreadyExists(request.name));
-            }
-            write_selection(
-                slot,
-                &CertificateConfig {
-                    version: 1,
-                    cert: CertificateSelection {
-                        name: request.name.clone(),
-                        identifiers: request.identifiers.clone(),
-                        key_algorithm: request.key_algorithm,
-                        account_name: request.account_name.clone(),
-                        account_id: account.account_id.clone(),
-                        directory: account.directory_url.clone(),
-                        solver_id: request.solver_id.clone(),
-                        challenge: request.challenge,
-                        solver_config: request.solver_config.clone(),
-                        in_use: None,
-                    },
-                },
-            )?;
-            Ok(request)
-        }
-        Initialization::Renewal(name) | Initialization::Scheduled { name, .. } => {
-            let config = selection(slot)?;
-            if config.cert.name != name
-                || config.cert.account_id != account.account_id
-                || config.cert.directory != account.directory_url
-            {
-                return Err(failure(
-                    "renewal definition does not match the selected account",
-                ));
-            }
-            if read_generations(slot, &name)?
-                .iter()
-                .any(|record| !config.cert.matches_record(record))
-            {
-                return Err(failure(
-                    "saved generations do not match the managed certificate definition",
-                ));
-            }
-            let request = IssueRequest {
-                challenge: config.cert.challenge,
-                solver_id: config.cert.solver_id,
-                solver_config: config.cert.solver_config,
-                name,
-                identifiers: config.cert.identifiers,
-                key_algorithm: config.cert.key_algorithm,
-                account_name: config.cert.account_name,
-            };
-            validate_request(&request, account)?;
-            Ok(request)
-        }
     }
 }
 
@@ -716,10 +403,18 @@ impl IssueStore for CliIssueStore {
         let name = name.clone();
         let operation_id = operation_id.to_owned();
         tokio::task::spawn_blocking(move || {
-            let record = read_generations(&slot, &name)?
-                .into_iter()
-                .find(|record| record.operation_id == operation_id)
-                .ok_or_else(|| failure("saved certificate request not found"))?;
+            let record = query::read(
+                slot.parent()
+                    .ok_or_else(|| failure("missing catalog parent"))?,
+                &IssueQuery {
+                    name: Some(name.clone()),
+                    operation_id: Some(operation_id.clone()),
+                    ..IssueQuery::default()
+                },
+            )?
+            .into_iter()
+            .next()
+            .ok_or_else(|| failure("saved certificate request not found"))?;
             let generation = slot.join(record.generation_name());
             ensure_real_dir(&generation)?;
             if record.name != name
@@ -750,199 +445,11 @@ impl IssueStore for CliIssueStore {
         .map_err(|_| failure("issuance open worker failed"))?
     }
 
-    async fn list(&self) -> Result<Vec<IssueRecord>, IssueError> {
+    async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
         let root = self.root.join("certs");
-        tokio::task::spawn_blocking(move || {
-            if !root
-                .try_exists()
-                .map_err(|_| failure("cannot inspect certificate catalog"))?
-            {
-                return Ok(Vec::new());
-            }
-            ensure_real_dir(&root)?;
-            let mut records = Vec::new();
-            for (index, entry) in fs::read_dir(&root)
-                .map_err(|_| failure("cannot enumerate certificates"))?
-                .enumerate()
-            {
-                if index >= 1024 {
-                    return Err(failure("certificate catalog exceeds 1024 names"));
-                }
-                let entry = entry.map_err(|_| failure("invalid certificate entry"))?;
-                let kind = entry
-                    .file_type()
-                    .map_err(|_| failure("cannot inspect certificate entry type"))?;
-                if !kind.is_dir() {
-                    continue;
-                }
-                let slot = entry.path();
-                if !managed_file_present(&slot.join("cert.toml"))? {
-                    continue;
-                }
-                let name = CertificateName::new(&entry.file_name().to_string_lossy())?;
-                let config = selection(&slot)?;
-                if config.cert.name != name {
-                    return Err(failure("certificate catalog name mismatch"));
-                }
-                ensure_real_dir(&slot)?;
-                records.extend(
-                    read_generations(&slot, &name)?
-                        .into_iter()
-                        .map(|mut record| {
-                            record.is_in_use =
-                                config.cert.in_use.as_deref() == Some(record.operation_id.as_str());
-                            record
-                        }),
-                );
-                if records.len() > 4096 {
-                    return Err(failure("issuance listing exceeds 4096 records"));
-                }
-            }
-
-            records.sort_by(|a, b| {
-                b.created_at
-                    .cmp(&a.created_at)
-                    .then(a.operation_id.cmp(&b.operation_id))
-            });
-            Ok(records)
-        })
-        .await
-        .map_err(|_| failure("issuance listing worker failed"))?
-    }
-}
-
-#[async_trait]
-impl IssueSession for Session {
-    async fn record(&self) -> Result<IssueRecord, IssueError> {
-        let permit = self.io.clone().lock_owned().await;
-        let generation = self.generation.clone();
-        let slot = self.slot.clone();
-        let lease = self.lease.clone();
-        let record = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _lease = lease;
-            let mut record = read_journal(&generation.join("operation.toml"))?;
-            record.is_in_use =
-                selection(&slot)?.cert.in_use.as_deref() == Some(record.operation_id.as_str());
-            Ok::<_, IssueError>(record)
-        })
-        .await
-        .map_err(|_| failure("issuance snapshot worker failed"))??;
-        self.verify_identity(&record)?;
-        Ok(record)
-    }
-
-    async fn save(&self, record: &IssueRecord) -> Result<(), IssueError> {
-        self.verify_identity(record)?;
-        let record = record.clone();
-        let generation = self.generation.clone();
-        let lease = self.lease.clone();
-        let permit = self.io.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _lease = lease;
-            write_journal(&generation.join("operation.toml"), &record)
-        })
-        .await
-        .map_err(|_| failure("issuance journal worker failed"))?
-    }
-
-    async fn csr(&self) -> Result<Vec<u8>, IssueError> {
-        let generation = self.generation.clone();
-        let record = self.initial.clone();
-        let lease = self.lease.clone();
-        let permit = self.io.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _lease = lease;
-            check_material(&generation, &record)?;
-            read_private(&generation.join("request.der"), 64 * 1024)
-                .map_err(|_| failure("fixed CSR missing or unsafe"))
-        })
-        .await
-        .map_err(|_| failure("CSR worker failed"))?
-    }
-
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError> {
-        let generation = self.generation.clone();
-        let lease = self.lease.clone();
-        let permit = self.io.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _lease = lease;
-            let chain = read_private(&generation.join("fullchain.pem"), 1024 * 1024)
-                .map_err(|_| failure("issued certificate missing or unsafe"))?;
-            certificate::leaf_der(&chain)
-        })
-        .await
-        .map_err(|_| failure("certificate read worker failed"))?
-    }
-
-    async fn complete(
-        &self,
-        record: &IssueRecord,
-        chain: &[u8],
-    ) -> Result<IssueRecord, IssueError> {
-        let mut record = record.clone();
-        let chain = chain.to_vec();
-        let generation = self.generation.clone();
-        let slot = self.slot.clone();
-        let lease = self.lease.clone();
-        self.verify_identity(&record)?;
-        let permit = self.io.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _lease = lease;
-            check_material(&generation, &record)?;
-            let key = zeroize::Zeroizing::new(
-                read_private(&generation.join("private-key.pk8"), 64 * 1024)
-                    .map_err(|_| failure("missing certificate key"))?,
-            );
-            record.certificate_not_after =
-                Some(certificate::validate(&chain, &key, &record.identifiers)?);
-            // Establish a durable fallback before promotion; ARI network failures cannot
-            // invalidate a successfully issued certificate or erase its renewal plan.
-            if record.renewal.is_none() {
-                record.renewal = Some(aster_acme::renewal::RenewalPlan::from_certificate(&chain)?);
-            }
-            if !matches!(record.phase, IssuancePhase::Completed) {
-                return Err(failure("cannot promote incomplete issuance"));
-            }
-            let config = selection(&slot)?;
-            if let Some(previous) = &record.renewal_of
-                && config.cert.in_use.as_deref() != Some(previous.operation_id.as_str())
-                && config.cert.in_use.as_deref() != Some(record.operation_id.as_str())
-            {
-                return Err(failure(
-                    "renewal predecessor is no longer in_use; refusing stale promotion",
-                ));
-            }
-            let artifacts = certificate::artifacts(&chain, &key)?;
-            for (name, bytes) in [
-                ("fullchain.pem", chain.as_slice()),
-                ("cert.pem", artifacts.certificate.as_bytes()),
-                ("ca.pem", artifacts.ca_chain.as_bytes()),
-                ("private-key.pem", artifacts.private_key.as_bytes()),
-            ] {
-                atomic_write(&generation.join(name), bytes)
-                    .map_err(|_| failure("cannot persist certificate artifact set"))?;
-            }
-            // Keep the operation resumable until selection is durable. A crash after
-            // selection only causes a safe re-download of the same issued artifact.
-            record.phase = IssuancePhase::Downloading;
-            write_journal(&generation.join("operation.toml"), &record)?;
-            publication::NATIVE.publish(&slot, &record)?;
-            let mut config = selection(&slot)?;
-            config.cert.in_use = Some(record.operation_id.clone());
-            write_selection(&slot, &config)?;
-            publication::NATIVE.recover(&slot, Some(&record.generation_name()))?;
-            record.phase = IssuancePhase::Completed;
-            record.is_in_use = true;
-            write_journal(&generation.join("operation.toml"), &record)?;
-            Ok(record)
-        })
-        .await
-        .map_err(|_| failure("certificate completion worker failed"))?
+        tokio::task::spawn_blocking(move || query::read(&root, &query))
+            .await
+            .map_err(|_| failure("issuance query worker failed"))?
     }
 }
 

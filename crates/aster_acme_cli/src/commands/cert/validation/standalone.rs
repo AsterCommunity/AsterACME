@@ -1,6 +1,8 @@
 //! Minimal HTTP-01 publication: exact Host/path GETs, no filesystem or generic routes.
 //! Hyper owns HTTP parsing; the shared listener owns bounded connection lifetimes.
-use super::{Arc, ChallengeKind, ChallengeSolver, IssueError, Progress, listener::Listener};
+use crate::commands::cert::validation::{
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress, listener::Listener,
+};
 use crate::common::output::MessageKind;
 use aster_acme::{
     challenge::ChallengeToken, issuance::ValidationRequirement, solver::ExecutionContext,

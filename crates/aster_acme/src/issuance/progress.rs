@@ -47,7 +47,10 @@ pub enum IssueEvent {
     /// The issued certificate is being downloaded and inspected.
     Downloading,
     /// Artifact validation, persistence and `in_use`-generation promotion finished.
-    CertificateSaved,
+    CertificateSaved {
+        /// Stable managed certificate name, independent of its domains and generation.
+        name: crate::issuance::CertificateName,
+    },
 }
 
 /// Product-owned progress sink. Implementations must avoid panics and excessive blocking.

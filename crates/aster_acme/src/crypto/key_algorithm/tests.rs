@@ -1,5 +1,5 @@
 //! Generate every advertised key and verify the actual CSR signature and PEM artifacts.
-use super::*;
+use crate::crypto::key_algorithm::*;
 use crate::{identifier::DnsIdentifier, issuance::certificate};
 use aws_lc_rs::signature;
 use rcgen::{CertificateParams, Issuer};

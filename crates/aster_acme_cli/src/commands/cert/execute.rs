@@ -1,6 +1,6 @@
 //! CLI execution wires account leases, generation sessions, and manual DNS UI into the library.
-use super::progress::Progress;
-use super::{
+use crate::commands::cert::progress::Progress;
+use crate::commands::cert::{
     args::{CertCommand, IssueArgs},
     render, selection,
 };
@@ -15,12 +15,14 @@ use crate::{
     },
 };
 use aster_acme::issuance::service::IssueService;
+use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+use aster_acme::storage::issuance::{IssueSession, IssueStore};
+use aster_acme::storage::query::{IssueQuery, IssueView, SimilarIssue};
 use aster_acme::{
-    account::{AccountKeyStore, AccountStore},
     identifier::DnsIdentifier,
     issuance::{
         CertificateName, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
-        IssueRequest, IssueSession, IssueStore,
+        IssueRequest,
     },
     solver::ExecutionContext,
 };
@@ -50,7 +52,7 @@ async fn issue(
     super::interaction::complete(
         &mut args,
         interactive,
-        &mut super::interaction::TerminalDomains(&cli.output),
+        &mut super::interaction::TerminalPrompts(&cli.output),
     )?;
     let mut options = options(&args.run.local, &args.run.http, args.account.clone());
     let settings = CliSettings::load(&options).await?;
@@ -68,52 +70,7 @@ async fn issue(
         None
     };
 
-    let selected = match &args.resume {
-        Some(explicit) => {
-            let inventory = store.list().await?;
-            super::selection::check_explicit_resume(
-                &inventory,
-                explicit,
-                args.operation.as_deref(),
-            )?;
-            let records = inventory
-                .into_iter()
-                .filter(IssueRecord::resume_candidate)
-                .collect::<Vec<_>>();
-            let name = selection::certificate_name(
-                &records,
-                match explicit {
-                    super::args::ResumeTarget::Choose => None,
-                    super::args::ResumeTarget::Named(name) => Some(name.as_str()),
-                },
-                args.operation.as_deref(),
-                &cli.output,
-            )?;
-            Some(selection::choose(
-                records,
-                &name,
-                args.operation.as_deref(),
-                selection::RequestSelection::Unfinished,
-                &cli.output,
-            )?)
-        }
-        None => {
-            if args.name.is_some() {
-                None
-            } else {
-                let (request, account) =
-                    proposed.as_ref().ok_or("Missing new request definition.")?;
-                let now = time::OffsetDateTime::now_utc();
-                let candidates = store
-                    .list()
-                    .await?
-                    .into_iter()
-                    .filter(|record| record.matches_unfinished_request(request, account, now))
-                    .collect();
-                super::similar::choose(candidates, args.if_similar_order, &cli.output)?
-            }
-        }
-    };
+    let selected = select_saved_issue(&args, &store, proposed.as_ref(), cli).await?;
     if let Some(record) = &selected {
         options.name = Some(record.account_name.clone());
     }
@@ -144,6 +101,76 @@ async fn issue(
     Ok(super::report::CertificateReport::Result {
         result,
         data_dir: root,
+    })
+}
+
+async fn select_saved_issue(
+    args: &IssueArgs,
+    store: &CliIssueStore,
+    proposed: Option<&(IssueRequest, aster_acme::account::AccountRecord)>,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<Option<IssueRecord>> {
+    Ok(match &args.resume {
+        Some(explicit) => {
+            let query = IssueQuery {
+                name: match explicit {
+                    super::args::ResumeTarget::Choose => None,
+                    super::args::ResumeTarget::Named(name) => Some(CertificateName::new(name)?),
+                },
+                unfinished: Some(true),
+                operation_id: args.operation.clone(),
+                resumable: Some(true),
+                ..IssueQuery::default()
+            };
+            let records = store.query(query.clone()).await?;
+            if records.is_empty() && query.name.is_some() {
+                let inventory = store
+                    .query(IssueQuery {
+                        resumable: None,
+                        ..query
+                    })
+                    .await?;
+                selection::check_explicit_resume(&inventory, explicit, args.operation.as_deref())?;
+            }
+            let name = selection::certificate_name(
+                &records,
+                match explicit {
+                    super::args::ResumeTarget::Choose => None,
+                    super::args::ResumeTarget::Named(name) => Some(name.as_str()),
+                },
+                args.operation.as_deref(),
+                selection::CertificateLabel::Standard,
+                &cli.output,
+            )?;
+            Some(selection::choose(
+                records,
+                &name,
+                args.operation.as_deref(),
+                &cli.output,
+            )?)
+        }
+        None => {
+            if args.name.is_some() {
+                None
+            } else {
+                let (request, account) = proposed.ok_or("Missing new request definition.")?;
+                let now = time::OffsetDateTime::now_utc();
+                let candidates = store
+                    .query(IssueQuery {
+                        unfinished: Some(true),
+                        similar: Some(SimilarIssue {
+                            request: request.clone(),
+                            account: account.clone(),
+                            now,
+                        }),
+                        ..IssueQuery::default()
+                    })
+                    .await?
+                    .into_iter()
+                    .collect();
+                super::similar::choose(candidates, args.if_similar_order, &cli.output)?
+            }
+        }
     })
 }
 
@@ -182,7 +209,7 @@ pub(super) async fn transact(
         .signer(
             &context.directory,
             &context.name,
-            aster_acme::account::KeyAccess::Existing,
+            aster_acme::storage::account::KeyAccess::Existing,
         )
         .await?;
     let thumbprint = signer.jwk()?.thumbprint()?;
@@ -216,14 +243,6 @@ pub(super) async fn transact(
             }
         }
     };
-    progress.output.progress(
-        MessageKind::Info,
-        &format!(
-            "Using CA: {} (account {})",
-            context.directory.as_str(),
-            context.name
-        ),
-    );
     let record = session.record().await?;
     report_material(&context, &record, &progress)?;
     let foreground = Foreground {
@@ -263,7 +282,32 @@ pub(super) async fn transact(
             return Err(error);
         }
     };
-    Ok(super::report::CertificateResult::Issuance(outcome))
+    drop(session);
+    Ok(attach_deployment_results(outcome, store).await)
+}
+
+async fn attach_deployment_results(
+    outcome: IssueOutcome,
+    store: &CliIssueStore,
+) -> super::report::CertificateResult {
+    let deployment_results = match &outcome {
+        IssueOutcome::Completed { record, .. } => {
+            let name = record.name.clone();
+            let generation = record.generation_name();
+            super::deployment::after_issuance(store, &name, &generation).await
+        }
+        IssueOutcome::ActionRequired { .. } => (Vec::new(), Vec::new()),
+    };
+    let (deployments, deployment_events) = deployment_results;
+    if deployments.is_empty() && deployment_events.is_empty() {
+        super::report::CertificateResult::Issuance(outcome)
+    } else {
+        super::report::CertificateResult::Issued {
+            outcome,
+            deployments,
+            deployment_events,
+        }
+    }
 }
 
 fn report_material(
@@ -281,6 +325,14 @@ fn report_material(
             ),
         );
     }
+    progress.output.progress(
+        MessageKind::Info,
+        &format!(
+            "Using CA: {} (account {})",
+            context.directory.as_str(),
+            context.name
+        ),
+    );
     let root = context
         .config_path
         .parent()
@@ -350,17 +402,10 @@ impl Foreground<'_> {
         self.progress
             .protocol(client.directory(), &session.record().await?);
         let service = IssueService::new(client, identity)?.with_observer(self.progress.clone());
-        let (cancellation, signal) = match &self.mode {
+        let (cancellation, _signal) = match &self.mode {
             RunMode::Single => {
                 let cancellation = CancellationToken::new();
-                let signal = tokio::spawn({
-                    let cancellation = cancellation.clone();
-                    async move {
-                        if tokio::signal::ctrl_c().await.is_ok() {
-                            cancellation.cancel();
-                        }
-                    }
-                });
+                let signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
                 (cancellation, Some(signal))
             }
             RunMode::Batch(cancellation) => (cancellation.clone(), None),
@@ -375,9 +420,6 @@ impl Foreground<'_> {
             poll_interval: Duration::from_secs(poll_interval),
         };
         let result = service.run(session, solver.as_ref(), &execution).await;
-        if let Some(signal) = signal {
-            signal.abort();
-        }
         Ok(result?)
     }
 }
@@ -389,6 +431,7 @@ pub(crate) async fn execute(
     match command {
         CertCommand::Issue(args) => issue(args, cli).await,
         CertCommand::Renew(args) => super::renewal::execute(args, cli).await,
+        CertCommand::Deploy(args) => super::deployment::execute(args, cli).await,
         CertCommand::Remove {
             target,
             all,
@@ -397,7 +440,7 @@ pub(crate) async fn execute(
             yes,
             local,
         } => {
-            use super::removal::RemovalFilter;
+            use crate::commands::cert::removal::RemovalFilter;
             let filter = match (all, history, revoked) {
                 (false, false, false) => RemovalFilter::Request,
                 (true, false, false) => RemovalFilter::All,
@@ -421,16 +464,16 @@ pub(crate) async fn execute(
             let store = CliIssueStore::new(settings.data_dir, Duration::from_secs(5));
             let filter = name.as_deref().map(CertificateName::new).transpose()?;
             let records = store
-                .list()
-                .await?
-                .into_iter()
-                .filter(|record| filter.as_ref().is_none_or(|name| record.name == *name))
-                .collect::<Vec<_>>();
-            let records = if history {
-                records
-            } else {
-                selection::managed_records(records)?
-            };
+                .query(IssueQuery {
+                    name: filter,
+                    view: if history {
+                        IssueView::All
+                    } else {
+                        IssueView::Managed
+                    },
+                    ..IssueQuery::default()
+                })
+                .await?;
             Ok(super::report::CertificateReport::List(records))
         }
         CertCommand::Show {
@@ -512,7 +555,8 @@ async fn revoke(
     let options = options(&local, &http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let record = selected_record(&store, &target, cli, selection::RequestSelection::Any).await?;
+    let record =
+        selected_record(&store, &target, cli, selection::RequestSelection::Completed).await?;
     // A confirmed local outcome needs neither an account key nor HTTP.
     let record = match record.revocation.state {
         aster_acme_core::revocation::RevocationState::Confirmed => record,
@@ -544,7 +588,28 @@ async fn selected_record(
     cli: &crate::common::context::CommandContext,
     mode: selection::RequestSelection,
 ) -> CliResult<IssueRecord> {
-    let records = store.list().await?;
+    let query = IssueQuery {
+        name: target
+            .identity
+            .name
+            .as_deref()
+            .or(target.identity.named_name.as_deref())
+            .map(CertificateName::new)
+            .transpose()?,
+        operation_id: target.operation.clone(),
+        unfinished: if matches!(mode, selection::RequestSelection::Completed) {
+            Some(false)
+        } else {
+            None
+        },
+        view: if matches!(mode, selection::RequestSelection::InUse) && target.operation.is_none() {
+            IssueView::CurrentOrUnfinished
+        } else {
+            IssueView::All
+        },
+        ..IssueQuery::default()
+    };
+    let records = store.query(query).await?;
     let name = selection::certificate_name(
         &records,
         target
@@ -553,15 +618,10 @@ async fn selected_record(
             .as_deref()
             .or(target.identity.named_name.as_deref()),
         target.operation.as_deref(),
+        selection::CertificateLabel::Standard,
         &cli.output,
     )?;
-    selection::choose(
-        records,
-        &name,
-        target.operation.as_deref(),
-        mode,
-        &cli.output,
-    )
+    selection::choose(records, &name, target.operation.as_deref(), &cli.output)
 }
 
 enum RemoteOperation {
@@ -585,7 +645,7 @@ async fn remote_operation(
         .signer(
             &context.directory,
             &context.name,
-            aster_acme::account::KeyAccess::Existing,
+            aster_acme::storage::account::KeyAccess::Existing,
         )
         .await?;
     let thumbprint = signer.jwk()?.thumbprint()?;
@@ -778,7 +838,7 @@ async fn allocate_certificate(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::cert::execute::*;
 
     fn allocation_account() -> aster_acme::account::AccountRecord {
         serde_json::from_value(serde_json::json!({
@@ -786,6 +846,68 @@ mod tests {
             "key_thumbprint":"test-key","contacts":[],"server_contacts":null,"last_status":"valid","deactivation":"not_requested",
             "key_rotation":null,"accepted_terms_url":null,"state":"registered"
         })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn renewal_material_logs_name_before_ca_for_each_batch_item() {
+        use aster_acme::issuance::progress::{IssueEvent, IssueObserver};
+        let temp = tempfile::tempdir().unwrap();
+        let options = AccountArgs {
+            data_dir: Some(temp.path().into()),
+            ca_directory: Some("https://ca.example/directory".into()),
+            ..AccountArgs::default()
+        };
+        let context = CliSettings::load(&options)
+            .await
+            .unwrap()
+            .account(&options)
+            .await
+            .unwrap();
+        let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
+        for json in [false, true] {
+            let (output, stdout, stderr) = crate::common::session::tests::session(json);
+            let progress = Progress::new(output);
+            for suffix in ["first", "second"] {
+                let name = format!("cdn.example.com-{suffix}-{json}");
+                let request = IssueRequest {
+                    name: CertificateName::new(&name).unwrap(),
+                    identifiers: vec![DnsIdentifier::new("cdn.example.com").unwrap()],
+                    account_name: "default".into(),
+                    key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                    challenge: aster_acme::challenge::ChallengeKind::Dns01,
+                    solver_id: "manual_dns".into(),
+                    solver_config: serde_json::json!({}),
+                };
+                let session = store.create(&request, &allocation_account()).await.unwrap();
+                let mut record = session.record().await.unwrap();
+                record.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+                    operation_id: "p".repeat(43),
+                    certificate_id: None,
+                });
+                report_material(&context, &record, &progress).unwrap();
+                progress.observe(&IssueEvent::CertificateSaved { name: record.name });
+            }
+            assert_eq!(stdout.text(), "");
+            let text = stderr.text();
+            if json {
+                assert_eq!(text, "");
+                continue;
+            }
+            let lines = text.lines().collect::<Vec<_>>();
+            assert_eq!(lines.len(), 8);
+            for (item, suffix) in ["first", "second"].into_iter().enumerate() {
+                let name = format!("cdn.example.com-{suffix}-{json}");
+                assert!(lines[item * 4].contains(&format!("Renewing {name} with ecdsa-p256")));
+                assert!(
+                    lines[item * 4 + 1]
+                        .contains("Using CA: https://ca.example/directory (account default)")
+                );
+                assert!(lines[item * 4 + 2].contains("Certificate key:"));
+                assert!(
+                    lines[item * 4 + 3].contains(&format!("Certificate {name} verified and saved"))
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -816,7 +938,7 @@ mod tests {
         assert_ne!(actual.name, initial_record.name);
         assert!(actual.name.as_str().starts_with("example.com-"));
         assert_eq!(actual.name.as_str().len(), "example.com-".len() + 8);
-        assert_eq!(store.list().await.unwrap().len(), 2);
+        assert_eq!(store.query(IssueQuery::default()).await.unwrap().len(), 2);
     }
 
     #[cfg(unix)]
@@ -856,14 +978,18 @@ mod tests {
         use rcgen::{CertificateParams, Issuer, KeyPair};
         let temp = tempfile::tempdir().unwrap();
         let ca = aster_acme_protocol::url::AcmeUrl::new("https://127.0.0.1:1/directory").unwrap();
-        let accounts = aster_acme_cli_storage::CliAccountStore::open(
+        let accounts = aster_acme_cli_storage::account::CliAccountStore::open(
             temp.path(),
             "default",
             Duration::from_secs(1),
         )
         .unwrap();
         let signer = accounts
-            .signer(&ca, "default", aster_acme::account::KeyAccess::Create(None))
+            .signer(
+                &ca,
+                "default",
+                aster_acme::storage::account::KeyAccess::Create(None),
+            )
             .await
             .unwrap();
         let thumb = signer.jwk().unwrap().thumbprint().unwrap();
@@ -924,7 +1050,7 @@ mod tests {
         super::super::renewal::execute(args, &crate::common::context::CommandContext::new(true))
             .await
             .unwrap();
-        assert_eq!(store.list().await.unwrap().len(), 1);
+        assert_eq!(store.query(IssueQuery::default()).await.unwrap().len(), 1);
         assert_eq!(
             std::fs::read(generation.join("operation.toml")).unwrap(),
             journal

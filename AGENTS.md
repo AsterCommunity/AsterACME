@@ -42,6 +42,8 @@ AsterACME 是可嵌入的 Rust ACME 客户端与 CLI。全局身份和工程流�
 
 ## Rust 与依赖
 
+- 禁止 `use super`（包含测试）。内部依赖通过明确的 `crate::…` 路径导入，使用模块实际所有者，不保留旧路径转发别名。
+
 - stable、edition 2024。所有依赖版本及 features 只能定义在根 `[workspace.dependencies]`；成员依赖只用 `workspace = true`，Forge/AsterFs 使用根表固定的已发布版本；各 crate 的 `[package].version` 独立显式声明，不继承 workspace.package.version。
 - 复用 Forge 数字转换工具；文件锁使用 Rust 1.89+ 标准库 API，不引入 fs2/fs4 或仅用于锁的 AsterFs。
 - 每个 crate 写 README。公开 API、失败策略、持久化顺序和协议边界写清注释，使用 `//` / `///` / `//!`，不使用块注释。
@@ -77,6 +79,7 @@ AsterACME 是可嵌入的 Rust ACME 客户端与 CLI。全局身份和工程流�
 
 ```sh
 python3 scripts/check-workspace-deps.py
+python3 scripts/check-rust-imports.py
 cargo fmt --all --check
 cargo check --workspace --locked
 cargo test --workspace --locked
@@ -138,3 +141,7 @@ git diff HEAD --check
 - HTTP standalone使用CLI validation/standalone + listener，复用Tokio/Hyper HTTP/1，不引入Web框架或手写HTTP解析。--listen-address只用于新申请、默认0.0.0.0:80并持久化；恢复/续期重建相同socket。公网80及A/AAAA转发由部署方负责，不能静默提权/停其他服务器。ChallengeSolver::restore重新提供已ack授权材料但不重发通知；IssueService所有返回路径shutdown临时服务，cleanup仍只处理终态材料。listener的TCP任务监督、连接上限及取消期限留给未来TLS-ALPN复用，TLS响应未实现。
 
 - RFC失败证据归IssueRecord：newOrder完整错误存creation_failure，不将4xx伪造成Order invalid；无URL不恢复或重放。finalize badCSR保留真实HTTP状态，orderNotReady只在明确4xx后解除提交标记、先查Order再按ready推进。授权终态/选中challenge invalid保留problem、不再ack/finalize或推荐resume；已valid订单下载不受旧授权历史影响。错误映射表见docs/rfc-reference.md，24个标准problem均有具名解析和诊断，不按每种type虚构资源状态。
+
+- 存储契约位于 `aster_acme::storage::{account,issuance}`，类型化查询及纯投影位于 `storage::query`。CLI 将 name/operation/view/in_use/phase/resumable/similar/revocation 条件交给 storage；storage 裁剪路径并执行筛选，CLI 只做输入/歧义选择与渲染。查询是快照，写入仍需持锁重新验证。账户文件实现位于 cli_storage::account，库存位于 inventory；具体文件和锁不进入 aster_acme。
+
+- deploy show 为用户明确授权的双位置参数例外：`cert deploy show [CERT_NAME] [DEPLOY_NAME]`，缺输入终端选择、脚本要求两个身份。其他部署命令保持单位置证书名和 -n/--name 部署名；show/list只读并允许检查不再具备发布资格的遗留绑定。

@@ -1,7 +1,7 @@
 //! HTTP and protocol error/retry boundary tests.
-use super::*;
 use crate::crypto::key::AccountKey;
 use crate::crypto::key_algorithm::KeyAlgorithm;
+use crate::transport::*;
 use aster_acme_protocol::jws::FlattenedJws;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use wiremock::{

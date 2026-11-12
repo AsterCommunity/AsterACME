@@ -1,6 +1,6 @@
 //! Fixed PKCS#10 CSR generation and issued leaf identity/key checks.
-use super::IssueError;
 use crate::identifier::DnsIdentifier;
+use crate::issuance::IssueError;
 use rcgen::{CertificateParams, DistinguishedName, KeyPair, PublicKeyData as _};
 use x509_parser::{pem::parse_x509_pem, prelude::FromDer as _, x509::X509Version};
 use zeroize::Zeroizing;

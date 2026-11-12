@@ -18,7 +18,7 @@ pub(crate) fn timestamp(value: Option<time::OffsetDateTime>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::time::*;
     #[test]
     fn utc_normalization_subseconds_and_unknown_times_use_one_display() {
         let epoch = time::OffsetDateTime::from_unix_timestamp(0)

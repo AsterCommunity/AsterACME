@@ -1,5 +1,5 @@
 //! Shared terminal table layout. Cells are padded before any ANSI styling is applied.
-use super::output::safe;
+use crate::common::output::safe;
 use unicode_width::UnicodeWidthStr;
 
 /// A style callback receives row/column indices and escaped plain cell text.
@@ -48,8 +48,8 @@ pub(crate) fn align<const N: usize>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::common::output::Style;
+    use crate::common::table::*;
     #[test]
     fn unicode_cells_controls_empty_tables_and_last_column_have_consistent_widths() {
         let rows = [

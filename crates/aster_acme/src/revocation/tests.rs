@@ -1,6 +1,6 @@
 //! Real account signatures, exact DER payloads and durable revocation failure boundaries.
-use super::*;
 use crate::crypto::key_algorithm::KeyAlgorithm;
+use crate::revocation::*;
 use crate::{
     account::AccountRecord,
     crypto::{AccountSigner, key::AccountKey},

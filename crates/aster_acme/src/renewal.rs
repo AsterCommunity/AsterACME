@@ -1,7 +1,8 @@
 //! RFC 9773 renewal planning. No background task or certificate issuance is started here.
 
+use crate::storage::issuance::IssueSession;
 use crate::{
-    issuance::{IssueError, IssueRecord, IssueSession},
+    issuance::{IssueError, IssueRecord},
     solver::ExecutionContext,
     transport::{AcmeClient, RetryAfter, TransportError, retry_after},
 };

@@ -1,5 +1,5 @@
 //! Shared selector row presentation; filtering, defaults and operation policy stay with owners.
-use super::{output::safe, time::timestamp};
+use crate::common::{output::safe, time::timestamp};
 use std::fmt;
 
 /// Stable ordering of identity, optional summary, time, state and selection marker.
@@ -31,7 +31,7 @@ impl fmt::Display for ChoiceLabel<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::selection::*;
     #[test]
     fn rows_share_field_order_time_and_control_escaping_with_optional_details() {
         let label = ChoiceLabel {

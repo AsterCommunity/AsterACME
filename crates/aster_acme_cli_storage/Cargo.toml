@@ -26,6 +26,7 @@ base64.workspace = true
 aws-lc-rs.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
@@ -36,7 +37,6 @@ winapi-util.workspace = true
 [dev-dependencies]
 rcgen.workspace = true
 tokio-util.workspace = true
-tempfile.workspace = true
 wiremock.workspace = true
 
 [lints]

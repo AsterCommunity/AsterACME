@@ -1,5 +1,6 @@
 //! Certificate issuance, manual interaction and read-only order presentation.
 pub(crate) mod args;
+pub(crate) mod deployment;
 pub(crate) mod execute;
 mod interaction;
 mod progress;

@@ -2,7 +2,7 @@
 //!
 //! Install before the Tokio runtime starts. A panic is diagnostic evidence, never
 //! authorization to retry an ACME mutation or delete a saved key/checkpoint.
-use super::{error::CliResult, session::OutputSession};
+use crate::common::{error::CliResult, session::OutputSession};
 use aster_forge_panic::{
     DiagnosticSink, PanicHookConfig, PanicOutput, PublicDiagnostic, ReportWriter,
 };
@@ -173,6 +173,7 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
         Command::Cert { command } => match command {
             CertCommand::Issue(args) => &args.run.local.data_dir,
             CertCommand::Renew(args) => &args.run.local.data_dir,
+            CertCommand::Deploy(args) => &args.local().data_dir,
             CertCommand::List { local, .. }
             | CertCommand::Show { local, .. }
             | CertCommand::Revoke { local, .. }

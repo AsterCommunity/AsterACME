@@ -1,6 +1,6 @@
 //! Exercise Windows-style complete-copy publication on every test host.
-use super::super::write_journal;
-use super::*;
+use crate::issuance::publication::*;
+use crate::issuance::write_journal;
 
 fn generation(slot: &Path, letter: char) -> IssueRecord {
     let record: IssueRecord = serde_json::from_value(serde_json::json!({

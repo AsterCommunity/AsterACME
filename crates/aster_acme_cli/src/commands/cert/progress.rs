@@ -126,9 +126,9 @@ impl IssueObserver for Progress {
                 MessageKind::Info,
                 "Downloading and checking the issued certificate chain".into(),
             ),
-            IssueEvent::CertificateSaved => (
+            IssueEvent::CertificateSaved { name } => (
                 MessageKind::Success,
-                "Certificate verified and saved".into(),
+                format!("Certificate {name} verified and saved"),
             ),
         };
         self.output.progress(level, &message);
@@ -190,8 +190,33 @@ fn protocol_messages(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::cert::progress::*;
     use std::time::Duration;
+
+    #[test]
+    fn saved_events_identify_each_certificate_and_keep_json_silent() {
+        for json in [false, true] {
+            let (output, stdout, stderr) = crate::common::session::tests::session(json);
+            let progress = Progress::new(output);
+            for name in ["cdn.example.com-first", "cdn.example.com-second"] {
+                progress.observe(&IssueEvent::CertificateSaved {
+                    name: aster_acme::issuance::CertificateName::new(name).unwrap(),
+                });
+            }
+            assert_eq!(stdout.text(), "");
+            let text = stderr.text();
+            if json {
+                assert_eq!(text, "");
+            } else {
+                assert_eq!(text.lines().count(), 2);
+                for name in ["cdn.example.com-first", "cdn.example.com-second"] {
+                    assert!(
+                        text.contains(&format!("[OK]    Certificate {name} verified and saved"))
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn json_suppresses_progress_but_every_wait_source_is_visible() {
         let json = Progress::new(crate::common::session::OutputSession::new(true));

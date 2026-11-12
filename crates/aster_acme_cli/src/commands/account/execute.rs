@@ -1,6 +1,6 @@
 //! Account execution injects storage and signers; offline reads never construct HTTP clients.
 
-use super::{
+use crate::commands::account::{
     args::{AccountArgs, AccountCommand},
     report::{AccountReport, LocalAccountReport},
 };
@@ -8,8 +8,10 @@ use crate::common::{
     context::{CliContext, CliSettings},
     error::CliResult,
 };
+use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+use aster_acme::storage::query::AccountQuery;
 use aster_acme::{
-    account::{AccountError, AccountKeyStore, AccountService, AccountStore, RegistrationOptions},
+    account::{AccountError, AccountService, RegistrationOptions},
     crypto::{AccountSigner, ExternalAccountCredentials},
 };
 use std::sync::Arc;
@@ -27,11 +29,11 @@ impl Operation {
     fn key_access(
         &self,
         algorithm: Option<aster_acme::crypto::key_algorithm::KeyAlgorithm>,
-    ) -> aster_acme::account::KeyAccess {
+    ) -> aster_acme::storage::account::KeyAccess {
         match self {
-            Self::Register => aster_acme::account::KeyAccess::Create(algorithm),
+            Self::Register => aster_acme::storage::account::KeyAccess::Create(algorithm),
             Self::Recover | Self::Deactivate | Self::Show { .. } | Self::Switch | Self::Remove => {
-                aster_acme::account::KeyAccess::Existing
+                aster_acme::storage::account::KeyAccess::Existing
             }
         }
     }
@@ -62,7 +64,10 @@ pub(crate) async fn execute(
         Operation::Recover | Operation::Remove | Operation::Show { .. } => {
             super::selection::Mode::Existing
         }
-        Operation::Deactivate | Operation::Switch => super::selection::Mode::Registered,
+        Operation::Deactivate => super::selection::Mode::Operation(
+            aster_acme_core::account::AccountOperation::Deactivate,
+        ),
+        Operation::Switch => super::selection::Mode::Registered,
     };
     super::selection::complete(&mut options, &settings, mode, cli).await?;
     if matches!(operation, Operation::Switch) && options.name.is_none() {
@@ -148,10 +153,14 @@ async fn list(
         ..args.local.into()
     };
     let settings = CliSettings::load(&options).await?;
-    let mut accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
+    let mut accounts = aster_acme_cli_storage::inventory::query_accounts(
+        settings.data_dir.clone(),
+        AccountQuery::default(),
+    )
+    .await?;
     let verification = if args.verify {
         let mut results = Vec::with_capacity(accounts.len());
-        for account in &accounts {
+        for account in &mut accounts {
             let selected = AccountArgs {
                 name: Some(account.name.clone()),
                 ..AccountArgs::default()
@@ -163,20 +172,30 @@ async fn list(
                     .signer(
                         &context.directory,
                         &context.name,
-                        aster_acme::account::KeyAccess::Existing,
+                        aster_acme::storage::account::KeyAccess::Existing,
                     )
                     .await?;
                 let transport = context.transport_options(&options)?;
                 let client = Arc::new(cli.http.discover(context.directory, transport).await?);
-                Ok::<_, Box<dyn std::error::Error>>(
-                    AccountService::new(client, context.store)
-                        .inspect(signer.as_ref())
-                        .await?,
-                )
+                let observed = AccountService::new(client, context.store.clone())
+                    .inspect(signer.as_ref())
+                    .await?;
+                let saved = context
+                    .store
+                    .metadata()
+                    .await?
+                    .ok_or("account metadata disappeared after verification")?;
+                Ok::<_, Box<dyn std::error::Error>>((observed, saved))
             }
             .await;
             let (status, error) = match result {
-                Ok(account) => (Some(account.status), None),
+                Ok((observed, saved)) => {
+                    *account = aster_acme_cli_storage::inventory::LocalAccount::from_record(
+                        account.name.clone(),
+                        saved,
+                    );
+                    (Some(observed.status), None)
+                }
                 Err(error) => (
                     None,
                     Some(crate::common::error::diagnostic(error.as_ref()).0),
@@ -188,8 +207,6 @@ async fn list(
                 error,
             });
         }
-        // Reflect successful observations in the same inventory rather than stale statuses.
-        accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
         Some(results)
     } else {
         None
@@ -323,7 +340,7 @@ async fn switch(context: CliContext) -> CliResult<AccountReport> {
         .signer(
             &context.directory,
             &target,
-            aster_acme::account::KeyAccess::Existing,
+            aster_acme::storage::account::KeyAccess::Existing,
         )
         .await?;
     let thumbprint = signer.jwk()?.thumbprint()?;
@@ -524,10 +541,16 @@ pub(super) fn registration_options(
 ) -> CliResult<RegistrationOptions> {
     let external_account = match (options.eab_kid, options.eab_key_file) {
         (Some(kid), Some(path)) => {
-            if std::fs::metadata(&path)?.len() > 8192 {
+            use std::io::Read as _;
+            let file = std::fs::File::open(path)?;
+            if !file.metadata()?.is_file() {
+                return Err("EAB key must be a regular file.".into());
+            }
+            let mut secret = zeroize::Zeroizing::new(String::new());
+            file.take(8193).read_to_string(&mut secret)?;
+            if secret.len() > 8192 {
                 return Err("EAB key file exceeds 8 KiB.".into());
             }
-            let secret = zeroize::Zeroizing::new(std::fs::read_to_string(path)?);
             Some(ExternalAccountCredentials::new(&kid, secret.trim())?)
         }
         (None, None) => None,

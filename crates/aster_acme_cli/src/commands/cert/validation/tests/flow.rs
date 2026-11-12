@@ -1,15 +1,19 @@
 //! Loopback CA drives the same ACME service with real manual/webroot CLI adapters.
 //! Finalization signs the persisted key; assertions verify no repeated newOrder on resume.
-use super::*;
+use crate::commands::cert::validation::tests::*;
+use aster_acme::storage::account::{AccountKeyStore, AccountStore, KeyAccess};
+use aster_acme::storage::issuance::{IssueSession, IssueStore};
+use aster_acme::storage::query::IssueQuery;
 use aster_acme::{
-    account::{AccountKeyStore, AccountRecord, AccountStore, KeyAccess},
+    account::AccountRecord,
     challenge::{ChallengeMaterial, ChallengeToken},
     identifier::DnsIdentifier,
     issuance::service::IssueService,
-    issuance::{IssueExecution, IssueOutcome, IssueRequest, IssueSession, IssueStore},
+    issuance::{IssueExecution, IssueOutcome, IssueRequest},
     transport::{HttpPool, TransportOptions},
 };
-use aster_acme_cli_storage::{CliAccountStore, issuance::CliIssueStore};
+use aster_acme_cli_storage::account::CliAccountStore;
+use aster_acme_cli_storage::issuance::CliIssueStore;
 use aster_acme_core::{account::AccountRecordState, protocol::AccountStatus};
 use aster_acme_protocol::{jws::FlattenedJws, url::AcmeUrl};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -1070,7 +1074,15 @@ async fn similar_order_decision_does_not_allocate_a_key_or_contact_a_ca() {
         .unwrap()
         .unwrap();
     assert_eq!(selected.challenge, ChallengeKind::Http01);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(
         fixture.server.received_requests().await.unwrap().len(),
         requests

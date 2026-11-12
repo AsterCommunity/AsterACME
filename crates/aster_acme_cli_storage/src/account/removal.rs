@@ -1,8 +1,8 @@
 //! Local account deletion, serialized with protocol operations and isolated before cleanup.
-use super::{
-    AccountStoreError, CliAccountStore, MAX_ACCOUNT_FILE, ensure_real_dir, private_dir,
-    read_private, store_error,
+use crate::account::{
+    CliAccountStore, MAX_ACCOUNT_FILE, ensure_real_dir, private_dir, read_private, store_error,
 };
+use aster_acme::storage::account::AccountStoreError;
 use std::{fs, path::Path};
 
 impl CliAccountStore {

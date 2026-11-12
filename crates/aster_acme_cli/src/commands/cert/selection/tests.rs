@@ -75,21 +75,21 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
     let first = record('a', "2026-01-01T00:00:00Z");
     let mut second = record('b', "2026-02-01T00:00:00Z");
     assert!(
-        super::choose(
+        select_projected(
             vec![first.clone(), second.clone()],
             &name,
             None,
-            super::RequestSelection::Unfinished,
+            TestSelection::Unfinished,
             &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
     assert_eq!(
-        super::choose(
+        select_projected(
             vec![first.clone(), second.clone()],
             &name,
             Some(&first.operation_id),
-            super::RequestSelection::Unfinished,
+            TestSelection::Unfinished,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -97,22 +97,22 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
         first.operation_id
     );
     assert!(
-        super::choose(
+        select_projected(
             vec![first.clone()],
             &name,
             Some("missing"),
-            super::RequestSelection::Unfinished,
+            TestSelection::Unfinished,
             &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
     second.phase = aster_acme_core::workflow::IssuancePhase::Completed;
     assert_eq!(
-        super::choose(
+        select_projected(
             vec![first.clone(), second],
             &name,
             None,
-            super::RequestSelection::Unfinished,
+            TestSelection::Unfinished,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -120,11 +120,11 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
         first.operation_id
     );
     assert!(
-        super::choose(
+        select_projected(
             vec![],
             &name,
             None,
-            super::RequestSelection::Unfinished,
+            TestSelection::Unfinished,
             &crate::common::session::OutputSession::new(true)
         )
         .is_err()
@@ -311,14 +311,17 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
 fn selection_labels_only_show_primary_domain_fixed_time_and_status() {
     let first = record('a', "2026-01-01T00:00:00.123456Z");
     let second = record('b', "2026-01-01T00:00:00.999999Z");
-    let name_label = super::certificate_label(&first);
+    let name_label = super::certificate_label(&first, super::CertificateLabel::Standard);
     assert_eq!(
         name_label,
         "example.com | example.com | 2026-01-01 00:00:00 UTC | creating order"
     );
     let mut in_use = first.clone();
     in_use.is_in_use = true;
-    assert!(!super::certificate_label(&in_use).ends_with(" | in use"));
+    assert!(
+        !super::certificate_label(&in_use, super::CertificateLabel::Standard)
+            .ends_with(" | in use")
+    );
     assert!(super::choice_label(&in_use).ends_with(" | in use"));
     let label = super::choice_label(&first);
     assert_eq!(
@@ -331,6 +334,30 @@ fn selection_labels_only_show_primary_domain_fixed_time_and_status() {
 }
 
 #[test]
+fn deployment_labels_show_binding_count_without_changing_standard_labels() {
+    let mut record = record('a', "2026-01-01T00:00:00Z");
+    let standard = super::certificate_label(&record, super::CertificateLabel::Standard);
+    for (count, expected) in [
+        (None, "unknown"),
+        (Some(0), "none"),
+        (Some(1), "1"),
+        (Some(2), "2"),
+    ] {
+        record.deployment_count = count;
+        let label = super::certificate_label(&record, super::CertificateLabel::Deployment);
+        assert_eq!(label, format!("{standard} | deployments: {expected}"));
+        assert_eq!(
+            super::certificate_label(&record, super::CertificateLabel::Standard),
+            standard
+        );
+    }
+    record.phase = aster_acme_core::workflow::IssuancePhase::Authorizing;
+    record.deployment_count = Some(0);
+    let label = super::certificate_label(&record, super::CertificateLabel::Deployment);
+    assert!(label.contains("authorizing domains | deployments: none"));
+}
+
+#[test]
 fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
     assert!(Args::try_parse_from(["aster-acme", "cert", "show"]).is_ok());
     let first = record('a', "2026-01-01T00:00:00Z");
@@ -339,6 +366,7 @@ fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
             std::slice::from_ref(&first),
             None,
             None,
+            super::CertificateLabel::Standard,
             &crate::common::session::OutputSession::new(true)
         )
         .is_err()
@@ -348,6 +376,7 @@ fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
             std::slice::from_ref(&first),
             None,
             Some(&first.operation_id),
+            super::CertificateLabel::Standard,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap(),
@@ -358,6 +387,7 @@ fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
             &[],
             Some("example.com"),
             None,
+            super::CertificateLabel::Standard,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -369,6 +399,7 @@ fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
             &[],
             None,
             Some("missing"),
+            super::CertificateLabel::Standard,
             &crate::common::session::OutputSession::new(true)
         )
         .is_err()
@@ -379,6 +410,38 @@ fn cert_show_without_name_defers_to_interaction_but_never_prompts_scripts() {
     ] {
         assert!(Args::try_parse_from(arguments).is_err());
     }
+}
+
+#[test]
+fn deployment_selection_only_resolves_names_from_storage_candidates() {
+    let current = record('a', "2026-01-01T00:00:00Z");
+    assert!(
+        super::deployment_certificate_name(
+            &[],
+            None,
+            &crate::common::session::OutputSession::new(true),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("No completed, non-revoked in-use certificates")
+    );
+    assert_eq!(
+        super::deployment_certificate_name(
+            std::slice::from_ref(&current),
+            Some("example.com"),
+            &crate::common::session::OutputSession::new(true),
+        )
+        .unwrap(),
+        current.name
+    );
+    assert!(
+        super::deployment_certificate_name(
+            std::slice::from_ref(&current),
+            Some("other.example.com"),
+            &crate::common::session::OutputSession::new(true),
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -525,16 +588,18 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
     in_use.is_in_use = true;
     let pending = record('c', "2026-03-01T00:00:00Z");
     let records = vec![pending.clone(), old.clone(), in_use.clone()];
-    let grouped = super::managed_records(records.clone()).unwrap();
+    let grouped = aster_acme::storage::query::IssueView::Managed
+        .project(records.clone())
+        .unwrap();
     assert_eq!(grouped.len(), 1);
     assert_eq!(grouped[0].operation_id, in_use.operation_id);
     let name = in_use.name.clone();
     assert_eq!(
-        super::choose(
+        select_projected(
             records.clone(),
             &name,
             None,
-            super::RequestSelection::InUse,
+            TestSelection::InUse,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -542,11 +607,11 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
         in_use.operation_id
     );
     assert_eq!(
-        super::choose(
+        select_projected(
             records,
             &name,
             None,
-            super::RequestSelection::Unfinished,
+            TestSelection::Unfinished,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -554,21 +619,21 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
         pending.operation_id
     );
     assert!(
-        super::choose(
+        select_projected(
             vec![old.clone()],
             &name,
             None,
-            super::RequestSelection::InUse,
+            TestSelection::InUse,
             &crate::common::session::OutputSession::new(true)
         )
         .is_err()
     );
     assert_eq!(
-        super::choose(
+        select_projected(
             vec![old.clone()],
             &name,
             Some(&old.operation_id),
-            super::RequestSelection::InUse,
+            TestSelection::InUse,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -576,11 +641,11 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
         old.operation_id
     );
     assert_eq!(
-        super::choose(
+        select_projected(
             vec![old, pending.clone()],
             &name,
             None,
-            super::RequestSelection::InUse,
+            TestSelection::InUse,
             &crate::common::session::OutputSession::new(true)
         )
         .unwrap()
@@ -589,7 +654,11 @@ fn managed_inventory_and_default_show_prefer_in_use_without_scheduling_history()
     );
     let mut duplicate = in_use.clone();
     duplicate.operation_id = "d".repeat(43);
-    assert!(super::managed_records(vec![in_use, duplicate]).is_err());
+    assert!(
+        aster_acme::storage::query::IssueView::Managed
+            .project(vec![in_use, duplicate])
+            .is_err()
+    );
 }
 
 #[test]
@@ -679,4 +748,43 @@ fn selected_version_details_show_in_use_only_when_explicitly_requested() {
             "In use: no"
         }));
     }
+}
+
+fn select_projected(
+    records: Vec<aster_acme::issuance::IssueRecord>,
+    name: &aster_acme::issuance::CertificateName,
+    id: Option<&str>,
+    mode: TestSelection,
+    output: &crate::common::session::OutputSession,
+) -> crate::common::error::CliResult<aster_acme::issuance::IssueRecord> {
+    use crate::commands::cert::selection::choose;
+    use aster_acme::storage::query::{IssueQuery, IssueView};
+    let query = IssueQuery {
+        name: Some(name.clone()),
+        operation_id: id.map(str::to_owned),
+        resumable: if matches!(mode, TestSelection::Unfinished) {
+            Some(true)
+        } else {
+            None
+        },
+        view: if matches!(mode, TestSelection::InUse) && id.is_none() {
+            IssueView::CurrentOrUnfinished
+        } else {
+            IssueView::All
+        },
+        ..IssueQuery::default()
+    };
+    let records = query
+        .view
+        .project(records)?
+        .into_iter()
+        .filter(|r| query.matches(r))
+        .collect();
+    choose(records, name, id, output)
+}
+
+#[derive(Clone, Copy)]
+enum TestSelection {
+    Unfinished,
+    InUse,
 }

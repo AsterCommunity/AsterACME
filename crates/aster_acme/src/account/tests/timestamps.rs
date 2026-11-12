@@ -1,5 +1,5 @@
 //! Controlled wall-clock tests of successful observations and failure/no-I/O paths.
-use super::*;
+use crate::account::tests::*;
 use crate::crypto::key_algorithm::KeyAlgorithm;
 use std::sync::atomic::AtomicI64;
 

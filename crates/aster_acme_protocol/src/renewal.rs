@@ -51,7 +51,7 @@ pub fn information_url(endpoint: &AcmeUrl, identifier: &str) -> Result<AcmeUrl, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::renewal::*;
 
     #[test]
     fn discovered_paths_queries_and_identifier_boundaries() {

@@ -1,8 +1,10 @@
 //! Local durability, locking, permissions and key identity tests.
 
-use super::*;
-use aster_acme::account::KeyAccess;
+use crate::account::*;
+use crate::inventory;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
+use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::query::AccountQuery;
 use aster_acme_core::account::AccountRecordState;
 use tokio::time::sleep;
 
@@ -27,7 +29,10 @@ async fn timestamp_metadata_roundtrips_without_inventing_unknown_values() {
         Some(record.clone())
     );
     assert_eq!(
-        accounts(temp.path().into()).await.unwrap()[0].times,
+        inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .unwrap()[0]
+            .times,
         record.times
     );
     atomic_write(
@@ -67,7 +72,13 @@ async fn local_removal_is_scoped_and_does_not_require_a_valid_key() {
         untouched
     );
     assert!(store.remove().await.is_err());
-    assert_eq!(accounts(temp.path().into()).await.unwrap().len(), 1);
+    assert_eq!(
+        inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -136,7 +147,13 @@ fn fixture(directory: &AcmeUrl, thumbprint: &str) -> AccountRecord {
 #[tokio::test]
 async fn listing_is_offline_sorted_filters_uninitialized_and_rejects_corrupt_entries() {
     let temp = tempfile::tempdir().unwrap();
-    assert_eq!(accounts(temp.path().into()).await.unwrap().len(), 0);
+    assert_eq!(
+        inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     assert!(!temp.path().join("accounts").exists());
     let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
     for name in ["zebra", "alpha"] {
@@ -157,7 +174,9 @@ async fn listing_is_offline_sorted_filters_uninitialized_and_rejects_corrupt_ent
         }
     }
     fs::create_dir(temp.path().join("accounts/empty")).unwrap();
-    let listed = accounts(temp.path().into()).await.unwrap();
+    let listed = inventory::query_accounts(temp.path().into(), AccountQuery::default())
+        .await
+        .unwrap();
     assert_eq!(
         listed
             .iter()
@@ -169,7 +188,11 @@ async fn listing_is_offline_sorted_filters_uninitialized_and_rejects_corrupt_ent
     assert!(!listed[1].usable);
     assert_eq!(listed[0].directory, ca);
     atomic_write(&temp.path().join("accounts/alpha/account.toml"), b"invalid").unwrap();
-    assert!(accounts(temp.path().into()).await.is_err());
+    assert!(
+        inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .is_err()
+    );
 }
 
 #[cfg(unix)]
@@ -180,7 +203,13 @@ async fn listing_ignores_unmanaged_symlink_but_explicit_account_open_rejects_it(
     let outside = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join("accounts")).unwrap();
     symlink(outside.path(), temp.path().join("accounts/alias")).unwrap();
-    assert_eq!(accounts(temp.path().into()).await.unwrap().len(), 0);
+    assert_eq!(
+        inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     let store = CliAccountStore::open(temp.path(), "alias", Duration::from_secs(1)).unwrap();
     assert!(
         store
@@ -555,7 +584,12 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
     assert!(!slot.join("account.lock").exists());
     assert!(!slot.join("account.toml").exists());
     assert!(!slot.join("account-key.pk8").exists());
-    assert!(accounts(temp.path().into()).await.unwrap().is_empty());
+    assert!(
+        inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // The leftover directory is uninitialized, and future explicit registration can
     // use the retained lock without touching user contents.
     store
@@ -591,7 +625,7 @@ async fn account_removal_leaves_no_empty_object_directory_and_reuses_external_lo
 
 #[tokio::test]
 async fn account_algorithms_survive_restart_and_mismatched_requests_never_replace_keys() {
-    use aster_acme::{account::KeyAccess, crypto::key_algorithm::KeyAlgorithm};
+    use aster_acme::{crypto::key_algorithm::KeyAlgorithm, storage::account::KeyAccess};
     let temp = tempfile::tempdir().unwrap();
     let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
     for algorithm in KeyAlgorithm::ALL {
@@ -605,7 +639,9 @@ async fn account_algorithms_survive_restart_and_mismatched_requests_never_replac
         let before = fs::read(store.account_slot().join("account-key.pk8")).unwrap();
         let record = store.metadata().await.unwrap().unwrap();
         assert_eq!(record.key_algorithm, algorithm);
-        let inventory = accounts(temp.path().into()).await.unwrap();
+        let inventory = inventory::query_accounts(temp.path().into(), AccountQuery::default())
+            .await
+            .unwrap();
         assert_eq!(
             inventory
                 .iter()

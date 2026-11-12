@@ -1,8 +1,9 @@
 //! Batch outcomes and cancellation are independent of transport timing and terminal state.
-use super::*;
 use crate::commands::cert::render;
-use aster_acme::account::KeyAccess;
+use crate::commands::cert::renewal::*;
 use aster_acme::issuance::{IssueOutcome, ValidationRequirement};
+use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::query::IssueQuery;
 use std::cell::RefCell;
 
 fn record(name: &str) -> IssueRecord {
@@ -177,11 +178,12 @@ struct LocalFixture {
 
 impl LocalFixture {
     async fn create() -> Self {
-        use aster_acme::account::{AccountKeyStore, AccountStore};
+        use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+
         let temp = tempfile::tempdir().unwrap();
         let directory =
             aster_acme_protocol::url::AcmeUrl::new("https://127.0.0.1:1/directory").unwrap();
-        let accounts = aster_acme_cli_storage::CliAccountStore::open(
+        let accounts = aster_acme_cli_storage::account::CliAccountStore::open(
             temp.path(),
             "default",
             Duration::from_secs(1),
@@ -271,7 +273,7 @@ impl LocalFixture {
 #[tokio::test]
 async fn real_transactions_keep_not_due_material_unchanged_skip_unissued_and_continue_after_missing_account()
  {
-    use aster_acme::account::AccountKeyStore;
+    use aster_acme::storage::account::AccountKeyStore;
     let fixture = LocalFixture::create().await;
     let broken = fixture.seed("a-missing-account", true).await;
     let good = fixture.seed("b-not-due", true).await;
@@ -283,7 +285,9 @@ async fn real_transactions_keep_not_due_material_unchanged_skip_unissued_and_con
         .unwrap();
     // Change only the snapshot passed to the executor: failure must not mutate any generation.
     drop(session);
-    let mut records = selection::managed_records(fixture.store.list().await.unwrap()).unwrap();
+    let mut records = aster_acme::storage::query::IssueView::Managed
+        .project(fixture.store.query(IssueQuery::default()).await.unwrap())
+        .unwrap();
     records[0].account_name = "missing".into();
     let work = super::super::report::RenewalWork::from_records(
         &records,
@@ -339,9 +343,17 @@ async fn real_transactions_keep_not_due_material_unchanged_skip_unissued_and_con
         );
         assert_eq!(std::fs::read(folder.join("private-key.pk8")).unwrap(), key);
     }
-    assert_eq!(fixture.store.list().await.unwrap().len(), 3);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
     assert!(good.is_in_use);
-    let accounts = aster_acme_cli_storage::CliAccountStore::open(
+    let accounts = aster_acme_cli_storage::account::CliAccountStore::open(
         &fixture.settings.data_dir,
         "default",
         Duration::from_secs(1),
@@ -372,9 +384,14 @@ async fn now_failure_is_reported_per_item_and_preserves_the_previous_in_use_cert
         cancellation: Some(&token),
         cli: &fixture.cli,
     };
-    let report = run_batch(fixture.store.list().await.unwrap(), &executor, &token).await;
+    let report = run_batch(
+        fixture.store.query(IssueQuery::default()).await.unwrap(),
+        &executor,
+        &token,
+    )
+    .await;
     assert_eq!(report.summary().failed, 1);
-    let records = fixture.store.list().await.unwrap();
+    let records = fixture.store.query(IssueQuery::default()).await.unwrap();
     assert_eq!(records.len(), 2);
     assert_eq!(records.iter().filter(|record| record.is_in_use).count(), 1);
     assert!(
@@ -472,7 +489,9 @@ async fn certificate_lock_timeout_is_one_failure_and_does_not_stop_the_next_due_
         .open(&locked.name, &locked.operation_id)
         .await
         .unwrap();
-    let records = selection::managed_records(fixture.store.list().await.unwrap()).unwrap();
+    let records = aster_acme::storage::query::IssueView::Managed
+        .project(fixture.store.query(IssueQuery::default()).await.unwrap())
+        .unwrap();
     let token = CancellationToken::new();
     let executor = Transaction {
         settings: &fixture.settings,
@@ -489,7 +508,15 @@ async fn certificate_lock_timeout_is_one_failure_and_does_not_stop_the_next_due_
         report.disposition(),
         super::super::report::BatchDisposition::PartialFailure
     );
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(
         lease.record().await.unwrap().operation_id,
         locked.operation_id

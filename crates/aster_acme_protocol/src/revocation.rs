@@ -117,7 +117,7 @@ impl std::fmt::Display for RevocationReason {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::revocation::*;
     #[test]
     fn all_assigned_reason_codes_roundtrip_and_unassigned_codes_are_rejected() {
         for reason in RevocationReason::ALL {

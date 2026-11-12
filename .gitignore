@@ -1,5 +1,6 @@
 /target/
 /data/
+/tmp/
 *.pk8
 .DS_Store
 

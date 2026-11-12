@@ -104,8 +104,8 @@ impl Drop for Listener {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::execution;
-    use super::*;
+    use crate::commands::cert::validation::listener::*;
+    use crate::commands::cert::validation::tests::execution;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

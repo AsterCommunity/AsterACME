@@ -171,7 +171,7 @@ fn confirm_with(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::terminal::*;
 
     #[test]
     fn confirmation_defaults_to_no_and_never_prompts_automation() {

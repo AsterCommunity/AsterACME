@@ -4,7 +4,9 @@
 //! hard link retains file identity across a crash between publishing and receipt
 //! persistence. Cleanup only unlinks an unchanged file with that exact identity;
 //! borrowed or replaced files are retained. No directory or unrelated file is removed.
-use super::{Arc, ChallengeKind, ChallengeSolver, IssueError, Progress};
+use crate::commands::cert::validation::{
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
+};
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
 use aster_acme_cli_storage::state_file;

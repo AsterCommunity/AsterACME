@@ -1,10 +1,11 @@
 //! Local-only certificate removal: resolve a name, validate under lease, confirm and delete.
-use super::{args::SavedTargetArgs, selection};
+use crate::commands::cert::{args::SavedTargetArgs, selection};
 use crate::{
     commands::account::args::AccountArgs,
     common::{args::LocalArgs, context::CliSettings, error::CliResult, terminal},
 };
-use aster_acme::issuance::IssueStore;
+use aster_acme::storage::issuance::IssueStore;
+use aster_acme::storage::query::IssueQuery;
 use aster_acme_cli_storage::issuance::{
     CliIssueStore,
     removal::{CertificateRemoval, RemovalScope},
@@ -12,6 +13,7 @@ use aster_acme_cli_storage::issuance::{
 use std::time::Duration;
 
 /// CLI selection mode; an exact request is resolved before acquiring its deletion lease.
+#[derive(Clone, Copy)]
 pub(super) enum RemovalFilter {
     Request,
     History,
@@ -33,7 +35,39 @@ pub(super) async fn execute(
     })
     .await?;
     let store = CliIssueStore::new(settings.data_dir, Duration::from_secs(5));
-    let records = store.list().await?;
+    let records = store
+        .query(IssueQuery {
+            name: target
+                .identity
+                .name
+                .as_deref()
+                .or(target.identity.named_name.as_deref())
+                .map(aster_acme::issuance::CertificateName::new)
+                .transpose()?,
+            operation_id: target.operation.clone(),
+            view: if matches!(filter, RemovalFilter::All) {
+                aster_acme::storage::query::IssueView::Managed
+            } else {
+                aster_acme::storage::query::IssueView::All
+            },
+            in_use: if matches!(filter, RemovalFilter::History) {
+                Some(false)
+            } else {
+                None
+            },
+            unfinished: if matches!(filter, RemovalFilter::History) {
+                Some(false)
+            } else {
+                None
+            },
+            revocation: if matches!(filter, RemovalFilter::Revoked) {
+                Some(aster_acme_core::revocation::RevocationState::Confirmed)
+            } else {
+                None
+            },
+            ..IssueQuery::default()
+        })
+        .await?;
     let name = selection::certificate_name(
         &records,
         target
@@ -42,6 +76,7 @@ pub(super) async fn execute(
             .as_deref()
             .or(target.identity.named_name.as_deref()),
         target.operation.as_deref(),
+        selection::CertificateLabel::Standard,
         &cli.output,
     )?;
     let scope = match filter {
@@ -49,14 +84,8 @@ pub(super) async fn execute(
         RemovalFilter::History => RemovalScope::History,
         RemovalFilter::Revoked => RemovalScope::Revoked,
         RemovalFilter::Request => RemovalScope::Operation(
-            selection::choose(
-                records,
-                &name,
-                target.operation.as_deref(),
-                selection::RequestSelection::Any,
-                &cli.output,
-            )?
-            .operation_id,
+            selection::choose(records, &name, target.operation.as_deref(), &cli.output)?
+                .operation_id,
         ),
     };
     let removal = store.prepare_removal(&name, scope.clone()).await?;
@@ -142,12 +171,10 @@ fn confirmation_details(removal: &CertificateRemoval) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use aster_acme::{
-        account::{AccountKeyStore, AccountStore},
-        issuance::{CertificateName, IssueRequest},
-    };
-    use aster_acme_cli_storage::CliAccountStore;
+    use crate::commands::cert::removal::*;
+    use aster_acme::issuance::{CertificateName, IssueRequest};
+    use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+    use aster_acme_cli_storage::account::CliAccountStore;
     use aster_acme_core::{account::AccountRecordState, protocol::AccountStatus};
     use aster_acme_protocol::url::AcmeUrl;
 
@@ -161,7 +188,7 @@ mod tests {
             .signer(
                 &directory,
                 "default",
-                aster_acme::account::KeyAccess::Create(None),
+                aster_acme::storage::account::KeyAccess::Create(None),
             )
             .await
             .unwrap();
@@ -222,7 +249,7 @@ mod tests {
         .unwrap();
         assert!(error.to_string().contains("use --yes"));
         assert_eq!(std::fs::read(&key).unwrap(), before);
-        assert_eq!(store.list().await.unwrap().len(), 1);
+        assert_eq!(store.query(IssueQuery::default()).await.unwrap().len(), 1);
         execute(
             target(),
             RemovalFilter::Request,
@@ -233,7 +260,7 @@ mod tests {
         .await
         .unwrap();
         assert!(!key.exists());
-        assert_eq!(store.list().await.unwrap().len(), 0);
+        assert_eq!(store.query(IssueQuery::default()).await.unwrap().len(), 0);
         assert!(
             execute(
                 target(),

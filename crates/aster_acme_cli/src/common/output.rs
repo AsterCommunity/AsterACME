@@ -33,7 +33,8 @@ impl Style {
 }
 
 /// Labels and presentation for progress, completion and diagnostics share one mapping.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum MessageKind {
     Debug,
     Info,
@@ -132,7 +133,7 @@ pub(crate) fn confirmation(details: &str, color: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::output::*;
     #[test]
     fn tips_style_only_the_label_and_plain_output_remains_copyable() {
         assert_eq!(

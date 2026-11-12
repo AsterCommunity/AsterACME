@@ -37,9 +37,9 @@ CLI 的账户文件存储适配，实现 `dyn AccountStore` 和 `dyn AccountKeyS
 
 ```rust,no_run
 use std::{sync::Arc, time::Duration};
-use aster_acme::account::{AccountStore, AccountKeyStore};
+use aster_acme::storage::account::{AccountStore, AccountKeyStore};
 use aster_acme_protocol::url::AcmeUrl;
-use aster_acme_cli_storage::CliAccountStore;
+use aster_acme_cli_storage::account::CliAccountStore;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let files = Arc::new(CliAccountStore::open("./data", "default", Duration::from_secs(5))?);
@@ -115,3 +115,19 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副本与 .generation 标记；同级 staging/previous 目录保证可按 catalog 恢复，双 rename 不是跨平台原子交换。Unix 继续使用链接，两个平台的 CLI 输出路径都为 in_use 下的四个文件。复制模式的正常、失败、回滚、用户内容保留测试在每个主机执行，Windows 原生结果由 CI 单独提供。
 
 证书定义和每个版本新增必需challenge/solver_id/solver_config；HTTP webroot保存规范绝对路径，manual实现保存空配置。open/save/renew均校验不可变定义，未知修改拒绝；未发布格式无旧读取/迁移。授权材料为按method区分的validation，保留cleanup_pending；清理成功后保存，不因清理失败回滚已完成产物。
+
+## 查询与源码所有权
+
+`account.rs` / `account/{rotation,removal}` 拥有账户文件实现；`inventory.rs` 拥有轻量账户查询。`issuance/generation.rs` 拥有生成和续期准备，`issuance/session.rs` 拥有持锁会话与提交，`issuance/query.rs` 拥有证书文件查询，`issuance/deployment.rs` 拥有发布及检查点。上层契约在 `aster_acme::storage`，不做旧导入路径转发。
+
+`query_accounts(root, AccountQuery)` 返回 `Vec<LocalAccount>`，按 name/directory/state/usable/operation 做 AND 筛选；明确 name 时直接读该账户，列表不加载密钥或查询 CA。`IssueStore::query(IssueQuery)` 返回 `Vec<IssueRecord>`；默认枚举所有版本，支持 name/operation/in_use/phase/unfinished/revocation/resumable/similar。`IssueView::{All,Managed,CurrentOrUnfinished}` 先选择版本，再应用状态谓词。Managed 选 in_use，否则最新未完成，否则最新历史；不会把历史标成当前使用。
+
+明确 name 直接访问对应目录，operation 或 in_use 限制使适配器按目录中的 ID 前缀裁剪 journal 读取；无索引的文件后端仍需枚举该目录，状态条件仍需解析候选 metadata。全目录/全历史查询继续拒绝范围内损坏资料，不隐藏错误；有界路径/文件数量和大小限制保持。查询只是快照，部署/续期/移除持租约后必须复查状态。账户 list --verify 更新每条查询所得的观察，不再二次全目录扫描。
+
+证书查询的 `deployment_count` 与 `is_in_use` 都是本地库存快照，从已读取的 cert.toml 填充，不额外逐项获取绑定。`deployment_count = None` 表示适配器未提供该信息；文件适配器返回精确数量（包括0），历史/当前版本共享所属托管证书的配置数量。该字段不写入 operation.toml 或 ACME wire/证书结果 JSON。
+
+部署的 `DeploymentPermissions` 保存可选Unix证书文件/私钥mode，缺省0600；Windows继承权限并拒绝显式mode。`DeploymentPatch` 仅更新给出的字段，目标替换整个目的路径集合，配置变化后重置为Configured，不发布、不reload。add/update/open按跨证书配置锁→证书租约顺序检查目的路径冲突；禁止覆盖其他绑定或托管账户/证书/控制文件，open后只保留证书租约。配置锁仅序列化目标所有权变动/检查，不跨reload持有。
+
+发布在同目录暂存完整内容、应用mode、同步后逐文件替换，默认私钥不会被证书文件mode放宽；不修改父目录或承诺整组原子切换。失败保留路径、IO阶段及OS原因；阻塞写入任务继续持有证书租约直到完成。存储不执行reload，不保存进程stdout/stderr；调用方分别报告本次执行失败和历史检查点。
+
+精确文件部署支持独立可选的 certificate/private_key/ca_chain/fullchain 四类路径；任意非空子集合法，不要求证书和私钥配对。None 不发布该文件；指定目标预检后只替换对应文件。仅保留绝对路径、目标互不重复及与目录模式互斥的安全边界。配置中的原证书/私钥字符串字段继续可读，新可选字段缺省为 None，不改变原有绑定及续期行为。

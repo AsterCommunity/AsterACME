@@ -71,7 +71,7 @@ fn txt_value_present(records: &[hickory_resolver::proto::rr::Record], expected: 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::dns01::visibility::*;
     use std::time::{Duration, Instant};
     use tokio_util::sync::CancellationToken;
 

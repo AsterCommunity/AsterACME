@@ -70,7 +70,7 @@ pub(crate) fn render(json: bool) -> CliResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::build_info::*;
 
     #[test]
     fn structured_and_human_versions_expose_the_same_build_identity() {

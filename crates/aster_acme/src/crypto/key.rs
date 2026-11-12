@@ -1,5 +1,5 @@
 //! Software account signing keys. No Debug/Clone exposes private material.
-use super::{AccountSigner, CryptoError, jwk::Jwk, key_algorithm::KeyAlgorithm};
+use crate::crypto::{AccountSigner, CryptoError, jwk::Jwk, key_algorithm::KeyAlgorithm};
 use aws_lc_rs::{
     encoding::AsDer as _,
     rand::SystemRandom,

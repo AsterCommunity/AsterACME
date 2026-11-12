@@ -1,17 +1,20 @@
 //! Shared account selection for all commands; prompts only supply ordinary command arguments.
 
-use super::args::AccountArgs;
+use crate::commands::account::args::AccountArgs;
 use crate::{
     common::{error::CliResult, output::safe, terminal::prompt_result},
     config::DEFAULT_CA_DIRECTORY,
 };
-use aster_acme_cli_storage::{LocalAccount, valid_account_name};
+use aster_acme::storage::query::AccountQuery;
+use aster_acme_cli_storage::account::valid_account_name;
+use aster_acme_cli_storage::inventory::LocalAccount;
 
 #[derive(Clone, Copy)]
 pub(super) enum Mode {
     Register,
     Existing,
     Registered,
+    Operation(aster_acme_core::account::AccountOperation),
 }
 
 /// Enumerate local choices only when a real terminal needs an unresolved target.
@@ -22,7 +25,31 @@ pub(super) async fn complete(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<()> {
     if crate::common::terminal::interactive(options.json) && options.name.is_none() {
-        let accounts = aster_acme_cli_storage::accounts(settings.data_dir.clone()).await?;
+        let accounts = aster_acme_cli_storage::inventory::query_accounts(
+            settings.data_dir.clone(),
+            match mode {
+                Mode::Register => AccountQuery::default(),
+                Mode::Existing | Mode::Registered | Mode::Operation(_) => AccountQuery {
+                    operation: if let Mode::Operation(operation) = mode {
+                        Some(operation)
+                    } else {
+                        None
+                    },
+                    directory: options
+                        .ca_directory
+                        .as_deref()
+                        .map(aster_acme_protocol::url::AcmeUrl::new)
+                        .transpose()?,
+                    usable: if matches!(mode, Mode::Registered) {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                    ..AccountQuery::default()
+                },
+            },
+        )
+        .await?;
         resolve(
             options,
             mode,
@@ -85,18 +112,33 @@ pub(super) fn resolve(
     if options.name.is_some() || !interactive {
         return Ok(());
     }
+    let query = AccountQuery {
+        operation: if let Mode::Operation(operation) = mode {
+            Some(operation)
+        } else {
+            None
+        },
+        directory: options
+            .ca_directory
+            .as_deref()
+            .map(aster_acme_protocol::url::AcmeUrl::new)
+            .transpose()?,
+        usable: if matches!(mode, Mode::Registered) {
+            Some(true)
+        } else {
+            None
+        },
+        ..AccountQuery::default()
+    };
     let candidates: Vec<_> = accounts
         .iter()
         .filter(|account| {
-            let state_allowed = match mode {
-                Mode::Registered => account.usable,
-                Mode::Register | Mode::Existing => true,
-            };
-            state_allowed
-                && options
-                    .ca_directory
-                    .as_deref()
-                    .is_none_or(|ca| ca == account.directory.as_str())
+            query.matches_fields(
+                &account.name,
+                &account.directory,
+                account.state,
+                account.usable,
+            )
         })
         .collect();
     if matches!(mode, Mode::Register) {
@@ -209,7 +251,7 @@ fn create(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::account::selection::*;
     use crate::common::terminal::Canceled;
     use aster_acme_protocol::url::AcmeUrl;
     use std::collections::VecDeque;
@@ -307,7 +349,7 @@ mod tests {
                     ["Register an account:", "Choose an existing account:"]
                 ),
                 Mode::Existing => assert_eq!(prompts.messages, ["Choose an existing account:"]),
-                Mode::Registered => panic!("not part of this test case"),
+                Mode::Registered | Mode::Operation(_) => panic!("not part of this test case"),
             }
         }
         let mut options = AccountArgs::default();

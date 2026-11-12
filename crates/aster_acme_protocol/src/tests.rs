@@ -1,10 +1,10 @@
 //! Wire-contract tests compare literal JSON, independent of transport implementations.
-use super::{account::*, directory::Directory, jws::*, problem::Problem, url::AcmeUrl};
+use crate::{account::*, directory::Directory, jws::*, problem::Problem, url::AcmeUrl};
 use aster_acme_core::protocol::AccountStatus;
 
 #[test]
 fn public_provider_names_serde_and_directories_have_one_registry() {
-    use super::directory::Provider;
+    use crate::directory::Provider;
     for (provider, name, url) in [
         (
             Provider::Letsencrypt,
@@ -158,7 +158,7 @@ fn resource_urls_keep_exact_spelling_and_reject_unsafe_input() {
 
 #[test]
 fn method_specific_fields_do_not_make_unknown_challenges_require_dns01_tokens() {
-    use super::order::{AuthorizationObject, WireChallengeKind};
+    use crate::order::{AuthorizationObject, WireChallengeKind};
     let resource = serde_json::json!({"identifier":{"type":"dns","value":"example.com"},"status":"pending","expires":"2099-01-01T00:00:00Z","challenges":[
         {"type":"dns-persist-01","status":"pending","url":"https://ca.example/persist","issuer-domain-names":["letsencrypt.org"]},
         {"type":"dns-01","status":"pending","url":"https://ca.example/dns","token":"long-enough-opaque-token"},

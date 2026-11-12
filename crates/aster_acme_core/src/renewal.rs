@@ -58,7 +58,7 @@ pub fn renewal_decision(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::renewal::*;
 
     #[test]
     fn query_deadline_and_unavailable_boundaries() {

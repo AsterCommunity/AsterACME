@@ -1,6 +1,8 @@
 //! Account presentation: distinguish local lifecycle from a fresh CA response.
 
-use super::report::{AccountReport, LocalAccountReport, deactivation_label, state_label};
+use crate::commands::account::report::{
+    AccountReport, LocalAccountReport, deactivation_label, state_label,
+};
 use crate::common::output::Style;
 use crate::common::time::timestamp;
 use crate::common::{
@@ -32,7 +34,7 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
             reused,
             action,
         } => {
-            use super::report::RemoteAction;
+            use crate::commands::account::report::RemoteAction;
             match action {
                 RemoteAction::Register | RemoteAction::Recover | RemoteAction::UpdateContact => {
                     let verb = match action {
@@ -89,7 +91,7 @@ fn rotation_label(phase: aster_acme_core::account::KeyRotationPhase) -> &'static
 
 /// Pad plain cells before applying ANSI so highlighting never changes alignment.
 fn list_text(
-    accounts: &[aster_acme_cli_storage::LocalAccount],
+    accounts: &[aster_acme_cli_storage::inventory::LocalAccount],
     default: &str,
     verification: Option<&[super::report::AccountVerification]>,
     color: bool,
@@ -312,8 +314,8 @@ fn account_status(status: &aster_acme_core::protocol::AccountStatus, color: bool
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::*;
-    use aster_acme_cli_storage::LocalAccount;
+    use crate::commands::account::render::*;
+    use aster_acme_cli_storage::inventory::LocalAccount;
     use aster_acme_core::account::DeactivationState;
     use aster_acme_protocol::url::AcmeUrl;
 
@@ -402,7 +404,7 @@ pub(super) mod tests {
 
     #[test]
     fn write_commands_summarize_success_while_show_retains_details() {
-        use super::super::report::RemoteAction;
+        use crate::commands::account::report::RemoteAction;
         use aster_acme::account::AcmeAccount;
         use aster_acme_core::protocol::AccountStatus;
         let account = AcmeAccount {

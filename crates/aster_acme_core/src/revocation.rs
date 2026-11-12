@@ -47,7 +47,7 @@ pub fn revocation_action(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::revocation::*;
 
     #[test]
     fn explicit_revocation_decisions_preserve_uncertain_request_identity() {

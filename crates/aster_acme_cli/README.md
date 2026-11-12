@@ -210,7 +210,7 @@ aster-acme cert show example.com --operation <ID> --verify
 
 手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多2秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
---request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone/tls_alpn，前台续期和吊销已实现；自动 DNS 和部署未实现。
+--request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone/tls_alpn，前台续期、吊销、绑定多目标部署与有界服务 reload 已实现；自动 DNS 和后台 daemon 未实现。
 
 每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
 
@@ -245,7 +245,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
-新申请必须显式 -c/--challenge，不默认选择验证方式；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
+新申请终端缺少 -c/--challenge 时交互选择验证方式；脚本必须显式指定，不自动默认选择；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
 
 所有账户、证书和 version 命令返回类型化 CommandReport，main 通过 OutputSession 统一写入最终结果；命令执行层不直接打印。渲染接收显式 Format，stdout/stderr 独立控制配色，JSON 只有一个结果或错误文档。会话跟踪真实进度/交互，避免全未到期批次出现开头空行。CommandContext 为一次命令持有同一惰性 HttpPool；批量续期和账户列表核验复用连接池，局部调用无需传入底层 HTTP 客户端。
 
@@ -278,3 +278,9 @@ Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且�
 `aster-acme cert issue -c standalone -d example.com`默认临时监听`0.0.0.0:80`；`-c tls_alpn`默认临时监听`0.0.0.0:443`，两者均可用`--listen-address`指定本地socket。公网入口须分别转发80/443并保留Host/SNI。配置持久化，resume/renew沿用；TLS-ALPN证书只包含目标DNS SAN、critical `acmeIdentifier`和`acme-tls/1`。成功/invalid/取消/超时/轮询上限均关闭服务；恢复已ack挑战重新提供内容但不重复提交CA。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
+
+证书部署使用 `cert deploy run/add/list/show/update/remove`，配置选项在 add/update：标准目录 --target 或任意组合 --cert-path/--key-path/--ca-path/--fullchain-path、可选 --reload-cmd、--reload-timeout、--max-retries。run CERT_NAME 部署全部，run CERT_NAME -n DEPLOY_NAME 部署单目标并可显式重试；list/remove 允许清理吊销或无当前版本留下的绑定，remove 保留已部署文件。终端省略 NAME 时选择证书，部署名用 -n/--name；add 交互缺省建议 default（可修改），脚本缺省在锁内自动生成，remove 缺省终端选择，脚本 remove 必须指定 -n。保存的绑定在续期后仍默认自动部署。
+
+`cert deploy update CERT_NAME -n DEPLOY_NAME` 只保存给出的配置；`--clear-reload`清除命令，目标路径参数整体替换目的集合，原文件保留。Unix支持 `--file-mode 0644 --key-mode 0640`，分别控制证书/CA/fullchain和私钥，缺省0600；Windows继承权限并拒绝显式Unix mode。模式保存在绑定、后续续期沿用；修改不立即部署。
+
+部署逐目标继续执行并汇总失败。库存/锁/打开失败也退出非零，执行错误不覆盖历史成功观察。Reload使用process-wrap管理Unix进程组/Windows Job Object，取消/超时清理拥有的进程树；stdout/stderr并行读取，每路每次收集64KiB后继续排空。手动命令实时显示，自动部署在统一部署报告展示；JSON仅一个结果并带events/deployment_events。输出不自动脱敏也不写入绑定文件。仍按单文件替换，不提供整组原子切换。

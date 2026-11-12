@@ -3,7 +3,9 @@
 //! The responder creates short-lived, self-signed challenge certificates with
 //! one DNS SAN and the critical `id-pe-acmeIdentifier` extension. It selects a
 //! certificate only when SNI and `acme-tls/1` are both present.
-use super::{Arc, ChallengeKind, ChallengeSolver, IssueError, Progress, listener::Listener};
+use crate::commands::cert::validation::{
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress, listener::Listener,
+};
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
 use async_trait::async_trait;

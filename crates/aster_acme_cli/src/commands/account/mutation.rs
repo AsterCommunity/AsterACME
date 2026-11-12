@@ -1,5 +1,5 @@
 //! Confirmed account mutations share selection, normalization, and service boundaries.
-use super::{
+use crate::commands::account::{
     args::{AccountArgs, RotateKeyArgs, UpdateContactArgs},
     report::{AccountReport, RemoteAction},
 };
@@ -9,17 +9,23 @@ use crate::common::{
     error::CliResult,
     terminal,
 };
-use aster_acme::account::{
-    AccountError, AccountKeyStore, AccountRotationStore, AccountService, AccountStore,
-};
+use aster_acme::account::{AccountError, AccountService};
+use aster_acme::storage::account::{AccountKeyStore, AccountRotationStore, AccountStore};
 use std::sync::Arc;
 
 async fn context(
     options: &mut AccountArgs,
+    operation: aster_acme_core::account::AccountOperation,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<CliContext> {
     let settings = CliSettings::load(options).await?;
-    super::selection::complete(options, &settings, super::selection::Mode::Existing, cli).await?;
+    super::selection::complete(
+        options,
+        &settings,
+        super::selection::Mode::Operation(operation),
+        cli,
+    )
+    .await?;
     let context = settings.account(options).await?;
     context.require_account().await?;
     Ok(context)
@@ -30,13 +36,18 @@ pub(super) async fn update_contacts(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let mut options = AccountArgs::from(args.network);
-    let context = context(&mut options, cli).await?;
+    let context = context(
+        &mut options,
+        aster_acme_core::account::AccountOperation::Update,
+        cli,
+    )
+    .await?;
     let signer = context
         .store
         .signer(
             &context.directory,
             &context.name,
-            aster_acme::account::KeyAccess::Existing,
+            aster_acme::storage::account::KeyAccess::Existing,
         )
         .await?;
     let record = context
@@ -86,7 +97,12 @@ pub(super) async fn rotate_key(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let mut options = AccountArgs::from(args.network);
-    let context = context(&mut options, cli).await?;
+    let context = context(
+        &mut options,
+        aster_acme_core::account::AccountOperation::RotateKey,
+        cli,
+    )
+    .await?;
     // Opening a rotation session validates the existing old/staged key identity without
     // generating material. Release it before user input; service revalidates under lease.
     let checked = context.store.rotation(&context.directory).await?;

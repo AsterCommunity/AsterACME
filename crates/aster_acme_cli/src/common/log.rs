@@ -1,11 +1,11 @@
 //! Shared human CLI logging: fixed UTC timestamps, aligned levels and detail rows.
 //! Structured command results belong to command renderers; JSON disables this sink.
-use super::output;
+use crate::common::output;
 use crate::common::output::MessageKind;
 
 // Pad the plain prefix before styling. Time, labels and continuation rows share one
 // visible column even when the terminal uses ANSI colors or timestamps had subseconds.
-pub(super) fn render(
+pub(crate) fn render(
     level: MessageKind,
     message: &str,
     details: &[String],
@@ -81,7 +81,7 @@ impl tracing::field::Visit for DiagnosticFields {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::log::*;
     #[test]
     fn time_label_and_continuation_columns_are_fixed_and_terminal_controls_escaped() {
         let at = time::OffsetDateTime::from_unix_timestamp(0)

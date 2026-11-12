@@ -100,7 +100,7 @@ fn parse(text: &str) -> CliResult<Config> {
     }
     crate::ca::resolve(document.config.ca, document.config.ca_directory.as_deref())?;
     if let Some(name) = &document.config.default_account
-        && !aster_acme_cli_storage::valid_account_name(name)
+        && !aster_acme_cli_storage::account::valid_account_name(name)
     {
         return Err(
             "Invalid config.default_account: use 1–64 letters, digits, hyphens or underscores."
@@ -252,8 +252,8 @@ pub(crate) fn default_data_dir() -> CliResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::config;
+    use crate::config::*;
 
     #[tokio::test]
     async fn removal_preserves_a_different_default_and_comments() {

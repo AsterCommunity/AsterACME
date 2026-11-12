@@ -29,7 +29,7 @@
 
 AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与 DNS-01/HTTP-01 证书签发。用户声明证书需求，库负责创建订单、跟踪授权、提交固定 CSR、下载证书链并持久化结果；CLI 提供终端交互和本地存储。
 
-项目正在开发，ACME 包尚未正式发布。手动签发与恢复、HTTP standalone、TLS-ALPN-01、ARI 续期计划、前台续期及账户签名证书吊销已经实现；自动 DNS provider、daemon 和部署 hook 仍是计划能力。
+项目正在开发，ACME 包尚未正式发布。手动签发与恢复、HTTP standalone、TLS-ALPN-01、ARI 续期计划、前台续期、证书部署和账户签名证书吊销已经实现；自动 DNS provider 与 daemon 调度仍是计划能力。
 
 ## 适用场景
 
@@ -39,7 +39,7 @@ AsterACME 以 Rust 库和命令行应用实现 ACME 账户操作与 DNS-01/HTTP-
 - 将协议服务嵌入应用，注入存储、签名、就绪检查和进度接口。
 - 使用终端提示，或通过显式参数与结构化 JSON 编写脚本。
 
-Webroot和standalone支持非交互前台续期；无人值守调度与部署尚未实现。存储适配器包含 Unix 权限策略及 Windows 继承权限策略；平台运行证据分别记录，不以交叉编译冒充 Windows 验收。
+Webroot和standalone支持非交互前台续期；证书部署可绑定多个文件目标并在续期后自动 reload，无人值守调度尚未实现。存储适配器包含 Unix 权限策略及 Windows 继承权限策略；平台运行证据分别记录，不以交叉编译冒充 Windows 验收。
 
 ## 设计重点
 
@@ -167,6 +167,10 @@ Standalone只响应当前HTTP-01挑战对应的Host/path GET，不写验证文�
 
 签发后立即尝试获取 ARI，在建议窗口内随机选时并保存；不可用时，有效期至少 10 天以经过三分之二为目标，较短证书以经过一半为目标，再在目标前一天内随机选择。窗口下界不会早于本地生成计划的时刻；若目标已过，则安排立即续期。按 `Retry-After` 保存重查期限，临时错误有限退避，刷新失败保留已有计划。`cert list/show` 显示计划；`show --verify` 刷新到期 ARI。cert renew 已支持单次到期续期（--now 提前），批量使用 cert renew --all，按托管名称顺序执行，保留人工 TXT 待办，单项失败继续并输出一次汇总。--all 与名称互斥；JSON 只输出一个报告，存在失败退出1，取消退出130。周期唤醒留给后续 daemon。
 
+使用 `cert deploy add CERT_NAME -n DEPLOY_NAME` 为一张证书绑定多个部署目标。目录目标会发布标准四个 PEM 文件，也可通过 --cert-path/--key-path/--ca-path/--fullchain-path 独立指定任意文件，给什么路径就发布什么。部署名通过可选 -n/--name 设置，脚本缺省在锁内自动生成，终端先提示可确认/修改的默认名称；裸 add 可交互选择证书和输入目录，reload 留空只发布文件。Reload 命令按 executable 与 argv 执行，不经 shell。签发和续期成功后自动发布到已配置目标并执行有界 reload；使用 `cert deploy list CERT_NAME` 列表和 `cert deploy show CERT_NAME DEPLOY_NAME` 查看完整配置及保存状态，检查失败/不确定的 reload 后可用 `cert deploy run CERT_NAME -n DEPLOY_NAME` 重试。
+
+`cert deploy update CERT_NAME -n DEPLOY_NAME` 只保存指定配置，不发布或reload，`--clear-reload` 可关闭reload。Unix的add/update支持 `--file-mode 0644 --key-mode 0640`（缺省均0600），Windows继承权限。目标不能与其他绑定或托管状态重叠。Reload展示标注目标/次数/输出流的stdout/stderr，每路每次最多64KiB，JSON通过结构化事件返回。单目标失败后继续其余目标并退出非零；文件逐一替换，整组原子切换尚未实现。
+
 ```sh
 aster-acme cert renew example-cert
 aster-acme cert renew example-cert --now
@@ -285,4 +289,6 @@ cargo doc --workspace --no-deps --locked
 
 除非明确另行说明，有意提交并纳入本项目的贡献同样采用上述双许可。
 
-新申请必须显式 -c/--challenge，不默认选择验证方式；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
+新申请终端缺少 -c/--challenge 时交互选择验证方式；脚本必须显式指定，不自动默认选择；恢复及续期沿用保存方式，不允许覆盖。--yes自动接受全部操作确认，不补填输入或跳过验证，条款同意仍独立。
+
+裸 `cert issue` 在终端先输入域名，再选择 manual_dns/manual_http/webroot/standalone/tls_alpn；webroot 输入现有目录，standalone/TLS-ALPN 输入监听地址（默认0.0.0.0:80/443）。显式参数跳过提示，通配符只提供DNS方式，非TTY/JSON缺少必需输入在初始化配置/密钥/网络前报错。

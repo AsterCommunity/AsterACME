@@ -22,7 +22,9 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；周期调度、自动DNS、外部CSR和部署尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；周期调度、自动DNS和外部CSR尚未实现。
+
+部署专项使用临时目录、真实证书产物与 Rust 测试子进程，覆盖当前版本发布、同版本幂等跳过、续期后新版本/密钥发布及绑定保留、多目标失败继续、非零退出有界重试、启动失败、超时/取消检查点和不自动重放、发布失败后显式恢复、租约与续期/移除互斥、移除绑定保留发布文件。渲染测试覆盖空列表、全部状态配色与可见宽度对齐、控制字符转义、单次及批量 JSON/退出码和命令参数不回显；存储测试覆盖目录/精确路径、非法参数和链接拒绝。PTY 另验证无名称选择（Enter）和取消（Escape）；这些均不代表真实 nginx/systemd 或 Windows 服务 reload 验收。
 
 ## 常规验证
 
@@ -158,3 +160,19 @@ Windows CI测试假设核对（2026-11-12）：rcgen在Windows默认输出CRLF�
 Windows runner 报告的两个失败源于测试假设：rcgen PEM 使用平台原生 CRLF，而拆分导出的叶子/CA PEM 由客户端规范编码为 LF；跨平台测试现显式用CRLF fullchain输入，分别断言原始链保留和拆分产物格式。RFC 7468 §2 与ABNF规定解析器须接受CRLF、CR、LF，没有要求生成器必须CRLF。另一失败把Windows `in_use`完整目录副本当成Unix文件链接删除；测试现在调用平台 `Publication::remove` 移除视图，并验证托管世代密钥保留、history范围仍拒绝猜测。
 
 修订后storage93项测试通过，workspace414项测试通过，原生及Windows GNU all-targets严格Clippy通过。Windows目标证据仅为交叉编译/Clippy，不宣称本地原生Windows运行；提交后的GitHub Windows runner仍负责复核这两个环境相关用例。
+
+存储查询回归验证 AND 条件、projection-before-filter、默认完整范围、当前/历史/未完成、无匹配、非法 operation/name，以及 resume 终态排除。裁剪测试刻意损坏无关证书和历史 journal，确保明确名称/当前或精确 operation 不解析范围外资料；完整查询仍报告损坏。账户测试移除私钥后继续查询轻量 metadata，再损坏无关账户，验证精确名称查询不受影响。新增 guard drop 测试验证 Ctrl-C 等待任务被中止；部署 preflight 测试确认后一个路径无效时前一个现有文件不被替换。operation ID 直接使用现有安全随机源，测试验证唯一性和原有格式边界，不把 ID 当成钥匙或授权凭据。
+
+部署子命令重构覆盖 run/add/list/remove 的参数作用域、单个位置证书名称与部署名称选项、旧语法拒绝、成对路径互斥、reload-timeout/max-retries 上下界、脚本缺失证书/目标路径无副作用，以及真实 CLI 添加两条绑定→run 全部/单个→list→remove 的产物/版本不变检查。显式 run 复用现有绑定和检查点，不再通过独立 retry/reset 路径实现；已保存 cert.toml 绑定不需要迁移。
+
+部署 add 的补全测试覆盖：终端默认 default 确认、已有默认名改建议 deploy-N、修改名称、非法/重复名称重试；目录不存在/是文件时重试，reload 引号错误重试，Enter 跳过，取消在持久化前返回。非TTY缺目标路径错误但缺部署名自动生成；随机名称冲突16次上限、并发唯一性、32绑定上限以及无reload的首次发布/续期/精确文件地址均有测试。参数树递归测试验证除用户授权的deploy show双位置参数外，其他命令最多一个业务位置参数。
+
+四种精确路径逐一独立可用，CLI回归穷举全部15种非空组合，核对首次部署和续期后的字节与源文件一致、未指定产物不创建。存储边界覆盖空集合、每一种相对路径及所有重复目标配对；解析测试确认四个选项没有 requires 残留，并分别与 --target 互斥。
+
+部署可靠性回归覆盖打开/发布失败后继续下一目标、历史Deployed与本次execution_error分别报告、自动部署库存损坏时单次/批量退出失败；update只修改指定字段、清除reload、替换目标后不自动执行，非法更新不改配置。权限用例检查Unix默认0600、证书0644/私钥0640、父目录不变、update延后生效与续期沿用；非Unix明确拒绝显式mode。目标所有权测试包括同/跨证书冲突、并发争用、父目录symlink及..别名、托管控制文件保护。
+
+真实测试进程覆盖stdout/stderr成功和退出7、双路各256KiB输出在64KiB截断且继续排空、超时保留部分输出、超时/丢弃future终止后代，以及成功父进程退出后的残留进程清理。JSON事件保留输出和错误且不混入人类日志；PTY实际验证update缺省证书/部署选择和run实时stdout/stderr展示。2026-11-12本地workspace共497项测试通过，另3项仅供子进程/PTY调用的fixture默认忽略；严格all-targets Clippy、rustdoc、Windows GNU all-targets交叉检查、依赖/feature/TLS/import策略及fmt/diff检查通过。Windows进程job原生运行和真实服务reload仍交由对应平台CI/部署验收，不把本地进程测试或交叉编译当作该证据。
+
+新签发交互用例覆盖全部五种方式、裸issue域名和方法补全、webroot目录输入、standalone/TLS-ALPN默认及IPv6自定义地址、显式参数零提示、恢复零提示、错误输入重试、通配符/显式方法配置限定菜单、每步取消、JSON/脚本缺输入无提示且不创建data-dir；实际PTY仅运行补全，不访问真实CA或绑定公网监听端口。
+
+部署show覆盖两个可省略位置参数解析、额外参数/非法名称拒绝；裸命令/仅证书在脚本里都拒绝缺失身份，终端支持两级选择。详情测试覆盖目录四类解析路径、精确文件15种子集、无reload、带空格argv引用、控制字符转义、JSON完整配置、所有保存执行字段。端到端只读测试删除实际证书私钥后仍可show，并验证配置/journal不变、没有发布/进程调用；吊销未确认/已吊销/缺in_use仍可检查，缺绑定报告错误。列表保留摘要与Tips，不主动泄露reload参数；show按显式查看配置的意图展示argv。

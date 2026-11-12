@@ -14,7 +14,7 @@ pub(crate) enum AccountReport {
     },
     /// Enumeration with optional per-account CA verification.
     List {
-        accounts: Vec<aster_acme_cli_storage::LocalAccount>,
+        accounts: Vec<aster_acme_cli_storage::inventory::LocalAccount>,
         default: String,
         verification: Option<Vec<AccountVerification>>,
     },

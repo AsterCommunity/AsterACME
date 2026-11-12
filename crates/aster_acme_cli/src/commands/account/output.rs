@@ -1,5 +1,5 @@
 //! Typed CLI JSON contracts, distinct from the CA's wire protocol and local storage schema.
-use super::report::AccountReport;
+use crate::commands::account::report::AccountReport;
 use aster_acme::account::AcmeAccount;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_core::account::{AccountRecordState, DeactivationState};

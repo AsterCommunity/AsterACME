@@ -1,5 +1,5 @@
 //! Command-scoped output lifecycle. Clones share progress, errors and exactly one final report.
-use super::{log, output, output::MessageKind};
+use crate::common::{log, output, output::MessageKind};
 use std::{
     io::{self, IsTerminal, Write},
     sync::{Arc, Mutex},
@@ -256,4 +256,4 @@ impl ExitStatus {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

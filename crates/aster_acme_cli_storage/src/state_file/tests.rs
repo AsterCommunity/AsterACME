@@ -1,5 +1,5 @@
 //! Portable state file contracts shared by native CI targets.
-use super::*;
+use crate::state_file::*;
 #[test]
 fn private_read_atomic_replace_and_nontruncating_lock() {
     let temp = tempfile::tempdir().unwrap();

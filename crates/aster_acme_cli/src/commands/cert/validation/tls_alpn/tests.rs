@@ -1,6 +1,6 @@
 //! Real TLS handshakes and RFC 8737 challenge certificate checks.
-use super::super::tests::{execution, progress};
-use super::*;
+use crate::commands::cert::validation::tests::{execution, progress};
+use crate::commands::cert::validation::tls_alpn::*;
 use std::time::{Duration, Instant};
 
 #[tokio::test]

@@ -8,6 +8,7 @@ pub(crate) mod output;
 pub(crate) mod panic;
 pub(crate) mod selection;
 pub(crate) mod session;
+pub(crate) mod signal;
 pub(crate) mod table;
 pub(crate) mod terminal;
 pub(crate) mod time;

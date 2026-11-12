@@ -1,12 +1,12 @@
 //! Structured library errors translated at the process boundary.
 
-use super::output::{safe, styled};
 use crate::common::output::Style;
+use crate::common::output::{safe, styled};
 use aster_acme::{
     account::AccountError,
     transport::{RetryAfter, TransportError},
 };
-use aster_acme_cli_storage::StorageError;
+use aster_acme_cli_storage::account::StorageError;
 
 pub(crate) mod problem;
 
@@ -119,7 +119,7 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
     if let Some(transport) = error.downcast_ref::<TransportError>() {
         return transport_diagnostic(transport);
     }
-    if let Some(storage) = error.downcast_ref::<aster_acme::account::AccountStoreError>() {
+    if let Some(storage) = error.downcast_ref::<aster_acme::storage::account::AccountStoreError>() {
         return storage_message(&storage.message);
     }
     if let Some(storage) = error.downcast_ref::<StorageError>() {
@@ -200,7 +200,7 @@ pub(crate) fn render(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::error::*;
     use aster_acme_protocol::problem::ProblemKind;
     #[test]
     fn missing_account_is_actionable_and_not_a_debug_dump() {

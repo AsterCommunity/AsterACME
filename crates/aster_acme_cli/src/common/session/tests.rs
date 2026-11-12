@@ -1,8 +1,8 @@
 //! Output lifecycle tests with isolated sinks: no globals or real terminal writes.
-use super::*;
+use crate::common::session::*;
 
 #[derive(Clone, Default)]
-struct Buffer(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct Buffer(Arc<Mutex<Vec<u8>>>);
 impl Write for Buffer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.0.lock().unwrap().extend_from_slice(bytes);
@@ -13,12 +13,12 @@ impl Write for Buffer {
     }
 }
 impl Buffer {
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
     }
 }
 
-fn session(json: bool) -> (OutputSession, Buffer, Buffer) {
+pub(crate) fn session(json: bool) -> (OutputSession, Buffer, Buffer) {
     let stdout = Buffer::default();
     let stderr = Buffer::default();
     (

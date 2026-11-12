@@ -24,6 +24,43 @@ pub(crate) enum CertificateReport {
         ids: Vec<String>,
         in_use_removed: bool,
     },
+    Deployment(DeploymentReport),
+    DeploymentDetails {
+        name: String,
+        binding: Box<aster_acme_cli_storage::issuance::DeploymentBinding>,
+    },
+    DeploymentUpdated {
+        name: String,
+        binding: Box<aster_acme_cli_storage::issuance::DeploymentBinding>,
+    },
+    DeploymentRemoved {
+        name: String,
+        id: String,
+    },
+}
+
+pub(crate) struct DeploymentReport {
+    pub(crate) name: String,
+    pub(crate) entries: Vec<aster_acme_cli_storage::issuance::DeploymentBinding>,
+    pub(crate) events: Vec<DeploymentEvent>,
+    pub(crate) attempted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DeploymentEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) deployment: Option<String>,
+    #[serde(rename = "level")]
+    pub(super) kind: crate::common::output::MessageKind,
+    pub(super) message: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub(super) at: time::OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DeploymentExecution {
+    pub(super) binding: aster_acme_cli_storage::issuance::DeploymentBinding,
+    pub(super) events: Vec<DeploymentEvent>,
 }
 
 impl CertificateReport {
@@ -37,7 +74,41 @@ impl CertificateReport {
                     ExitStatus::Success
                 }
             },
+            Self::Deployment(report)
+                if report.attempted
+                    && (report
+                        .events
+                        .iter()
+                        .any(|event| event.kind == crate::common::output::MessageKind::Error)
+                        || report.entries.iter().any(|entry| {
+                            entry.phase
+                                != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                        })) =>
+            {
+                ExitStatus::Failed
+            }
+            Self::Result {
+                result:
+                    CertificateResult::Issued {
+                        deployments,
+                        deployment_events,
+                        ..
+                    },
+                ..
+            } if deployment_events
+                .iter()
+                .any(|event| event.kind == crate::common::output::MessageKind::Error)
+                || deployments.iter().any(|entry| {
+                    entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                }) =>
+            {
+                ExitStatus::Failed
+            }
             Self::Result { .. }
+            | Self::Deployment(_)
+            | Self::DeploymentDetails { .. }
+            | Self::DeploymentUpdated { .. }
+            | Self::DeploymentRemoved { .. }
             | Self::List(_)
             | Self::Show { .. }
             | Self::Revoked(_)
@@ -49,6 +120,11 @@ impl CertificateReport {
 /// Shared single-certificate result; scheduling without work is a successful outcome.
 pub(crate) enum CertificateResult {
     Issuance(IssueOutcome),
+    Issued {
+        outcome: IssueOutcome,
+        deployments: Vec<aster_acme_cli_storage::issuance::DeploymentBinding>,
+        deployment_events: Vec<DeploymentEvent>,
+    },
     NotDue(Box<IssueRecord>),
 }
 
@@ -183,12 +259,33 @@ impl RenewalBatch {
         let mut summary = RenewalSummary::default();
         for entry in &self.entries {
             match &entry.result {
-                RenewalResult::Outcome(CertificateResult::Issuance(IssueOutcome::Completed {
-                    ..
-                })) => summary.completed += 1,
-                RenewalResult::Outcome(CertificateResult::Issuance(
-                    IssueOutcome::ActionRequired { .. },
-                )) => summary.action_required += 1,
+                RenewalResult::Outcome(CertificateResult::Issued {
+                    outcome: IssueOutcome::Completed { .. },
+                    deployments,
+                    deployment_events,
+                }) if deployment_events
+                    .iter()
+                    .any(|event| event.kind == crate::common::output::MessageKind::Error)
+                    || deployments.iter().any(|entry| {
+                        entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                    }) =>
+                {
+                    summary.failed += 1;
+                }
+                RenewalResult::Outcome(
+                    CertificateResult::Issuance(IssueOutcome::Completed { .. })
+                    | CertificateResult::Issued {
+                        outcome: IssueOutcome::Completed { .. },
+                        ..
+                    },
+                ) => summary.completed += 1,
+                RenewalResult::Outcome(
+                    CertificateResult::Issuance(IssueOutcome::ActionRequired { .. })
+                    | CertificateResult::Issued {
+                        outcome: IssueOutcome::ActionRequired { .. },
+                        ..
+                    },
+                ) => summary.action_required += 1,
                 RenewalResult::Outcome(CertificateResult::NotDue(_)) => summary.not_due += 1,
                 RenewalResult::Skipped(_) => summary.skipped += 1,
                 RenewalResult::Failed { .. } => summary.failed += 1,

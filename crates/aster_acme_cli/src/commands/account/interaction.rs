@@ -118,7 +118,7 @@ pub(super) fn terms(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::account::interaction::*;
     use std::collections::VecDeque;
 
     struct Prompts {

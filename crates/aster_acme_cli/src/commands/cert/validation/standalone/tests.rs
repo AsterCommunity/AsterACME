@@ -1,6 +1,6 @@
 //! Real loopback sockets exercise parsing, publication, bounds and release semantics.
-use super::super::tests::{execution, progress};
-use super::*;
+use crate::commands::cert::validation::standalone::*;
+use crate::commands::cert::validation::tests::{execution, progress};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

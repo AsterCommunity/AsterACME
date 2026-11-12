@@ -31,7 +31,7 @@ pub fn valid_component(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::local_name::*;
     #[test]
     fn device_names_path_escapes_and_nonportable_characters_are_rejected() {
         for value in [

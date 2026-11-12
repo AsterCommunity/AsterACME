@@ -6,6 +6,8 @@
 
 ### 新增
 
+- **证书部署与服务 reload**：每张托管证书可绑定多个标准PEM目录或独立叶子证书/私钥/CA链/fullchain路径。`cert deploy run/add/list/show/update/remove` 支持交互选择、可修改默认名称、可选reload、离线配置详情和仅保存配置的update；签发/续期成功后默认自动部署。Unix `--file-mode` / `--key-mode` 保存权限策略（默认0600），Windows继承权限并拒绝显式Unix mode。存储在配置锁/证书租约下拒绝跨绑定/跨证书目标冲突及覆盖托管状态。暂存后逐文件原子替换，不保证整组切换。Reload不经shell，有界重试、进程组/job清理并展示stdout/stderr（每路每次64KiB），结构化事件保留本次输出。多目标失败后继续，报告区分本次失败与历史状态；库存/打开失败退出非零但保留已签发证书。不确定/中断reload须检查后显式重试；移除绑定保留已发布文件。
+
 - **IANA 错误注册表追踪**：为全部32种注册错误提供具名类型、RFC/草案注释和诊断；每周及相关PR在线核对IANA官方CSV，不保存本地注册表副本。
 
 - **验证失败诊断**：newOrder失败保存真实HTTP状态/problem/Retry-After，区分创建拒绝、延后和未确认，不伪造Order invalid或推荐无URL恢复；badCSR不限400并保留原状态，orderNotReady先查询订单再按ready推进；授权终态/选中challenge invalid保留problem、安全清理并拒绝恢复。展示CA订单/challenge problem及域名子问题，invalid订单保留检查并拒绝恢复，不再给resume建议。Webroot INFO记录实际发布/复用/保留/删除路径，DEBUG解释服务器URL到本地文件的映射。确认invalid后共用终态清理机制删除本次拥有且未变的文件；清理失败保留待办和原CA problem，取消及不确定结果保留验证材料。
@@ -18,11 +20,11 @@
 
 - **有界CA轮询**：新增--max-polls与逐轮计数，持久化Retry-After/本地间隔来源，达到上限保留记录供恢复；跳过仍有效的授权刷新。HTTP发布复用共享池做限时建议性内容检查。
 
-- **方法驱动HTTP验证**：同一ACME协议流程注入CLI的manual_dns/manual_http/webroot/standalone实现，standalone复用Tokio/Hyper HTTP/1，不引入Web框架或新增解析依赖；--listen-address默认0.0.0.0:80并持久化，只响应精确Host/path的GET，有界连接且所有结果均关闭监听，恢复已提交挑战不重放通知，为后续TLS-ALPN共用临时监听生命周期。方法/配置/材料在恢复和续期中保持不变。Webroot以文件身份持久化所有权、发布精确HTTP-01内容，保留已有/修改文件，清理失败不抹掉已签发结果。完整定义匹配未完成申请，终端选择恢复，--if-similar-order供脚本唯一匹配恢复；创建结果未确认也给提示但不重发newOrder。DNS预检变为限时建议性检查并移除skip/force参数；日志显示托管名称、实现和协议，新增--debug安全检查点/请求元数据诊断，本地确定的恢复失败在CA发现前报告。未发布存储/JSON格式直接更新，无兼容读取。
+- **方法驱动HTTP验证**：新签发终端支持验证方式选择，按需补全域名、webroot目录或standalone/TLS-ALPN监听地址；显式参数跳过提示，脚本缺必要参数在存储/网络副作用前拒绝。同一ACME协议流程注入CLI的manual_dns/manual_http/webroot/standalone实现，standalone复用Tokio/Hyper HTTP/1，不引入Web框架或新增解析依赖；--listen-address默认0.0.0.0:80并持久化，只响应精确Host/path的GET，有界连接且所有结果均关闭监听，恢复已提交挑战不重放通知，为后续TLS-ALPN共用临时监听生命周期。方法/配置/材料在恢复和续期中保持不变。Webroot以文件身份持久化所有权、发布精确HTTP-01内容，保留已有/修改文件，清理失败不抹掉已签发结果。完整定义匹配未完成申请，终端选择恢复，--if-similar-order供脚本唯一匹配恢复；创建结果未确认也给提示但不重发newOrder。DNS预检变为限时建议性检查并移除skip/force参数；日志显示托管名称、实现和协议，新增--debug安全检查点/请求元数据诊断，本地确定的恢复失败在CA发现前报告。未发布存储/JSON格式直接更新，无兼容读取。
 
 - **账户密钥算法**：账户与证书共用八种密钥选择及生成，account register/rotate-key 新增 -k/--key-type；类型化 ES256/ES384/ES512/EdDSA/RS256、EC/RSA/OKP 规范 JWK，以及账户类型元数据和展示。新账户默认 P256，跨算法轮换恢复仍保留暂存钥，显式冲突拒绝。未发布账户格式新增必需 key_algorithm，不保留旧读取。标准帮助入口统一格式，不重解释位置参数。
 
-- **单次与批量续期**：新增 cert renew --all 顺序批量、逐项结果与一次结构化汇总及去除重复计划/逐项检查日志的人类输出、部分失败/取消退出状态、人工TXT待办不阻塞后续项；到期检查与 --now 提前执行，复用稳定定义，持久化 predecessor/replaces、恢复未完成续期，完整产物提交后才切 in_use，失败保留旧版本。DNS 采用有界建议性预检，不提供DNS跳过/force参数。对象锁外置，删除时清空无用户内容的账户/证书目录；输出由结果枚举驱动，查询证据按资源区分。workspace 各包独立设为0.1.0-alpha.1，尚不启动daemon。
+- **单次与批量续期**：保存完成日志包含托管证书名称，续期先展示证书身份再展示 CA/账户。新增 cert renew --all 顺序批量、逐项结果与一次结构化汇总及去除重复计划/逐项检查日志的人类输出、部分失败/取消退出状态、人工TXT待办不阻塞后续项；到期检查与 --now 提前执行，复用稳定定义，持久化 predecessor/replaces、恢复未完成续期，完整产物提交后才切 in_use，失败保留旧版本。DNS 采用有界建议性预检，不提供DNS跳过/force参数。对象锁外置，删除时清空无用户内容的账户/证书目录；输出由结果枚举驱动，查询证据按资源区分。workspace 各包独立设为0.1.0-alpha.1，尚不启动daemon。
 
 - **证书密钥与吊销原因**：公共八选项枚举及 -k/--key-type，默认 ECDSA P-256，支持 P-384/P-521、Ed25519、RSA 2048/3072/4096/8192。持久化选择，恢复及续期准备校验实际算法，进度与证书视图展示类型。吊销原因使用 RFC 5280 具名代码，移除客户端 CA 政策白名单，保留 CA 拒绝细节。明确 badCSR 持久化，其他申请完成共享 CA 订单后恢复仍保留原拒绝；本地失败标红并与 CA 订单状态分列；RFC8555 问题类型统一枚举并无损保留未知扩展，共享 CLI 行动建议、限流提示和标识符子问题展示。
 
@@ -38,11 +40,13 @@
 
 ### 变更
 
+- **类型化存储查询与模块归属**：存储契约迁到 `aster_acme::storage`，文件账户/库存/证书查询按模块拆分，CLI 通过类型化条件查询，不再先全量读取后筛选。明确名称及精确/当前世代在解析 journal 前裁剪范围，保留历史、诊断和 skipped 语义；去除账户二次全目录扫描、续期重复扫描、仅生成 ID 的临时密钥计算和产物/快照复制，Ctrl-C 任务采用 RAII 管理。全仓库内部导入改为 crate 根路径并由 CI 检查。未发布 Rust API 直接更新，磁盘布局不变。
+
 - **标准库锁与平台存储**：使用 Rust 标准库文件锁并移除仅用于锁的 AsterFs 依赖，文件策略集中到平台适配层；Windows 沿用继承权限、不要求 ACL 管理，in_use 保存完整 PEM 副本并支持 staging/previous 目录恢复。保留 Unix 链接与权限检查，使用可移植托管名称并增加原生 OS CI 目标。缺失底层机制关联 AsterFs #3/#4；目录切换可恢复，不宣称原子交换。
 
 - **命令输出与 HTTP 生命周期**：账户、证书、version 共用命令级输出会话，集中进度、交互和最终结果，分别控制输出流配色，按实际输出添加分隔，部分失败也仅输出一份 JSON 报告。ACME 客户端在批量操作中持有同一惰性 HTTP 连接池，账户 User-Agent、请求期限及 nonce 独立。
 - **依赖与 TLS 归属**：Forge HTTP 使用已发布的 `=0.1.0-alpha.2`，仅启用 JSON、rustls/AWS-LC 和系统代理；utils/macros 保持 `=0.1.0-alpha.1`，文件锁使用 Rust 标准库且移除 AsterFs 依赖，base64 使用 0.23.1。rustls 与共用 AWS-LC 后端减少重复 P-256 依赖，客户端显式选择 rustls，嵌入应用合并其他后端时也不会改变选择；CI 拒绝 native-tls/OpenSSL 传输依赖。各 crate 独立维护自身版本，依赖版本、来源和 features 仍集中在 workspace 定义。 CI 按 Cargo 合并后的生产依赖 feature 白名单检查，禁止额外 TLS/密码后端及未用 HTTP/UI/日志功能；交互只启用 crossterm/fuzzy，日志只启用 fmt/ANSI/env-filter。
 - **Release 构建**：CLI 及其依赖使用 `opt-level="z"`、LTO、单 codegen unit 优化体积。保留 unwind panic 和函数符号，不携带源码级调试信息。可执行入口在 Tokio 启动前安装已发布 Forge panic `=0.1.0-alpha.2`；私有报告位于 `<data-dir>/crash.log`，移除 panic payload，屏幕人类/JSON 错误不含 payload 或回溯。库不安装 hook，报告拒绝不安全文件，使用非阻塞锁及 1 MiB 上限；失败保留密钥/checkpoint，不触发操作重试。
-- **文档**：新增中英文 README/更新日志、官网入口、crate 指南、RFC 索引、架构与 CLI 契约，并分开记录本地/staging 验证证据。自动 DNS 发布、daemon 调度和部署尚未实现。
+- **文档**：新增中英文 README/更新日志、官网入口、crate 指南、RFC 索引、架构与 CLI 契约，并分开记录本地/staging 验证证据。自动 DNS 发布和 daemon 调度尚未实现。
 
 [Unreleased]: https://github.com/AsterCommunity/AsterACME/commits/main/

@@ -1,8 +1,8 @@
 //! Actual file transactions against a loopback ACME server, including restart boundaries.
-use super::*;
-use aster_acme::account::KeyAccess;
-use aster_acme::account::{AccountKeyStore, AccountStore};
+use crate::account::rotation::*;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
+use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 use aster_acme::{
     account::{AccountService, AccountTimes},
     transport::TransportOptions,
@@ -598,7 +598,7 @@ async fn rotation_commit_rejects_changed_identity_and_unconfirmed_journal() {
 
 #[tokio::test]
 async fn cross_algorithm_rotations_commit_actual_type_and_default_to_the_previous_type() {
-    use aster_acme::{account::KeyAccess, crypto::key_algorithm::KeyAlgorithm};
+    use aster_acme::{crypto::key_algorithm::KeyAlgorithm, storage::account::KeyAccess};
     let fixture = setup(true, Duration::from_secs(30)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))

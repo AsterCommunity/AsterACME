@@ -1,5 +1,5 @@
 //! ARI timing, RFC identifier, HTTP retry and durable schedule boundaries.
-use super::*;
+use crate::renewal::*;
 use crate::transport::TransportOptions;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};

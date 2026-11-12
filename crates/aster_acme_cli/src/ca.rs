@@ -57,7 +57,7 @@ pub(crate) fn resolve(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::ca::*;
 
     #[test]
     fn provider_registry_uses_public_directories_and_has_no_test_presets() {

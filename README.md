@@ -29,7 +29,7 @@
 
 AsterACME implements ACME account operations and DNS-01/HTTP-01 certificate issuance as a Rust library and command-line application. You request a certificate; the library creates the order, tracks authorizations, submits the fixed CSR, downloads the issued chain, and persists the result. The CLI supplies terminal interaction, publication implementations and local storage.
 
-The project is under active development and has not released its ACME packages. Manual issuance and recovery, HTTP standalone, TLS-ALPN-01, ARI renewal planning, foreground renewal, and account-signed certificate revocation are implemented. Automated DNS providers, daemon scheduling, and deployment hooks remain planned.
+The project is under active development and has not released its ACME packages. Manual issuance and recovery, HTTP standalone, TLS-ALPN-01, ARI renewal planning, foreground renewal, and account-signed certificate revocation are implemented. Automated DNS providers and daemon scheduling remain planned.
 
 ## Where it fits
 
@@ -39,7 +39,7 @@ The project is under active development and has not released its ACME packages. 
 - Embed the protocol service in an application with injected storage, signing, readiness, and progress interfaces.
 - Use either terminal prompts or explicit arguments and structured JSON in scripts.
 
-Webroot and standalone support noninteractive foreground renewal; unattended scheduling and deployment are not implemented. The filesystem adapter includes Unix mode policy and Windows inherited-permission storage. Native runtime validation is tracked separately from cross-compilation.
+Webroot and standalone support noninteractive foreground renewal; unattended scheduling is not implemented. Configured deployments run after successful foreground issuance/renewal. The filesystem adapter includes Unix mode policy and Windows inherited-permission storage. Native runtime validation is tracked separately from cross-compilation.
 
 ## Design focus
 
@@ -167,6 +167,11 @@ Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed
 
 After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, use two thirds of the validity as the target for certificates at least 10 days long, half for shorter certificates, then randomize within the preceding day. The window is clamped after local plan creation; if the target has passed, renewal is due immediately. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Batch renewal uses `cert renew --all`: process each managed certificate sequentially, retain manual TXT tasks, continue after per-item failures, and emit one summary. `--all` conflicts with a certificate name. JSON emits one report; failures exit 1 and cancellation exits 130. Periodic wakeups remain future daemon work.
 
+Bind multiple deployment targets to a certificate with `cert deploy add CERT_NAME -n DEPLOY_NAME`. A directory target receives the standard four PEM files; leaf, private-key, CA-chain and fullchain exact paths can each be selected independently. The deployment name is optional via -n/--name; scripts allocate omitted names under lease; terminal add offers an editable default name, then prompts for an existing directory and an optional reload command. Reload commands are executable plus argv and never run through a shell; omitting reload publishes files only. Successful issue and renewal automatically publish to configured targets and run bounded reloads. Use `cert deploy list CERT_NAME` to list targets and `cert deploy show CERT_NAME DEPLOY_NAME` to inspect complete configuration and saved status and `cert deploy run CERT_NAME -n DEPLOY_NAME` after checking a failed or uncertain reload.
+
+Deployment bindings support `cert deploy update CERT_NAME -n DEPLOY_NAME` without publishing or reloading; supply only settings to change, or `--clear-reload` for publication only. On Unix, add/update accept `--file-mode 0644 --key-mode 0640` (both default to 0600); Windows uses inherited permissions. Destinations must not overlap another binding or managed state. Reload stdout/stderr are shown with attempt/stream labels and bounded to 64 KiB each per attempt; JSON includes structured events. Individual target failures do not stop the remaining targets and still produce a failing exit status. Files are replaced individually; whole-set atomic switching is not implemented.
+
+
 ```sh
 aster-acme cert renew example-cert
 aster-acme cert renew example-cert --now
@@ -285,4 +290,4 @@ Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your optio
 
 Unless explicitly stated otherwise, contributions intentionally submitted for inclusion are dual-licensed under the same terms.
 
-New issuance requires an explicit `-c/--challenge`; there is no default validation method. Recovery and renewal retain the saved implementation. `--yes` accepts all operation confirmations, without selecting inputs or bypassing validation; terms consent remains independent.
+Interactive new issuance collects domains and offers a validation-method menu when `-c/--challenge` is omitted. Webroot asks for an existing directory; standalone/TLS-ALPN ask for the local socket with defaults `0.0.0.0:80` / `0.0.0.0:443`. Explicit values skip those prompts. Scripts require an explicit method and domains, plus a webroot path when applicable; listener defaults still apply. Recovery and renewal retain the saved implementation. `--yes` accepts all operation confirmations, without selecting inputs or bypassing validation; terms consent remains independent.

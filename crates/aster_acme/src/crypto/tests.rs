@@ -1,6 +1,6 @@
 //! Signature, identity and encoding boundaries.
-use super::key::AccountKey;
-use super::*;
+use crate::crypto::key::AccountKey;
+use crate::crypto::*;
 use aws_lc_rs::signature::ECDSA_P256_SHA256_FIXED;
 use aws_lc_rs::signature::UnparsedPublicKey;
 use sha2::Digest as _;

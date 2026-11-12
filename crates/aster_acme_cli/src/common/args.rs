@@ -25,7 +25,7 @@ pub(crate) struct HttpArgs {
 
 /// Account names are local storage identifiers, shared by account targets and cert -a.
 pub(crate) fn parse_account_name(value: &str) -> Result<String, String> {
-    if aster_acme_cli_storage::valid_account_name(value) {
+    if aster_acme_cli_storage::account::valid_account_name(value) {
         Ok(value.to_owned())
     } else {
         Err("Use 1–64 ASCII letters, digits, hyphens or underscores for the account name.".into())

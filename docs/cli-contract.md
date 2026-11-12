@@ -72,6 +72,7 @@
 | account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
+| cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
 | cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
@@ -89,6 +90,33 @@
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。
 - `--contact` 是完整替换列表，`--clear-contacts` 明确清空，二者互斥；缺省输入不当作清空。
 - `--eab-kid` 与 `--eab-key-file` 必须成对且只属于注册。秘密从文件读取，不直接放 CLI 参数中。
+
+## 证书部署
+
+执行部署/添加绑定只查询已完成、当前 in_use 且没有吊销意图的证书；查看/移除绑定查询托管库存，允许已吊销、吊销未确认或没有当前版本的记录，执行时不会发布文件或 reload。部署命令与 show/renew/remove 共用证书选择器：交互终端省略 NAME 时列出托管证书供选择；JSON/非交互必须明确名称，不自动猜测目标。`list` 无绑定时显示空状态和添加提示；有绑定时复用公共表格对齐、表头和状态配色，仅显示保存的执行状态，不宣称服务当前健康。deploy 的证书选择行额外展示 `deployments: none` 或 `deployments: N`，数量来自同一次库存查询读取的 cert.toml，不逐证书另查；其他选择器行不增加该字段。
+
+`cert deploy add [CERT_NAME] [-n DEPLOY_NAME]` 保存一个证书部署绑定并立即执行首次发布。部署名称的命令行输入只通过 `-n/--name` 指定；交互终端省略时提示名称，首个默认建议 default，已有同名时建议未占用的 deploy-N，Enter 接受或编辑，重名/非法输入原地重试。非TTY/JSON省略时在 storage 的证书租约内生成 deploy-<随机后缀> 并有限处理碰撞。接受的交互名称和显式 -n 都在 storage 保存前重新检查唯一性，不静默更改。证书始终是已有托管证书，不生成新的证书身份。
+
+交互终端执行裸 add 时先选择证书、确认或修改默认部署名称，再输入已存在的目标目录，最后询问可选 reload 命令；留空则只发布文件，不启动进程。交互引导只支持目录，精确文件地址需要显式传参。目标使用 `--target DIR`（写入 fullchain.pem、cert.pem、ca.pem、private-key.pem），或独立提供 `--cert-path`、`--key-path`、`--ca-path`、`--fullchain-path` 的任意非空组合，只发布指定的产物，不强制配对或依赖。目录模式与精确路径互斥，所有精确目标必须互不相同，父目录必须预先存在。无效输入会留在提示内重试，取消不保存绑定。脚本/JSON 必须提供 CERT_NAME 与完整目标路径，部署名和 reload 均可省略（脚本不询问部署名），不弹提示。
+
+文件通过同目录暂存后逐文件原子替换，不保证整组切换。Unix 默认0600；add/update 的 `--file-mode 0644` 设置证书、CA链和fullchain，`--key-mode 0640` 单独设置私钥。输入为3–4位八进制且仅接受000–777普通权限位，在临时文件发布前设置，不修改父目录。权限随绑定保存并用于后续续期；Windows 使用继承权限，显式 Unix mode 明确报不支持，不静默忽略。服务必须能读取配置后的私钥。
+
+可选 `--reload-cmd "systemctl restart nginx"` 按引用规则拆成程序与 argv，不启动 shell。未配置命令时发布完成即 deployed，attempts=0；不会声称 reload 成功。`--reload-timeout` 仅在配置 reload 时限制每次进程及输出收集，默认30秒（1–3600）；`--max-retries` 为额外尝试次数，默认3（0–10）。续期后仍默认自动部署，只有配置了 reload 才执行进程。
+
+手动部署实时展示reload的stdout/stderr，自动部署在证书结果后的统一部署区展示；每条输出注明目标、尝试次数与输出流。每次尝试每路保留最多64KiB，超限继续排空并标记截断；失败和超时也保留已收集内容，错误包含退出状态或启动/等待原因。JSON只输出一个结构化结果，通过events/deployment_events携带输出、level、时间和目标，不夹杂人类日志。进程输出不自动脱敏、不写入cert.toml。超时或取消终止拥有的Unix进程组/Windows Job Object，正常结束也清理残留后代；不保证回收主动脱离该组/job的daemon。超时/中断保留不确定状态，不自动重放。
+
+`cert deploy update [CERT_NAME] -n DEPLOY_NAME` 至少需要一个配置修改，可省略部署名称在终端选择。未指定的配置保留；`--clear-reload` 清除命令且与 `--reload-cmd` 互斥。提供目标参数时整体替换目的路径集合，未提供的产物不再发布；它不删除原目标文件。配置变化清空旧执行检查点并返回configured，仅保存，不发布或reload；下一次显式run或续期应用修改。
+
+存储层在跨证书配置锁和证书租约下拒绝重复/冲突目标（含目录展开、父目录链接及..别名），并禁止覆盖托管账户、证书和控制文件；每次执行重新检查。某个目标打开/发布/reload失败后继续其他目标，单次及批量报告退出非零。打开前失败不会篡改历史成功检查点：本次列表显示execution failed，JSON保留saved status并另附execution_error；仅list仍展示保存状态。自动部署库存读取失败也报告错误，不将空结果当成功。
+
+`cert deploy list [CERT_NAME]` 查看状态；`cert deploy run [CERT_NAME]` 部署全部绑定，`cert deploy run CERT_NAME -n DEPLOY_NAME` 只部署一个，也用于检查服务后显式重试失败/不确定结果。`cert deploy remove CERT_NAME -n DEPLOY_NAME` 只删除绑定，不删除已发布文件，成功只输出 `[DONE] Deployment 'DEPLOY_NAME' removed.`；JSON 返回 status=removed、certificate、deployment，不列剩余绑定。
+
+除 `cert deploy show CERT_NAME DEPLOY_NAME` 明确允许两个位置参数外，每个命令最多一个业务位置参数。终端省略 CERT_NAME 时选择现有证书；run 缺 -n 执行全部，remove/update 缺 -n 可交互选择，非交互必须给 -n。`--data-dir`/`--json` 位于具体子命令；删除旧操作选项和第二个位置参数，不保留别名。未配置权限时采用平台默认策略，已保存reload命令继续生效。
+
+
+`cert deploy show [CERT_NAME] [DEPLOY_NAME]` 只读展示完整绑定配置及保存的执行状态：目录模式展开四个文件路径，精确路径模式标出各配置项及未配置项；包含实际 reload argv、单次超时、额外重试次数、最近世代/状态/次数/错误。不会读取证书私钥内容、发布文件、执行reload或访问CA；已吊销或没有当前版本的绑定仍可检查。与 list 的摘要不同，show 是明确查看配置的入口，会显示配置中的 reload 命令和参数。人类输出使用公共 field/颜色，JSON 输出 certificate、deployment完整配置与observation=saved local state。
+
+裸 show 在终端先选择证书再选择部署；只给CERT_NAME时选择部署，即使只有一个绑定也会询问；脚本/JSON必须同时给两个名字，不猜测。show 不增加 -n 别名，第三个位置参数/发布选项/--verify 拒绝。非空 list 底部以 Tips 指向 `cert deploy show CERT_NAME DEPLOY_NAME`；remove 仍只有简短成功确认。
 
 ## 展示与退出
 
@@ -110,7 +138,7 @@ cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / auth
 
 cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN摘要/UTC时间/状态；脚本提供名称或完整operation ID，不猜最新。完成版本不参与签发恢复选择，DNS预检仅建议，JSON不输出人类日志。
 
-新建 cert issue 必须显式 -c/--challenge，无默认验证方式；终端可在 -c 已指定时引导域名输入。--yes不补填验证方式。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
+新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单只提供 manual_dns，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
 
 仅在实际存在证书前台进度时与最终结果之间留一空行；无进度的全未到期批次及单次not_due不加开头空行（JSON不加分隔）；批量标题/计数使用INFO/WARN/ERROR标签，表格复用公共对齐和Style，待办/取消黄色、失败红色、完成绿色、未到期青色。
 
@@ -133,7 +161,7 @@ cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN
 
 ## 方法驱动签发及相似请求
 
-新申请显式 -c manual_dns/manual_http/webroot，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
+新申请显式 -c 或交互选择 manual_dns/manual_http/webroot/standalone/tls_alpn，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH或终端输入目录，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
 
 本地DNS预检限2秒，仅建议：不存在TXT、系统解析器失败和查询超时均WARN后继续CA。用户取消/整体deadline仍终止。DNS skip/force参数已删除，无别名。`--yes`只接受操作确认，不补填验证方式、名称或条款；恢复人工材料才可提交确认。
 
@@ -183,3 +211,36 @@ Webroot在成功签发或已保存CA明确invalid订单后清理本次拥有且�
 INFO显示实际监听启动/停止，DEBUG提示转发要求；建议性公网HTTP预检保持限时非阻塞。成功、invalid、取消、总期限和轮询上限均关闭监听并回收连接；恢复重建原挑战响应但不重复ack。单次监听最多64个活动连接，每连接最多5秒，HTTP响应只提供已保存域名/路径的GET、不写文件；TLS listener只提供保存的挑战证书。服务仅存活于当前调用，所有终态关闭监听和连接。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
+
+## 查询筛选与写入边界
+
+所有库存查询均为本地快照，无 HTTP 或私钥加载。账户列表用 AccountQuery（默认全部）；既有账户交互按显式 CA/usable 或 core operation 资格过滤（Update/Deactivate/RotateKey，未确认轮换仍可恢复），注册为了检查名称占用保留全部本地名称。明确名称的账户操作直接读取该身份。
+
+| 证书入口 | 查询范围 |
+| --- | --- |
+| list | name 可选，Managed 投影；--history 为 All |
+| show | name/operation 可选，默认 CurrentOrUnfinished；历史/精确 operation 为 All |
+| issue --resume | name/operation 可选，unfinished + resumable；无候选时明确名称可再读原始错误供诊断 |
+| issue 相似申请 | unfinished + 完整域名/账户/CA/密钥/solver 定义匹配及显式 now |
+| renew | 单次 name 可选 + in_use；--all 为 Managed，缺当前版本仍记录 skipped |
+| revoke | name/operation 可选，只选择 completed 版本 |
+| remove | name/operation 可选；history 为非当前 completed，revoked 为已确认吊销，all 为 Managed；删除 scope 持锁后重新计算 |
+| deploy | name 可选 + in_use + completed + 无吊销意图；添加/执行时持锁复核 |
+
+查询不代替执行前资格验证；storage 不接受 SQL 字符串或 CLI 交互策略。默认投影先确定版本，再按状态筛选，避免被条件过滤后意外选回旧证书。
+
+## 交互覆盖核对
+
+| 命令 | 当前交互入口 | 仍需显式指定的部分 |
+| --- | --- | --- |
+| account register | 新建/继续、账户名、CA、联系人、条款和复用确认 | EAB、密钥算法等高级选项 |
+| account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
+| account update-contact/rotate-key/deactivate/remove | 账户选择、联系人输入或操作确认 | key-type 等可选参数使用默认/显式值 |
+| cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
+| cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
+| cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |
+| cert deploy add | 选证书、名称建议可确认/修改、输入现有目录、可选 reload；脚本缺省部署名自动生成 | 四种精确文件路径只能显式传入 |
+| cert deploy run/list/remove | 选证书；remove 缺名可选绑定；run 缺名默认全部 | 部署名仅通过 -n/--name 或既定交互/默认行为 |
+| account list、cert list、version、help、cert renew --all | 直接输出/按既定范围执行，无需选择 | 不添加无意义的输入流程 |
+
+顶层及 account/cert/deploy 命令组仍需显式选择子命令，不提供动作菜单；JSON/非TTY按设计完全不交互。除了 deploy show 的证书/部署名两个位置参数，其余业务命令最多一个位置参数，由解析测试递归验证；子命令路径和选项值不计为业务位置参数。

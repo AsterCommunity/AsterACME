@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Intentional allowlists: adding a dependency or changing a transitive feature must
 # not silently install a second TLS/crypto backend or unused HTTP/UI capabilities.
 ALLOWED = {
+    "process-wrap": {"tokio1", "process-group", "job-object", "kill-on-drop"},
     "hyper": {"default", "client", "http1", "server"},
     "hyper-util": {"default", "client", "client-legacy", "client-proxy", "client-proxy-system", "http1", "tokio"},
     "http-body-util": {"default"},

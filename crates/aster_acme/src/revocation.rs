@@ -1,6 +1,7 @@
 //! Account-signed RFC 8555 section 7.6 revocation of a saved certificate generation.
+use crate::storage::issuance::IssueSession;
 use crate::{
-    issuance::{IssueError, IssueIdentity, IssueRecord, IssueSession},
+    issuance::{IssueError, IssueIdentity, IssueRecord},
     transport::{AcmeClient, TransportError, json_payload},
 };
 use aster_acme_core::{

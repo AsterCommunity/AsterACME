@@ -1,5 +1,5 @@
 //! Single and batch renewal orchestration. Transactions return data; rendering happens once.
-use super::{
+use crate::commands::cert::{
     args::{RenewArgs, RunArgs},
     execute::{RunMode, Start, transact},
     report::{
@@ -11,7 +11,9 @@ use crate::common::{
     context::CliSettings,
     error::{CliResult, diagnostic},
 };
-use aster_acme::issuance::{IssueRecord, IssueStore};
+use aster_acme::issuance::IssueRecord;
+use aster_acme::storage::issuance::IssueStore;
+use aster_acme::storage::query::{IssueQuery, IssueView};
 use aster_acme_cli_storage::issuance::CliIssueStore;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -24,79 +26,84 @@ pub(super) async fn execute(
     let options = super::execute::options(&args.run.local, &args.run.http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let records = store.list().await?;
-    if args.all {
-        let work = RenewalWork::from_records(&records, args.now, time::OffsetDateTime::now_utc());
-        if work.scheduled > 0 {
-            cli.output.progress(
-                crate::common::output::MessageKind::Info,
-                &format!(
-                    "Renewing {} certificates; {} not due.",
-                    work.scheduled, work.not_due
-                ),
-            );
-        }
-        let candidates = selection::managed_records(records)?;
-        let cancellation = CancellationToken::new();
-        let _signal = BatchSignal(tokio::spawn({
-            let cancellation = cancellation.clone();
-            async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    cancellation.cancel();
-                }
+    match (
+        args.all,
+        args.target
+            .name
+            .as_deref()
+            .or(args.target.named_name.as_deref()),
+    ) {
+        (true, _) => {
+            let records = store
+                .query(IssueQuery {
+                    view: IssueView::Managed,
+                    ..IssueQuery::default()
+                })
+                .await?;
+            let work =
+                RenewalWork::from_records(&records, args.now, time::OffsetDateTime::now_utc());
+            if work.scheduled > 0 {
+                cli.output.progress(
+                    crate::common::output::MessageKind::Info,
+                    &format!(
+                        "Renewing {} certificates; {} not due.",
+                        work.scheduled, work.not_due
+                    ),
+                );
             }
-        }));
-        let executor = Transaction {
-            settings: &settings,
-            store: &store,
-            run: &args.run,
-            immediate: args.now,
-            cancellation: Some(&cancellation),
-            cli,
-        };
-        let report = run_batch(candidates, &executor, &cancellation).await;
-        Ok(super::report::CertificateReport::Batch {
-            report,
-            data_dir: settings.data_dir,
-        })
-    } else {
-        let name = selection::certificate_name(
-            &records,
-            args.target
-                .name
-                .as_deref()
-                .or(args.target.named_name.as_deref()),
-            None,
-            &cli.output,
-        )?;
-        let selected = records
-            .iter()
-            .find(|record| record.name == name && record.is_in_use)
-            .ok_or(
+            let cancellation = CancellationToken::new();
+            let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
+            let executor = Transaction {
+                settings: &settings,
+                store: &store,
+                run: &args.run,
+                immediate: args.now,
+                cancellation: Some(&cancellation),
+                cli,
+            };
+            let report = run_batch(records, &executor, &cancellation).await;
+            Ok(super::report::CertificateReport::Batch {
+                report,
+                data_dir: settings.data_dir,
+            })
+        }
+        (false, explicit) => {
+            let records = store
+                .query(IssueQuery {
+                    name: explicit
+                        .map(aster_acme::issuance::CertificateName::new)
+                        .transpose()?,
+                    in_use: Some(true),
+                    ..IssueQuery::default()
+                })
+                .await?;
+            let name = selection::certificate_name(
+                &records,
+                args.target
+                    .name
+                    .as_deref()
+                    .or(args.target.named_name.as_deref()),
+                None,
+                selection::CertificateLabel::Standard,
+                &cli.output,
+            )?;
+            let selected = records.iter().find(|record| record.name == name).ok_or(
                 "No in-use certificate is selected. Complete an initial issuance before renewing.",
             )?;
-        let executor = Transaction {
-            settings: &settings,
-            store: &store,
-            run: &args.run,
-            immediate: args.now,
-            cancellation: None,
-            cli,
-        };
-        let result = executor.run(selected).await?;
-        Ok(super::report::CertificateReport::Result {
-            result,
-            data_dir: settings.data_dir,
-        })
-    }
-}
-
-// The task is command-scoped, including while an account/certificate lease is being
-// acquired. Dropping an interrupted batch must not leave a global signal listener.
-struct BatchSignal(tokio::task::JoinHandle<()>);
-impl Drop for BatchSignal {
-    fn drop(&mut self) {
-        self.0.abort();
+            let executor = Transaction {
+                settings: &settings,
+                store: &store,
+                run: &args.run,
+                immediate: args.now,
+                cancellation: None,
+                cli,
+            };
+            let result = executor.run(selected).await?;
+            Ok(super::report::CertificateReport::Result {
+                result,
+                data_dir: settings.data_dir,
+            })
+        }
     }
 }
 

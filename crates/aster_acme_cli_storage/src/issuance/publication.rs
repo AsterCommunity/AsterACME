@@ -9,7 +9,7 @@
 //! generation, catalog commit and rollback decision. Two renames are recoverable,
 //! not a cross-platform atomic exchange; preserve that distinction in the public contract.
 //! <https://github.com/AsterCommunity/AsterFs/issues/4>
-use super::{IssueRecord, failure, read_journal};
+use crate::issuance::{IssueRecord, failure, read_journal};
 use crate::{
     state_file::{self, ViewKind},
     toml_file::{atomic_write, ensure_real_dir, private_dir, read_private},

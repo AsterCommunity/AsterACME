@@ -1,5 +1,5 @@
 //! Scoped local certificate removal under the same lease used by issuance and revocation.
-use super::{
+use crate::issuance::{
     CertificateName, CliIssueStore, IssueError, IssueRecord, failure, publication,
     read_generations, selection, write_selection,
 };

@@ -1,6 +1,6 @@
 # AsterACME 架构设计
 
-状态：架构基线；账户与手动 DNS-01 签发、持久化恢复及只读订单查看已实现；ARI 续期计划及账户签名吊销也已实现；自动 DNS provider、自动续期、daemon 和部署仍为设计目标。日期：2026-11-11。
+状态：架构基线；账户与手动 DNS-01 签发、持久化恢复及只读订单查看已实现；ARI 续期计划及账户签名吊销也已实现；前台续期与多目标部署已实现；自动 DNS provider 和 daemon 仍为设计目标。日期：2026-11-12。
 
 规范依据见 [ACME RFC 参考](rfc-reference.md)。本文确定职责、依赖方向与可靠性契约；Rust 代码均为接口示意，不承诺最终签名。
 
@@ -162,7 +162,7 @@ Transport 负责 directory、HTTPS、响应解析、nonce 管理、JWS 封装、
 
 签发成功后先持久化证书结果。输出适配器将证书、链和私钥作为一组版本化产物发布；仅对单个文件原子 rename 不足以保证整组一致。可采用版本目录加原子切换引用，密钥文件使用受限权限。
 
-部署 hook 在发布后执行，失败标记为部署失败，可单独重试；不得因此重新签发。默认以程序与参数数组执行，shell 模式需显式配置；限制执行时长，不在日志暴露凭据。
+部署 hook 在发布后执行，失败标记为部署失败，可单独重试；不得因此重新签发。以程序与参数数组执行，不提供隐式 shell；限制执行时长，不打印内部私钥/凭据。外部reload的stdout/stderr按用户要求展示，命令自身负责控制其输出中的敏感内容。
 
 清理失败不抹去已签发结果：返回证书可用及 cleanup pending 的结构化状态，并保留重试任务。CLI 明确报告未完成清理，不能只输出“成功”。
 
@@ -397,3 +397,17 @@ ChallengeSolver::restore在恢复pending订单的已保存pending授权材料时
 standalone配置保存单个SocketAddr，默认0.0.0.0:80，支持显式IPv4/IPv6和非零自定义端口，不提供管理员自动提权或业务服务器停启。只响应当前材料的规范Host/path GET；拒绝请求体、代理绝对URI、额外query、未知域名/路径和其他方法；HTTP头缓冲上限8KiB、最多32头，每连接一个请求。响应只包含key authorization，不读取文件或私钥。转发端须保留Host，公网80入口和A/AAAA路由由部署方负责。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
+
+## 存储查询与资源边界
+
+`aster_acme::storage::account` 提供账户 metadata/key/rotation 契约，`storage::issuance` 提供证书 store/session 契约，`storage::query` 定义 `AccountQuery`、`IssueQuery`、完整定义匹配及版本投影。实现无文件系统依赖，文件适配器仍在 cli_storage，数据库适配器可用相同查询语义。
+
+CLI 将查询条件交给 storage，负责交互、歧义处理和渲染。name 查询避开无关目录；operation/in_use 避开无关 journal；Managed 投影支持 list/renew --all，每个托管名一行且保留无 in_use 项作为显式 skipped。show 默认为 CurrentOrUnfinished；显式历史保留全部；revoke 只选择已签发世代；resume 和相似申请经查询谓词筛选。执行资格仍在持锁事务复查，查询结果不授权 mutation。
+
+账户 list --verify 只刷新被验证账户的快照，不重新枚举目录；单次及批量证书操作的 Ctrl-C 等待任务由 RAII guard 管理；部署共享只读产物，阻塞写入保留租约直到完成。签发后部署事件与手动 deploy 共用事件生成、日志和表格渲染，人类报告按证书完成→空行→Started deployment→发布/reload→部署列表排列；JSON 仍只有一份结构化结果。
+
+部署配置/目的路径归storage的 `issuance/deployment/{targets,permissions,update}`：跨证书配置锁先于证书租约获取，add/update/open均检查路径所有权；证书租约覆盖发布与reload，配置锁在open完成后释放。路径检查展开目录目标并规范化父路径，拒绝跨绑定覆盖和写入托管状态，不引入第二份目标注册表。update只更改配置及重置变化后的检查点，保留原目标文件。产物按同目录临时文件逐一替换，mode在发布前应用；整组原子切换未实现。
+
+CLI部署执行逐目标收集错误，库存/打开/锁失败不冒充空列表或历史成功；执行事件独立于保存的绑定状态，报告同时保留本次execution_error与历史状态。reload生命周期由小型process-wrap适配提供Unix进程组和Windows Job Object，取消时Drop清理、超时终止并有界回收；stdout/stderr并行排空且每路每次只收集64KiB。手动输出实时显示，自动输出随统一部署报告显示；内容仅存本次events，不持久化到cert.toml，不承诺自动脱敏或终止主动脱组的daemon。
+
+新申请输入补全由 CLI 的 cert/interaction 模块负责，所有显式与交互配置调用同一个 validation::configuration 校验。输入步骤在账户选择、config初始化、私钥创建和 CA discovery 前完成；恢复/续期沿用保存定义，不进入新申请向导。交互菜单复用 ValidationMethod 的 ValueEnum 注册表/帮助描述，不维护平行方式列表。

@@ -1,0 +1,128 @@
+//! Real test processes exercise concurrent output draining and whole-tree cleanup.
+use crate::commands::cert::{deployment::reload::*, deployment::tests::child_command};
+
+#[tokio::test]
+async fn successful_parent_does_not_leave_background_descendants_running() {
+    let temp = tempfile::tempdir().unwrap();
+    let heartbeat = temp.path().join("heartbeat");
+    let command = child_command(&format!("tree-success:{}", heartbeat.display()));
+    let result = run(
+        &command,
+        Duration::from_secs(5),
+        "test",
+        1,
+        &mut Vec::new(),
+        None,
+    )
+    .await;
+    assert!(result.status.unwrap().success());
+    assert!(!result.timed_out);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let before = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read(heartbeat).unwrap(), before);
+}
+
+#[tokio::test]
+async fn both_streams_exit_status_and_output_limits_are_preserved_without_deadlock() {
+    for (mode, success) in [
+        ("output-success", true),
+        ("output-failure", false),
+        ("large-output", true),
+    ] {
+        let mut events = Vec::new();
+        let result = run(
+            &child_command(mode),
+            Duration::from_secs(5),
+            "test",
+            1,
+            &mut events,
+            None,
+        )
+        .await;
+        assert_eq!(result.status.unwrap().success(), success);
+        assert!(!result.timed_out);
+        assert!(events.iter().any(|event| event.message.contains("stdout:")));
+        assert!(events.iter().any(|event| event.message.contains("stderr:")));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.message.len() < MAX_OUTPUT + 256)
+        );
+        if mode == "large-output" {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.message.contains("truncated at 64 KiB"))
+                    .count(),
+                2
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn timeout_retains_partial_output_and_kills_descendants() {
+    let mut events = Vec::new();
+    let result = run(
+        &child_command("output-timeout"),
+        Duration::from_millis(400),
+        "test",
+        1,
+        &mut events,
+        None,
+    )
+    .await;
+    assert!(result.timed_out);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.message.contains("output before timeout"))
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let heartbeat = temp.path().join("heartbeat");
+    let command = child_command(&format!("tree:{}", heartbeat.display()));
+    run(
+        &command,
+        Duration::from_secs(1),
+        "test",
+        1,
+        &mut events,
+        None,
+    )
+    .await;
+    let before = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read(heartbeat).unwrap(), before);
+}
+
+#[tokio::test]
+async fn dropping_reload_future_terminates_the_owned_process_tree() {
+    let temp = tempfile::tempdir().unwrap();
+    let heartbeat = temp.path().join("heartbeat");
+    let command = child_command(&format!("tree:{}", heartbeat.display()));
+    let mut events = Vec::new();
+    {
+        let execution = run(
+            &command,
+            Duration::from_secs(30),
+            "test",
+            1,
+            &mut events,
+            None,
+        );
+        tokio::pin!(execution);
+        tokio::select! {
+            result = &mut execution => panic!("child unexpectedly exited: {}", result.status.is_ok()),
+            () = async {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !heartbeat.exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+                }).await.unwrap();
+            } => {},
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let before = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read(heartbeat).unwrap(), before);
+}

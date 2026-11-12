@@ -5,12 +5,16 @@ use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme_protocol::revocation::RevocationReason;
 use clap::{Args, Subcommand, builder::TypedValueParser as _};
 
+pub(crate) mod deployment;
+
 #[derive(Subcommand)]
 pub(crate) enum CertCommand {
     /// Issue using a selected validation implementation, or resume a saved request.
     Issue(IssueArgs),
     /// Renew the `in_use` certificate using its saved definition, or resume its renewal.
     Renew(RenewArgs),
+    /// Configure and run deployments bound to a managed certificate.
+    Deploy(deployment::DeployArgs),
     /// List managed certificates; use --history to include every saved request.
     List {
         /// Include historical versions and unfinished requests instead of one row per certificate.
@@ -136,35 +140,17 @@ pub(crate) struct IssueArgs {
     /// Certificate key algorithm; CA acceptance varies. Account signing key is unchanged.
     #[arg(short = 'k', long = "key-type", value_parser = key_algorithm_parser(), default_value = "ecdsa-p256", conflicts_with = "resume")]
     pub key_algorithm: KeyAlgorithm,
-    /// Required validation implementation for a new certificate; resume uses the saved method.
-    #[arg(
-        short = 'c',
-        long,
-        value_enum,
-        required_unless_present = "resume",
-        conflicts_with = "resume"
-    )]
+    /// Validation implementation; omitted prompts on terminals, required in scripts.
+    #[arg(short = 'c', long, value_enum, conflicts_with = "resume")]
     pub challenge: Option<super::validation::ValidationMethod>,
     /// Resume one fully matching unfinished request; multiple matches require an explicit target.
     #[arg(long, conflicts_with_all = ["resume", "name"])]
     pub if_similar_order: bool,
     /// Document root of your existing public HTTP server; persisted for resume/renew.
-    #[arg(
-        short = 'w',
-        long,
-        value_name = "PATH",
-        required_if_eq("challenge", "webroot"),
-        requires = "challenge",
-        conflicts_with = "resume"
-    )]
+    #[arg(short = 'w', long, value_name = "PATH", conflicts_with = "resume")]
     pub webroot: Option<std::path::PathBuf>,
     /// Temporary validation listener socket: port 80 for standalone or 443 for `tls_alpn`; saved for resume/renew.
-    #[arg(
-        long,
-        value_name = "IP:PORT",
-        requires = "challenge",
-        conflicts_with = "resume"
-    )]
+    #[arg(long, value_name = "IP:PORT", conflicts_with = "resume")]
     pub listen_address: Option<std::net::SocketAddr>,
     /// Resume a saved request; omit the name to choose unfinished requests interactively.
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
@@ -234,6 +220,7 @@ impl CertCommand {
             | Self::Show { local, .. }
             | Self::Revoke { local, .. }
             | Self::Remove { local, .. } => local.json,
+            Self::Deploy(args) => args.local().json,
         }
     }
 }
@@ -258,8 +245,8 @@ fn parse_operation(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::app::{Args, Command};
+    use crate::commands::cert::args::*;
     use clap::Parser;
 
     #[test]
@@ -579,16 +566,28 @@ mod tests {
         );
     }
     #[test]
-    fn new_issuance_requires_explicit_method_even_with_yes_and_resume_cannot_override_it() {
-        for args in [
+    fn missing_issue_inputs_defer_to_completion_and_resume_cannot_override_method() {
+        assert!(
+            Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "issue",
+                "--resume",
+                "web",
+                "-c",
+                "manual_dns"
+            ])
+            .is_err()
+        );
+        for words in [
             vec![],
             vec!["-d", "example.com"],
             vec!["-d", "example.com", "--yes"],
-            vec!["--resume", "web", "-c", "manual_dns"],
+            vec!["-c", "webroot"],
         ] {
             assert!(
-                Args::try_parse_from(["aster-acme", "cert", "issue"].into_iter().chain(args))
-                    .is_err()
+                Args::try_parse_from(["aster-acme", "cert", "issue"].into_iter().chain(words))
+                    .is_ok()
             );
         }
         assert!(

@@ -90,7 +90,7 @@ fn sample_exclusive(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::renewal_calculation::*;
 
     fn at(seconds: i64) -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(seconds).unwrap()

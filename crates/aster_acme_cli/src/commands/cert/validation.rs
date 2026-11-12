@@ -1,6 +1,6 @@
 //! CLI publication implementation choices, distinct from ACME protocol methods.
 //! ACME owns derivation/acknowledgement/state; adapters own filesystem/user actions.
-use super::progress::Progress;
+use crate::commands::cert::progress::Progress;
 use aster_acme::{
     challenge::ChallengeKind,
     issuance::{IssueError, IssueRecord},
@@ -102,7 +102,7 @@ pub(super) fn configuration(
     ) && listen_address.is_some()
     {
         return Err(IssueError::InvalidInput(
-            "--listen-address is only valid with -c standalone",
+            "--listen-address is only valid with -c standalone or -c tls_alpn",
         ));
     }
     match (method, root) {

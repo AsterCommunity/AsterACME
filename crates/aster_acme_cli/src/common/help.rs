@@ -25,7 +25,7 @@ pub(crate) fn help_styles() -> Styles {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::help::*;
     use clap::CommandFactory;
     #[test]
     fn root_and_nested_help_share_the_product_version_without_stale_commands() {

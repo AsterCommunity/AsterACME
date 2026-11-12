@@ -46,7 +46,7 @@ pub(crate) async fn execute(args: Args, cli: &CommandContext) -> CliResult<Comma
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::dispatch::*;
 
     #[test]
     fn report_layout_keeps_large_owned_snapshots_out_of_every_command_frame() {

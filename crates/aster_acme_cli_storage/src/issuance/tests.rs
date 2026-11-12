@@ -1,13 +1,15 @@
 //! Loopback CA exercises real journals, fixed CSR and restartable foreground execution.
+mod query;
 mod rfc_errors;
-use super::*;
-use aster_acme::account::KeyAccess;
+use crate::issuance::*;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme::identifier::DnsIdentifier;
 use aster_acme::issuance::service::IssueService;
 use aster_acme::solver::ChallengeSolver;
+use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::account::{AccountKeyStore, AccountStore};
+use aster_acme::storage::query::IssueQuery;
 use aster_acme::{
-    account::{AccountKeyStore, AccountStore},
     issuance::{IssueExecution, IssueIdentity, IssueOutcome, ValidationRequirement},
     solver::ExecutionContext,
     transport::TransportOptions,
@@ -45,7 +47,7 @@ async fn fixture() -> Fixture {
         .await;
     let temp = tempfile::tempdir().unwrap();
     let accounts =
-        super::super::CliAccountStore::open(temp.path(), "default", Duration::from_secs(1))
+        crate::account::CliAccountStore::open(temp.path(), "default", Duration::from_secs(1))
             .unwrap();
     let directory = AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap();
     let signer = accounts
@@ -335,7 +337,7 @@ async fn manual_dns_yields_then_resumes_to_validated_certificate_without_recreat
             .in_use,
         Some(initial.operation_id)
     );
-    let saved = restarted.list().await.unwrap();
+    let saved = restarted.query(IssueQuery::default()).await.unwrap();
     assert_eq!(saved.len(), 1);
     assert!(matches!(saved[0].phase, IssuancePhase::Completed));
     assert!(saved[0].certificate_not_after.is_some());
@@ -449,7 +451,15 @@ async fn names_generations_locks_and_material_tampering_have_explicit_boundaries
         second.record().await.unwrap().operation_id
     );
     drop(second);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     let path = fixture
         .store
         .slot(&record.name)
@@ -495,7 +505,12 @@ async fn malformed_order_and_wrong_identifier_keep_location_but_never_notify_cha
                 .await
                 .is_err()
         );
-        let saved = fixture.store.list().await.unwrap().remove(0);
+        let saved = fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .remove(0);
         assert!(saved.order_url.is_some());
         assert!(saved.creation_submitted);
         assert!(
@@ -700,7 +715,15 @@ async fn bad_nonce_resigns_the_same_new_order_without_creating_a_second_generati
     let second: FlattenedJws = serde_json::from_slice(&posts[1].body).unwrap();
     assert_eq!(first.payload, second.payload);
     assert_ne!(first.signature, second.signature);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -787,7 +810,7 @@ async fn unsafe_material_and_unknown_journal_versions_fail_without_replacing_fil
         .unwrap()
         .replacen("version = 1", "version = 99", 1);
     atomic_write(&journal, text.as_bytes()).unwrap();
-    assert!(fixture.store.list().await.is_err());
+    assert!(fixture.store.query(IssueQuery::default()).await.is_err());
     assert_eq!(fs::read_to_string(&journal).unwrap(), text);
 }
 
@@ -825,7 +848,15 @@ async fn reusing_one_embedded_session_reads_its_latest_checkpoint_instead_of_rec
     };
     assert_eq!(first.operation_id, second.operation_id);
     assert_eq!(first_txt, second_txt);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(
         fixture
             .server
@@ -1012,7 +1043,7 @@ async fn issuance_reports_typed_progress_in_order_without_private_or_txt_materia
         event,
         IssueEvent::ValidationSubmitted { .. }
             | IssueEvent::Finalizing
-            | IssueEvent::CertificateSaved
+            | IssueEvent::CertificateSaved { .. }
     )));
 }
 
@@ -1036,7 +1067,7 @@ async fn catalog_ignores_finder_files_at_both_levels_without_hiding_broken_gener
     ] {
         fs::write(path, b"finder metadata, not a certificate journal").unwrap();
     }
-    let records = fixture.store.list().await.unwrap();
+    let records = fixture.store.query(IssueQuery::default()).await.unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].operation_id, record.operation_id);
     let opened = fixture
@@ -1049,9 +1080,17 @@ async fn catalog_ignores_finder_files_at_both_levels_without_hiding_broken_gener
     let extra = generations.join("x".repeat(43));
     fs::create_dir(&extra).unwrap();
     fs::create_dir(catalog.join("My Notes")).unwrap();
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     atomic_write(&extra.join("operation.toml"), b"broken managed journal").unwrap();
-    assert!(fixture.store.list().await.is_err());
+    assert!(fixture.store.query(IssueQuery::default()).await.is_err());
 }
 
 #[cfg(unix)]
@@ -1070,11 +1109,27 @@ async fn catalog_ignores_unmanaged_links_but_rejects_managed_marker_links() {
     fs::write(&target, b"untouched").unwrap();
     let root_link = fixture.temp.path().join("certs/.DS_Store");
     symlink(&target, &root_link).unwrap();
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     fs::remove_file(&root_link).unwrap();
     let generation_link = fixture.store.slot(&record.name).join(".DS_Store");
     symlink(&target, &generation_link).unwrap();
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let journal = fixture
         .store
         .slot(&record.name)
@@ -1082,7 +1137,7 @@ async fn catalog_ignores_unmanaged_links_but_rejects_managed_marker_links() {
         .join("operation.toml");
     fs::remove_file(&journal).unwrap();
     symlink(&target, &journal).unwrap();
-    assert!(fixture.store.list().await.is_err());
+    assert!(fixture.store.query(IssueQuery::default()).await.is_err());
     assert_eq!(fs::read(&target).unwrap(), b"untouched");
 }
 
@@ -1262,7 +1317,7 @@ async fn in_use_link_atomically_selects_readable_generations_and_preserves_histo
     }
     assert_ne!(generations[0], generations[1]);
     assert!(generations[0].join("cert.pem").exists());
-    let records = fixture.store.list().await.unwrap();
+    let records = fixture.store.query(IssueQuery::default()).await.unwrap();
     assert_eq!(records.len(), 2);
     assert!(
         records
@@ -1407,17 +1462,15 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
     use aster_acme_core::revocation::RevocationState;
     use aster_acme_protocol::revocation::RevocationReason;
     let fixture = fixture().await;
+    let record = completed_generation(&fixture).await;
     let mut session = fixture
         .store
-        .create(&request(), &fixture.account)
+        .open(&record.name, &record.operation_id)
         .await
         .unwrap();
-    let mut record = session.record().await.unwrap();
     let slot = fixture.store.slot(&record.name);
     let generation = slot.join(record.generation_name());
-    let chain = leaf_for(&generation, &record.identifiers);
-    record.phase = IssuancePhase::Completed;
-    let record = session.complete(&record, chain.as_bytes()).await.unwrap();
+    let chain = fs::read_to_string(generation.join("fullchain.pem")).unwrap();
     let key_before = fs::read(generation.join("private-key.pk8")).unwrap();
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1442,9 +1495,12 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
             .await
             .unwrap(),
     );
-    let accounts =
-        super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
-            .unwrap();
+    let accounts = crate::account::CliAccountStore::open(
+        fixture.temp.path(),
+        "default",
+        Duration::from_secs(1),
+    )
+    .unwrap();
     let signer = accounts
         .signer(&record.directory, "default", KeyAccess::Existing)
         .await
@@ -1468,10 +1524,8 @@ async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal
         .unwrap();
     let durable = reopened.record().await.unwrap();
     assert_eq!(durable.revocation.state, RevocationState::Confirmed);
-    assert_eq!(
-        durable.revocation.reason,
-        Some(RevocationReason::Superseded)
-    );
+    let reason = Some(RevocationReason::Superseded);
+    assert_eq!(durable.revocation.reason, reason);
     assert!(durable.revocation.confirmed_at.is_some());
     service.revoke(reopened.as_mut(), None).await.unwrap();
     aster_acme::renewal::RenewalService::new(client)
@@ -1545,7 +1599,15 @@ async fn certificate_removal_deletes_all_generations_keeps_lock_and_account_with
     assert_eq!(removal.generations(), 2);
     assert_eq!(removal.name(), &record.name);
     removal.remove().await.unwrap();
-    assert_eq!(fixture.store.list().await.unwrap().len(), 0);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     assert!(!generation.exists());
     assert!(!slot.join(other_record.generation_name()).exists());
     assert!(!slot.join("in_use").exists());
@@ -1610,7 +1672,15 @@ async fn certificate_removal_preserves_extra_content_in_place_and_never_follows_
     assert_eq!(fs::read_to_string(external).unwrap(), "untouched");
     assert!(!generation.join("operation.toml").exists());
     assert!(!generation.join("private-key.pk8").exists());
-    assert_eq!(fixture.store.list().await.unwrap().len(), 0);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -1658,7 +1728,15 @@ async fn removal_drop_missing_target_and_lock_contention_leave_saved_material_un
     );
     drop(removal); // Rejected/cancelled confirmation only releases the lease.
     assert_eq!(fs::read(generation.join("private-key.pk8")).unwrap(), key);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     fixture
         .store
         .open(&record.name, &record.operation_id)
@@ -1786,7 +1864,13 @@ async fn removal_cleanup_failure_retains_marker_and_blocks_reusing_leftover_gene
 }
 
 async fn completed_generation(fixture: &Fixture) -> IssueRecord {
-    let session = if fixture.store.list().await.unwrap().is_empty() {
+    let session = if fixture
+        .store
+        .query(IssueQuery::default())
+        .await
+        .unwrap()
+        .is_empty()
+    {
         fixture
             .store
             .create(&request(), &fixture.account)
@@ -1847,7 +1931,7 @@ async fn single_historical_removal_preserves_in_use_unfinished_requests_and_othe
     );
     assert_eq!(selected_view(&slot), in_use_link);
     assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), config);
-    let remaining = fixture.store.list().await.unwrap();
+    let remaining = fixture.store.query(IssueQuery::default()).await.unwrap();
     assert_eq!(remaining.len(), 2);
     assert!(
         remaining
@@ -1886,7 +1970,7 @@ async fn removing_in_use_clears_selection_without_promoting_any_historical_versi
             .exists()
     );
     assert!(!slot.join(in_use.generation_name()).exists());
-    let remaining = fixture.store.list().await.unwrap();
+    let remaining = fixture.store.query(IssueQuery::default()).await.unwrap();
     assert_eq!(remaining.len(), 1);
     assert!(!remaining[0].is_in_use);
     fixture
@@ -1898,7 +1982,15 @@ async fn removing_in_use_clears_selection_without_promoting_any_historical_versi
         .await
         .unwrap();
     assert!(!slot.join("cert.toml").exists());
-    assert_eq!(fixture.store.list().await.unwrap().len(), 0);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -1947,7 +2039,15 @@ async fn history_cleanup_preserves_in_use_pending_and_is_repeatable_without_side
     assert_eq!(empty.generations(), 0);
     empty.remove().await.unwrap();
     assert!(!slot.join(".removing").exists());
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -1987,7 +2087,15 @@ async fn history_without_consistent_in_use_and_unknown_operation_delete_nothing(
             .await
             .is_err()
     );
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert!(
         slot.join(in_use.generation_name())
             .join("private-key.pk8")
@@ -2089,7 +2197,15 @@ async fn revoked_cleanup_preserves_unrevoked_in_use_and_incomplete_requests() {
             .join("private-key.pk8")
             .exists()
     );
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -2111,7 +2227,15 @@ async fn new_managed_name_is_exclusive_and_duplicate_new_issue_preserves_definit
     );
     assert_eq!(fs::read(slot.join("cert.toml")).unwrap(), definition);
     assert_eq!(fs::read(&key_path).unwrap(), key);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let mut other = request();
     other.name = CertificateName::new("example.com-other").unwrap();
     fixture
@@ -2119,7 +2243,15 @@ async fn new_managed_name_is_exclusive_and_duplicate_new_issue_preserves_definit
         .create(&other, &fixture.account)
         .await
         .unwrap();
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -2154,7 +2286,7 @@ async fn concurrent_new_issue_claims_exactly_one_managed_name_under_the_certific
         }
     }
     assert_eq!((created, collisions), (1, 1));
-    assert_eq!(store.list().await.unwrap().len(), 1);
+    assert_eq!(store.query(IssueQuery::default()).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -2190,7 +2322,15 @@ async fn renewed_generation_keeps_the_managed_definition_and_rejects_changed_acc
         }
         assert!(fixture.store.renew(&initial.name, &other).await.is_err());
     }
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     let config = selection(&slot).unwrap();
     assert_eq!(config.cert.identifiers, initial.identifiers);
     assert_eq!(config.cert.solver_id, "manual_dns");
@@ -2478,9 +2618,12 @@ async fn renewal_client(fixture: &Fixture, ari: bool) -> Arc<IssueService> {
         )
         .await
         .unwrap();
-    let accounts =
-        super::super::CliAccountStore::open(fixture.temp.path(), "default", Duration::from_secs(1))
-            .unwrap();
+    let accounts = crate::account::CliAccountStore::open(
+        fixture.temp.path(),
+        "default",
+        Duration::from_secs(1),
+    )
+    .unwrap();
     let signer = accounts
         .signer(
             &fixture.account.directory_url,
@@ -2592,7 +2735,15 @@ async fn scheduled_renewal_keeps_name_definition_and_promotes_new_key_with_and_w
                 .await,
             Ok(RenewalPreparation::NotDue(_))
         ));
-        assert_eq!(fixture.store.list().await.unwrap().len(), 1);
+        assert_eq!(
+            fixture
+                .store
+                .query(IssueQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         let RenewalPreparation::Ready(session) = fixture
             .store
             .prepare_renewal(&in_use.name, &in_use.operation_id, true, &fixture.account)
@@ -2660,7 +2811,15 @@ async fn scheduled_renewal_keeps_name_definition_and_promotes_new_key_with_and_w
             fs::read(slot.join(record.generation_name()).join("private-key.pk8")).unwrap(),
             old_key
         );
-        assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+        assert_eq!(
+            fixture
+                .store
+                .query(IssueQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }
 
@@ -2712,7 +2871,15 @@ async fn scheduled_renewal_checks_due_time_stale_in_use_and_revocation_before_cr
         panic!("renewal session expected")
     };
     assert!(renewal.record().await.unwrap().renewal_of.is_some());
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -2768,7 +2935,15 @@ async fn interrupted_manual_renewal_retains_old_in_use_and_resumes_the_same_orde
     );
     assert_eq!(fs::read(generation.join("private-key.pk8")).unwrap(), key);
     assert_eq!(restored.csr().await.unwrap(), csr);
-    assert_eq!(fixture.store.list().await.unwrap().len(), 2);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(
         fixture
             .server

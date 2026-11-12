@@ -143,7 +143,7 @@ fn guidance(kind: &ProblemKind, instance: Option<&str>, retry: Option<&RetryAfte
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::error::problem::*;
 
     #[test]
     fn known_problems_have_specific_guidance_and_unknown_values_keep_the_uri() {

@@ -1,5 +1,7 @@
 //! Manual implementations share confirmation semantics but keep method-specific instructions.
-use super::{Arc, ChallengeKind, ChallengeSolver, IssueError, Progress};
+use crate::commands::cert::validation::{
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
+};
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
 use async_trait::async_trait;

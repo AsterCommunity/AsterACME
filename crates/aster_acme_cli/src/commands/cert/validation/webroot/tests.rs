@@ -1,5 +1,5 @@
 //! Real filesystem ownership checks, with no public HTTP or CA request.
-use super::*;
+use crate::commands::cert::validation::webroot::*;
 const OP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TOKEN: &str = "abcdefghijklmnopqrstuvwxyz012345";
 fn requirement() -> ValidationRequirement {

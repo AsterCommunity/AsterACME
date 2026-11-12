@@ -41,7 +41,7 @@ pub(crate) fn validate_user_agent(user_agent: &str) -> Result<(), TransportError
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::http_client::*;
     use crate::transport::TransportOptions;
 
     #[test]

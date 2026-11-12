@@ -1,5 +1,5 @@
 //! Contact replacement, clearing, failures and observation boundaries.
-use super::*;
+use crate::account::tests::*;
 use crate::transport::TransportOptions;
 use std::time::Duration;
 

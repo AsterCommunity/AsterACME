@@ -1,5 +1,5 @@
 //! Shared account/certificate key choices, generation and PKCS#8 validation.
-use super::CryptoError;
+use crate::crypto::CryptoError;
 use rcgen::{KeyPair, PublicKeyData as _};
 use serde::{Deserialize, Serialize};
 use x509_parser::prelude::FromDer as _;
