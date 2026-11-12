@@ -34,4 +34,4 @@ build.rs只在Git仓库确实管理当前源码时读取revision，嵌套源码�
 
 normal/build依赖feature由scripts策略检查，限定rustls/AWS-LC、需要的HTTP/交互/日志功能。根workspace统一版本及features，库不安装宿主hook；详细Rust规则见[Rust约定](../rust-guidelines.md)。
 
-HTTP-01建议性探测使用独立的无代理、DNS固定客户端：逐跳拒绝解析到非公开地址的目标，回环测试显式启用。池内ACME签名请求继续复用既有客户端。User-Agent限定可见ASCII；终端输出转义双向控制字符。
+HTTP-01建议性探测与ACME请求复用既有连接池，保留系统／环境代理及其DNS行为；允许内网和回环目标，不作为SSRF隔离边界。每次探测仍有总期限、跳转和正文上限，TLS继续校验，失败不阻断CA验证。User-Agent限定可见ASCII；终端输出转义双向控制字符。

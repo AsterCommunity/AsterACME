@@ -23,7 +23,6 @@ use aster_acme_protocol::{
 };
 
 mod http_precheck;
-pub use crate::transport::http_precheck::HttpPrecheckPolicy;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const NONCE_POOL_CAPACITY: usize = 64;
