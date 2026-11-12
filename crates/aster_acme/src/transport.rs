@@ -49,6 +49,9 @@ pub enum TransportError {
     /// Invalid custom HTTP User-Agent.
     #[error("invalid User-Agent; use 1 to 512 printable characters")]
     InvalidUserAgent,
+    /// Durable ACME submission intent failed before the request was sent.
+    #[error("could not persist ACME submission intent: {0}")]
+    SubmissionIntent(String),
     /// Underlying network failure; mutations may already have happened remotely.
     #[error("ACME network request failed: {0}")]
     Network(#[from] reqwest::Error),
@@ -386,21 +389,28 @@ impl AcmeClient {
             kid,
             payload,
             &std::sync::atomic::AtomicBool::new(false),
+            || std::future::ready(Ok(())),
         )
         .await
     }
 
-    pub(crate) async fn signed_observed(
+    pub(crate) async fn signed_observed<F, Fut>(
         &self,
         url: &AcmeUrl,
         signer: &dyn AccountSigner,
         kid: Option<&AcmeUrl>,
         payload: &[u8],
         submitted: &std::sync::atomic::AtomicBool,
-    ) -> Result<AcmeResponse, TransportError> {
+        before_submit: F,
+    ) -> Result<AcmeResponse, TransportError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>> + Send,
+    {
         check_transport(url, &self.options)?;
         let jwk = signer.jwk()?;
         let mut current_nonce = self.take_nonce().await?;
+        let mut before_submit = Some(before_submit);
         for attempt in 0..=self.options.bad_nonce_retries {
             let identity = match kid {
                 Some(kid) => RequestIdentity::Kid { kid: kid.as_str() },
@@ -417,6 +427,11 @@ impl AcmeClient {
             let prepared = request(http, Method::POST, url, &self.options)
                 .header("Content-Type", "application/jose+json")
                 .json(&jws);
+            if let Some(before_submit) = before_submit.take() {
+                before_submit()
+                    .await
+                    .map_err(TransportError::SubmissionIntent)?;
+            }
             submitted.store(true, std::sync::atomic::Ordering::SeqCst);
             let sent = prepared.send().await;
             if let Err(error) = &sent {

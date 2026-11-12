@@ -12,7 +12,7 @@ CommandContext拥有本次OutputSession和惰性HttpPool。执行返回报告，
 
 HttpPool复用Forge/reqwest客户端和连接，AcmeClient分别拥有nonce、directory和请求策略。每请求设置UA/deadline，纯本地操作不初始化HTTP。账户UA优先级为本次参数、账户偏好、内置默认；单次覆盖不回写账户。
 
-ACME签名请求禁跳转，HTTP-01建议性检查可有限跟随HTTP/HTTPS。CA资源URL保留合法精确字符串，拒绝会被HTTP层编码的非法字符。请求/响应正文、nonce和签名不进入debug，诊断只记录阶段、状态、计时和Retry-After元数据。
+ACME签名请求禁跳转，HTTP-01建议性检查可有限跟随HTTP/HTTPS。CA资源URL保留合法精确字符串，拒绝会被HTTP层重新编码、导致签名目标不一致的输入。RFC 3986 §2.2/§3.4允许查询中的单引号，但当前WHATWG URL传输层会把HTTP(S)查询里的裸单引号编码为%27；按RFC 8555 §6.4不能改写CA提供的签名URL，因此只拒绝查询里的裸单引号，路径单引号及已编码%27仍可使用。请求/响应正文、nonce和签名不进入debug，诊断只记录阶段、状态、计时和Retry-After元数据。
 
 换钥通过transport发送观察区分“确定尚未发送POST”和“请求已开始、结果可能未知”。前者可撤销本次Pending；后者保留双钥对账。badNonce仅在明确拒绝后有限重签，成功响应不因缺nonce丢失Location。
 

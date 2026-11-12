@@ -46,6 +46,7 @@ pub enum DeploymentPhase {
     Configured,
     Publishing,
     PublishFailed,
+    PublicationComplete,
     Reloading,
     ReloadFailed,
     ReloadUncertain,

@@ -37,6 +37,8 @@ pub struct KeyRotation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyRotationPhase {
+    /// Staged locally; transport preparation has not reached the request boundary.
+    Prepared,
     Pending,
     Confirmed,
 }
@@ -94,6 +96,15 @@ pub fn account_action(
     use AccountAction::{AlreadyDeactivated, Inspect, LookupExisting, Select, SendDeactivation};
     use AccountStateError::{NotActive, NotRegistered, ReconciliationRequired};
     match key_rotation {
+        Some(KeyRotation {
+            phase: KeyRotationPhase::Prepared,
+            ..
+        }) => {
+            return match operation {
+                AccountOperation::RotateKey => Ok(AccountAction::SendKeyChange),
+                _ => Err(AccountStateError::KeyRotationUncertain),
+            };
+        }
         Some(KeyRotation {
             phase: KeyRotationPhase::Pending,
             ..
@@ -169,6 +180,7 @@ mod tests {
     #[test]
     fn rollover_states_block_other_operations_and_only_resume_saved_key() {
         for (phase, expected) in [
+            (KeyRotationPhase::Prepared, AccountAction::SendKeyChange),
             (KeyRotationPhase::Pending, AccountAction::ReconcileKeyChange),
             (
                 KeyRotationPhase::Confirmed,

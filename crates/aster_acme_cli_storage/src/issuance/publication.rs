@@ -133,7 +133,7 @@ impl Publication {
         if self.kind == ViewKind::Link {
             let active = slot.join("in_use");
             let actual = self.target(&active)?;
-            if actual.is_some() && actual.as_deref() != expected {
+            if actual.as_deref() != expected {
                 match expected {
                     Some(target) => {
                         let record = read_journal(&slot.join(target).join("operation.toml"))?;

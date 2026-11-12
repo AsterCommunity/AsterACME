@@ -250,6 +250,24 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
             .await,
         Err(AccountError::TermsRequired(_))
     ));
+    let before_rejected_contacts = store.record.lock().await.clone().unwrap();
+    let rejected_contacts = RegistrationOptions {
+        contacts: vec!["mailto:must-not-save@example.com".into()],
+        ..RegistrationOptions::default()
+    };
+    assert!(matches!(
+        changed
+            .load_or_prepare(
+                &directory,
+                &thumbprint,
+                &rejected_contacts,
+                KeyAlgorithm::EcdsaP256,
+                &(Arc::new(()) as Arc<dyn AccountLease>)
+            )
+            .await,
+        Err(AccountError::TermsRequired(_))
+    ));
+    assert_eq!(*store.record.lock().await, Some(before_rejected_contacts));
     let record = changed
         .load_or_prepare(
             &directory,

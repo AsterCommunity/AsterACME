@@ -704,8 +704,20 @@ impl IssueService {
                                 },
                             ),
                         ) => {
+                            let retry_after = match &error {
+                                IssueError::Transport(
+                                    crate::transport::TransportError::Problem {
+                                        retry_after, ..
+                                    },
+                                ) => retry_after.clone(),
+                                _ => None,
+                            };
                             record.authorizations[index].acknowledgement =
                                 SubmissionState::NotSubmitted;
+                            // RFC 8555 §6.6 and RFC 9110 §10.2.3: a rejected
+                            // submission still carries a server wait deadline.
+                            // Persist it before allowing an explicit retry.
+                            schedule_retry(record, retry_after.as_ref(), execution.poll_interval);
                             session.save(record).await?;
                             return Err(error);
                         }

@@ -21,7 +21,7 @@ CLI 将查询条件交给 storage，负责交互、歧义处理和渲染。name 
 
 账户 list --verify 只刷新被验证账户的快照，不重新枚举目录；单次及批量证书操作的 Ctrl-C 等待任务由 RAII guard 管理；部署共享只读产物，阻塞写入保留租约直到完成。签发后部署事件与手动 deploy 共用事件生成、日志和表格渲染，人类报告按证书完成→空行→Started deployment→发布/reload→部署列表排列；JSON 仍只有一份结构化结果。
 
-部署配置/目的路径归storage的 `issuance/deployment/{targets,permissions,update}`：跨证书配置锁先于证书租约获取，add/update/open均检查路径所有权；证书租约覆盖发布与reload，配置锁在open完成后释放。路径检查展开目录目标并规范化父路径，拒绝跨绑定覆盖和写入托管状态，不引入第二份目标注册表。update只更改配置及重置变化后的检查点，保留原目标文件。产物发布归 `issuance/deployment/publication`：全部选定文件先在各自父目录暂存、设权、同步，完整prepare成功后才进入commit逐一替换。临时文件集合通过RAII持有，准备失败不改现有目标并清理临时文件；提交前重新检查整组路径，单个替换前再次检查。目录路径保持稳定，直接发布普通文件，不使用部署链接或目录交换；整组原子切换不作保证。提交失败/取消留下Publishing或PublishFailed检查点，显式重试重新发布完整选定集合；只有publish返回成功才reload，不自动回滚或宣称服务已加载。进程崩溃不保证临时文件自动清理。
+部署配置/目的路径归storage的 `issuance/deployment/{targets,permissions,update}`：跨证书配置锁先于证书租约获取，add/update/open均检查路径所有权；证书租约覆盖发布与reload，配置锁在open完成后释放。路径检查展开目录目标并规范化父路径，拒绝跨绑定覆盖和写入托管状态，不引入第二份目标注册表。update只更改配置及重置变化后的检查点，保留原目标文件。产物发布归 `issuance/deployment/publication`：全部选定文件先在各自父目录暂存、设权、同步，完整prepare成功后才进入commit逐一替换。临时文件集合通过RAII持有，准备失败不改现有目标并清理临时文件；提交前重新检查整组路径，单个替换前再次检查。Unix发布适配器在prepare时保留父目录句柄，以openat/renameat/unlinkat及句柄sync完成暂存、替换、清理与持久化，避免最终路径检查后的父目录替换重定向IO；路径身份复核只负责提前失败。初始父路径解析仍需要可信祖先，Windows路径适配器仍依赖父目录及祖先受信任。目录路径保持稳定，直接发布普通文件，不使用部署链接或目录交换；整组原子切换不作保证。提交失败/取消留下Publishing或PublishFailed检查点，显式重试重新发布完整选定集合；只有publish返回成功才reload，不自动回滚或宣称服务已加载。进程崩溃不保证临时文件自动清理。
 
 CLI部署执行逐目标收集错误，库存/打开/锁失败不冒充空列表或历史成功；执行事件独立于保存的绑定状态，报告同时保留本次execution_error与历史状态。reload生命周期由小型process-wrap适配提供Unix进程组和Windows Job Object，取消时Drop清理、超时终止并有界回收；stdout/stderr并行排空且每路每次只收集64KiB。手动输出实时显示，自动输出随统一部署报告显示；内容仅存本次events，不持久化到cert.toml，不承诺自动脱敏或终止主动脱组的daemon。
 

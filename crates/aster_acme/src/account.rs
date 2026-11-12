@@ -256,7 +256,8 @@ impl AccountService {
         algorithm: Option<crate::crypto::key_algorithm::KeyAlgorithm>,
         expected: Option<&AccountRecord>,
     ) -> Result<AccountRecord, AccountError> {
-        let session = keys.rotation(self.client.directory_url()).await?;
+        let session: Arc<dyn AccountRotation> =
+            Arc::from(keys.rotation(self.client.directory_url()).await?);
         if expected.is_some_and(|expected| {
             let actual = session.record();
             actual.account_id != expected.account_id
@@ -299,7 +300,8 @@ impl AccountService {
         }
         match action {
             AccountAction::SendKeyChange => {
-                self.send_key_change(session.as_ref(), &mut record, old.as_ref(), new.as_ref())
+                record = self
+                    .submit_key_change(session.clone(), record, old.clone(), new.clone())
                     .await?;
             }
             AccountAction::ReconcileKeyChange => {
@@ -337,6 +339,40 @@ impl AccountService {
         Ok(record)
     }
 
+    async fn submit_key_change(
+        &self,
+        session: Arc<dyn AccountRotation>,
+        mut record: AccountRecord,
+        old: Arc<dyn AccountSigner>,
+        new: Arc<dyn AccountSigner>,
+    ) -> Result<AccountRecord, AccountError> {
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let _cancel_on_drop = cancelled.clone().drop_guard();
+        let service = Self {
+            client: self.client.clone(),
+            store: self.store.clone(),
+            clock: self.clock.clone(),
+        };
+        // Pending persistence and HTTP submission share one owned task.
+        // Dropping the caller must not release the lease between those
+        // operations. Before Pending, cancellation prevents submission;
+        // afterwards the worker classifies the result without replaying.
+        tokio::spawn(async move {
+            service
+                .send_key_change(
+                    session.as_ref(),
+                    &mut record,
+                    old.as_ref(),
+                    new.as_ref(),
+                    &cancelled,
+                )
+                .await?;
+            Ok::<_, AccountError>(record)
+        })
+        .await
+        .map_err(|_| AccountError::KeyRotationUncertain)?
+    }
+
     // The mutation owns durable intent; the caller owns reconciliation and commit.
     async fn send_key_change(
         &self,
@@ -344,6 +380,7 @@ impl AccountService {
         record: &mut AccountRecord,
         old: &dyn AccountSigner,
         new: &dyn AccountSigner,
+        cancelled: &tokio_util::sync::CancellationToken,
     ) -> Result<(), AccountError> {
         let account_url = record
             .account_url
@@ -357,16 +394,36 @@ impl AccountService {
             .ok_or(AccountError::KeyChangeUnavailable)?;
         let inner =
             crate::crypto::sign_key_change(new, &old.jwk()?, &account_url, endpoint.as_str())?;
+        let new_thumbprint = new.jwk()?.thumbprint()?;
         record.key_rotation = Some(KeyRotation {
-            new_thumbprint: new.jwk()?.thumbprint()?,
-            phase: KeyRotationPhase::Pending,
+            new_thumbprint: new_thumbprint.clone(),
+            phase: KeyRotationPhase::Prepared,
         });
         session.save(record).await?;
         let payload = json_payload(&inner)?;
         let submitted = std::sync::atomic::AtomicBool::new(false);
         let response = self
             .client
-            .signed_observed(endpoint, old, Some(&account_url), &payload, &submitted)
+            .signed_observed(
+                endpoint,
+                old,
+                Some(&account_url),
+                &payload,
+                &submitted,
+                || async {
+                    if cancelled.is_cancelled() {
+                        return Err("key rotation cancelled before submission".into());
+                    }
+                    record.key_rotation = Some(KeyRotation {
+                        new_thumbprint: new_thumbprint.clone(),
+                        phase: KeyRotationPhase::Pending,
+                    });
+                    session
+                        .save(record)
+                        .await
+                        .map_err(|error| error.to_string())
+                },
+            )
             .await;
         let response = match response {
             Ok(response) => response,
@@ -383,7 +440,10 @@ impl AccountService {
             }
             Err(error) => {
                 if !submitted.load(std::sync::atomic::Ordering::SeqCst) {
-                    record.key_rotation = None;
+                    record.key_rotation = Some(KeyRotation {
+                        new_thumbprint: new_thumbprint.clone(),
+                        phase: KeyRotationPhase::Prepared,
+                    });
                     session.save(record).await?;
                 }
                 return Err(error.into());
@@ -393,6 +453,13 @@ impl AccountService {
             return Err(AccountError::InvalidResponse);
         }
         record.times.last_used_at = Some(self.clock.now().to_offset(time::UtcOffset::UTC));
+        // RFC 8555 §7.3.5: HTTP 200 confirms rollover. Persist this even if
+        // the caller disappeared; recovery can finish the local key swap only.
+        record.key_rotation = Some(KeyRotation {
+            new_thumbprint,
+            phase: KeyRotationPhase::Confirmed,
+        });
+        session.save(record).await?;
         Ok(())
     }
 
@@ -779,22 +846,29 @@ impl AccountService {
                 .action(AccountOperation::Register)
                 .map_err(AccountError::from)?;
             validate_contacts(&options.contacts)?;
-            if !options.contacts.is_empty() {
-                // Keep local intent even if a CA omits contact in its account response.
-                // Updating this input does not update an already registered remote account.
-                record.contacts.clone_from(&options.contacts);
-                self.store.save(&record, lease).await?;
-            }
-            match &self.client.directory().meta.terms_of_service {
+            let accepted_terms = match &self.client.directory().meta.terms_of_service {
                 // Consent is recorded as the discovered URL, not a reusable boolean:
                 // a changed document requires another explicit acceptance by the caller.
-                Some(current) if record.accepted_terms_url.as_ref() == Some(current) => {}
-                Some(current) if options.terms_accepted => {
-                    record.accepted_terms_url = Some(current.clone());
-                    self.store.save(&record, lease).await?;
+                Some(current) if record.accepted_terms_url.as_ref() == Some(current) => {
+                    Some(current.clone())
                 }
+                Some(current) if options.terms_accepted => Some(current.clone()),
                 Some(current) => return Err(AccountError::TermsRequired(current.clone())),
-                None => {}
+                None => None,
+            };
+            let mut changed = false;
+            if !options.contacts.is_empty() && record.contacts != options.contacts {
+                record.contacts.clone_from(&options.contacts);
+                changed = true;
+            }
+            if let Some(accepted_terms) = accepted_terms
+                && record.accepted_terms_url.as_ref() != Some(&accepted_terms)
+            {
+                record.accepted_terms_url = Some(accepted_terms);
+                changed = true;
+            }
+            if changed {
+                self.store.save(&record, lease).await?;
             }
             return Ok(record);
         }

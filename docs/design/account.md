@@ -72,3 +72,5 @@ AccountStore::lock_account返回Arc<dyn AccountLease>，AccountStore::save显式
 删除确认携带账户ID、directory和密钥指纹；换钥确认另携带原kid及轮换事务快照，重新持锁后变化即拒绝。Confirmed在CLI可离线提交，校验保存的新钥后才更新身份。Nonce/签名/客户端准备阶段明确未发送POST的失败可撤销Pending；发送开始后的网络结果仍保守保留。
 
 历史签发使用稳定账户ID、directory和kid绑定当前账户；保存的旧thumbprint继续绑定原挑战材料，不因换钥而重算。
+
+换钥提交先保存Prepared，nonce/HTTP初始化完成后才保存Pending。Pending保存与HTTP请求由同一个独立持锁任务负责；调用方取消后任务仍完成结果分类，避免“Pending已写但future被丢弃、请求从未发出”的窗口。进入Pending前取消则不提交，保留可重试Prepared；收到RFC 8555 §7.3.5的200后先保存Confirmed，恢复只补本地提交。传输结果未知保持Pending，不自动重复keyChange。

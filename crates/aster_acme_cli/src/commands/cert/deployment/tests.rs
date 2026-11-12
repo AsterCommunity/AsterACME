@@ -229,7 +229,7 @@ async fn list_and_remove_bindings_work_after_revocation_or_loss_of_current_versi
     ] {
         let fixture = Fixture::new().await;
         let target = fixture.add("nginx", child_command("success"), 0).await;
-        let original = run_one(&fixture.store, &fixture.name, "nginx", true, None)
+        let original = run_one(&fixture.store, &fixture.name, "nginx", true, None, None)
             .await
             .unwrap()
             .binding;
@@ -410,14 +410,24 @@ fn reload_child() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        value if value.starts_with("tree:") => {
-            let mut command =
-                child_command(&format!("heartbeat:{}", value.trim_start_matches("tree:")));
-            let program = command.remove(0);
-            let mut child = std::process::Command::new(program)
-                .args(command)
-                .spawn()
+        value if value.starts_with("tree:") || value.starts_with("tree-wait-inherited:") => {
+            // Unlike tree-inherited, this parent stays alive while the child
+            // holds its pipes, exercising timeout rather than successful exit.
+            let inherited = value.starts_with("tree-wait-inherited:");
+            let file = value
+                .strip_prefix("tree-wait-inherited:")
+                .or_else(|| value.strip_prefix("tree:"))
                 .unwrap();
+            let mut command = child_command(&format!("heartbeat:{file}"));
+            let program = command.remove(0);
+            let mut process = std::process::Command::new(program);
+            process.args(command);
+            if !inherited {
+                process
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+            }
+            let mut child = process.spawn().unwrap();
             println!("descendant started");
             let _ = child.wait();
         }
@@ -507,7 +517,8 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
             &fixture.name,
             "nginx",
             false,
-            Some(&fixture.progress)
+            Some(&fixture.progress),
+            None
         )
         .await
         .unwrap()
@@ -522,6 +533,7 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
         "nginx",
         true,
         Some(&fixture.progress),
+        None,
     )
     .await
     .unwrap();
@@ -553,6 +565,7 @@ async fn deploy_and_renewal_publish_current_generation_skip_completed_and_keep_b
         "nginx",
         false,
         Some(&fixture.progress),
+        None,
     )
     .await
     .unwrap();
@@ -619,7 +632,8 @@ async fn timeout_is_uncertain_survives_reopen_and_is_not_automatically_replayed(
             &fixture.name,
             "slow",
             false,
-            Some(&fixture.progress)
+            Some(&fixture.progress),
+            None
         )
         .await
         .unwrap()
@@ -652,6 +666,7 @@ async fn cancelling_reload_preserves_intent_releases_lease_and_prevents_automati
             "slow",
             false,
             Some(&fixture.progress),
+            None,
         );
         tokio::pin!(execution);
         tokio::select! {
@@ -684,7 +699,8 @@ async fn publication_failure_does_not_run_reload_and_missing_program_is_saved() 
             &fixture.name,
             "badpath",
             true,
-            Some(&fixture.progress)
+            Some(&fixture.progress),
+            None
         )
         .await
         .unwrap()
@@ -715,7 +731,8 @@ async fn publication_failure_does_not_run_reload_and_missing_program_is_saved() 
             &fixture.name,
             "missing",
             true,
-            Some(&fixture.progress)
+            Some(&fixture.progress),
+            None
         )
         .await
         .unwrap()

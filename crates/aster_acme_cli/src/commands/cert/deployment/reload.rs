@@ -19,6 +19,18 @@ pub(super) struct ReloadResult {
     pub(super) timed_out: bool,
 }
 
+impl ReloadResult {
+    pub(super) fn interrupted() -> Self {
+        Self {
+            status: Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "reload interrupted or overall execution deadline exceeded; process tree terminated",
+            )),
+            timed_out: true,
+        }
+    }
+}
+
 struct ProcessTree(Box<dyn ChildWrapper>);
 impl Drop for ProcessTree {
     fn drop(&mut self) {

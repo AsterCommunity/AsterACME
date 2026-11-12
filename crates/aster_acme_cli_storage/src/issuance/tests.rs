@@ -2080,6 +2080,22 @@ async fn history_without_consistent_in_use_and_unknown_operation_delete_nothing(
     // Unix exposes a link; Windows exposes a complete copied directory.
     // Removing the native view must preserve its backing generation on both.
     publication::NATIVE.remove(&slot.join("in_use")).unwrap();
+    #[cfg(unix)]
+    {
+        // A missing Unix link is repaired from the durable catalog under the
+        // lease. That recovery must never select current/pending generations
+        // as history just because their public view was temporarily absent.
+        let history = fixture
+            .store
+            .prepare_removal(&in_use.name, RemovalScope::History)
+            .await
+            .unwrap();
+        assert_eq!(history.generations(), 0);
+        assert!(!history.removes_in_use());
+        drop(history);
+        assert!(publication::NATIVE.matches(&slot, &in_use).unwrap());
+    }
+    #[cfg(not(unix))]
     assert!(
         fixture
             .store

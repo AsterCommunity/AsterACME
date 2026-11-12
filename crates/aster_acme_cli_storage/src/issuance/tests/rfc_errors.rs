@@ -583,3 +583,78 @@ async fn rotated_account_signer_can_resume_saved_material_without_changing_its_t
         old_material
     );
 }
+
+#[tokio::test]
+async fn rejected_acknowledgement_retry_after_survives_reopen_and_blocks_early_requests() {
+    let http_date = time::format_description::parse_borrowed::<1>(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+    )
+    .unwrap();
+    for retry_after in [
+        "120".to_owned(),
+        (time::OffsetDateTime::now_utc() + time::Duration::seconds(120))
+            .format(&http_date)
+            .unwrap(),
+    ] {
+        let fixture = fixture().await;
+        mount_flow(&fixture).await;
+        Mock::given(method("POST"))
+            .and(path("/challenge/0"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Replay-Nonce", "limited")
+                    .insert_header("Retry-After", retry_after)
+                    .set_body_json(serde_json::json!({"type": ProblemKind::RateLimited})),
+            )
+            .with_priority(1)
+            .mount(&fixture.server)
+            .await;
+        let mut session = fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .unwrap();
+        let started = time::OffsetDateTime::now_utc();
+        assert!(
+            fixture
+                .service
+                .run(session.as_mut(), &Dns(true), &execution())
+                .await
+                .is_err()
+        );
+        let saved = session.record().await.unwrap();
+        assert_eq!(
+            saved.authorizations[0].acknowledgement,
+            SubmissionState::NotSubmitted
+        );
+        assert!(saved.next_poll_at.unwrap() >= started + time::Duration::seconds(115));
+        assert_eq!(
+            saved.poll_wait_source,
+            Some(aster_acme::issuance::PollWaitSource::RetryAfter)
+        );
+        drop(session);
+        let before = fixture.server.received_requests().await.unwrap().len();
+        let mut reopened = fixture
+            .store
+            .open(&saved.name, &saved.operation_id)
+            .await
+            .unwrap();
+        let mut retry = execution();
+        retry.context.deadline = Instant::now() + Duration::from_millis(100);
+        assert!(
+            fixture
+                .service
+                .run(reopened.as_mut(), &Dns(true), &retry)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fixture.server.received_requests().await.unwrap().len(),
+            before
+        );
+        assert_eq!(
+            reopened.record().await.unwrap().next_poll_at,
+            saved.next_poll_at
+        );
+    }
+}

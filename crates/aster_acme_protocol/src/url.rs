@@ -40,6 +40,11 @@ impl AcmeUrl {
                     || c.is_whitespace()
                     || matches!(c, '"' | '<' | '>' | '`' | '{' | '}' | '\\')
             })
+            // RFC 3986 §§2.2/3.4 permits apostrophes, but WHATWG special-query
+            // parsing encodes them. RFC 8555 §6.4 forbids re-encoding the signed
+            // server URL. Inspect the raw query: parsed.query() already lost it.
+            // Path apostrophes and an explicit %27 remain supported.
+            || value.split_once('?').is_some_and(|(_, query)| query.contains('\''))
             || value.trim() != value
         {
             return Err(InvalidAcmeUrl);

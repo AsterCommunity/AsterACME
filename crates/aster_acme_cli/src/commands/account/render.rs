@@ -84,6 +84,7 @@ fn success(message: &str, color: bool) -> String {
 
 fn rotation_label(phase: aster_acme_core::account::KeyRotationPhase) -> &'static str {
     match phase {
+        aster_acme_core::account::KeyRotationPhase::Prepared => "key rotation prepared",
         aster_acme_core::account::KeyRotationPhase::Pending => "key rotation pending",
         aster_acme_core::account::KeyRotationPhase::Confirmed => "key commit pending",
     }

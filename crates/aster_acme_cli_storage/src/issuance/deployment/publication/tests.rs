@@ -291,3 +291,68 @@ fn empty_duplicate_relative_destinations_and_invalid_modes_fail_before_staging()
     );
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
 }
+
+#[cfg(unix)]
+#[test]
+fn renamed_parent_never_redirects_commit_or_cleanup_to_a_replacement() {
+    for symlink in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let moved = root.path().join("moved");
+        let unrelated = root.path().join("unrelated");
+        fs::create_dir(&target).unwrap();
+        fs::create_dir(&unrelated).unwrap();
+        old_files(&target);
+        old_files(&unrelated);
+        let prepared = PreparedPublication::prepare(
+            &DeploymentTarget::Directory {
+                path: target.clone(),
+            },
+            &artifacts(),
+            &DeploymentPermissions::default(),
+        )
+        .unwrap();
+        // Replace the configured name after descriptors and temporary files
+        // exist. Neither commit nor Drop may reopen the replacement by path.
+        fs::rename(&target, &moved).unwrap();
+        if symlink {
+            std::os::unix::fs::symlink(&unrelated, &target).unwrap();
+        } else {
+            fs::create_dir(&target).unwrap();
+            old_files(&target);
+        }
+        assert!(prepared.commit().is_err());
+        assert_old(&moved);
+        assert_old(&unrelated);
+        assert_old(&target);
+        assert_no_temporaries(&moved);
+        assert_no_temporaries(&target);
+        assert_no_temporaries(&unrelated);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn descriptor_relative_commit_survives_a_rename_after_the_last_path_check() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("target");
+    let moved = root.path().join("moved");
+    fs::create_dir(&target).unwrap();
+    let path = target.join("private-key.pem");
+    let staged = stage_file(&Destination {
+        path: path.clone(),
+        contents: b"private",
+        mode: None,
+    })
+    .unwrap();
+    staged.inspect(&path).unwrap();
+    fs::rename(&target, &moved).unwrap();
+    fs::create_dir(&target).unwrap();
+    // Invoke the actual rename boundary directly to deterministically inject
+    // the race between the final check and renameat; no timing sleeps needed.
+    staged.persist(&path).unwrap();
+    assert!(!path.exists());
+    assert_eq!(fs::read(moved.join("private-key.pem")).unwrap(), b"private");
+    assert_no_temporaries(&moved);
+    assert_no_temporaries(&target);
+}

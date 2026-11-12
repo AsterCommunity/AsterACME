@@ -217,6 +217,9 @@ impl Write for DiagnosticWriter {
         }
     }
     fn flush(&mut self) -> io::Result<()> {
+        if self.0.is_json() {
+            return Ok(());
+        }
         let mut state = self
             .0
             .state

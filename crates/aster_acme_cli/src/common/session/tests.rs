@@ -267,16 +267,18 @@ fn diagnostic_flush_failure_is_retained_and_prevents_a_success_report() {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
         }
     }
-    let stdout = Buffer::default();
-    let output = OutputSession::with_writers(
-        Box::new(stdout.clone()),
-        Box::new(FlushFailure),
-        Format::plain(false),
-        Format::plain(false),
-    );
-    let mut writer = output.make_writer();
-    writer.write_all(b"diagnostic").unwrap();
-    assert!(writer.flush().is_err());
-    assert!(output.finish("success", FinalChannel::Result).is_err());
-    assert_eq!(stdout.text(), "");
+    for json in [false, true] {
+        let stdout = Buffer::default();
+        let output = OutputSession::with_writers(
+            Box::new(stdout.clone()),
+            Box::new(FlushFailure),
+            Format::plain(json),
+            Format::plain(json),
+        );
+        let mut writer = output.make_writer();
+        writer.write_all(b"diagnostic").unwrap();
+        assert_eq!(writer.flush().is_ok(), json);
+        assert_eq!(output.finish("success", FinalChannel::Result).is_ok(), json);
+        assert_eq!(stdout.text(), if json { "success\n" } else { "" });
+    }
 }

@@ -158,7 +158,11 @@ fn paths(
                     )
                     .map_err(|_| IssueError::InvalidInput("cannot sync HTTP directory creation"))?;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Existing directories may belong to the operator; do not chmod them.
+                    // The advisory HTTP precheck determines whether the server can read the result.
+                    let _ = error;
+                }
                 Err(_) => {
                     return Err(IssueError::InvalidInput(
                         "cannot create HTTP challenge directory",
@@ -355,7 +359,9 @@ fn unlink_owned(path: &Path, expected: &File, content: &[u8]) -> Result<bool, Is
         return Ok(true);
     }
     // hard_link restores without ever overwriting a concurrently created entry.
-    if fs::hard_link(&moved, path).is_err() {
+    let regular = fs::symlink_metadata(&moved)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink());
+    if !regular || fs::hard_link(&moved, path).is_err() {
         let retained = quarantine.keep();
         return Err(IssueError::Publication(format!(
             "HTTP cleanup path changed; retained isolated content at {}",

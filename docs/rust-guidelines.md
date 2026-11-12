@@ -4,7 +4,7 @@
 
 - stable、edition 2024；每个crate显式声明版本，包/目录用下划线，可执行文件为aster-acme。
 - 版本、来源、features只定义在根workspace.dependencies，成员只写workspace=true；增加依赖使用cargo add，再核对根表和策略脚本。
-- 禁止use super（含测试）；使用crate::实际所有者路径，不保留旧路径转发别名。禁止生产unsafe和unwrap/expect/panic/unreachable/unimplemented/todo，依赖workspace严格lint。
+- 禁止use super（含测试）；使用crate::实际所有者路径，不保留旧路径转发别名。禁止生产unsafe；各crate根通过 `cfg_attr(not(test), deny(...))` 禁止生产unwrap/expect/panic/unreachable/unimplemented/todo，这些不是workspace lint。
 - 领域枚举分发优先穷尽match；普通条件保留if。新抽象应承担策略、转换、生命周期、所有权或测试隔离，不增加纯透传facade。
 - 公开API说明失败策略，wire使用具名类型序列化；库不安装宿主panic hook。Box用于对象所有权或有证据的布局收益，不仅为压lint。
 - HTTP复用Forge池和rustls/AWS-LC，生产feature统一受scripts策略约束。文件锁使用标准库，平台文件机制集中在state_file。

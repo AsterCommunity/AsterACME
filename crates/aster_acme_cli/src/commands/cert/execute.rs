@@ -423,7 +423,9 @@ impl Foreground<'_> {
             poll_interval: Duration::from_secs(poll_interval),
         };
         let result = service.run(session, solver.as_ref(), &execution).await;
-        if result.is_err() && self.execution.cancellation.is_cancelled() {
+        if matches!(result, Err(IssueError::Interrupted))
+            && self.execution.cancellation.is_cancelled()
+        {
             return Err(Box::new(terminal::Canceled));
         }
         Ok(result?)

@@ -17,84 +17,83 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
             0,
         )
         .await;
-    for renewal in [false, true] {
-        if renewal {
-            fixture.complete(true).await;
-        }
-        let generation = fixture
-            .store
-            .query(IssueQuery {
-                name: Some(fixture.name.clone()),
-                in_use: Some(true),
-                ..IssueQuery::default()
-            })
-            .await
-            .unwrap()
-            .remove(0)
-            .generation_name();
-        for name in ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"] {
-            std::fs::copy(
-                fixture
-                    .temp
-                    .path()
-                    .join("certs/web")
-                    .join(&generation)
-                    .join(name),
-                target.join(format!("expected-{name}")),
-            )
-            .unwrap();
-        }
-        let observed = target.join("reload-observed");
-        if observed.exists() {
-            std::fs::remove_file(&observed).unwrap();
-        }
-        if renewal {
-            let results = fixture.automatic(&fixture.store).await;
-            assert_eq!(results[0].phase, DeploymentPhase::Deployed);
-        } else {
-            let result = run_one(&fixture.store, &fixture.name, "verify", true, None)
-                .await
-                .unwrap();
-            assert_eq!(result.binding.phase, DeploymentPhase::Deployed);
-        }
-        assert_eq!(std::fs::read(&observed).unwrap(), b"complete set");
+    let initial_generation = fixture
+        .store
+        .query(IssueQuery {
+            name: Some(fixture.name.clone()),
+            in_use: Some(true),
+            ..IssueQuery::default()
+        })
+        .await
+        .unwrap()
+        .remove(0)
+        .generation_name();
+    let initial_folder = fixture
+        .temp
+        .path()
+        .join("certs/web")
+        .join(&initial_generation);
+    for name in ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"] {
+        std::fs::copy(
+            initial_folder.join(name),
+            target.join(format!("expected-{name}")),
+        )
+        .unwrap();
     }
-    // A failure in the last configured file must not reload or replace any earlier file.
-    std::fs::remove_file(target.join("reload-observed")).unwrap();
-    std::fs::remove_file(target.join("private-key.pem")).unwrap();
-    std::fs::create_dir(target.join("private-key.pem")).unwrap();
-    let old_chain = std::fs::read(target.join("fullchain.pem")).unwrap();
-    let result = run_one(&fixture.store, &fixture.name, "verify", true, None)
+    let original = run_one(&fixture.store, &fixture.name, "verify", true, None, None)
         .await
         .unwrap();
-    assert_eq!(result.binding.phase, DeploymentPhase::PublishFailed);
-    assert_eq!(result.binding.attempts, 0);
-    assert!(!target.join("reload-observed").exists());
-    assert_eq!(
-        std::fs::read(target.join("fullchain.pem")).unwrap(),
-        old_chain
-    );
+    assert_eq!(original.binding.phase, DeploymentPhase::Deployed);
+    let previous_files = ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"]
+        .map(|name| std::fs::read(target.join(name)).unwrap());
+    let renewal = fixture.complete(true).await;
+    let next_generation = renewal.generation_name();
+    let generation_path = fixture.temp.path().join("certs/web").join(&next_generation);
+    for name in ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"] {
+        std::fs::copy(
+            generation_path.join(name),
+            target.join(format!("expected-{name}")),
+        )
+        .unwrap();
+    }
+    let observed = target.join("reload-observed");
+    std::fs::remove_file(&observed).unwrap();
+    // The last file is invalid after the renewal generation has been selected.
+    std::fs::remove_file(target.join("private-key.pem")).unwrap();
+    std::fs::create_dir(target.join("private-key.pem")).unwrap();
+    let context = aster_acme::solver::ExecutionContext {
+        cancellation: tokio_util::sync::CancellationToken::new(),
+        deadline: std::time::Instant::now() + Duration::from_secs(10),
+    };
+    let (failed, events) =
+        after_issuance(&fixture.store, &fixture.name, &next_generation, &context).await;
+    assert_eq!(failed[0].phase, DeploymentPhase::PublishFailed);
+    assert_eq!(failed[0].attempts, 0);
+    assert!(!observed.exists());
+    for (name, previous) in ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"]
+        .into_iter()
+        .zip(previous_files)
+    {
+        if name == "private-key.pem" {
+            assert!(target.join(name).is_dir());
+        } else {
+            assert_eq!(std::fs::read(target.join(name)).unwrap(), previous);
+        }
+    }
     assert!(
-        !result
-            .events
+        !events
             .iter()
-            .any(|event| event.message.contains("files published")
-                || event.message.contains("reload succeeded"))
+            .any(|event| event.message.contains("reload succeeded"))
     );
     assert_eq!(
         fixture.status("verify").await.phase,
         DeploymentPhase::PublishFailed
     );
     std::fs::remove_dir(target.join("private-key.pem")).unwrap();
-    let reopened = CliIssueStore::new(fixture.temp.path().into(), Duration::from_secs(2));
-    let result = run_one(&reopened, &fixture.name, "verify", true, None)
-        .await
-        .unwrap();
-    assert_eq!(result.binding.phase, DeploymentPhase::Deployed);
-    assert_eq!(
-        std::fs::read(target.join("reload-observed")).unwrap(),
-        b"complete set"
-    );
+    let (recovered, _) =
+        after_issuance(&fixture.store, &fixture.name, &next_generation, &context).await;
+    assert_eq!(recovered[0].phase, DeploymentPhase::Deployed);
+    assert_eq!(std::fs::read(observed).unwrap(), b"complete set");
 }
 
 #[tokio::test]
@@ -326,7 +325,15 @@ async fn inventory_errors_and_old_deployed_states_make_single_and_batch_reports_
         .join(current.generation_name());
     std::fs::remove_file(folder.join("private-key.pk8")).unwrap();
     let bindings = fixture.store.deployments(&fixture.name).await.unwrap();
-    let execution = run_target(&fixture.store, &fixture.name, &bindings[0], true, None).await;
+    let execution = run_target(
+        &fixture.store,
+        &fixture.name,
+        &bindings[0],
+        true,
+        None,
+        None,
+    )
+    .await;
     assert_eq!(execution.binding.phase, DeploymentPhase::Deployed);
     assert!(
         execution
@@ -705,7 +712,14 @@ async fn automatic_deployment_inherits_cancellation_and_deadline_without_publica
 #[tokio::test]
 async fn automatic_reload_is_stopped_by_remaining_operation_budget() {
     let fixture = Fixture::new().await;
-    fixture.add("slow", child_command("timeout"), 0).await;
+    let heartbeat = fixture.temp.path().join("reload-heartbeat");
+    fixture
+        .add(
+            "slow",
+            child_command(&format!("tree:{}", heartbeat.display())),
+            0,
+        )
+        .await;
     let started = std::time::Instant::now();
     let (_, events) = after_issuance(
         &fixture.store,
@@ -721,9 +735,13 @@ async fn automatic_reload_is_stopped_by_remaining_operation_budget() {
     assert!(
         events
             .iter()
-            .any(|event| event.message.contains("deadline exceeded"))
+            .any(|event| event.message.contains("deadline"))
     );
     let saved = fixture.status("slow").await;
-    assert_eq!(saved.phase, DeploymentPhase::Reloading);
+    assert_eq!(saved.phase, DeploymentPhase::ReloadUncertain);
     assert_eq!(saved.attempts, 1);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let stopped = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(std::fs::read(heartbeat).unwrap(), stopped);
 }

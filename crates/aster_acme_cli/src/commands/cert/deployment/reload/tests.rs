@@ -147,3 +147,54 @@ async fn successful_parent_with_inherited_pipes_does_not_turn_into_a_timeout() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(before, std::fs::read(heartbeat).unwrap());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reload_timeout_terminates_owned_descendants_that_inherit_pipe_handles() {
+    let temp = tempfile::tempdir().unwrap();
+    let heartbeat = temp.path().join("heartbeat");
+    let mut events = Vec::new();
+    let result = run(
+        &child_command(&format!("tree-wait-inherited:{}", heartbeat.display())),
+        Duration::from_millis(300),
+        "test",
+        1,
+        &mut events,
+        None,
+    )
+    .await;
+    assert!(result.timed_out);
+    let first = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(first, std::fs::read(heartbeat).unwrap());
+}
+
+#[tokio::test]
+async fn overall_deadline_terminates_waiting_parent_and_inherited_pipe_descendants() {
+    let temp = tempfile::tempdir().unwrap();
+    let heartbeat = temp.path().join("heartbeat");
+    let command = child_command(&format!("tree-wait-inherited:{}", heartbeat.display()));
+    let mut events = Vec::new();
+    let execution = aster_acme::solver::ExecutionContext {
+        cancellation: tokio_util::sync::CancellationToken::new(),
+        deadline: std::time::Instant::now() + Duration::from_millis(500),
+    };
+    let result = Box::pin(crate::commands::cert::deployment::wait_reload(
+        run(
+            &command,
+            Duration::from_secs(30),
+            "test",
+            1,
+            &mut events,
+            None,
+        ),
+        Some(&execution),
+    ))
+    .await;
+    assert!(result.status.is_err());
+    assert!(result.timed_out);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let before = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(before, std::fs::read(&heartbeat).unwrap());
+}

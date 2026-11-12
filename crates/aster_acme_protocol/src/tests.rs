@@ -196,7 +196,15 @@ fn method_specific_fields_do_not_make_unknown_challenges_require_dns01_tokens() 
 }
 
 #[test]
-fn exact_urls_reject_characters_the_http_layer_would_reencode() {
+fn exact_urls_reject_only_characters_reencoded_by_http_url_parsing() {
+    // RFC 3986 permits the character; this is a transport serialization limit,
+    // required to preserve RFC 8555 §6.4's exact signed server URL.
+    assert_eq!(
+        url::Url::parse("https://ca.example/order?x='a'")
+            .unwrap()
+            .query(),
+        Some("x=%27a%27")
+    );
     for value in [
         "https://ca.example/a b",
         "https://ca.example/a\\b",
@@ -204,9 +212,16 @@ fn exact_urls_reject_characters_the_http_layer_would_reencode() {
         "https://ca.example/{x}",
         "https://ca.example/<x>",
         "https://ca.example/\"x",
+        "https://ca.example/order?x='a'",
     ] {
         assert!(crate::url::AcmeUrl::new(value).is_err(), "{value}");
     }
     let value = "https://ca.example/%41?exact=%2f";
     assert_eq!(crate::url::AcmeUrl::new(value).unwrap().as_str(), value);
+    for value in [
+        "https://ca.example/order'quote",
+        "https://ca.example/order?x=%27a%27",
+    ] {
+        assert_eq!(crate::url::AcmeUrl::new(value).unwrap().as_str(), value);
+    }
 }

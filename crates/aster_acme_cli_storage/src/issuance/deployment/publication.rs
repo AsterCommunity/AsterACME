@@ -13,7 +13,14 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
 };
-use tempfile::NamedTempFile;
+#[cfg(unix)]
+mod anchored;
+#[cfg(not(unix))]
+mod portable;
+#[cfg(unix)]
+use crate::issuance::deployment::publication::anchored::Temporary;
+#[cfg(not(unix))]
+use crate::issuance::deployment::publication::portable::Temporary;
 
 /// Owns all fully written/synced files until the explicit commit boundary.
 pub(super) struct PreparedPublication {
@@ -22,7 +29,7 @@ pub(super) struct PreparedPublication {
 
 struct PreparedFile {
     destination: PathBuf,
-    temporary: NamedTempFile,
+    temporary: Temporary,
 }
 
 struct Destination<'a> {
@@ -114,18 +121,14 @@ impl PreparedPublication {
 
     pub(super) fn commit(self) -> Result<(), IssueError> {
         // Recheck the whole set after preparation before replacing the first file.
-        // This narrows external path-change races; trusted parent directories are still required.
+        // Unix IO stays anchored even if a path changes after the last check.
+        // Initial resolution and the portable path adapter need trusted ancestors.
         for file in &self.files {
-            inspect_destination(&file.destination)?;
+            file.temporary.inspect(&file.destination)?;
         }
         for file in self.files {
-            inspect_destination(&file.destination)?;
-            file.temporary.persist(&file.destination).map_err(|error| {
-                path_error("replace destination", &file.destination, &error.error)
-            })?;
-            let parent = parent(&file.destination)?;
-            crate::state_file::sync_directory(parent)
-                .map_err(|error| path_error("sync parent directory", &file.destination, &error))?;
+            file.temporary.inspect(&file.destination)?;
+            file.temporary.persist(&file.destination)?;
         }
         Ok(())
     }
@@ -135,7 +138,7 @@ impl PreparedPublication {
 /// Any preparation error therefore drops every temporary file without committing.
 fn stage_all(
     files: Vec<Destination<'_>>,
-    mut stage: impl FnMut(&Destination<'_>) -> Result<NamedTempFile, IssueError>,
+    mut stage: impl FnMut(&Destination<'_>) -> Result<Temporary, IssueError>,
 ) -> Result<PreparedPublication, IssueError> {
     if files.is_empty() {
         return Err(failure(
@@ -162,12 +165,11 @@ fn stage_all(
     Ok(PreparedPublication { files: prepared })
 }
 
-fn stage_file(file: &Destination<'_>) -> Result<NamedTempFile, IssueError> {
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".aster-acme-deploy-")
-        .tempfile_in(parent(&file.path)?)
+fn stage_file(file: &Destination<'_>) -> Result<Temporary, IssueError> {
+    let mut temporary = Temporary::create(&file.path)
         .map_err(|error| path_error("stage file", &file.path, &error))?;
     temporary
+        .as_file_mut()
         .write_all(file.contents)
         .map_err(|error| path_error("write file", &file.path, &error))?;
     #[cfg(unix)]

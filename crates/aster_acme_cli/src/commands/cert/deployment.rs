@@ -14,6 +14,7 @@ use aster_acme_cli_storage::issuance::{
     DeploymentPhase, DeploymentTarget,
 };
 use std::{
+    future::Future,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -98,7 +99,8 @@ async fn execute_inner(
             )?;
             let definition = definition(args)?;
             let configured = store.add_deployment(&name, definition).await?;
-            let execution = run_target(&store, &name, &configured, true, Some(&progress)).await;
+            let execution =
+                run_target(&store, &name, &configured, true, Some(&progress), None).await;
             execution_events.extend(execution.events);
             (vec![execution.binding], true)
         }
@@ -113,7 +115,8 @@ async fn execute_inner(
             }
             let mut entries = Vec::with_capacity(selected.len());
             for definition in selected {
-                let execution = run_target(&store, &name, &definition, true, Some(&progress)).await;
+                let execution =
+                    run_target(&store, &name, &definition, true, Some(&progress), None).await;
                 entries.push(execution.binding);
                 execution_events.extend(execution.events);
             }
@@ -322,18 +325,17 @@ pub(super) async fn after_issuance(
             )],
         );
     }
-    tokio::select! {
-        biased;
-        () = execution.cancellation.cancelled() => (Vec::new(), vec![event(MessageKind::Error,
-            "Deployment interrupted; issued certificate retained. Inspect saved deployment state before retrying.")]),
-        result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline), automatic_inner(store, name, generation)) => result.unwrap_or_else(|_| (Vec::new(), vec![event(MessageKind::Error, "Deployment deadline exceeded; issued certificate retained. Inspect saved deployment state before retrying.")])),
-    }
+    // Do not drop automatic_inner at the operation deadline: a started blocking
+    // publication continues under its lease. The worker records the final publish
+    // state, then checks the deadline before starting reload or another target.
+    Box::pin(automatic_inner(store, name, generation, execution)).await
 }
 
 async fn automatic_inner(
     store: &CliIssueStore,
     name: &CertificateName,
     generation: &str,
+    execution: &aster_acme::solver::ExecutionContext,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
     let definitions = match store.deployments(name).await {
         Ok(definitions) => definitions,
@@ -349,15 +351,30 @@ async fn automatic_inner(
     };
     let mut result = Vec::with_capacity(definitions.len());
     let mut events = Vec::new();
-    for definition in definitions {
+    let mut definitions = definitions.into_iter();
+    while let Some(definition) = definitions.next() {
+        if execution.check().is_err() {
+            events.push(event(MessageKind::Error, "Automatic deployment stopped before the next target because issuance was cancelled or its deadline expired; committed certificate and deployment checkpoints are retained."));
+            result.push(definition);
+            result.extend(definitions);
+            break;
+        }
         let same_generation = definition.generation.as_deref() == Some(generation);
         if same_generation && definition.phase == DeploymentPhase::Deployed {
             result.push(definition);
             continue;
         }
-        let execution = run_target(store, name, &definition, false, None).await;
-        events.extend(execution.events);
-        result.push(execution.binding);
+        let target = Box::pin(run_target(
+            store,
+            name,
+            &definition,
+            false,
+            None,
+            Some(execution),
+        ))
+        .await;
+        events.extend(target.events);
+        result.push(target.binding);
     }
     (result, events)
 }
@@ -368,9 +385,10 @@ async fn run_target(
     definition: &DeploymentBinding,
     force: bool,
     progress: Option<&Progress>,
+    execution: Option<&aster_acme::solver::ExecutionContext>,
 ) -> DeploymentExecution {
     let id = definition.id.as_str();
-    match run_one(store, name, id, force, progress).await {
+    match Box::pin(run_one(store, name, id, force, progress, execution)).await {
         Ok(mut execution) => {
             if execution.binding.phase != DeploymentPhase::Deployed {
                 record_event(
@@ -417,15 +435,26 @@ async fn run_one(
     id: &str,
     force: bool,
     progress: Option<&Progress>,
+    execution: Option<&aster_acme::solver::ExecutionContext>,
 ) -> CliResult<DeploymentExecution> {
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        return Err(
+            "issuance was cancelled or its execution deadline expired before deployment".into(),
+        );
+    }
     let mut session = store.open_deployment(name, id).await?;
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        return Err(
+            "issuance was cancelled or its execution deadline expired before publication".into(),
+        );
+    }
     let mut events = Vec::new();
     let same_generation =
         session.definition().generation.as_deref() == Some(session.artifacts().generation.as_str());
     if !force && same_generation && session.definition().phase == DeploymentPhase::Deployed {
         return Ok(DeploymentExecution {
             binding: session.definition().clone(),
-            events,
+            events: events.clone(),
         });
     }
     if !force
@@ -443,7 +472,7 @@ async fn run_one(
         );
         return Ok(DeploymentExecution {
             binding: session.definition().clone(),
-            events,
+            events: events.clone(),
         });
     }
     let current_generation = session.artifacts().generation.clone();
@@ -456,6 +485,13 @@ async fn run_one(
     session
         .save_state(DeploymentPhase::Publishing, 0, None)
         .await?;
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        let error = "deployment cancelled before file publication";
+        session
+            .save_state(DeploymentPhase::Configured, 0, Some(error.into()))
+            .await?;
+        return Err(error.into());
+    }
     if let Err(error) = session.publish().await {
         session
             .save_state(DeploymentPhase::PublishFailed, 0, Some(error.to_string()))
@@ -468,11 +504,29 @@ async fn run_one(
         );
         return Ok(DeploymentExecution {
             binding: session.definition().clone(),
-            events,
+            events: events.clone(),
         });
     }
-    record_event(
+    Box::pin(finish_publication(
+        &mut session,
+        name,
         &mut events,
+        progress,
+        execution,
+    ))
+    .await
+}
+
+async fn finish_publication(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    name: &CertificateName,
+    events: &mut Vec<DeploymentEvent>,
+    progress: Option<&Progress>,
+    execution: Option<&aster_acme::solver::ExecutionContext>,
+) -> CliResult<DeploymentExecution> {
+    let id = session.definition().id.clone();
+    record_event(
+        events,
         MessageKind::Info,
         &format!(
             "Deployment '{}' files published for generation {}",
@@ -486,30 +540,44 @@ async fn run_one(
             .save_state(DeploymentPhase::Deployed, 0, None)
             .await?;
         record_event(
-            &mut events,
+            events,
             MessageKind::Success,
             &format!("Deployment '{id}' completed (no reload command configured)"),
             progress,
         );
         return Ok(DeploymentExecution {
             binding: session.definition().clone(),
-            events,
+            events: events.clone(),
+        });
+    }
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        if matches!(
+            session.definition().phase,
+            DeploymentPhase::Reloading | DeploymentPhase::ReloadUncertain
+        ) {
+            return Err("previous reload outcome remains unconfirmed after cancellation; inspect the service before retry".into());
+        }
+        let error = "files were published, but reload was not started because the issuance was cancelled or its deadline expired";
+        session
+            .save_state(DeploymentPhase::PublicationComplete, 0, Some(error.into()))
+            .await?;
+        record_event(events, MessageKind::Error, error, progress);
+        return Ok(DeploymentExecution {
+            binding: session.definition().clone(),
+            events: events.clone(),
         });
     }
     let binding = session.definition().clone();
-    if let Err(error) =
-        reload_with_retries(&mut session, &binding, name, &mut events, progress).await
+    if let Err(error) = Box::pin(reload_with_retries(
+        session, &binding, name, events, progress, execution,
+    ))
+    .await
     {
-        record_event(
-            &mut events,
-            MessageKind::Error,
-            &error.to_string(),
-            progress,
-        );
+        record_event(events, MessageKind::Error, &error.to_string(), progress);
     }
     Ok(DeploymentExecution {
         binding: session.definition().clone(),
-        events,
+        events: events.clone(),
     })
 }
 
@@ -519,25 +587,32 @@ async fn reload_with_retries(
     name: &CertificateName,
     events: &mut Vec<DeploymentEvent>,
     progress: Option<&Progress>,
+    execution: Option<&aster_acme::solver::ExecutionContext>,
 ) -> CliResult<()> {
     let attempts_allowed = binding.max_retries.saturating_add(1);
     for attempt in 1..=attempts_allowed {
+        if execution.is_some_and(|execution| execution.check().is_err()) {
+            return Err(
+                "issuance was cancelled or its execution deadline expired before reload".into(),
+            );
+        }
         session
             .save_state(DeploymentPhase::Reloading, attempt, None)
             .await?;
-        let result = Box::pin(reload::run(
-            &binding.reload_command,
-            Duration::from_secs(binding.timeout_seconds),
-            &binding.id,
-            attempt,
-            events,
-            progress,
+        let result = Box::pin(wait_reload(
+            reload::run(
+                &binding.reload_command,
+                Duration::from_secs(binding.timeout_seconds),
+                &binding.id,
+                attempt,
+                events,
+                progress,
+            ),
+            execution,
         ))
         .await;
         if result.timed_out {
-            session.save_state(DeploymentPhase::ReloadUncertain, attempt,
-                Some("reload command timed out; process-tree cleanup requested; inspect the service before retry".into())).await?;
-            return Err("reload command timed out; use cert deploy run CERT_NAME -n DEPLOY_NAME after checking the service".into());
+            return Err(reload_interrupted(session, attempt, execution).await?);
         }
         match result.status {
             Ok(status) if status.success() => {
@@ -561,9 +636,7 @@ async fn reload_with_retries(
                     )
                     .await?;
                 if attempt < attempts_allowed {
-                    let shift = u32::from(attempt.saturating_sub(1)).min(2);
-                    tokio::time::sleep(Duration::from_millis(250_u64 << shift).min(MAX_BACKOFF))
-                        .await;
+                    reload_backoff(attempt, false).await;
                 }
             }
             Err(error) => {
@@ -577,7 +650,7 @@ async fn reload_with_retries(
                     )
                     .await?;
                 if attempt < attempts_allowed {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    reload_backoff(attempt, true).await;
                 }
             }
         }
@@ -594,6 +667,60 @@ async fn reload_with_retries(
         progress,
     );
     Ok(())
+}
+
+// A killed reload may already have affected the service. Keep uncertainty
+// durable and require an explicit retry instead of replaying it automatically.
+async fn reload_interrupted(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    attempt: u8,
+    execution: Option<&aster_acme::solver::ExecutionContext>,
+) -> CliResult<Box<dyn std::error::Error>> {
+    let overall_deadline = execution.is_some_and(|execution| {
+        !execution.cancellation.is_cancelled() && execution.deadline <= std::time::Instant::now()
+    });
+    let detail = if overall_deadline {
+        "overall operation deadline expired during reload; process tree was terminated; inspect the service before retry"
+    } else {
+        "reload timed out or was cancelled; process tree was terminated; inspect the service before retry"
+    };
+    session
+        .save_state(
+            DeploymentPhase::ReloadUncertain,
+            attempt,
+            Some(detail.into()),
+        )
+        .await?;
+    Ok(if overall_deadline {
+        "overall operation deadline expired during reload; inspect the service, then use cert deploy run CERT_NAME -n DEPLOY_NAME"
+    } else {
+        "reload timed out or was cancelled; inspect the service, then use cert deploy run CERT_NAME -n DEPLOY_NAME"
+    }
+    .into())
+}
+
+async fn reload_backoff(attempt: u8, process_failed_to_start: bool) {
+    let delay = if process_failed_to_start {
+        Duration::from_millis(250)
+    } else {
+        let shift = u32::from(attempt.saturating_sub(1)).min(2);
+        Duration::from_millis(250_u64 << shift).min(MAX_BACKOFF)
+    };
+    tokio::time::sleep(delay).await;
+}
+
+async fn wait_reload(
+    reload: impl Future<Output = reload::ReloadResult>,
+    execution: Option<&aster_acme::solver::ExecutionContext>,
+) -> reload::ReloadResult {
+    match execution {
+        Some(execution) => tokio::select! {
+            biased;
+            () = execution.cancellation.cancelled() => reload::ReloadResult::interrupted(),
+            result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline), reload) => result.unwrap_or_else(|_| reload::ReloadResult::interrupted()),
+        },
+        None => reload.await,
+    }
 }
 
 fn event(kind: MessageKind, message: impl Into<String>) -> DeploymentEvent {

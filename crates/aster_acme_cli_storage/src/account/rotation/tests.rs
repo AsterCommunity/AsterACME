@@ -174,7 +174,9 @@ async fn empty_success_commits_both_keys_preserving_account_identity_and_status_
 
 #[tokio::test]
 async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover() {
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    // The detached submission retains the lease until the bounded transport
+    // classifies the lost response, then reconciliation can acquire it.
+    let fixture = setup(true, Duration::from_millis(400)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))
         .respond_with(
@@ -760,7 +762,7 @@ async fn stale_rotation_confirmation_never_stages_or_sends_a_request() {
 }
 
 #[tokio::test]
-async fn nonce_failure_before_sending_rollover_clears_only_the_unsent_intent() {
+async fn nonce_failure_before_sending_rollover_keeps_prepared_intent_retryable() {
     let fixture = setup(true, Duration::from_secs(1)).await;
     let directory = fixture.before.directory_url.clone();
     Mock::given(method("GET"))
@@ -797,7 +799,10 @@ async fn nonce_failure_before_sending_rollover_clears_only_the_unsent_intent() {
             .is_err()
     );
     let saved = fixture.store.metadata().await.unwrap().unwrap();
-    assert!(saved.key_rotation.is_none());
+    assert_eq!(
+        saved.key_rotation.as_ref().unwrap().phase,
+        KeyRotationPhase::Prepared
+    );
     assert_eq!(saved.key_thumbprint, fixture.before.key_thumbprint);
     assert_eq!(
         post_count(
@@ -807,3 +812,87 @@ async fn nonce_failure_before_sending_rollover_clears_only_the_unsent_intent() {
         0
     );
 }
+
+#[tokio::test]
+async fn cancellation_while_fetching_nonce_leaves_prepared_rotation_retryable_without_post() {
+    use aster_acme::storage::account::AccountRotationStore as _;
+    let fixture = setup(true, Duration::from_secs(5)).await;
+    let delayed_nonce = AcmeUrl::new(&format!("{}/delayed-nonce", fixture.server.uri())).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Directory {
+            new_nonce: delayed_nonce,
+            new_account: AcmeUrl::new(&format!("{}/unused", fixture.server.uri())).unwrap(),
+            key_change: Some(
+                AcmeUrl::new(&format!("{}/vendor/rollover", fixture.server.uri())).unwrap(),
+            ),
+            new_order: None,
+            renewal_info: None,
+            revoke_cert: None,
+            meta: DirectoryMeta::default(),
+        }))
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path("/delayed-nonce"))
+        .respond_with(
+            ResponseTemplate::new(204)
+                .set_delay(Duration::from_secs(5))
+                .insert_header("Replay-Nonce", "late"),
+        )
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            fixture.before.directory_url.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                request_timeout: Duration::from_millis(400),
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let service = AccountService::new(Arc::new(client), fixture.store.clone());
+    {
+        let rotation = service.rotate_key(fixture.store.as_ref(), None, None);
+        tokio::pin!(rotation);
+        tokio::select! {
+            result = &mut rotation => panic!("rotation unexpectedly completed: {result:?}"),
+            () = async {
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        // HEAD can only start after Prepared was durably saved;
+                        // use wire observation instead of racing a metadata swap.
+                        if fixture.server.received_requests().await.unwrap().iter().any(|request| request.method == "HEAD" && request.url.path() == "/delayed-nonce") { break; }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.unwrap();
+            } => {},
+        }
+    }
+    let saved = fixture.store.metadata().await.unwrap().unwrap();
+    assert_eq!(
+        saved.key_rotation.as_ref().unwrap().phase,
+        KeyRotationPhase::Prepared
+    );
+    let retry = fixture.store.rotation(&saved.directory_url).await.unwrap();
+    assert_eq!(
+        retry
+            .record()
+            .action(aster_acme_core::account::AccountOperation::RotateKey)
+            .unwrap(),
+        aster_acme_core::account::AccountAction::SendKeyChange
+    );
+    assert_eq!(
+        post_count(
+            &fixture.server.received_requests().await.unwrap(),
+            "/vendor/rollover"
+        ),
+        0
+    );
+}
+
+mod cancellation;
