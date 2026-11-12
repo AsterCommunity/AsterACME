@@ -74,11 +74,9 @@ impl HttpPool {
                 }
                 body.extend_from_slice(&chunk);
             }
-            return Ok(body
-                .strip_suffix(b"\r\n")
-                .or_else(|| body.strip_suffix(b"\n"))
-                .unwrap_or(&body)
-                == expected);
+            // RFC 8555 §8.3: ignore trailing whitespace only, preserving
+            // leading/interior bytes so a different key authorization cannot match.
+            return Ok(body.trim_ascii_end() == expected);
         }
         Ok(false)
     }

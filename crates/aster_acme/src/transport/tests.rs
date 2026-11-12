@@ -661,6 +661,11 @@ async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
     for (path_name, body, expected) in [
         ("exact", "token.thumb", true),
         ("newline", "token.thumb\n", true),
+        ("spaces", "token.thumb \t\r\n\n ", true),
+        ("leading", " token.thumb\n", false),
+        ("interior", "token. thumb\n", false),
+        ("non-ascii", "token.thumb\u{a0}", false),
+        ("empty", " \r\n\t", false),
         ("wrong", "other", false),
     ] {
         Mock::given(method("GET"))

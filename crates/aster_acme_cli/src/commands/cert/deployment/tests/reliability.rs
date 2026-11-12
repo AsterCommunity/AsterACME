@@ -33,22 +33,32 @@ async fn wrong_certificate_is_rejected_and_private_pem_is_derived_from_the_verif
         .unwrap();
     assert_eq!(session.artifacts().private_key.as_slice(), expected);
     drop(session);
-    let key = rcgen::KeyPair::generate().unwrap();
-    let wrong = rcgen::CertificateParams::new(vec!["other.example.com".into()])
-        .unwrap()
-        .self_signed(&key)
-        .unwrap();
-    aster_acme_cli_storage::state_file::StateDirectory::open(&source)
-        .unwrap()
-        .atomic_write("fullchain.pem", wrong.pem().as_bytes())
-        .unwrap();
-    assert!(
-        fixture
-            .store
-            .open_deployment(&fixture.name, "checked")
-            .await
-            .is_err()
-    );
+    let der = std::fs::read(source.join("private-key.pk8")).unwrap();
+    let matching_key = rcgen::KeyPair::try_from(der.as_slice()).unwrap();
+    let other_key = rcgen::KeyPair::generate().unwrap();
+    // Isolate SAN and public-key checks: either guard must reject its own
+    // mismatch even if the other guard is removed accidentally.
+    for (domain, key) in [
+        ("other.example.com", &matching_key),
+        ("example.com", &other_key),
+    ] {
+        let wrong = rcgen::CertificateParams::new(vec![domain.into()])
+            .unwrap()
+            .self_signed(key)
+            .unwrap();
+        aster_acme_cli_storage::state_file::StateDirectory::open(&source)
+            .unwrap()
+            .atomic_write("fullchain.pem", wrong.pem().as_bytes())
+            .unwrap();
+        assert!(
+            fixture
+                .store
+                .open_deployment(&fixture.name, "checked")
+                .await
+                .is_err(),
+            "{domain}"
+        );
+    }
 }
 
 #[tokio::test]

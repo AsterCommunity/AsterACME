@@ -22,10 +22,12 @@ impl DirectoryGuard {
     /// Rejects non-directory, reparse or inaccessible objects.
     pub fn pin(&mut self, path: &Path) -> io::Result<()> {
         let mut options = OpenOptions::new();
-        // FILE_READ_ATTRIBUTES, FILE_SHARE_READ|WRITE (no DELETE),
-        // FILE_FLAG_BACKUP_SEMANTICS|OPEN_REPARSE_POINT. No unsafe FFI needed.
+        // FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES makes the open participate
+        // in sharing checks. An attributes-only open does not block rename
+        // even without FILE_SHARE_DELETE (confirmed by native Windows CI).
+        // FILE_SHARE_READ|WRITE excludes DELETE; flags open the directory itself.
         options
-            .access_mode(0x80)
+            .access_mode(0x81)
             .share_mode(0x3)
             .custom_flags(0x0220_0000);
         let file = options.open(path)?;
@@ -68,6 +70,14 @@ mod tests {
         guard.pin(&child).unwrap();
         let moved = temp.path().join("moved");
         assert!(std::fs::rename(&child, &moved).is_err());
+        // A second handle asking for DELETE must also conflict with our guard.
+        let delete = OpenOptions::new()
+            .access_mode(0x0001_0000)
+            .share_mode(0x7)
+            .custom_flags(0x0220_0000)
+            .open(&child);
+        assert!(delete.is_err());
+        assert!(child.is_dir() && !moved.exists());
         drop(guard);
         std::fs::rename(child, moved).unwrap();
     }

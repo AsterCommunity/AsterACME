@@ -49,6 +49,8 @@ impl PublicDirectory {
         )?);
         if created {
             file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+            // Persist child permission metadata before its parent directory entry.
+            file.sync_all()?;
             self.file.sync_all()?;
         }
         Ok(Self {

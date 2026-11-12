@@ -181,7 +181,7 @@ aster-acme cert issue --resume <NAME> --yes --debug
 缺少Location且已记录newOrder意图时，在访问CA directory前由库的check_recovery判断CreationUncertain；不会在公开输出里重复给出无效的“不断resume”建议。Debug无法补回先前已丢失的Location，用户需保留材料并检查后显式决定是否新建独立请求。
 
 
---max-polls适用于issue/renew，默认30、范围1–1000，每次调用/每份证书独立计数，只计算订单轮询轮次（其内可有必要授权查询），不计算directory/nonce/挑战通知/finalize。每轮显示(n/limit)，等待注明持久化期限来自Retry-After还是local polling interval；不缩短CA规定的等待，Retry-After为0仍使用100ms最小延迟防止忙循环。达到上限返回PollLimit并保留全部检查点，下次resume重新计数且不新下单。有效授权不重复查询。HTTP预检使用共享池，最多2秒、8192字节、最多跟随10次HTTP/HTTPS重定向（TLS证书仍校验）；缺失/错误/超时只WARN继续CA，取消/整体deadline仍停止。
+--max-polls适用于issue/renew，默认30、范围1–1000，每次调用/每份证书独立计数，只计算订单轮询轮次（其内可有必要授权查询），不计算directory/nonce/挑战通知/finalize。每轮显示(n/limit)，等待注明持久化期限来自Retry-After还是local polling interval；不缩短CA规定的等待，Retry-After为0仍使用100ms最小延迟防止忙循环。达到上限返回PollLimit并保留全部检查点，下次resume重新计数且不新下单。有效授权不重复查询。HTTP预检使用共享池，固定最多5秒、8192字节、最多跟随10次HTTP/HTTPS重定向（TLS证书仍校验）；缺失/错误/超时只WARN继续CA，取消/整体deadline仍停止。
 
 
 ## 三种独立执行限制

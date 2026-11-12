@@ -24,7 +24,7 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 ## 人工验证与终端
 
-DNS/HTTP本地预检最多2秒且建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制，失败仅警告后继续CA验证。Manual确认线程使用25ms有界终端轮询，观察同一取消/deadline；shutdown结束读取并恢复raw mode，Esc/Ctrl-C映射CLI取消，终端IO失败独立报告。
+DNS本地预检最多2秒，HTTP固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制，失败仅警告后继续CA验证。Manual确认线程使用25ms有界终端轮询，观察同一取消/deadline；shutdown结束读取并恢复raw mode，Esc/Ctrl-C映射CLI取消，终端IO失败独立报告。
 
 ## Webroot文件所有权
 
