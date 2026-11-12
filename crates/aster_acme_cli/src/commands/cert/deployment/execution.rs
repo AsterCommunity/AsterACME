@@ -1,6 +1,4 @@
 //! Cooperative cancellation waits for publication and bounds reload observation.
-use crate::commands::cert::deployment::reload;
-use std::future::Future;
 
 /// Manual deployments have cancellation but no overall issuance deadline.
 /// Both entry points use the same boundary checks and reload interruption path.
@@ -24,7 +22,7 @@ impl Execution {
             Ok(())
         }
     }
-    async fn interrupted(&self) {
+    pub(super) async fn interrupted(&self) {
         tokio::select! {
             () = self.cancellation.cancelled() => {},
             () = async {
@@ -42,19 +40,5 @@ impl From<&aster_acme::solver::ExecutionContext> for Execution {
             cancellation: context.cancellation.clone(),
             deadline: Some(context.deadline),
         }
-    }
-}
-
-pub(super) async fn wait_reload(
-    reload: impl Future<Output = reload::ReloadResult>,
-    execution: Option<&Execution>,
-) -> reload::ReloadResult {
-    match execution {
-        Some(execution) => tokio::select! {
-            biased;
-            () = execution.interrupted() => reload::ReloadResult::interrupted(),
-            result = reload => result,
-        },
-        None => reload.await,
     }
 }

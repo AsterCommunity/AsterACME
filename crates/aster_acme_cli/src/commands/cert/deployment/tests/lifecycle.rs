@@ -288,7 +288,7 @@ async fn manual_add_and_run_propagate_cancellation_to_reload_and_preserve_the_ch
             deadline: None,
         };
         let cli = crate::common::context::CommandContext::new(true);
-        let running = execute_inner(args, &cli, &execution);
+        let running = execute(args, &cli, execution.cancellation.clone());
         tokio::pin!(running);
         tokio::select! {
             result = &mut running => panic!("command exited before cancellation: {}", result.is_ok()),
@@ -303,11 +303,187 @@ async fn manual_add_and_run_propagate_cancellation_to_reload_and_preserve_the_ch
             .await
             .unwrap()
             .unwrap();
-        assert!(matches!(result, CertificateReport::Deployment(_)));
+        assert_cancelled_report(&result);
         assert!(target.join("private-key.pem").exists());
         let saved = fixture.status("manual").await;
         assert_eq!(saved.phase, DeploymentPhase::ReloadUncertain);
         assert_eq!(saved.attempts, 1);
         assert_descendant_exited(&heartbeat).await;
+    }
+}
+
+fn assert_cancelled_report(result: &CertificateReport) {
+    assert_eq!(
+        result.exit_status(),
+        crate::common::session::ExitStatus::Failed
+    );
+    let text =
+        crate::commands::cert::render::render(result, crate::common::session::Format::plain(true))
+            .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["deployments"][0]["phase"], "reload_uncertain");
+    assert!(
+        json["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["deployment"] == "manual")
+    );
+    assert!(text.contains("cancelled"));
+    let CertificateReport::Deployment(report) = result else {
+        panic!("missing deployment report");
+    };
+    assert_eq!(report.entries[0].phase, DeploymentPhase::ReloadUncertain);
+}
+
+#[tokio::test]
+async fn cancellation_after_reload_intent_does_not_invent_a_process_or_erase_prior_state() {
+    for phase in [
+        DeploymentPhase::PublicationComplete,
+        DeploymentPhase::ReloadUncertain,
+        DeploymentPhase::ReloadFailed,
+    ] {
+        let fixture = Fixture::new().await;
+        let heartbeat = fixture.temp.path().join("must-not-start");
+        fixture
+            .add(
+                "intent",
+                child_command(&format!("heartbeat:{}", heartbeat.display())),
+                3,
+            )
+            .await;
+        let mut session = fixture
+            .store
+            .open_deployment(&fixture.name, "intent")
+            .await
+            .unwrap();
+        session.publish().await.unwrap();
+        session
+            .save_state(phase, 2, Some("previous outcome".into()))
+            .await
+            .unwrap();
+        let previous = session.definition().clone();
+        // Deterministically cancel at the exact point reached when a signal
+        // arrives during the awaited intent write, before reload::run is polled.
+        session
+            .save_state(DeploymentPhase::Reloading, 1, None)
+            .await
+            .unwrap();
+        let execution = Execution {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: None,
+        };
+        execution.cancellation.cancel();
+        let mut events = Vec::new();
+        let result = reload::run(
+            &previous.reload_command,
+            Duration::from_secs(30),
+            "intent",
+            1,
+            &mut events,
+            None,
+            Some(&execution),
+        )
+        .await;
+        assert!(!result.started);
+        assert!(!result.timed_out);
+        assert!(
+            settle_reload_attempt(
+                &mut session,
+                &previous,
+                1,
+                result,
+                &mut events,
+                None,
+                Some(&execution)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(session.definition(), &previous);
+        assert!(!heartbeat.with_extension("alive").exists());
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.message.contains("tree was terminated"))
+        );
+        drop(session);
+        assert_eq!(fixture.status("intent").await, previous);
+    }
+}
+
+#[tokio::test]
+async fn explicit_retry_retains_uncertainty_through_publication_and_cancellation() {
+    for original in [DeploymentPhase::ReloadUncertain, DeploymentPhase::Reloading] {
+        for stage in [
+            "before-publication",
+            "publication-failed",
+            "after-publication",
+        ] {
+            let fixture = Fixture::new().await;
+            fixture.add("retry", child_command("success"), 3).await;
+            let mut session = fixture
+                .store
+                .open_deployment(&fixture.name, "retry")
+                .await
+                .unwrap();
+            session
+                .save_state(original, 2, Some("old reload unconfirmed".into()))
+                .await
+                .unwrap();
+            let previous = session.definition().clone();
+            let execution = Execution {
+                cancellation: tokio_util::sync::CancellationToken::new(),
+                deadline: None,
+            };
+            if stage == "before-publication" {
+                execution.cancellation.cancel();
+            }
+            let prepared = prepare_publication(&mut session, Some(&execution)).await;
+            assert_eq!(session.definition(), &previous);
+            if stage == "before-publication" {
+                assert!(prepared.is_err());
+            } else {
+                prepared.unwrap();
+                execution.cancellation.cancel();
+                if stage == "publication-failed" {
+                    publish_and_finish(
+                        &mut session,
+                        &fixture.name,
+                        &mut Vec::new(),
+                        None,
+                        Some(&execution),
+                        async |_| {
+                            Err(aster_acme::issuance::IssueError::InvalidInput(
+                                "injected failure",
+                            ))
+                        },
+                    )
+                    .await
+                    .unwrap();
+                } else {
+                    session.publish().await.unwrap();
+                    assert!(
+                        finish_publication(
+                            &mut session,
+                            &fixture.name,
+                            &mut Vec::new(),
+                            None,
+                            Some(&execution)
+                        )
+                        .await
+                        .is_err()
+                    );
+                }
+            }
+            assert_eq!(session.definition(), &previous);
+            drop(session);
+            let automatic = fixture.automatic(&fixture.store).await;
+            assert_eq!(automatic[0], previous);
+            let explicit = run_one(&fixture.store, &fixture.name, "retry", true, None, None)
+                .await
+                .unwrap();
+            assert_eq!(explicit.binding.phase, DeploymentPhase::Deployed);
+        }
     }
 }

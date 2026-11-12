@@ -20,19 +20,6 @@ pub(super) struct ReloadResult {
     pub(super) started: bool,
 }
 
-impl ReloadResult {
-    pub(super) fn interrupted() -> Self {
-        Self {
-            status: Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "reload interrupted or overall execution deadline exceeded; process tree terminated",
-            )),
-            timed_out: true,
-            started: true,
-        }
-    }
-}
-
 struct ProcessTree(Box<dyn ChildWrapper>);
 impl Drop for ProcessTree {
     fn drop(&mut self) {
@@ -47,7 +34,18 @@ pub(super) async fn run(
     attempt: u8,
     events: &mut Vec<DeploymentEvent>,
     progress: Option<&Progress>,
+    execution: Option<&crate::commands::cert::deployment::execution::Execution>,
 ) -> ReloadResult {
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        return ReloadResult {
+            status: Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "reload cancelled before process startup",
+            )),
+            timed_out: false,
+            started: false,
+        };
+    }
     let mut wrapped = CommandWrap::with_new(&command[0], |process| {
         process
             .args(&command[1..])
@@ -75,7 +73,7 @@ pub(super) async fn run(
     let stderr = child.0.stderr().take();
     let mut out = Captured::default();
     let mut err = Captured::default();
-    let waited = tokio::time::timeout(timeout, async {
+    let observe = tokio::time::timeout(timeout, async {
         let (status, (), ()) = tokio::join!(
             async {
                 // Observe the immediate process, then close inherited pipes by
@@ -88,8 +86,17 @@ pub(super) async fn run(
             capture(stderr, &mut err, id, attempt, "stderr", progress)
         );
         status
-    })
-    .await;
+    });
+    // Cancellation belongs to the process owner. Before spawn it is a known
+    // non-operation; after spawn we stop/reap the tree and retain uncertainty.
+    let waited = match execution {
+        Some(execution) => tokio::select! {
+            biased;
+            () = execution.interrupted() => Err(()),
+            result = observe => result.map_err(|_| ()),
+        },
+        None => observe.await.map_err(|_| ()),
+    };
     // Kill any remaining descendants even when the immediate process exited successfully.
     let _ = child.0.start_kill();
     let (status, timed_out) = if let Ok(status) = waited {

@@ -439,7 +439,9 @@ pub(crate) async fn execute(
     match command {
         CertCommand::Issue(args) => issue(args, cli).await,
         CertCommand::Renew(args) => super::renewal::execute(args, cli).await,
-        CertCommand::Deploy(args) => super::deployment::execute(args, cli).await,
+        CertCommand::Deploy(args) => {
+            super::deployment::execute(args, cli, CancellationToken::new()).await
+        }
         CertCommand::Remove {
             target,
             all,

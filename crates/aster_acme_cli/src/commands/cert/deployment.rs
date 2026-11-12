@@ -26,13 +26,13 @@ mod execution;
 mod interaction;
 mod reload;
 
-use crate::commands::cert::deployment::execution::{Execution, wait_reload};
+use crate::commands::cert::deployment::execution::Execution;
 
 pub(super) async fn execute(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
+    cancellation: tokio_util::sync::CancellationToken,
 ) -> CliResult<super::report::CertificateReport> {
-    let cancellation = tokio_util::sync::CancellationToken::new();
     let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
     // Never drop the command future while publication owns a blocking task.
     // Cancellation is propagated to the shared execution boundaries instead.
@@ -40,9 +40,7 @@ pub(super) async fn execute(
         cancellation,
         deadline: None,
     };
-    let result = execute_inner(args, cli, &execution).await?;
-    execution.check()?;
-    Ok(result)
+    execute_inner(args, cli, &execution).await
 }
 
 async fn execute_inner(
@@ -514,16 +512,7 @@ async fn run_one(
         &format!("Started deployment '{id}' for generation {current_generation}"),
         progress,
     );
-    session
-        .save_state(DeploymentPhase::Publishing, 0, None)
-        .await?;
-    if execution.is_some_and(|execution| execution.check().is_err()) {
-        let error = "deployment cancelled before file publication";
-        session
-            .save_state(DeploymentPhase::Configured, 0, Some(error.into()))
-            .await?;
-        return Err(error.into());
-    }
+    prepare_publication(&mut session, execution).await?;
     Box::pin(publish_and_finish(
         &mut session,
         name,
@@ -533,6 +522,39 @@ async fn run_one(
         aster_acme_cli_storage::issuance::DeploymentSession::publish,
     ))
     .await
+}
+
+fn uncertain(binding: &DeploymentBinding) -> bool {
+    matches!(
+        binding.phase,
+        DeploymentPhase::Reloading | DeploymentPhase::ReloadUncertain
+    )
+}
+
+async fn prepare_publication(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    execution: Option<&Execution>,
+) -> CliResult<()> {
+    // An explicit retry does not itself resolve the previous reload. Keep
+    // its durable barrier throughout publication, cancellation and crashes.
+    if !uncertain(session.definition()) {
+        session
+            .save_state(DeploymentPhase::Publishing, 0, None)
+            .await?;
+    }
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        if !uncertain(session.definition()) {
+            session
+                .save_state(
+                    DeploymentPhase::Configured,
+                    0,
+                    Some("deployment cancelled before file publication".into()),
+                )
+                .await?;
+        }
+        return Err("deployment cancelled before file publication".into());
+    }
+    Ok(())
 }
 
 // Keep publication and its checkpoint in one awaited lifecycle. The injected
@@ -548,9 +570,11 @@ async fn publish_and_finish(
     ) -> Result<(), aster_acme::issuance::IssueError>,
 ) -> CliResult<DeploymentExecution> {
     if let Err(error) = publish(session).await {
-        session
-            .save_state(DeploymentPhase::PublishFailed, 0, Some(error.to_string()))
-            .await?;
+        if !uncertain(session.definition()) {
+            session
+                .save_state(DeploymentPhase::PublishFailed, 0, Some(error.to_string()))
+                .await?;
+        }
         record_event(
             events,
             MessageKind::Warning,
@@ -604,6 +628,13 @@ async fn finish_publication(
             events: events.clone(),
         });
     }
+    // Successful publication is known independently of whether reload starts.
+    // A prior unknown reload remains a barrier until a new definite result.
+    if !uncertain(session.definition()) {
+        session
+            .save_state(DeploymentPhase::PublicationComplete, 0, None)
+            .await?;
+    }
     if execution.is_some_and(|execution| execution.check().is_err()) {
         if matches!(
             session.definition().phase,
@@ -650,26 +681,26 @@ async fn reload_with_retries(
                 "issuance was cancelled or its execution deadline expired before reload".into(),
             );
         }
+        let previous = session.definition().clone();
         session
             .save_state(DeploymentPhase::Reloading, attempt, None)
             .await?;
-        let result = Box::pin(wait_reload(
-            reload::run(
-                &binding.reload_command,
-                Duration::from_secs(binding.timeout_seconds),
-                &binding.id,
-                attempt,
-                events,
-                progress,
-            ),
+        let result = Box::pin(reload::run(
+            &binding.reload_command,
+            Duration::from_secs(binding.timeout_seconds),
+            &binding.id,
+            attempt,
+            events,
+            progress,
             execution,
         ))
         .await;
-        if result.timed_out {
-            return Err(reload_interrupted(session, attempt, execution).await?);
-        }
         let failed_to_start = !result.started;
-        if finish_reload_attempt(session, binding, attempt, result, events, progress).await? {
+        if settle_reload_attempt(
+            session, &previous, attempt, result, events, progress, execution,
+        )
+        .await?
+        {
             return Ok(());
         }
         if attempt < attempts_allowed {
@@ -688,6 +719,39 @@ async fn reload_with_retries(
         progress,
     );
     Ok(())
+}
+
+// A checkpoint records intent, not proof of spawn. Restore the pre-attempt
+// state if cancellation wins before the process owner starts the executable.
+async fn settle_reload_attempt(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    previous: &DeploymentBinding,
+    attempt: u8,
+    result: reload::ReloadResult,
+    events: &mut Vec<DeploymentEvent>,
+    progress: Option<&Progress>,
+    execution: Option<&Execution>,
+) -> CliResult<bool> {
+    if !result.started
+        && (uncertain(previous) || execution.is_some_and(|execution| execution.check().is_err()))
+    {
+        session
+            .save_state(
+                previous.phase,
+                previous.attempts,
+                previous.last_error.clone(),
+            )
+            .await?;
+        return Err(
+            "reload was not started; previous execution state retained; no process was terminated"
+                .into(),
+        );
+    }
+    if result.timed_out {
+        return Err(reload_interrupted(session, attempt, execution).await?);
+    }
+    let binding = session.definition().clone();
+    finish_reload_attempt(session, &binding, attempt, result, events, progress).await
 }
 
 /// Return true only for confirmed success. Errors after spawn are uncertain:

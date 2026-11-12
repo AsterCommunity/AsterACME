@@ -216,7 +216,12 @@ async fn manage_binding(
     else {
         panic!("expected deploy");
     };
-    execute(args, &crate::common::context::CommandContext::new(true)).await
+    execute(
+        args,
+        &crate::common::context::CommandContext::new(true),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
 }
 
 #[tokio::test]
@@ -312,7 +317,7 @@ async fn deploy_entry_uses_shared_selection_for_missing_name_and_lists_explicit_
             panic!("expected deploy");
         };
         let cli = crate::common::context::CommandContext::new(true);
-        let result = execute(args, &cli).await;
+        let result = execute(args, &cli, tokio_util::sync::CancellationToken::new()).await;
         if named {
             let super::super::report::CertificateReport::Deployment(report) = result.unwrap()
             else {
@@ -521,7 +526,7 @@ async fn interactive_selection_child() {
         panic!("expected deploy");
     };
     let cli = crate::common::context::CommandContext::new(false);
-    match execute(args, &cli).await {
+    match execute(args, &cli, tokio_util::sync::CancellationToken::new()).await {
         Ok(report) => {
             let text =
                 super::super::render::render(&report, crate::common::session::Format::plain(false))
@@ -1518,12 +1523,16 @@ async fn bare_show_in_json_requires_certificate_and_missing_deployments_never_gu
         panic!("expected show");
     };
     assert!(
-        execute(args, &crate::common::context::CommandContext::new(true))
-            .await
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Specify a certificate")
+        execute(
+            args,
+            &crate::common::context::CommandContext::new(true),
+            tokio_util::sync::CancellationToken::new()
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("Specify a certificate")
     );
     assert!(manage_binding(&fixture, &["show"]).await.is_err());
     assert!(
