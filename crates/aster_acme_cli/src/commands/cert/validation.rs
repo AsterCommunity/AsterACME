@@ -41,6 +41,10 @@ pub(crate) enum ValidationMethod {
     TlsAlpn,
 }
 impl ValidationMethod {
+    pub(super) const fn automatic(self) -> bool {
+        matches!(self, Self::Webroot | Self::Standalone | Self::TlsAlpn)
+    }
+
     pub(super) const fn kind(self) -> ChallengeKind {
         match self {
             Self::ManualDns => ChallengeKind::Dns01,

@@ -10,6 +10,7 @@
 | CAA/TXT/HTTP建议性预检 | [签发设计](design/issuance.md)、[RFC](rfc-reference.md) | core/caa、aster_acme/precheck、validation/{caa,txt}、CLI cert/precheck | CA身份任选、父域/别名、通配符、DNS失败与空集、建议性预算/取消 |
 | HTTP/webroot/standalone/TLS-ALPN | [签发设计](design/issuance.md)、[CLI](cli-contract.md) | CLI cert/validation/{webroot,listener,standalone,tls_alpn,manual} | 所有权、取消/期限、线程/终端恢复、清理用户替换文件 |
 | 续期/ARI/吊销/删除 | [生命周期](certificate-lifecycle.md) | aster_acme/{renewal,renewal_calculation,revocation}、cli_storage/issuance、CLI cert | 过期边界、时间窗口、旧in_use保留、批量已提交结果 |
+| daemon/周期证书维护 | [生命周期](certificate-lifecycle.md) | aster_acme/maintenance、renewal/refresh、storage/query、cli_storage/issuance、CLI cert/renewal+deployment、commands/daemon | ARI和续期分别筛选、准入白名单、真实跨进程争用、固定材料复用、in_use保护、自动部署/报告 |
 | 存储查询/文件/恢复/部署发布 | [存储设计](design/storage.md) | storage/query、cli_storage/{inventory,issuance,account,state_file,toml_file} | 路径裁剪、持锁重验、故障恢复、平台差异 |
 | deploy/reload | [CLI部署契约](cli-contract.md#证书部署)、[存储设计](design/storage.md) | CLI cert/deployment、cli_storage/issuance/deployment | 完整准备、逐文件替换、进程输出/取消、部分失败 |
 | 参数/交互/配置/输出 | [CLI契约](cli-contract.md)、[运行时](design/runtime.md) | CLI common、commands、config | 非TTY/JSON、缺省值、转义、最终报告与退出码 |

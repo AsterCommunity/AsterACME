@@ -126,7 +126,7 @@
 
 0 表示命令成功执行；cert issue 的 action_required 同样为 0，脚本必须检查 status，不能将其误认为 completed。一般错误为 1，Clap 解析错误沿用 2，交互取消为 130。远端查询失败不标为 verified。
 
-续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。周期 ARI 刷新由后续 daemon 唤醒；本轮只有首次签发查询、显式 verify 时到期刷新和嵌入接口。
+续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。`daemon run-once` 非交互刷新到期ARI建议，并独立执行准入的到期续期及已配置部署，可由cron触发；仅`webroot`、`standalone`、`tls_alpn`自动准入，人工方法报告为跳过。参数、预算、报告和退出码见生命周期的单次维护周期。未提供子命令时由clap拒绝，不启动常驻任务。
 
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
 

@@ -149,6 +149,7 @@ pub(super) enum RenewalResult {
 pub(super) enum SkipReason {
     NoInUseCertificate,
     BatchCancelled,
+    ManualValidation,
 }
 
 impl SkipReason {
@@ -156,6 +157,9 @@ impl SkipReason {
         match self {
             Self::NoInUseCertificate => "no in-use certificate; complete an initial issuance first",
             Self::BatchCancelled => "not attempted after batch cancellation",
+            Self::ManualValidation => {
+                "saved validation method requires user action; automatic renewal skipped"
+            }
         }
     }
 }
@@ -231,7 +235,22 @@ pub(crate) struct RenewalBatch {
 }
 
 impl RenewalBatch {
-    pub(super) fn was_cancelled(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+            cancelled: false,
+        }
+    }
+
+    pub(crate) fn cancelled() -> Self {
+        Self {
+            entries: Vec::new(),
+            cancelled: true,
+        }
+    }
+
+    pub(crate) fn was_cancelled(&self) -> bool {
         self.cancelled
             || self.entries.iter().any(|entry| {
                 matches!(
@@ -253,6 +272,10 @@ impl RenewalBatch {
             (false, 0, 1..) => BatchDisposition::ActionRequired,
             (false, 0, 0) => BatchDisposition::Completed,
         }
+    }
+
+    pub(crate) fn has_failures(&self) -> bool {
+        self.summary().failed > 0
     }
 
     pub(super) fn summary(&self) -> RenewalSummary {

@@ -19,7 +19,7 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 
 ```text
 CLI app / dispatch
-  → commands/<account|cert>/{args,execute,report,render}
+  → commands/<account|cert|daemon>/{args,execute,report,render}
   → AccountService / IssueService / RenewalService / RevocationService
   → core动作 + protocol模型 + transport / signer / store / solver
 ```
@@ -32,7 +32,7 @@ CLI app / dispatch
 
 已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
 
-自动DNS provider与daemon调度尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
+`daemon run-once`先调用库的`maintenance::run_once`刷新到期ARI建议，再由CLI renewal事务独立查询到期证书、执行验证方式准入并复用签发后的自动部署钩子。Storage负责到期查询与元数据租约；账户锁、证书租约和expected_in_use重验阻止并发重复世代。自动DNS provider与常驻调度尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 
 ## 详细设计入口
 

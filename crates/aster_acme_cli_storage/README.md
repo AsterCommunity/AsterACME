@@ -95,7 +95,7 @@ certs/<certificate-name>/
 
 目录扫描仅以 cert.toml/operation.toml 识别托管对象，忽略 .DS_Store、笔记、额外目录和未识别链接；已识别托管文件仍严格检查类型、身份、schema、权限和尺寸。in_use 是唯一显式托管的相对 symlink，只可指向同级且身份匹配的世代；不覆盖用户同名普通文件或指向外部的链接。版本名为 UTC 秒级创建时间 + 8 位随机后缀，完整 operation ID 留在 journal，不保留旧目录布局读取。
 
-续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI提供计划、显式刷新及由cron调用的`daemon run-once`；吊销保留本地文件，与订单状态独立。
 
 cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容，根目录 .locks 保持稳定锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
 
@@ -103,7 +103,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；常驻调度未实现，`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn证书并执行已配置部署；manual验证会跳过。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 账户元数据必需保存 key_algorithm；AccountKeyStore 使用 KeyAccess::Existing/Create(Option<KeyAlgorithm>)，真实 PKCS#8、指纹及保存类型必须一致。轮换缺省继承原类型；暂存钥存在时恢复其实际类型，显式不同选择拒绝。只有确认换钥提交才原子更新主钥和算法字段，常规 save 不能修改算法；无旧 schema 默认值或迁移。
 

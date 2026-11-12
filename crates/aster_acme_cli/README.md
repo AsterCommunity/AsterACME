@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；自动 DNS、自动续期调度和 daemon 尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn证书并执行已配置部署；manual验证会跳过。自动DNS provider和常驻服务尚未实现。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -210,7 +210,7 @@ aster-acme cert show example.com --operation <ID> --verify
 
 手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多5秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
---request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone/tls_alpn，前台续期、吊销、绑定多目标部署与有界服务 reload 已实现；自动 DNS 和后台 daemon 未实现。
+--request-timeout 是单次 HTTP 限制，--operation-timeout 是每张证书每个执行阶段的预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。`daemon run-once`由cron触发ARI刷新和到期自动续期；自动方式限webroot/standalone/tls_alpn，manual验证会显式跳过，续期完成后运行已配置部署。自动 DNS 和常驻服务尚未实现。
 
 每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
 
@@ -233,7 +233,7 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 
 cert issue/renew使用通用-y/--yes确认操作，人工新材料先返回待办，恢复再确认已发布；不猜输入/目标、不接受条款。DNS预检是建议，不再暴露跳过参数。公共存储/HTTP参数按命令作用域组合。
 
-续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI提供计划、显式刷新及由cron调用的`daemon run-once`；吊销保留本地文件，与订单状态独立。
 
 cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容，根目录 .locks 保持稳定锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
 
@@ -241,7 +241,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；常驻调度未实现，`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn证书并执行已配置部署；manual验证会跳过。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 

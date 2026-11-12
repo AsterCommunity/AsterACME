@@ -226,19 +226,14 @@ pub(super) fn list(records: &[IssueRecord], format: Format) -> CliResult<String>
     }
     let mut lines =
         vec!["Local certificates (CA order status from saved observations; times in UTC):".into()];
-    lines.extend(crate::common::table::align(
+    lines.extend(crate::common::table::listing(
         &rows,
-        Some(&|row, column, cell| {
-            let style = match (row, column) {
-                (0, _) => Style::BoldCyan,
-                (_, 4) => local_status_style(&records[row - 1], now),
-                (_, 5) => {
-                    order_status_style(records[row - 1].order.as_ref().map(|order| &order.status))
-                }
-                _ => Style::Plain,
-            };
-            output::styled(cell, style, color)
-        }),
+        color,
+        |row, column| match column {
+            4 => local_status_style(&records[row], now),
+            5 => order_status_style(records[row].order.as_ref().map(|order| &order.status)),
+            _ => Style::Plain,
+        },
     ));
     lines.push(output::tips(
         "Use cert show <NAME> for request IDs, CA details and saved validation requirements.",
@@ -917,17 +912,14 @@ fn deployment_table(
         "Local deployments for {} (saved execution status):",
         output::safe(name)
     )];
-    lines.extend(crate::common::table::align(
+    lines.extend(crate::common::table::listing(
         &rows,
-        Some(&|row, column, cell| {
-            let style = match (row, column) {
-                (0, _) => Style::BoldCyan,
-                (_, 2) if current_error(events, &entries[row - 1].id).is_some() => Style::Red,
-                (_, 2) => deployment_phase(entries[row - 1].phase).1,
-                _ => Style::Plain,
-            };
-            output::styled(cell, style, format.color)
-        }),
+        format.color,
+        |row, column| match column {
+            2 if current_error(events, &entries[row].id).is_some() => Style::Red,
+            2 => deployment_phase(entries[row].phase).1,
+            _ => Style::Plain,
+        },
     ));
     lines.push(output::tips(
         "Use cert deploy show CERT_NAME DEPLOY_NAME for configuration and saved execution details.",
@@ -1116,7 +1108,7 @@ fn batch_summary(summary: &RenewalSummary, total: usize) -> String {
     }
 }
 
-pub(super) fn batch(
+pub(crate) fn batch(
     report: &RenewalBatch,
     format: Format,
     data_dir: &std::path::Path,
@@ -1149,16 +1141,13 @@ pub(super) fn batch(
         BatchDisposition::PartialFailure => output::MessageKind::Error,
     };
     let mut lines = vec![format!("{} Batch renewal results:", kind.badge(color))];
-    lines.extend(crate::common::table::align(
+    lines.extend(crate::common::table::listing(
         &rows,
-        Some(&|row, column, cell| {
-            let style = match (row, column) {
-                (0, _) => Style::BoldCyan,
-                (_, 1) => batch_status_style(&report.entries[row - 1].result),
-                _ => Style::Plain,
-            };
-            output::styled(cell, style, color)
-        }),
+        color,
+        |row, column| match column {
+            1 => batch_status_style(&report.entries[row].result),
+            _ => Style::Plain,
+        },
     ));
     lines.push(String::new());
     lines.push(format!(

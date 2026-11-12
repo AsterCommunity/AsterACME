@@ -27,13 +27,13 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers and background scheduling are not implemented.
+**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers and resident scheduling are not implemented.
 
 ## Capabilities
 
 - Named CA accounts: registration, recovery, contacts, key rotation, and deactivation.
 - Single-domain, multi-SAN, and wildcard certificates; independent account and certificate key choices.
-- Saved issuance recovery, ARI renewal plans, foreground single/batch renewal, and revocation.
+- Saved issuance recovery, ARI refresh, foreground single/batch renewal, and cron-driven automatic renewal for supported validation methods.
 - Multiple deployment targets per certificate, automatic deployment after renewal, and bounded reload commands with stdout/stderr output.
 - Interactive input, structured JSON, offline inspection, and optional debug diagnostics.
 
@@ -69,7 +69,9 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`renew` runs when due; add `--now` to renew early. Scheduling these commands remains the caller's responsibility. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
+`daemon run-once` refreshes due ARI suggestions, renews due certificates using `webroot`, `standalone`, or `tls_alpn`, and runs configured deployments. Manual validation methods are skipped. Use cron to invoke it periodically.
+
+`renew` runs when due; add `--now` to renew early. Use `daemon run-once` with cron for unattended renewals using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
 
 ## Deploy
 

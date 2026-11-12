@@ -1,6 +1,6 @@
 # 证书续期计划与吊销
 
-已实现 RFC 9773 的 RenewalInfo、持久化计划、cert renew 单次续期，以及 RFC 8555 §7.6 的账户签名吊销。尚不安装系统任务或启动常驻调度；后续由 `aster-acme daemon` 统一消费这些接口和期限。
+已实现 RFC 9773 的 RenewalInfo、持久化计划、cert renew 单次续期，以及 RFC 8555 §7.6 的账户签名吊销。`daemon run-once` 提供一次 ARI 刷新、符合准入条件的自动续期和已配置部署周期，由外部 cron 触发；不安装系统任务或启动常驻调度。
 
 ## 托管证书与签发版本
 
@@ -24,7 +24,33 @@ cert list 默认每份托管证书一行，优先当前版本；没有 in_use �
 
 `RenewalPlan` 保存在每个版本的 `operation.toml` 内，包含证书标识、notBefore/notAfter、renew_at、来源 ari/fallback、建议窗口、说明 URL、最近查询及下次查询时间、失败标记。它不包含私钥。`cert issue` 完成后在产物路径下显示 Next renewal 和来源；`cert list` 的 NEXT RENEWAL 列与 `cert show` 使用相同计划。吊销后显示 disabled，未确认时显示 suspended，不把旧计划当成下一次续期。`cert list/show` 默认离线；`cert show --verify` 成功查询订单后刷新到期的 ARI 观察，未到期不额外查询。
 
-`RenewalService::refresh` 接受 `dyn IssueSession` 和调用方的 `ExecutionContext`。这提供嵌入式调度入口，不启动全局任务。CLI 退出后不会自行唤醒；后续 daemon 应按持久化 `next_check_at` 重新查询，并独立按 `renew_at`、失败退避和验证方案调度真正的续期。cert renew 按发现的 renewalInfo 支持情况选择是否提交 newOrder.replaces。
+`RenewalService::refresh` 接受 `dyn IssueSession` 和调用方的 `ExecutionContext`。这提供嵌入式调度入口，不启动全局任务。CLI 退出后不会自行唤醒；`maintenance::run_once` 按持久化 `next_check_at` 重新查询。自动续期复用现有 `cert renew` 事务；真正的签发与部署仍由既有 workflow 和 deployment hook 执行。cert renew 按发现的 renewalInfo 支持情况选择是否提交 newOrder.replaces。
+
+## 单次维护周期
+
+```sh
+aster-acme daemon run-once
+aster-acme daemon run-once --data-dir /srv/aster-acme --json
+aster-acme daemon run-once --request-timeout 30 --operation-timeout 600 --poll-interval 5 --max-polls 30
+```
+
+ARI刷新只扫描当前 in_use、已完成、未吊销、未过期且有ARI标识且`next_check_at`已到期的证书；这一阶段不需要账户密钥。随后自动续期独立筛选当前 in_use、已完成、未吊销且`renew_at`已到期的证书，不要求该轮先完成ARI刷新。两个阶段分别调用各自期限，不注册账户、不创建订单直到续期事务通过准入检查。续期成功后复用已有自动部署/reload hook。
+
+可嵌入入口 `aster_acme::maintenance::run_once(store, pool, options, cancellation, observer)` 只负责批次、租约与结果；ARI资格判断、目录缓存与发现、延期重查和更新归`renewal::refresh::RefreshCycle`，实际GET及持久化复用`RenewalService`的同一实现。未来常驻循环可复用同一个维护函数。类型化 `IssueQuery::ari_due_at` 在存储侧筛选；每项调用 `IssueStore::open_observation` 获取与前台执行共用的证书锁，锁内重验选用世代、到期与吊销状态。正常元数据会话不加载固定key/CSR，执行会话 `open` 仍做原有材料验证；Windows视图恢复仍遵循存储契约。查询快照过期则跳过，重叠进程不会基于旧快照重复更新。锁失败记录为该项失败，不跳过为成功。
+
+同一轮共用HTTP池，每个CA成功发现的directory复用一次。发现失败或无 `renewalInfo` 时保留原续期计划，将下一次发现延后六小时，避免频繁cron请求；这不冒充一次成功ARI GET，`last_checked_at`保持不变。实际ARI查询复用 `RenewalService` 的持久化意图、窗口、Retry-After和重试策略。缺少/非法Retry-After仍可应用有效窗口，结果为 `retry scheduled`。全部时间写回对应版本的现有计划，不增加独立任务状态文件。查询前保存一次重试意图；失败或响应没有新信息时不重复写journal，只有计划变化才保存响应结果。成功路径直接返回已保存记录，失败路径仍在锁内重读以报告真实持久化状态。
+
+参数覆盖config.toml的`[config].request_timeout`（单请求，默认30秒）、`operation_timeout`（每张证书每个ARI/续期阶段，默认600秒）、`poll_interval`（默认5秒）和`max_polls`（默认30轮）；缺省配置回退默认，不设置整批超时。预算包含发现、锁等待和查询，但不强行丢弃已开始的存储IO；存储租约等待自身有界，超时/取消后必须等写入完成才释放租约。单项失败继续其他证书；Ctrl-C停止后续项，保留已完成和本项持久化结果。人类表格或一次JSON报告携带ARI和续期结果。成功/空库存/跳过人工验证退出0，查询失败或续期失败退出1，用户取消退出130。
+
+例如每15分钟检查一次（路径由用户替换，通过`crontab -e`添加，程序不安装crontab）：
+
+```cron
+*/15 * * * * /usr/local/bin/aster-acme daemon run-once --data-dir /srv/aster-acme
+```
+
+cron触发频率只决定何时检查保存的期限，不会绕过CA的Retry-After。
+
+`daemon help`、`daemon help run-once`与`--help`由clap原生生成，包含cron示例。维护表格与证书/部署/批量续期列表共用`common::table::listing`，统一表头与状态样式；同一ARI窗口保留已有`renew_at`，成功刷新不意味着续期时间必然改变。
 
 ## 吊销
 
@@ -130,3 +156,10 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 批量显示收敛为一次结果表，不再展示重复本地计划表和逐项Checking renewal日志。仅有实际续期/恢复工作时先简报数量，执行时保持原进度；全部未到期时用“certificates checked; none due for renewal.”总结，混合结果只列非零计数，JSON仍完整。库存和执行结果按托管名称统一排序。
 
 失败申请清理：`cert remove NAME --failed`只选择未签发、非in_use且存在不可恢复失败证据的generation。不能用“非resume候选”直接授权删除：newOrder响应丢失、408/429/5xx仍保留，已valid但尚未下载的订单也保留。storage在删除租约内用同一规则重新筛选，并沿用未知用户文件保护。
+
+
+### 自动续期准入
+
+daemon 只对当前 `in_use`、已完成、未过期、续期时间已到且吊销状态为 `NotRequested` 的证书执行自动续期。验证实现白名单是 `webroot`、`standalone` 和 `tls_alpn`；`manual_dns`、`manual_http` 以及未知实现返回 `manual validation` 跳过，不创建续期世代。未来接入自动 DNS 时，只需在验证实现准入处增加实现，不复制续期事务。
+
+续期调用已有 `cert renew` 事务和签发后自动部署流程。账户锁、证书租约、`expected_in_use` 重验、固定 key/CSR、旧世代保护和部署 generation 检查全部复用；两个 daemon 或 daemon 与前台 renew 同时运行时，只有持锁成功的一方创建续期世代，另一方复用或报告锁竞争。

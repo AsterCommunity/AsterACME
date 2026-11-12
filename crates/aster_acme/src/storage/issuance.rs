@@ -71,6 +71,17 @@ pub trait IssueStore: Send + Sync {
         name: &CertificateName,
         operation_id: &str,
     ) -> Result<Box<dyn IssueSession>, IssueError>;
+    /// Open a locked metadata observation session without loading signing/key material.
+    /// Execution sessions still use `open` and validate their fixed key/CSR artifacts.
+    /// # Errors
+    /// Rejects missing identity, inconsistent catalogs and unavailable leases.
+    /// Implementations must bound lease acquisition without abandoning started IO.
+    async fn open_observation(
+        &self,
+        name: &CertificateName,
+        operation_id: &str,
+    ) -> Result<Box<dyn IssueSession>, IssueError>;
+
     /// Query local snapshots only; never load private keys or contact a CA.
     /// Implementations should apply the filters before materializing unrelated records.
     ///

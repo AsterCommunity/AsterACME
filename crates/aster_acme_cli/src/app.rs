@@ -25,6 +25,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: crate::commands::cert::args::CertCommand,
     },
+    /// Run noninteractive certificate maintenance for an external scheduler.
+    Daemon {
+        #[command(subcommand)]
+        command: crate::commands::daemon::DaemonCommand,
+    },
     /// Show version, revision, target, profile, enabled features and build time.
     Version {
         /// Structured JSON build metadata.
@@ -45,6 +50,9 @@ impl Args {
         match &self.command {
             Command::Cert { command } => command.json(),
             Command::Version { json } => *json,
+            Command::Daemon { command } => match command {
+                crate::commands::daemon::DaemonCommand::RunOnce(args) => args.local.json,
+            },
             Command::Account { command } => command.json(),
         }
     }

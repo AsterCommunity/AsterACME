@@ -1,4 +1,4 @@
-//! Pure renewal-information scheduling decisions; timestamps are Unix seconds.
+//! Pure renewal-information scheduling decisions; clocks and I/O remain caller-owned.
 
 /// Whether a caller should perform an ARI query, independently of certificate renewal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,8 +12,13 @@ pub enum RenewalAction {
 }
 
 /// Decide from persisted observations without performing I/O or consulting a clock.
+/// Both times must use the same ordered representation; callers retain their precision.
 #[must_use]
-pub fn renewal_action(available: bool, next_check: Option<i64>, now: i64) -> RenewalAction {
+pub fn renewal_action<T: Ord + Copy>(
+    available: bool,
+    next_check: Option<T>,
+    now: T,
+) -> RenewalAction {
     match (available, next_check) {
         (false, _) => RenewalAction::Unavailable,
         (true, Some(at)) if at > now => RenewalAction::Wait,

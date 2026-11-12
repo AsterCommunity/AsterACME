@@ -58,6 +58,7 @@ pub(super) async fn execute(
                 store: &store,
                 run: &args.run,
                 immediate: args.now,
+                automatic: false,
                 cancellation: Some(&cancellation),
                 cli,
             };
@@ -95,6 +96,7 @@ pub(super) async fn execute(
                 store: &store,
                 run: &args.run,
                 immediate: args.now,
+                automatic: false,
                 cancellation: None,
                 cli,
             };
@@ -107,16 +109,49 @@ pub(super) async fn execute(
     }
 }
 
+/// Run unattended renewals for daemon-owned candidates. Method eligibility is
+/// checked before the existing transaction, which still revalidates under lease.
+pub(crate) async fn execute_automatic(
+    settings: CliSettings,
+    store: &CliIssueStore,
+    run: &RunArgs,
+    cli: &crate::common::context::CommandContext,
+    cancellation: &CancellationToken,
+) -> CliResult<RenewalBatch> {
+    let records = store
+        .query(IssueQuery {
+            in_use: Some(true),
+            renewal_due_at: Some(time::OffsetDateTime::now_utc()),
+            ..IssueQuery::default()
+        })
+        .await?;
+    let candidates = records;
+    let executor = Transaction {
+        settings: &settings,
+        store,
+        run,
+        immediate: false,
+        automatic: true,
+        cancellation: Some(cancellation),
+        cli,
+    };
+    Ok(run_batch(candidates, &executor, cancellation).await)
+}
+
 #[async_trait(?Send)]
 trait RenewalExecutor {
     async fn run(&self, record: &IssueRecord) -> CliResult<CertificateResult>;
+    fn skip_reason(&self, _record: &IssueRecord) -> Option<SkipReason> {
+        None
+    }
 }
 
-struct Transaction<'a> {
+pub(crate) struct Transaction<'a> {
     settings: &'a CliSettings,
     store: &'a CliIssueStore,
     run: &'a RunArgs,
     immediate: bool,
+    automatic: bool,
     cancellation: Option<&'a CancellationToken>,
     cli: &'a crate::common::context::CommandContext,
 }
@@ -148,6 +183,16 @@ impl RenewalExecutor for Transaction<'_> {
         )
         .await
     }
+
+    fn skip_reason(&self, record: &IssueRecord) -> Option<SkipReason> {
+        if !self.automatic {
+            return None;
+        }
+        match super::validation::ValidationMethod::from_record(record) {
+            Ok(method) if method.automatic() => None,
+            Ok(_) | Err(_) => Some(SkipReason::ManualValidation),
+        }
+    }
 }
 
 // Input is an inventory snapshot of stable managed identities, not all historical
@@ -163,6 +208,8 @@ async fn run_batch(
             RenewalResult::Skipped(SkipReason::BatchCancelled)
         } else if !record.is_in_use {
             RenewalResult::Skipped(SkipReason::NoInUseCertificate)
+        } else if let Some(reason) = executor.skip_reason(&record) {
+            RenewalResult::Skipped(reason)
         } else {
             // Executor owns cancellation through durable issuance completion and
             // deployment reporting. Do not drop committed work at this outer boundary.

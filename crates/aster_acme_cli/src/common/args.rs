@@ -15,7 +15,7 @@ pub(crate) struct LocalArgs {
 
 #[derive(clap::Args, Default, Clone)]
 pub(crate) struct HttpArgs {
-    /// HTTP User-Agent override; an explicit value during registration is saved for this account.
+    /// HTTP User-Agent override for this invocation; registration may save an explicit value.
     #[arg(long)]
     pub(crate) user_agent: Option<String>,
     /// Single HTTP request timeout in seconds (1–300); config `request_timeout`, default 30.

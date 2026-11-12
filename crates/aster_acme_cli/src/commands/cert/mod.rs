@@ -8,7 +8,7 @@ mod precheck;
 mod progress;
 mod removal;
 pub(crate) mod render;
-mod renewal;
+pub(crate) mod renewal;
 pub(crate) mod report;
 mod selection;
 mod similar;

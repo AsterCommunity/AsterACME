@@ -193,3 +193,15 @@ Webroot清理用实际移入私有目录的对象核验身份，替换文件保�
 当前最终验证：cargo test --workspace --locked -- --test-threads=2，共529项通过、4个专用fixture默认忽略；严格all-targets Clippy、Windows GNU all-targets交叉检查、rustdoc与fmt通过。Python3.13关闭UTF-8模式并把默认编码警告升级为错误时，10项脚本测试通过；文档25页本地链接及import/workspace依赖/TLS/features策略通过。未对真实CA、容器、服务或Windows原生环境验收，未提交/推送或声称CodeRabbit重新通过。
 
 根AGENTS只保留入口与硬约束，具体契约/架构/设计/测试分开；文档发现入口见[文档索引](README.md)与[任务路由](task-routing.md)。新增本地链接校验接入CI，已有带日期验收记录保持历史证据身份，不作为当前契约来源。
+
+## 单次ARI维护周期（2026-11-13）
+
+基于cf0f968之后本轮未提交工作树，新增15项真实存储/loopback测试和4项CLI测试。覆盖到期精确边界、存储侧筛选、未来检查与过期/历史/吊销排除、同CA发现复用、无签名GET、账户离线和证书key/CSR不可用时的元数据更新；相同窗口不重抽、原产物/世代不变、重复运行无请求、缺失Retry-After、非法响应、发现失败与不支持ARI的重查计划。并发及陈旧快照分别验证延后检查、吊销和选用世代变更；锁争用/逐项超时继续其他证书，中途取消保留持久化意图，项间取消保留已完成结果。CLI测试检查显式--run-once、参数边界/配置覆盖/缺省回退、退出码和单份JSON。
+
+`cargo test --workspace --all-features --locked -- --test-threads=2`共619项通过、5项专用用例按原配置忽略；严格原生和Windows GNU目标all-targets/all-features Clippy通过。独立预检feature矩阵、rustdoc、fmt、文档/import/dependency/TLS策略及11项Python脚本测试通过。实际CLI临时空库存JSON输出和帮助页通过。以上为macOS本机与loopback证据，Windows仅交叉检查，未运行公网CA、原生Windows或实际cron；未安装定时任务。
+
+本轮服务边界集中与命令调整：维护层只调度，ARI发现/缓存/延期归`renewal::refresh::RefreshCycle`，GET/重试/保存复用`RenewalService`。另增4项服务边界测试、2项CLI帮助/样式测试及1项共享表格测试：验证成功只读一次、失败不重复写、相同建议无新信息只保存意图、保存失败的副作用顺序，以及发现期间过期不再GET。`daemon run-once`、原生`daemon help [run-once]`与cron帮助已实际执行，证书/部署/批量续期/维护共用表格样式。
+
+自动续期阶段新增准入：storage以类型化查询筛选当前、到期、完成且未吊销证书；CLI只准入webroot/standalone/tls_alpn，并将manual DNS/HTTP作为显式跳过。复用现有renew事务和签发后的部署hook。测试包含五种验证实现的准入矩阵和storage续期精确边界。跨进程测试启动两个独立Rust test子进程模拟daemon候选选择与前台renew，共用同一根目录和账户/证书外置锁；断言仅产生一个固定续期operation、两方拿到相同ID且旧in_use保留。此测试验证存储事务并发契约，不代表两个完整公网签发流程的端到端CA验收。
+
+最终全仓单元测试626项通过、5项按原配置忽略；本轮调整后的续期/core相关22项及过期发现用例复跑通过。全仓命令末尾doctest首次出现依赖加载E0463；停止交错构建后串行`cargo test --workspace --all-features --doc --locked`通过。严格原生/Windows GNU all-targets/all-features Clippy、rustdoc、fmt、文档/依赖/import/TLS策略及11项Python测试通过；没有公网CA、原生Windows或实际cron验收。

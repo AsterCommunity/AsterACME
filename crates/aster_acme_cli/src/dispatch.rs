@@ -1,7 +1,7 @@
 //! Root command execution returns one typed report; the session alone writes the final document.
 use crate::{
     app::{Args, Command},
-    commands::{account, cert},
+    commands::{account, cert, daemon},
     common::{
         context::CommandContext,
         error::CliResult,
@@ -13,6 +13,7 @@ pub(crate) enum CommandReport {
     // Account snapshots dominate the other command reports; box once at this boundary.
     Account(Box<account::report::AccountReport>),
     Certificate(cert::report::CertificateReport),
+    Maintenance(daemon::DaemonReport),
     Version,
 }
 impl CommandReport {
@@ -20,6 +21,7 @@ impl CommandReport {
         match self {
             Self::Account(report) => account::render::render(report, format),
             Self::Certificate(report) => cert::render::render(report, format),
+            Self::Maintenance(report) => daemon::render::render(report, format),
             Self::Version => crate::commands::build_info::render(format.json),
         }
     }
@@ -28,6 +30,7 @@ impl CommandReport {
             Self::Account(report) if report.has_failures() => ExitStatus::Failed,
             Self::Account(_) | Self::Version => ExitStatus::Success,
             Self::Certificate(report) => report.exit_status(),
+            Self::Maintenance(report) => daemon::exit_status(report),
         }
     }
 }
@@ -41,6 +44,9 @@ pub(crate) async fn execute(args: Args, cli: &CommandContext) -> CliResult<Comma
             account::execute::execute(command, cli).await?,
         ))),
         Command::Version { .. } => Ok(CommandReport::Version),
+        Command::Daemon { command } => Ok(CommandReport::Maintenance(
+            daemon::execute(command, cli).await?,
+        )),
     }
 }
 

@@ -18,6 +18,7 @@ pub mod crypto;
 mod http_client;
 pub mod identifier;
 pub mod issuance;
+pub mod maintenance;
 #[cfg(feature = "precheck")]
 pub mod precheck;
 pub mod renewal;

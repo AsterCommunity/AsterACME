@@ -519,3 +519,37 @@ async fn webroot_rejects_replaced_directory_components_and_removes_only_inside_p
             .is_file()
     );
 }
+
+#[test]
+fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renewal() {
+    for (method, eligible) in [
+        (ValidationMethod::Webroot, true),
+        (ValidationMethod::Standalone, true),
+        (ValidationMethod::TlsAlpn, true),
+        (ValidationMethod::ManualDns, false),
+        (ValidationMethod::ManualHttp, false),
+    ] {
+        assert_eq!(method.automatic(), eligible, "{}", method.id());
+    }
+    let mut record: aster_acme::issuance::IssueRecord = serde_json::from_value(serde_json::json!({
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+        "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
+        "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"completed","creation_submitted":true,"authorizations":[],"finalize_submitted":"submitted"
+    })).unwrap();
+    for method in [
+        ValidationMethod::Webroot,
+        ValidationMethod::Standalone,
+        ValidationMethod::TlsAlpn,
+        ValidationMethod::ManualDns,
+        ValidationMethod::ManualHttp,
+    ] {
+        record.solver_id = method.id().into();
+        record.challenge = method.kind();
+        assert_eq!(
+            ValidationMethod::from_record(&record).unwrap().automatic(),
+            method.automatic()
+        );
+    }
+    record.solver_id = "future-dns-provider".into();
+    assert!(ValidationMethod::from_record(&record).is_err());
+}

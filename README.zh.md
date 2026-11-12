@@ -27,13 +27,13 @@
 
 AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断恢复流程，管理证书生命周期。可以交互使用 CLI、编写脚本，也可以将 Rust 服务嵌入应用，注入自己的存储、签名器和验证适配器。
 
-**尚未正式发布：** ACME 包暂未发布，本地格式与 Rust API 仍可能变化。自动 DNS provider 和后台调度尚未实现。
+**尚未正式发布：** ACME 包暂未发布，本地格式与 Rust API 仍可能变化。自动 DNS provider 和常驻调度尚未实现。
 
 ## 能力
 
 - 具名 CA 账户：注册、找回、联系人更新、换钥和停用。
 - 单域名、多 SAN 与通配符证书，账户与证书可独立选择密钥类型。
-- 保存申请后恢复、ARI 续期计划、前台单次／批量续期，以及证书吊销。
+- 保存申请后恢复、ARI 刷新、前台单次／批量续期，以及 cron 触发的支持验证方式自动续期。
 - 每张证书绑定多个部署目标，续期后自动部署，reload 有界执行并展示 stdout/stderr。
 - 交互式输入、结构化 JSON、离线查看及可选 debug 诊断。
 
@@ -69,7 +69,9 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`renew` 默认到期才执行，`--now` 可提前续期；定时调用由使用者安排。其他验证方式和脚本确认规则见 [CLI 契约](docs/cli-contract.md)。
+`daemon run-once` 刷新到期的 ARI 建议，并自动续期使用`webroot`、`standalone`或`tls_alpn`的到期证书，随后执行已配置部署。人工验证方式会跳过，可由 cron 周期调用。
+
+`renew` 默认到期才执行，`--now` 可提前续期。无人值守续期可由 cron 定期调用 `daemon run-once`，仅支持无需人工确认的验证方式。其他验证方式和脚本确认规则见 [CLI 契约](docs/cli-contract.md)。
 
 ## 部署
 

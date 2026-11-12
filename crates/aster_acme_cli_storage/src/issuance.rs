@@ -379,6 +379,39 @@ impl IssueStore for CliIssueStore {
         name: &CertificateName,
         operation_id: &str,
     ) -> Result<Box<dyn IssueSession>, IssueError> {
+        self.open_session(name, operation_id, OpenMode::Execution)
+            .await
+    }
+
+    async fn open_observation(
+        &self,
+        name: &CertificateName,
+        operation_id: &str,
+    ) -> Result<Box<dyn IssueSession>, IssueError> {
+        self.open_session(name, operation_id, OpenMode::Observation)
+            .await
+    }
+
+    async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
+        let root = self.root.join("certs");
+        tokio::task::spawn_blocking(move || query::read(&root, &query))
+            .await
+            .map_err(|_| failure("issuance query worker failed"))?
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OpenMode {
+    Execution,
+    Observation,
+}
+impl CliIssueStore {
+    async fn open_session(
+        &self,
+        name: &CertificateName,
+        operation_id: &str,
+        mode: OpenMode,
+    ) -> Result<Box<dyn IssueSession>, IssueError> {
         if !valid_operation_id(operation_id) {
             return Err(failure("invalid operation ID"));
         }
@@ -407,8 +440,12 @@ impl IssueStore for CliIssueStore {
             {
                 return Err(failure("issuance path and identity mismatch"));
             }
-            check_material(&generation, &record)?;
-            if matches!(record.phase, IssuancePhase::Completed) {
+            if matches!(mode, OpenMode::Execution) {
+                check_material(&generation, &record)?;
+            }
+            if matches!(mode, OpenMode::Execution)
+                && matches!(record.phase, IssuancePhase::Completed)
+            {
                 let chain = read_private(&generation.join("fullchain.pem"), 1024 * 1024)
                     .map_err(|_| failure("completed certificate artifact is missing or unsafe"))?;
                 let key = zeroize::Zeroizing::new(
@@ -427,13 +464,6 @@ impl IssueStore for CliIssueStore {
         })
         .await
         .map_err(|_| failure("issuance open worker failed"))?
-    }
-
-    async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
-        let root = self.root.join("certs");
-        tokio::task::spawn_blocking(move || query::read(&root, &query))
-            .await
-            .map_err(|_| failure("issuance query worker failed"))?
     }
 }
 
