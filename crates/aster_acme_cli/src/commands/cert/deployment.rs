@@ -14,7 +14,6 @@ use aster_acme_cli_storage::issuance::{
     DeploymentPhase, DeploymentTarget,
 };
 use std::{
-    future::Future,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -23,8 +22,11 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_RETRIES: u8 = 3;
 const MAX_BACKOFF: Duration = Duration::from_secs(4);
 
+mod execution;
 mod interaction;
 mod reload;
+
+use crate::commands::cert::deployment::execution::{Execution, wait_reload};
 
 pub(super) async fn execute(
     args: DeployArgs,
@@ -32,16 +34,21 @@ pub(super) async fn execute(
 ) -> CliResult<super::report::CertificateReport> {
     let cancellation = tokio_util::sync::CancellationToken::new();
     let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
-    tokio::select! {
-        biased;
-        () = cancellation.cancelled() => Err(Box::new(crate::common::terminal::Canceled) as Box<dyn std::error::Error>),
-        result = execute_inner(args, cli) => result,
-    }
+    // Never drop the command future while publication owns a blocking task.
+    // Cancellation is propagated to the shared execution boundaries instead.
+    let execution = Execution {
+        cancellation,
+        deadline: None,
+    };
+    let result = execute_inner(args, cli, &execution).await?;
+    execution.check()?;
+    Ok(result)
 }
 
 async fn execute_inner(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
+    execution: &Execution,
 ) -> CliResult<super::report::CertificateReport> {
     let options: AccountArgs = args.local().clone().into();
     let settings = CliSettings::load(&options).await?;
@@ -54,6 +61,7 @@ async fn execute_inner(
             | DeployCommand::Update(_)
     );
     let name = select_certificate(&store, args.name(), managing, &cli.output).await?;
+    execution.check()?;
     let progress = Progress::new(cli.output.clone());
     let mut execution_events = Vec::new();
     let (entries, attempted) = match args.command {
@@ -88,19 +96,19 @@ async fn execute_inner(
             });
         }
         DeployCommand::Add(mut args) => {
-            let definitions = store.deployments(&name).await?;
-            interaction::complete(
-                &mut args,
-                &definitions,
-                crate::common::terminal::interactive(cli.output.is_json()),
-                &mut interaction::TerminalPrompts {
-                    output: &cli.output,
-                },
-            )?;
+            complete_add(&store, &name, &mut args, &cli.output).await?;
             let definition = definition(args)?;
+            execution.check()?;
             let configured = store.add_deployment(&name, definition).await?;
-            let execution =
-                run_target(&store, &name, &configured, true, Some(&progress), None).await;
+            let execution = run_target(
+                &store,
+                &name,
+                &configured,
+                true,
+                Some(&progress),
+                Some(execution),
+            )
+            .await;
             execution_events.extend(execution.events);
             (vec![execution.binding], true)
         }
@@ -115,8 +123,16 @@ async fn execute_inner(
             }
             let mut entries = Vec::with_capacity(selected.len());
             for definition in selected {
-                let execution =
-                    run_target(&store, &name, &definition, true, Some(&progress), None).await;
+                execution.check()?;
+                let execution = run_target(
+                    &store,
+                    &name,
+                    &definition,
+                    true,
+                    Some(&progress),
+                    Some(execution),
+                )
+                .await;
                 entries.push(execution.binding);
                 execution_events.extend(execution.events);
             }
@@ -131,6 +147,21 @@ async fn execute_inner(
             attempted,
         },
     ))
+}
+
+async fn complete_add(
+    store: &CliIssueStore,
+    name: &CertificateName,
+    args: &mut DeployAddArgs,
+    output: &crate::common::session::OutputSession,
+) -> CliResult<()> {
+    let definitions = store.deployments(name).await?;
+    interaction::complete(
+        args,
+        &definitions,
+        crate::common::terminal::interactive(output.is_json()),
+        &mut interaction::TerminalPrompts { output },
+    )
 }
 
 async fn update(
@@ -337,6 +368,7 @@ async fn automatic_inner(
     generation: &str,
     execution: &aster_acme::solver::ExecutionContext,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
+    let execution = Execution::from(execution);
     let definitions = match store.deployments(name).await {
         Ok(definitions) => definitions,
         Err(error) => {
@@ -370,7 +402,7 @@ async fn automatic_inner(
             &definition,
             false,
             None,
-            Some(execution),
+            Some(&execution),
         ))
         .await;
         events.extend(target.events);
@@ -385,7 +417,7 @@ async fn run_target(
     definition: &DeploymentBinding,
     force: bool,
     progress: Option<&Progress>,
-    execution: Option<&aster_acme::solver::ExecutionContext>,
+    execution: Option<&Execution>,
 ) -> DeploymentExecution {
     let id = definition.id.as_str();
     match Box::pin(run_one(store, name, id, force, progress, execution)).await {
@@ -435,7 +467,7 @@ async fn run_one(
     id: &str,
     force: bool,
     progress: Option<&Progress>,
-    execution: Option<&aster_acme::solver::ExecutionContext>,
+    execution: Option<&Execution>,
 ) -> CliResult<DeploymentExecution> {
     if execution.is_some_and(|execution| execution.check().is_err()) {
         return Err(
@@ -492,14 +524,40 @@ async fn run_one(
             .await?;
         return Err(error.into());
     }
-    if let Err(error) = session.publish().await {
+    Box::pin(publish_and_finish(
+        &mut session,
+        name,
+        &mut events,
+        progress,
+        execution,
+        aster_acme_cli_storage::issuance::DeploymentSession::publish,
+    ))
+    .await
+}
+
+// Keep publication and its checkpoint in one awaited lifecycle. The injected
+// operation lets tests suspend real publication without process-global hooks.
+async fn publish_and_finish(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    name: &CertificateName,
+    events: &mut Vec<DeploymentEvent>,
+    progress: Option<&Progress>,
+    execution: Option<&Execution>,
+    publish: impl AsyncFnOnce(
+        &aster_acme_cli_storage::issuance::DeploymentSession,
+    ) -> Result<(), aster_acme::issuance::IssueError>,
+) -> CliResult<DeploymentExecution> {
+    if let Err(error) = publish(session).await {
         session
             .save_state(DeploymentPhase::PublishFailed, 0, Some(error.to_string()))
             .await?;
         record_event(
-            &mut events,
+            events,
             MessageKind::Warning,
-            &format!("Deployment '{id}' file publication failed: {error}"),
+            &format!(
+                "Deployment '{}' file publication failed: {error}",
+                session.definition().id
+            ),
             progress,
         );
         return Ok(DeploymentExecution {
@@ -508,11 +566,7 @@ async fn run_one(
         });
     }
     Box::pin(finish_publication(
-        &mut session,
-        name,
-        &mut events,
-        progress,
-        execution,
+        session, name, events, progress, execution,
     ))
     .await
 }
@@ -522,7 +576,7 @@ async fn finish_publication(
     name: &CertificateName,
     events: &mut Vec<DeploymentEvent>,
     progress: Option<&Progress>,
-    execution: Option<&aster_acme::solver::ExecutionContext>,
+    execution: Option<&Execution>,
 ) -> CliResult<DeploymentExecution> {
     let id = session.definition().id.clone();
     record_event(
@@ -587,7 +641,7 @@ async fn reload_with_retries(
     name: &CertificateName,
     events: &mut Vec<DeploymentEvent>,
     progress: Option<&Progress>,
-    execution: Option<&aster_acme::solver::ExecutionContext>,
+    execution: Option<&Execution>,
 ) -> CliResult<()> {
     let attempts_allowed = binding.max_retries.saturating_add(1);
     for attempt in 1..=attempts_allowed {
@@ -614,45 +668,12 @@ async fn reload_with_retries(
         if result.timed_out {
             return Err(reload_interrupted(session, attempt, execution).await?);
         }
-        match result.status {
-            Ok(status) if status.success() => {
-                session
-                    .save_state(DeploymentPhase::Deployed, attempt, None)
-                    .await?;
-                record_event(
-                    events,
-                    MessageKind::Success,
-                    &format!("Deployment '{}' reload succeeded", binding.id),
-                    progress,
-                );
-                return Ok(());
-            }
-            Ok(status) => {
-                session
-                    .save_state(
-                        DeploymentPhase::ReloadFailed,
-                        attempt,
-                        Some(format!("reload command exited unsuccessfully: {status}")),
-                    )
-                    .await?;
-                if attempt < attempts_allowed {
-                    reload_backoff(attempt, false).await;
-                }
-            }
-            Err(error) => {
-                session
-                    .save_state(
-                        DeploymentPhase::ReloadFailed,
-                        attempt,
-                        Some(format!(
-                            "reload command could not start or be observed: {error}"
-                        )),
-                    )
-                    .await?;
-                if attempt < attempts_allowed {
-                    reload_backoff(attempt, true).await;
-                }
-            }
+        let failed_to_start = !result.started;
+        if finish_reload_attempt(session, binding, attempt, result, events, progress).await? {
+            return Ok(());
+        }
+        if attempt < attempts_allowed {
+            reload_backoff(attempt, failed_to_start).await;
         }
     }
     record_event(
@@ -669,15 +690,77 @@ async fn reload_with_retries(
     Ok(())
 }
 
+/// Return true only for confirmed success. Errors after spawn are uncertain:
+/// a service may have changed even when its exit status cannot be observed.
+async fn finish_reload_attempt(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    binding: &DeploymentBinding,
+    attempt: u8,
+    result: reload::ReloadResult,
+    events: &mut Vec<DeploymentEvent>,
+    progress: Option<&Progress>,
+) -> CliResult<bool> {
+    match result.status {
+        Ok(status) if status.success() => {
+            session
+                .save_state(DeploymentPhase::Deployed, attempt, None)
+                .await?;
+            record_event(
+                events,
+                MessageKind::Success,
+                &format!("Deployment '{}' reload succeeded", binding.id),
+                progress,
+            );
+            Ok(true)
+        }
+        Ok(status) => {
+            session
+                .save_state(
+                    DeploymentPhase::ReloadFailed,
+                    attempt,
+                    Some(format!("reload command exited unsuccessfully: {status}")),
+                )
+                .await?;
+            Ok(false)
+        }
+        Err(error) if result.started => {
+            let detail = format!(
+                "reload started but its result could not be observed: {error}; inspect the service before an explicit retry"
+            );
+            session
+                .save_state(
+                    DeploymentPhase::ReloadUncertain,
+                    attempt,
+                    Some(detail.clone()),
+                )
+                .await?;
+            Err(detail.into())
+        }
+        Err(error) => {
+            session
+                .save_state(
+                    DeploymentPhase::ReloadFailed,
+                    attempt,
+                    Some(format!("reload command could not start: {error}")),
+                )
+                .await?;
+            Ok(false)
+        }
+    }
+}
+
 // A killed reload may already have affected the service. Keep uncertainty
 // durable and require an explicit retry instead of replaying it automatically.
 async fn reload_interrupted(
     session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
     attempt: u8,
-    execution: Option<&aster_acme::solver::ExecutionContext>,
+    execution: Option<&Execution>,
 ) -> CliResult<Box<dyn std::error::Error>> {
     let overall_deadline = execution.is_some_and(|execution| {
-        !execution.cancellation.is_cancelled() && execution.deadline <= std::time::Instant::now()
+        !execution.cancellation.is_cancelled()
+            && execution
+                .deadline
+                .is_some_and(|deadline| deadline <= std::time::Instant::now())
     });
     let detail = if overall_deadline {
         "overall operation deadline expired during reload; process tree was terminated; inspect the service before retry"
@@ -707,20 +790,6 @@ async fn reload_backoff(attempt: u8, process_failed_to_start: bool) {
         Duration::from_millis(250_u64 << shift).min(MAX_BACKOFF)
     };
     tokio::time::sleep(delay).await;
-}
-
-async fn wait_reload(
-    reload: impl Future<Output = reload::ReloadResult>,
-    execution: Option<&aster_acme::solver::ExecutionContext>,
-) -> reload::ReloadResult {
-    match execution {
-        Some(execution) => tokio::select! {
-            biased;
-            () = execution.cancellation.cancelled() => reload::ReloadResult::interrupted(),
-            result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline), reload) => result.unwrap_or_else(|_| reload::ReloadResult::interrupted()),
-        },
-        None => reload.await,
-    }
 }
 
 fn event(kind: MessageKind, message: impl Into<String>) -> DeploymentEvent {

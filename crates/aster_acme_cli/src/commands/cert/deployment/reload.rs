@@ -17,6 +17,7 @@ const MAX_OUTPUT: usize = 64 * 1024;
 pub(super) struct ReloadResult {
     pub(super) status: io::Result<ExitStatus>,
     pub(super) timed_out: bool,
+    pub(super) started: bool,
 }
 
 impl ReloadResult {
@@ -27,6 +28,7 @@ impl ReloadResult {
                 "reload interrupted or overall execution deadline exceeded; process tree terminated",
             )),
             timed_out: true,
+            started: true,
         }
     }
 }
@@ -64,6 +66,7 @@ pub(super) async fn run(
             return ReloadResult {
                 status: Err(error),
                 timed_out: false,
+                started: false,
             };
         }
     };
@@ -122,7 +125,11 @@ pub(super) async fn run(
             );
         }
     }
-    ReloadResult { status, timed_out }
+    ReloadResult {
+        status,
+        timed_out,
+        started: true,
+    }
 }
 
 #[derive(Default)]

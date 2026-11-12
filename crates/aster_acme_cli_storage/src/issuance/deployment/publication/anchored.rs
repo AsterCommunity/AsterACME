@@ -7,7 +7,7 @@ use std::{
     fs::{self, File},
     io,
     os::unix::fs::MetadataExt as _,
-    path::{Component, Path},
+    path::Path,
 };
 
 #[cfg(test)]
@@ -25,42 +25,21 @@ pub(super) struct Temporary {
 
 impl Temporary {
     pub(super) fn create(path: &Path) -> Result<Self, IssueError> {
-        // Resolve legitimate ancestor aliases (e.g. macOS /var) once, then
-        // walk the resolved path no-follow. Initial path resolution requires
-        // trusted ancestors; after opening, renames cannot redirect later IO.
+        // Initial resolution requires trusted ancestors, as before. Open only
+        // the final directory: the kernel needs search permission on ancestors,
+        // not read permission. O_NOFOLLOW rejects replacement of the final
+        // component with a symlink; all later IO stays on the retained handle.
         let resolved =
             fs::canonicalize(parent(path)?).map_err(|error| failure(&error.to_string()))?;
-        let mut directory = File::from(
+        let directory = File::from(
             open(
-                "/",
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                &resolved,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .map_err(io::Error::from)
-            .map_err(|e| failure(&e.to_string()))?,
+            .map_err(|error| failure(&error.to_string()))?,
         );
-        for component in resolved.components() {
-            match component {
-                Component::RootDir => {}
-                Component::Normal(name) => {
-                    directory = File::from(
-                        openat(
-                            &directory,
-                            name,
-                            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                            Mode::empty(),
-                        )
-                        .map_err(io::Error::from)
-                        .map_err(|e| failure(&e.to_string()))?,
-                    );
-                }
-                _ => {
-                    return Err(failure(
-                        "deployment directory must be an absolute path without dot components",
-                    ));
-                }
-            }
-        }
         let name = OsString::from(format!(
             ".aster-acme-deploy-{}",
             crate::issuance::new_operation_id()?

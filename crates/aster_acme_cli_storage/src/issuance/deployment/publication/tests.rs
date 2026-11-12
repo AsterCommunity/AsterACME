@@ -356,3 +356,38 @@ fn descriptor_relative_commit_survives_a_rename_after_the_last_path_check() {
     assert_no_temporaries(&moved);
     assert_no_temporaries(&target);
 }
+
+#[cfg(unix)]
+#[test]
+fn ancestors_need_search_permission_but_not_directory_read_permission() {
+    use std::os::unix::fs::PermissionsExt as _;
+    // Restore permissions even on assertion failure, so TempDir can clean up.
+    struct Restore(PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let ancestor = root.path().join("search-only");
+    let target = ancestor.join("certificates");
+    fs::create_dir(&ancestor).unwrap();
+    fs::create_dir(&target).unwrap();
+    fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o111)).unwrap();
+    let _restore = Restore(ancestor);
+    PreparedPublication::prepare(
+        &DeploymentTarget::Directory {
+            path: target.clone(),
+        },
+        &artifacts(),
+        &DeploymentPermissions::default(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(
+        fs::read(target.join("private-key.pem")).unwrap(),
+        b"new-key"
+    );
+    assert_no_temporaries(&target);
+}

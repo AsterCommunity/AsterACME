@@ -23,6 +23,13 @@ impl Temporary {
         self.0.path()
     }
     pub(super) fn inspect(&self, path: &Path) -> Result<(), IssueError> {
+        // Same-directory staging is required for replacement without a
+        // cross-filesystem copy. Check the owned temporary as well as the target.
+        if self.0.path().parent() != Some(parent(path)?) {
+            return Err(crate::issuance::failure(
+                "deployment temporary and destination directories differ",
+            ));
+        }
         inspect_destination(path)
     }
     pub(super) fn persist(self, path: &Path) -> Result<(), IssueError> {

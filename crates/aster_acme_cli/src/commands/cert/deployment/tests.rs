@@ -383,11 +383,7 @@ fn reload_child() {
             err.join().unwrap();
         }
         value if value.starts_with("heartbeat:") => {
-            let file = value.trim_start_matches("heartbeat:");
-            loop {
-                std::fs::write(file, format!("{:?}", std::time::SystemTime::now())).unwrap();
-                std::thread::sleep(Duration::from_millis(25));
-            }
+            heartbeat_child(value.trim_start_matches("heartbeat:"));
         }
         value if value.starts_with("tree-success:") || value.starts_with("tree-inherited:") => {
             let file = value
@@ -433,6 +429,47 @@ fn reload_child() {
         }
         _ => panic!("unknown reload fixture mode"),
     }
+}
+
+fn heartbeat_child(file: &str) {
+    // This lock is held for the entire infinite fixture lifetime.
+    // The kernel releases it on process termination, independently
+    // of whether the heartbeat happened to receive CPU time.
+    let lifetime = std::fs::File::create(Path::new(file).with_extension("alive")).unwrap();
+    lifetime.lock().unwrap();
+    std::fs::write(
+        Path::new(file).with_extension("pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    loop {
+        std::fs::write(file, format!("{:?}", std::time::SystemTime::now())).unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// The fixture never unlocks voluntarily. Acquiring this kernel lock is an
+/// exit notification, unlike observing an unchanged heartbeat after a sleep.
+pub(in crate::commands::cert::deployment) async fn assert_descendant_exited(heartbeat: &Path) {
+    let pid = std::fs::read_to_string(heartbeat.with_extension("pid")).unwrap();
+    let lifetime = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(heartbeat.with_extension("alive"))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match lifetime.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("cannot observe descendant {pid} termination: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("descendant {pid} still owns its lifetime lock"));
 }
 
 #[tokio::test]
@@ -1508,3 +1545,5 @@ fn bare_deployment_filename_resolves_against_current_directory() {
             .join("cert.pem")
     );
 }
+
+mod lifecycle;

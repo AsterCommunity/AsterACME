@@ -1,6 +1,6 @@
 //! Failure isolation, configuration patches, permission policy and destination ownership.
 use crate::commands::cert::{
-    deployment::tests::{Fixture, child_command, manage_binding},
+    deployment::tests::{Fixture, assert_descendant_exited, child_command, manage_binding},
     deployment::*,
     report::{CertificateReport, CertificateResult},
 };
@@ -710,7 +710,7 @@ async fn automatic_deployment_inherits_cancellation_and_deadline_without_publica
 }
 
 #[tokio::test]
-async fn automatic_reload_is_stopped_by_remaining_operation_budget() {
+async fn automatic_cancellation_after_child_start_reaps_descendants_and_saves_uncertainty() {
     let fixture = Fixture::new().await;
     let heartbeat = fixture.temp.path().join("reload-heartbeat");
     fixture
@@ -720,27 +720,50 @@ async fn automatic_reload_is_stopped_by_remaining_operation_budget() {
             0,
         )
         .await;
-    let started = std::time::Instant::now();
-    let (_, events) = after_issuance(
+    fixture
+        .store
+        .update_deployment(
+            &fixture.name,
+            "slow",
+            DeploymentPatch {
+                timeout_seconds: Some(30),
+                ..DeploymentPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    let context = aster_acme::solver::ExecutionContext {
+        cancellation: tokio_util::sync::CancellationToken::new(),
+        deadline: std::time::Instant::now() + Duration::from_secs(30),
+    };
+    let mut running = Box::pin(after_issuance(
         &fixture.store,
         &fixture.name,
         "generation",
-        &aster_acme::solver::ExecutionContext {
-            cancellation: tokio_util::sync::CancellationToken::new(),
-            deadline: started + Duration::from_millis(250),
-        },
-    )
-    .await;
-    assert!(started.elapsed() < Duration::from_secs(1));
+        &context,
+    ));
+    tokio::select! {
+        _ = &mut running => panic!("deployment ended before descendant started"),
+        () = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !heartbeat.exists() { tokio::time::sleep(Duration::from_millis(10)).await; }
+            }).await.unwrap();
+        } => {},
+    }
+    context.cancellation.cancel();
+    let (_, events) = tokio::time::timeout(Duration::from_secs(3), running)
+        .await
+        .unwrap();
     assert!(
         events
             .iter()
-            .any(|event| event.message.contains("deadline"))
+            .any(|event| event.message.contains("cancelled"))
     );
     let saved = fixture.status("slow").await;
     assert_eq!(saved.phase, DeploymentPhase::ReloadUncertain);
     assert_eq!(saved.attempts, 1);
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_descendant_exited(&heartbeat).await;
     let stopped = std::fs::read(&heartbeat).unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(std::fs::read(heartbeat).unwrap(), stopped);
