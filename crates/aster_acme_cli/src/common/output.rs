@@ -123,7 +123,7 @@ pub(crate) fn confirmation(details: &str, color: bool) -> String {
                 .strip_prefix("  ")
                 .and_then(|line| line.split_once(": "))
             {
-                return field(&format!("{label}:"), &safe(value), color);
+                return field(&safe(&format!("{label}:")), &safe(value), color);
             }
             styled(&safe(line), Style::Yellow, color && !line.is_empty())
         })

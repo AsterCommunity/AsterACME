@@ -25,269 +25,74 @@
   <a href="LICENSE-MIT"><img alt="MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square"></a>
 </p>
 
-## What is AsterACME?
+AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-AsterACME implements ACME account operations and DNS-01/HTTP-01 certificate issuance as a Rust library and command-line application. You request a certificate; the library creates the order, tracks authorizations, submits the fixed CSR, downloads the issued chain, and persists the result. The CLI supplies terminal interaction, publication implementations and local storage.
+**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers and background scheduling are not implemented.
 
-The project is under active development and has not released its ACME packages. Manual issuance and recovery, HTTP standalone, TLS-ALPN-01, ARI renewal planning, foreground renewal, and account-signed certificate revocation are implemented. Automated DNS providers and daemon scheduling remain planned.
+## Capabilities
 
-## Where it fits
+- Named CA accounts: registration, recovery, contacts, key rotation, and deactivation.
+- Single-domain, multi-SAN, and wildcard certificates; independent account and certificate key choices.
+- Saved issuance recovery, ARI renewal plans, foreground single/batch renewal, and revocation.
+- Multiple deployment targets per certificate, automatic deployment after renewal, and bounded reload commands with stdout/stderr output.
+- Interactive input, structured JSON, offline inspection, and optional debug diagnostics.
 
-- Request certificates for individual domains, multiple SANs, and wildcard names using manual DNS validation.
-- Manage several named accounts, each bound to its own CA and account key.
-- Resume saved issuance attempts without regenerating their certificate key or CSR.
-- Embed the protocol service in an application with injected storage, signing, readiness, and progress interfaces.
-- Use either terminal prompts or explicit arguments and structured JSON in scripts.
-
-Webroot and standalone support noninteractive foreground renewal; unattended scheduling is not implemented. Configured deployments run after successful foreground issuance/renewal. The filesystem adapter includes Unix mode policy and Windows inherited-permission storage. Native runtime validation is tracked separately from cross-compilation.
-
-## Design focus
-
-- **Protocol ownership** — Typed ACME models live in `aster_acme_protocol`. Resource URLs come from the CA; client code does not construct fixed ACME paths.
-- **Explicit decisions** — The pure core returns actions from CA observations and saved submission state. The service owns HTTP, timers, and execution.
-- **Recoverable operations** — Mutation intent is durable before submission. Pending responses do not authorize silently creating another order or repeating finalization.
-- **Stable artifacts** — Each request has a separate timestamped version. A validated complete artifact set is promoted through an atomic `in_use` link.
-- **Shared mechanisms** — Forge HTTP, standard-library file locks, rustls, and AWS-LC provide transport and crypto foundations; application rules remain in ACME.
+| Validation | Implementation |
+| --- | --- |
+| DNS-01 | `manual_dns`: publish TXT records yourself; supports wildcards |
+| HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
+| TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
 
 ## Quick start
 
-### Build from source
-
-Use stable Rust 1.99 or newer:
+Build from the checkout with **Rust 1.99+**:
 
 ```sh
 git clone https://github.com/AsterCommunity/AsterACME.git
 cd AsterACME
-cargo build --release -p aster_acme_cli --locked
-./target/release/aster-acme --help
-```
-
-Or install the binary locally from the checkout:
-
-```sh
 cargo install --path crates/aster_acme_cli --locked
 ```
 
-The executable is `aster-acme`; Cargo package names use underscores. The following examples assume the binary is on `PATH`.
-
-### Register an account
+Register an account, review the CA terms, then request a certificate. The default CA is **Let's Encrypt production**.
 
 ```sh
-aster-acme account register default \
-  --contact admin@example.com \
-  --data-dir ./data
+aster-acme account register default --contact admin@example.com
+aster-acme cert issue -n example-cert -a default -d example.com -c manual_dns
 ```
 
-Review and accept the CA terms when prompted. The default CA is Let's Encrypt production. `--ca` also accepts `zerossl` and `google`; `--ca-directory <URL>` selects a custom directory. EAB credentials are supplied only when required by the selected CA.
+Publish the requested TXT values and confirm. If interrupted, continue the saved request; renewal keeps the saved validation method:
 
 ```sh
-aster-acme account list --data-dir ./data
-aster-acme account show default --data-dir ./data
-aster-acme account show default --verify --data-dir ./data
-aster-acme account switch default --data-dir ./data
-```
-
-`show` is offline unless `--verify` is supplied. Registration, key-based recovery, contact updates, key rotation, CA deactivation, and local removal are separate operations. Removing local files does not deactivate the CA account or revoke certificates.
-
-### Account key algorithms
-
-Accounts and certificates independently support the same eight key choices. New accounts default to ECDSA P-256. `account rotate-key` without `-k` retains the existing type, or resumes the saved staged key; an explicit conflicting type is rejected. CA support varies: RFC 8555 requires ES256 and recommends Ed25519; unsupported algorithms are not silently replaced.
-
-```sh
-aster-acme account register work -k rsa-3072 --accept-terms
-aster-acme account rotate-key work -k ed25519 --yes
-aster-acme account show work
-```
-
-Account metadata and `list/show` expose the actual key type. Account signing uses ES256/ES384/ES512/EdDSA/RS256 as appropriate; certificate key choices remain independent. ACME packages are unreleased: the account schema now requires `key_algorithm`, without legacy readers or migration.
-
-### Issue a certificate
-
-```sh
-aster-acme cert issue \
-  -n example-cert \
-  -a default \
-  -d example.com \
-  -d '*.example.com' \
-  -c manual_dns \
-  --data-dir ./data
-```
-
-Publish every requested TXT value, keeping unrelated existing records. Several values can be required at the same owner name. The CLI checks their visibility before asking the CA to validate them. Local DNS visibility is readiness evidence; the CA makes the authorization decision.
-
-If you need to finish later:
-
-```sh
-aster-acme cert issue --resume example-cert --data-dir ./data
-aster-acme cert list --data-dir ./data
-aster-acme cert show example-cert --data-dir ./data
-aster-acme cert show example-cert --verify --data-dir ./data
-```
-
-Each new issue creates an independent managed certificate. Default names combine the primary domain with a random suffix; collisions retry automatically. Explicit `-n/--name` names must be unused. Stable cert.toml definitions retain domains, account, CA and validation method; subsequent renewal generations stay under that same name. `--resume` continues an existing operation. List/show default to in_use, `list --history` expands versions, and `show --history` or `--operation` selects historical requests. Only in_use has an active renewal schedule.
-
-`cert show` without a name guides terminal selection. Certificate listing and inspection do not advance validation or issuance. Expired requests remain visible but cannot continue validation or finalization.
-
-## Validation implementations
-
-| `-c/--challenge` | Protocol | Behavior |
-| --- | --- | --- |
-| `manual_dns` | DNS-01 | Publish TXT yourself; local DNS precheck is advisory (up to 2 seconds) |
-| `manual_http` | HTTP-01 | Serve the exact saved URL/path/content yourself, then resume |
-| `webroot` | HTTP-01 | Write/clean owned challenge files below an existing HTTP server root |
-| `standalone` | HTTP-01 | Temporarily listen for challenge requests; default `0.0.0.0:80` |
-| `tls_alpn` | TLS-ALPN-01 | Temporarily serve per-domain challenge certificates; default `0.0.0.0:443` |
-
-```sh
-aster-acme cert issue -d example.com -c manual_http
-aster-acme cert issue --resume example.com-xxxxxxxx --yes
-aster-acme cert issue -d example.com -c webroot --webroot /srv/www
-aster-acme cert issue -d example.com -c standalone
-aster-acme cert issue -d example.com -c standalone --listen-address 0.0.0.0:8080
-aster-acme cert issue -d example.com -c tls_alpn
-```
-
-HTTP and TLS-ALPN methods do not support wildcard identifiers. For manual HTTP/webroot, the existing server must expose port 80 and the challenge path for every SAN. Webroot requires hard-link support and never overwrites conflicting files or deletes borrowed/changed files. The root/configuration is persisted for resume and renewal. New public files use Unix 0644/0755; existing site permissions are retained and Windows inherits permissions.
-
-Without an explicit new name, terminal issuance offers matching unfinished requests before creating keys. Automation stops with explicit resume commands, or use `--if-similar-order` to resume a unique full match (zero matches creates new; multiple matches fail). Matching includes the full domain set, account/CA, method/configuration and key type. Unconfirmed newOrder creation remains visible but cannot be automatically reposted without its saved Location. `--name <NEW_NAME>` explicitly starts an independent identity.
-
-Local DNS absence, resolver failure and precheck timeout warn and continue after publication confirmation. There is no DNS skip/force flag; CA validation, cancellation and overall expiry still apply. DNS-PERSIST and automated CNAME delegation remain unimplemented.
-
-TLS-ALPN listens on port 443 and uses temporary RFC 8737 challenge certificates with `acme-tls/1`. Its certificate contains one DNS SAN and the critical `acmeIdentifier` extension; its private key is independent from the requested certificate key. Bind public port 443 with the original SNI forwarded. Resume restores the saved challenge without another acknowledgement.
-
-### HTTP standalone
-
-Standalone serves only active HTTP-01 Host/path GETs and writes no challenge files. TLS-ALPN uses temporary RFC 8737 challenge certificates and ALPN `acme-tls/1`; both saved local sockets are reused for resume/renew and stopped on every terminal outcome. Public port 80/443 must reach the configured listener, preserving Host/SNI. Bind conflicts/permissions fail without replacing another server. INFO records listener start/stop and debug describes forwarding.
-
-## Certificate key algorithms
-
-Use `-k/--key-type` with `ecdsa-p256` (default), `ecdsa-p384`, `ecdsa-p521`, `ed25519`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `rsa-8192`. These are client generation capabilities; CA acceptance varies. The choice is persisted and retained on recovery and renewal generations. Account signing uses the same key-choice enum independently; see the account options below.
-
-## Renewal planning and revocation
-
-After issuance, fetch ARI immediately and persist a random time inside the suggested window. Without usable ARI, use two thirds of the validity as the target for certificates at least 10 days long, half for shorter certificates, then randomize within the preceding day. The window is clamped after local plan creation; if the target has passed, renewal is due immediately. Persist `Retry-After` query deadlines, retry transient failures with bounded backoff, and retain the previous plan on refresh failure. `cert list/show` display the plan; `show --verify` refreshes due ARI. `cert renew` executes a single due renewal (or --now for early renewal). Batch renewal uses `cert renew --all`: process each managed certificate sequentially, retain manual TXT tasks, continue after per-item failures, and emit one summary. `--all` conflicts with a certificate name. JSON emits one report; failures exit 1 and cancellation exits 130. Periodic wakeups remain future daemon work.
-
-Bind multiple deployment targets to a certificate with `cert deploy add CERT_NAME -n DEPLOY_NAME`. A directory target receives the standard four PEM files; leaf, private-key, CA-chain and fullchain exact paths can each be selected independently. The deployment name is optional via -n/--name; scripts allocate omitted names under lease; terminal add offers an editable default name, then prompts for an existing directory and an optional reload command. Reload commands are executable plus argv and never run through a shell; omitting reload publishes files only. Successful issue and renewal automatically publish to configured targets and run bounded reloads. Use `cert deploy list CERT_NAME` to list targets and `cert deploy show CERT_NAME DEPLOY_NAME` to inspect complete configuration and saved status and `cert deploy run CERT_NAME -n DEPLOY_NAME` after checking a failed or uncertain reload.
-
-Deployment bindings support `cert deploy update CERT_NAME -n DEPLOY_NAME` without publishing or reloading; supply only settings to change, or `--clear-reload` for publication only. On Unix, add/update accept `--file-mode 0644 --key-mode 0640` (both default to 0600); Windows uses inherited permissions. Destinations must not overlap another binding or managed state. Reload stdout/stderr are shown with attempt/stream labels and bounded to 64 KiB each per attempt; JSON includes structured events. Individual target failures do not stop the remaining targets and still produce a failing exit status. Files are replaced individually; whole-set atomic switching is not implemented.
-
-
-```sh
+aster-acme cert issue --resume example-cert
+aster-acme cert show example-cert
 aster-acme cert renew example-cert
-aster-acme cert renew example-cert --now
 aster-acme cert renew --all
-aster-acme cert renew --all --now --json
-aster-acme cert revoke example-cert --reason key-compromise --yes
-aster-acme cert remove example-cert --history --yes
-aster-acme cert remove example-cert --revoked --yes
-aster-acme cert remove example-cert --all --yes
 ```
 
-Revocation uses the bound issuing account and requires confirmation. Select the exact generation when ambiguous. Local files remain; a timeout is recorded as unconfirmed. `cert remove` defaults to one exact request. `--history` cleans issued non-in_use versions, `--revoked` matches saved revocation confirmations, and `--all` explicitly deletes the whole group. Clearing in_use never promotes an old version. Files not managed by AsterACME are preserved; an otherwise empty certificate directory is removed. No CA request is made. See the [renewal and revocation contract](docs/certificate-lifecycle.md).
+`renew` runs when due; add `--now` to renew early. Scheduling these commands remains the caller's responsibility. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
 
-Use `--debug` on a command to show safe checkpoint and HTTP status/timing diagnostics. Request bodies, keys and nonce values are excluded. JSON mode suppresses human diagnostics; debug cannot reconstruct a previously lost newOrder Location.
+## Deploy
 
-Order polling is bounded by `--max-polls` (default 30, range 1–1000) and the overall timeout. Each round shows its counter; waits identify CA `Retry-After` versus the local polling interval. Reaching the limit retains the request for resume. Manual HTTP and webroot perform an advisory, two-second HTTP content check using the shared pool; failures or unsupported redirects warn and continue to CA validation.
-
-Local polling defaults to 5 seconds. Set config `poll_interval` or override it with `--poll-interval <SECONDS>` (1–300); CLI > config > built-in default. Valid CA Retry-After still takes precedence. Applies to issue/resume and per-certificate renew, including --all.
-
-Webroot logs each file publication/cleanup at INFO; --debug shows root-to-URL mapping for server setup. Invalid orders retain CA problem details for inspection and cannot be resumed.
-
-## Scripts and confirmation
+Configure your service to read from an existing target directory, then bind it to the certificate:
 
 ```sh
-# First call returns JSON with status=action_required and the TXT requirements.
-aster-acme cert issue -n script-cert -d example.com -c manual_dns --json --data-dir ./data
-
-# After publishing the TXT values, resume without the manual confirmation.
-aster-acme cert issue --resume script-cert --yes --json --data-dir ./data
+aster-acme cert deploy add example-cert -n nginx \
+  --target /etc/nginx/certs/example \
+  --reload-cmd "systemctl reload nginx"
+aster-acme cert deploy show example-cert nginx
 ```
 
-An `action_required` result exits successfully but is not an issued certificate; inspect the JSON `status`.
+Adding a binding deploys immediately; later successful renewals use it automatically. Files are fully prepared before individual replacements, and reload runs only after publication succeeds. Deployment uses regular files at stable directory paths. Manage bindings, file permissions, exact paths, and retries through [`cert deploy`](docs/cli-contract.md#证书部署).
 
-| Option | Contract |
-| --- | --- |
-| `-y`, `--yes` | Confirm the in_use command's action; on certificate resume, skip the TXT publication question. It does not disable name selection, accept CA terms, or bypass DNS checks. |
-| `--accept-terms` | Explicitly accept the selected CA's current terms during registration. |
-| `--json` | Structured output; no prompts, terminal styling, or human progress messages. |
-| `--verify` | Explicitly query the CA for an existing resource. Offline reads remain the default. |
+## Documentation
 
-First automated/manual-DNS requests expose their fresh TXT instructions even with `--yes`; resume after publication. `--yes` never guesses missing inputs. Single-request HTTP `--request-timeout` and foreground `--operation-timeout` are independent of the CA's expiry times. See the [CLI contract](docs/cli-contract.md) for command scopes and short options.
+- [CLI and configuration](docs/cli-contract.md): commands, prompts, JSON, timeouts, and `--debug`.
+- [Certificate lifecycle](docs/certificate-lifecycle.md): renewal, ARI, revocation, and removal.
+- [Developer guide](docs/README.md): project contract, task routing, architecture, crate ownership, and tests.
+- [RFC reference](docs/rfc-reference.md) and [changelog](CHANGELOG.md).
 
-## Data and certificate files
-
-`--data-dir` is the only storage-root override. Without it, the platform configuration directory for `com.astercosm.acme` is used. `config.toml` is initialized automatically; there is no separate `--config` path.
-
-```text
-<data-dir>/
-├── config.toml
-├── .locks/{accounts,certificates}/<name>.lock
-├── accounts/<name>/
-│   ├── account.toml
-│   └── account-key.pk8
-└── certs/example-cert/
-    ├── cert.toml
-    ├── in_use -> 20261111T010851Z-9YowFEL2/
-    └── 20261111T010851Z-9YowFEL2/
-        ├── operation.toml
-        ├── private-key.pk8
-        ├── request.der
-        ├── material.sha256
-        ├── fullchain.pem
-        ├── cert.pem
-        ├── ca.pem
-        └── private-key.pem
-```
-
-Deploy from `in_use/fullchain.pem`, `in_use/cert.pem`, `in_use/ca.pem`, and `in_use/private-key.pem`. The PEM and internal DER keys represent the same certificate key, separate from the account key. `ca.pem` contains only the rest of the chain returned by the CA and is empty for a leaf-only response. The client does not append or install roots.
-
-Existing versions remain available when a new request fails. Extra user files are preserved; correctness checks apply to managed records and artifacts. Pre-release formats change directly without compatibility readers or automatic migration.
-
-## Project structure
-
-| Crate | Responsibility |
-| --- | --- |
-| [`aster_acme_core`](crates/aster_acme_core/README.md) | Pure resource-state and workflow decisions; no network, files, or runtime. |
-| [`aster_acme_protocol`](crates/aster_acme_protocol/README.md) | Typed wire resources, requests, problems, JWS envelopes, and CA directories. |
-| [`aster_acme`](crates/aster_acme/README.md) | Account and issuance orchestration, signing, transport, identifiers, and adapter contracts. |
-| [`aster_acme_validation`](crates/aster_acme_validation/README.md) | Method-specific validation components; currently DNS TXT visibility checks. |
-| [`aster_acme_cli_storage`](crates/aster_acme_cli_storage/README.md) | Private files, locks, versioned TOML, fixed key/CSR persistence, and artifact promotion. |
-| [`aster_acme_cli`](crates/aster_acme_cli/README.md) | Arguments, interaction, reports, rendering, and process exit behavior. |
-
-Each crate owns its package version. All dependency versions, sources, and features belong to the root `workspace.dependencies`; members inherit them with `workspace = true`.
-
-## Development and validation
-
-Python 3.11+ is required for repository policy checks. The release profile uses size optimization (`opt-level="z"`), LTO, one codegen unit, unwind panics, and stripped debug information while retaining function symbols.
-
-The CLI uses published Forge panic alpha.2 for private, payload-redacted `<data-dir>/crash.log` reports and safe human/JSON diagnostics. Normal commands and help/version do not create crash files; panics do not retry ACME mutations. Production feature allowlists reject unreviewed TLS, crypto, HTTP, prompt and logging capabilities in CI.
-
-```sh
-python3 scripts/check-workspace-deps.py
-python3 scripts/check-tls-backend.py
-python3 scripts/check-dependency-features.py
-python3 -m unittest discover -s scripts/tests
-cargo fmt --all --check
-cargo check --workspace --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo doc --workspace --no-deps --locked
-```
-
-Local tests exercise a loopback CA, real signatures, durable storage, restart, cancellation, expiry, and failure boundaries. Routine checks do not contact public CAs. Real staging acceptance is documented separately from local evidence.
-
-- [Website](https://acme.astercosm.com)
-- [Architecture](docs/architecture.md)
-- [RFC reference](docs/rfc-reference.md)
-- [Account tests and staging records](docs/account-testing.md)
-- [Issuance tests and limitations](docs/issuance-testing.md)
-- [CLI argument contract](docs/cli-contract.md)
-- [English changelog](CHANGELOG.md) / [中文更新日志](CHANGELOG.zh.md)
+State is stored in the platform directory for `com.astercosm.acme`; pass `--data-dir PATH` to each command to use another root. `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
 
 ## License
 
-Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
-
-Unless explicitly stated otherwise, contributions intentionally submitted for inclusion are dual-licensed under the same terms.
-
-Interactive new issuance collects domains and offers a validation-method menu when `-c/--challenge` is omitted. Webroot asks for an existing directory; standalone/TLS-ALPN ask for the local socket with defaults `0.0.0.0:80` / `0.0.0.0:443`. Explicit values skip those prompts. Scripts require an explicit method and domains, plus a webroot path when applicable; listener defaults still apply. Recovery and renewal retain the saved implementation. `--yes` accepts all operation confirmations, without selecting inputs or bypassing validation; terms consent remains independent.
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Contributions are dual-licensed under the same terms unless explicitly stated otherwise.

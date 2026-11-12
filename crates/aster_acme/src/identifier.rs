@@ -97,6 +97,10 @@ impl DnsIdentifier {
         let name = DnsName::new(base)?;
         if name.as_str().contains('_')
             || name.as_str().parse::<IpAddr>().is_ok()
+            || matches!(
+                url::Host::parse(name.as_str()),
+                Ok(url::Host::Ipv4(_) | url::Host::Ipv6(_))
+            )
             || (wildcard && name.as_str().len() > 251)
         {
             return Err(IdentifierError::InvalidDnsIdentifier(value.to_owned()));

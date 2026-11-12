@@ -118,7 +118,7 @@ async fn empty_success_commits_both_keys_preserving_account_identity_and_status_
         .await;
     let result = fixture
         .service
-        .rotate_key(fixture.store.as_ref(), None)
+        .rotate_key(fixture.store.as_ref(), None, None)
         .await
         .unwrap();
     assert_ne!(result.key_thumbprint, fixture.before.key_thumbprint);
@@ -190,7 +190,7 @@ async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover()
         let store = fixture.store.clone();
         async move {
             service
-                .rotate_key(store.as_ref(), Some(KeyAlgorithm::Ed25519))
+                .rotate_key(store.as_ref(), Some(KeyAlgorithm::Ed25519), None)
                 .await
         }
     });
@@ -250,7 +250,7 @@ async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover()
         .await;
     let result = fixture
         .service
-        .rotate_key(fixture.store.as_ref(), None)
+        .rotate_key(fixture.store.as_ref(), None, None)
         .await
         .unwrap();
     assert_eq!(result.key_algorithm, KeyAlgorithm::Ed25519);
@@ -286,7 +286,7 @@ async fn explicit_rejections_and_pending_unauthorized_never_replace_primary_key(
         assert!(
             fixture
                 .service
-                .rotate_key(fixture.store.as_ref(), None)
+                .rotate_key(fixture.store.as_ref(), None, None)
                 .await
                 .is_err()
         );
@@ -300,7 +300,7 @@ async fn explicit_rejections_and_pending_unauthorized_never_replace_primary_key(
         assert!(matches!(
             fixture
                 .service
-                .rotate_key(fixture.store.as_ref(), None)
+                .rotate_key(fixture.store.as_ref(), None, None)
                 .await,
             Err(aster_acme::account::AccountError::KeyRotationUncertain)
         ));
@@ -344,7 +344,7 @@ async fn confirmed_partial_local_swap_resumes_without_a_key_change_endpoint() {
     drop(session);
     let record = fixture
         .service
-        .rotate_key(fixture.store.as_ref(), None)
+        .rotate_key(fixture.store.as_ref(), None, None)
         .await
         .unwrap();
     assert_eq!(record.key_thumbprint, thumbprint(new.as_ref()).unwrap());
@@ -365,7 +365,7 @@ async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
     assert!(matches!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref(), None)
+            .rotate_key(fixture.store.as_ref(), None, None)
             .await,
         Err(aster_acme::account::AccountError::KeyChangeUnavailable)
     ));
@@ -386,7 +386,7 @@ async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
     assert!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref(), None)
+            .rotate_key(fixture.store.as_ref(), None, None)
             .await
             .is_err()
     );
@@ -411,7 +411,7 @@ async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
     assert!(matches!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref(), None)
+            .rotate_key(fixture.store.as_ref(), None, None)
             .await,
         Err(aster_acme::account::AccountError::IdentityMismatch)
     ));
@@ -442,7 +442,7 @@ async fn timeout_keeps_both_keys_and_never_automatically_reposts_key_change() {
     assert!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref(), None)
+            .rotate_key(fixture.store.as_ref(), None, None)
             .await
             .is_err()
     );
@@ -468,7 +468,7 @@ async fn timeout_keeps_both_keys_and_never_automatically_reposts_key_change() {
     assert!(matches!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref(), None)
+            .rotate_key(fixture.store.as_ref(), None, None)
             .await,
         Err(aster_acme::account::AccountError::KeyRotationUncertain)
     ));
@@ -505,7 +505,7 @@ async fn bad_nonce_retries_only_the_outer_signature_with_the_same_durable_new_ke
         .await;
     let result = fixture
         .service
-        .rotate_key(fixture.store.as_ref(), None)
+        .rotate_key(fixture.store.as_ref(), None, None)
         .await
         .unwrap();
     let requests = fixture.server.received_requests().await.unwrap();
@@ -534,7 +534,7 @@ async fn definitive_conflict_problem_preserves_old_identity_and_allows_later_ope
     assert!(
         fixture
             .service
-            .rotate_key(fixture.store.as_ref(), None)
+            .rotate_key(fixture.store.as_ref(), None, None)
             .await
             .is_err()
     );
@@ -618,7 +618,7 @@ async fn cross_algorithm_rotations_commit_actual_type_and_default_to_the_previou
         let expected = next.unwrap_or(previous);
         let record = fixture
             .service
-            .rotate_key(fixture.store.as_ref(), next)
+            .rotate_key(fixture.store.as_ref(), next, None)
             .await
             .unwrap();
         assert_eq!(record.key_algorithm, expected);
@@ -695,6 +695,110 @@ async fn staged_algorithm_survives_restart_and_conflicting_choices_are_rejected(
     assert_eq!(restored.algorithm(), KeyAlgorithm::Ed25519);
     assert_eq!(restored.jwk().unwrap().thumbprint().unwrap(), thumbprint);
     assert_eq!(session.record().key_algorithm, KeyAlgorithm::EcdsaP256);
+    assert_eq!(
+        post_count(
+            &fixture.server.received_requests().await.unwrap(),
+            "/vendor/rollover"
+        ),
+        0
+    );
+}
+
+#[tokio::test]
+async fn concurrent_stage_calls_return_the_same_durable_key() {
+    let fixture = setup(true, Duration::from_secs(1)).await;
+    let session = fixture
+        .store
+        .rotation(&fixture.before.directory_url)
+        .await
+        .unwrap();
+    let (a, b, c) = tokio::join!(
+        session.stage(None),
+        session.stage(None),
+        session.stage(None)
+    );
+    let first = thumbprint(a.unwrap().as_ref()).unwrap();
+    assert_eq!(first, thumbprint(b.unwrap().as_ref()).unwrap());
+    assert_eq!(first, thumbprint(c.unwrap().as_ref()).unwrap());
+    assert_eq!(
+        first,
+        thumbprint(
+            load_key(&fixture.store.account_slot().join("account-key.next.pk8"))
+                .unwrap()
+                .as_ref()
+        )
+        .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn stale_rotation_confirmation_never_stages_or_sends_a_request() {
+    let fixture = setup(true, Duration::from_secs(1)).await;
+    let mut expected = fixture.before.clone();
+    expected.account_id = "different".into();
+    assert!(matches!(
+        fixture
+            .service
+            .rotate_key(fixture.store.as_ref(), None, Some(&expected))
+            .await,
+        Err(aster_acme::account::AccountError::IdentityMismatch)
+    ));
+    assert!(
+        !fixture
+            .store
+            .account_slot()
+            .join("account-key.next.pk8")
+            .exists()
+    );
+    assert_eq!(
+        post_count(
+            &fixture.server.received_requests().await.unwrap(),
+            "/vendor/rollover"
+        ),
+        0
+    );
+}
+
+#[tokio::test]
+async fn nonce_failure_before_sending_rollover_clears_only_the_unsent_intent() {
+    let fixture = setup(true, Duration::from_secs(1)).await;
+    let directory = fixture.before.directory_url.clone();
+    Mock::given(method("GET"))
+        .and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Directory {
+            new_nonce: AcmeUrl::new(&format!("{}/broken-nonce", fixture.server.uri())).unwrap(),
+            new_account: AcmeUrl::new(&format!("{}/unused", fixture.server.uri())).unwrap(),
+            key_change: Some(
+                AcmeUrl::new(&format!("{}/vendor/rollover", fixture.server.uri())).unwrap(),
+            ),
+            new_order: None,
+            renewal_info: None,
+            revoke_cert: None,
+            meta: DirectoryMeta::default(),
+        }))
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            directory,
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let service = AccountService::new(Arc::new(client), fixture.store.clone());
+    assert!(
+        service
+            .rotate_key(fixture.store.as_ref(), None, None)
+            .await
+            .is_err()
+    );
+    let saved = fixture.store.metadata().await.unwrap().unwrap();
+    assert!(saved.key_rotation.is_none());
+    assert_eq!(saved.key_thumbprint, fixture.before.key_thumbprint);
     assert_eq!(
         post_count(
             &fixture.server.received_requests().await.unwrap(),

@@ -36,6 +36,7 @@ pub struct IssueService {
     identity: IssueIdentity,
     observer: Option<Arc<dyn IssueObserver>>,
 }
+
 impl IssueService {
     /// Bind discovered transport to an already registered account; no implicit registration.
     ///
@@ -395,7 +396,11 @@ impl IssueService {
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
                 .is_none_or(|value| {
-                    value.split(';').next() != Some("application/pem-certificate-chain")
+                    !value.split(';').next().is_some_and(|essence| {
+                        essence
+                            .trim()
+                            .eq_ignore_ascii_case("application/pem-certificate-chain")
+                    })
                 })
         {
             return Err(IssueError::InvalidInput(
@@ -436,7 +441,6 @@ impl IssueService {
                     .account_url
                     .clone()
                     .ok_or(IssueError::InvalidInput("missing account URL"))?
-            || record.account_thumbprint != self.identity.account.key_thumbprint
         {
             return Err(IssueError::InvalidInput(
                 "saved issuance account binding changed; retain original identity",
@@ -686,11 +690,27 @@ impl IssueService {
                     {
                         return Err(IssueError::Expired);
                     }
-                    let response = bounded(
+                    let response = match bounded(
                         execution,
                         self.post(&url, &json_payload(&AcknowledgeRequest {})?),
                     )
-                    .await?;
+                    .await
+                    {
+                        Ok(response) => response,
+                        Err(
+                            error @ IssueError::Transport(
+                                crate::transport::TransportError::Problem {
+                                    status: 400..=499, ..
+                                },
+                            ),
+                        ) => {
+                            record.authorizations[index].acknowledgement =
+                                SubmissionState::NotSubmitted;
+                            session.save(record).await?;
+                            return Err(error);
+                        }
+                        Err(error) => return Err(error),
+                    };
                     if response.status != reqwest::StatusCode::OK {
                         return Err(IssueError::InvalidInput(
                             "challenge acknowledgement must return 200",

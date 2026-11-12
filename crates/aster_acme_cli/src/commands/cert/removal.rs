@@ -136,7 +136,10 @@ fn confirmation_details(removal: &CertificateRemoval) -> String {
         heading.to_owned(),
         format!("  Name: {}", removal.name().as_str()),
         format!("  Requests: {}", removal.generations()),
-        format!("  Directory: {}", removal.directory().display()),
+        format!(
+            "  Directory: {}",
+            crate::common::output::safe(&removal.directory().display().to_string())
+        ),
     ];
     if let RemovalScope::Operation(_) = removal.scope() {
         for record in removal.records() {
@@ -225,7 +228,10 @@ mod tests {
         let before = std::fs::read(&key).unwrap();
         drop(session);
         // Local certificate removal must also work after its account was removed.
-        accounts.remove().await.unwrap();
+        accounts
+            .remove(&accounts.metadata().await.unwrap().unwrap())
+            .await
+            .unwrap();
         let target = || SavedTargetArgs {
             identity: super::super::args::CertificateNameArgs {
                 name: Some("example.com".into()),

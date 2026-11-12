@@ -82,7 +82,7 @@ JWS protected header 包含 由密钥决定的 `alg`（ES256/ES384/ES512/EdDSA/R
 
 AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at，UTC RFC 3339。registered_at 是本地首次成功确认（找回也算），不是 CA 原始创建时间；只写一次。成功认证查询/注册/找回/停用时更新状态观察和使用时间；失败、离线读取、已确认停用的本地返回不更新。AccountClock 支持 dyn 注入，默认 UTC 系统时钟。未知时间不猜测回填。
 
-`AccountService::rotate_key(&dyn AccountRotationStore, Option<KeyAlgorithm>)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。新钥支持统一 KeyAlgorithm 八种选择；省略算法时新轮换沿用原类型，恢复沿用已保存新钥；显式选择不得替换不匹配的暂存钥。未实现 CLI 私钥导入。
+`AccountService::rotate_key(&dyn AccountRotationStore, Option<KeyAlgorithm>, Option<&AccountRecord>)` 以对象安全事务会话注入双钥持久化：stage、save、commit 全程持锁；服务负责 §7.3.5 双层 JWS 和 pending 对账。200 空 body 可确认换钥，不改变账户 URL/本地 ID/联系人。超时不重放，pending 仅用已保存新钥向原账户 URL 对账，confirmed 仅补完本地提交。400/409 的合法拒绝 problem 保留旧身份；无法证明结果时保留双钥。新钥支持统一 KeyAlgorithm 八种选择；省略算法时新轮换沿用原类型，恢复沿用已保存新钥；显式选择不得替换不匹配的暂存钥。未实现 CLI 私钥导入。
 
 `http_client` 通过 registry 的 aster_forge_http =0.1.0-alpha.2 构造连接池，根 workspace 仅选择 json/rustls-aws-lc-rs/system-proxy，客户端显式选择 TlsBackend::Rustls，禁重定向和自动重试；保留全请求/连接超时、平台 TLS 根与默认系统代理。reqwest 仍用于 Response/Error/StatusCode/header 等公共类型，与 Forge 共享同版本；不单独打开 features，由 Forge 的 workspace 配置选择。`TransportOptions::validate` 在副作用前校验设置。
 
@@ -96,7 +96,7 @@ AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at
 
 CA 的订单/授权 expires 与证书 notAfter 分开处理；订单没有虚构的 expired wire 状态。恢复先观察，已过期申请不能继续验证/finalize；valid 订单允许取回已经签出的证书。newOrder 的 Location 丢失没有通用幂等恢复，不能自动再下单。challenge/finalize 的 Submitted 检查点令迟到的 pending/ready 只轮询，不自动重放。显式 fresh issue 才创建新操作。
 
-本地证书检查包括 PEM 语法、SAN 精确集合、公钥与保存密钥一致、叶子非 CA/有效期，以及提供的相邻证书链签名；不代表建立了公众信任链，尤其不安装 staging 根。当前支持独立的 ECDSA P-256/P-384/P-521、Ed25519、RSA 2048/3072/4096/8192 证书密钥，不导入外部 CSR；ARI 续期计划已实现；周期调度、自动续期、自动 provider 与部署未实现。
+本地证书检查包括 PEM 语法、SAN 精确集合、公钥与保存密钥一致、叶子非 CA/有效期，以及提供的相邻证书链签名；不代表建立了公众信任链，尤其不安装 staging 根。当前支持独立的 ECDSA P-256/P-384/P-521、Ed25519、RSA 2048/3072/4096/8192 证书密钥，不导入外部 CSR；ARI 续期计划已实现；前台续期和多目标部署已实现；周期daemon调度与自动DNS provider未实现。
 
 续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
 
@@ -111,8 +111,8 @@ cert renew --all 提供按托管身份顺序执行的批量入口，复用同一
 
 ChallengeKind/ValidationRequirement及IssueService归本库；调用方实现ChallengeSolver::kind/ready/cleanup。库保存材料后才调用ready，准备好后由库通知CA；完成产物后尝试cleanup，失败保留清理状态而不抹掉证书。IssueRequest验证域名与通配符约束，IssueRecord::matches_unfinished_request统一完整定义匹配。CLI不复制协议状态机。移除未接线的旧receipt/prepare接口，不保留兼容层。
 
-CLI已实现manual_dns、manual_http和webroot。HTTP材料是未经哈希的key authorization，公开URL/路径由请求标识符和CA token推导；TLS仍只有材料定义、没有可执行实现。本库不写webroot文件、不提示终端、不决定DNS预检是否应阻止用户操作。
+CLI已实现manual_dns、manual_http、webroot、HTTP standalone和TLS-ALPN。HTTP材料是未经哈希的key authorization，公开URL/路径由请求标识符和CA token推导；TLS-ALPN使用临时SNI/ALPN挑战监听器。本库不写webroot文件、不提示终端、不决定DNS预检是否应阻止用户操作。
 
-临时挑战服务可实现`ChallengeSolver::restore`重建已保存的pending授权响应，包括已经通知CA的挑战；该hook不重发ack。`IssueService::run`在所有返回路径调用有界`shutdown`，与终态持久化材料`cleanup`分开；嵌入者直接丢弃运行future时必须关闭或丢弃solver。CLI HTTP standalone使用该契约；TLS-ALPN可复用生命周期，当前没有TLS监听实现。
+临时挑战服务可实现`ChallengeSolver::restore`重建已保存的pending授权响应，包括已经通知CA的挑战；该hook不重发ack。`IssueService::run`在所有返回路径调用有界`shutdown`，与终态持久化材料`cleanup`分开；嵌入者直接丢弃运行future时必须关闭或丢弃solver。CLI HTTP standalone使用该契约；TLS-ALPN复用同一生命周期并提供TLS监听实现。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。

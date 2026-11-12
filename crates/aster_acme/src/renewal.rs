@@ -128,6 +128,20 @@ impl RenewalPlan {
 }
 
 // RFC 9773 requires raw DER INTEGER bytes, including a positive serial's leading zero.
+/// Extract an RFC 9773 identifier without creating a new renewal schedule.
+///
+/// # Errors
+/// Rejects malformed certificates and duplicate extensions; expired leaves remain valid inputs.
+pub fn identifier_from_certificate(chain: &[u8]) -> Result<Option<String>, IssueError> {
+    let (_, pem) = parse_x509_pem(chain)
+        .map_err(|_| IssueError::InvalidInput("invalid renewal certificate PEM"))?;
+    let (_, cert) = x509_parser::certificate::X509Certificate::from_der(&pem.contents)
+        .map_err(|_| IssueError::InvalidInput("invalid renewal certificate DER"))?;
+    cert.extensions_map()
+        .map_err(|_| IssueError::InvalidInput("invalid certificate renewal metadata"))?;
+    Ok(certificate_identifier(&cert))
+}
+
 fn certificate_identifier(cert: &x509_parser::certificate::X509Certificate<'_>) -> Option<String> {
     cert.extensions()
         .iter()
@@ -210,6 +224,9 @@ impl RenewalService {
             return Ok(record);
         };
         let now = OffsetDateTime::now_utc();
+        if now >= plan.not_after {
+            return Ok(record);
+        }
         let endpoint = self.client.directory().renewal_info.as_ref();
         match renewal_action(
             endpoint.is_some() && plan.certificate_id.is_some(),

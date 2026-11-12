@@ -64,14 +64,15 @@ async fn local_removal_is_scoped_and_does_not_require_a_valid_key() {
         .unwrap();
     let untouched = fs::read(other.account_slot().join("account-key.pk8")).unwrap();
     atomic_write(&store.account_slot().join("account-key.pk8"), b"corrupt").unwrap();
-    store.remove().await.unwrap();
+    let expected = store.metadata().await.unwrap().unwrap();
+    store.remove(&expected).await.unwrap();
     assert!(!store.account_slot().exists());
     assert!(!temp.path().join("accounts/.personal.removing").exists());
     assert_eq!(
         fs::read(other.account_slot().join("account-key.pk8")).unwrap(),
         untouched
     );
-    assert!(store.remove().await.is_err());
+    assert!(store.remove(&expected).await.is_err());
     assert_eq!(
         inventory::query_accounts(temp.path().into(), AccountQuery::default())
             .await
@@ -97,10 +98,20 @@ async fn removal_lock_timeout_and_cleanup_collision_preserve_account() {
     let key_path = store.account_slot().join("account-key.pk8");
     let before = fs::read(&key_path).unwrap();
     let held = store.lock_account(&ca, &thumb).await.unwrap();
-    assert!(store.remove().await.is_err());
+    assert!(
+        store
+            .remove(&store.metadata().await.unwrap().unwrap())
+            .await
+            .is_err()
+    );
     drop(held);
     fs::create_dir(temp.path().join("accounts/.personal.removing")).unwrap();
-    assert!(store.remove().await.is_err());
+    assert!(
+        store
+            .remove(&store.metadata().await.unwrap().unwrap())
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read(key_path).unwrap(), before);
 }
 
@@ -120,7 +131,12 @@ async fn removal_rejects_key_links_without_touching_the_target() {
     let outside = temp.path().join("outside");
     atomic_write(&outside, b"untouched").unwrap();
     symlink(&outside, &key_path).unwrap();
-    assert!(store.remove().await.is_err());
+    assert!(
+        store
+            .remove(&store.metadata().await.unwrap().unwrap())
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read(outside).unwrap(), b"untouched");
     assert!(store.account_slot().join("account.toml").exists());
 }
@@ -577,7 +593,10 @@ async fn removal_only_deletes_managed_files_and_retains_user_contents_and_lock()
     fs::write(slot.join("notes.txt"), b"user notes").unwrap();
     fs::create_dir(slot.join("backup")).unwrap();
     fs::write(slot.join("backup/own-file"), b"retain").unwrap();
-    store.remove().await.unwrap();
+    store
+        .remove(&store.metadata().await.unwrap().unwrap())
+        .await
+        .unwrap();
     assert_eq!(fs::read(slot.join("notes.txt")).unwrap(), b"user notes");
     assert_eq!(fs::read(slot.join("backup/own-file")).unwrap(), b"retain");
     assert!(store.lock_path().unwrap().exists());
@@ -612,7 +631,10 @@ async fn account_removal_leaves_no_empty_object_directory_and_reuses_external_lo
         .unwrap();
     let lock = store.lock_path().unwrap();
     let inode = file_identity(&lock);
-    store.remove().await.unwrap();
+    store
+        .remove(&store.metadata().await.unwrap().unwrap())
+        .await
+        .unwrap();
     assert!(!store.account_slot().exists());
     assert_eq!(file_identity(&lock), inode);
     store
@@ -693,4 +715,84 @@ async fn account_algorithms_survive_restart_and_mismatched_requests_never_replac
         );
         atomic_write(&path, &metadata).unwrap();
     }
+}
+
+#[tokio::test]
+async fn stale_removal_confirmation_cannot_delete_replaced_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
+    let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
+    store
+        .signer(&ca, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
+    let old = store.metadata().await.unwrap().unwrap();
+    store.remove(&old).await.unwrap();
+    store
+        .signer(&ca, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
+    let current = store.metadata().await.unwrap().unwrap();
+    assert_ne!(current.account_id, old.account_id);
+    assert!(
+        store
+            .remove(&old)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("changed after confirmation")
+    );
+    assert_eq!(store.metadata().await.unwrap(), Some(current));
+    assert!(store.account_slot().join("account-key.pk8").exists());
+}
+
+#[test]
+fn cancelled_save_retains_the_operation_lease_until_queued_write_finishes() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+        let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
+        store
+            .signer(&directory, "work", KeyAccess::Create(None))
+            .await
+            .unwrap();
+        let mut record = store.metadata().await.unwrap().unwrap();
+        let lease = store
+            .lock_account(&directory, &record.key_thumbprint)
+            .await
+            .unwrap();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            let _ = started.send(());
+            gate.recv().unwrap();
+        });
+        ready.await.unwrap();
+        record.contacts = vec!["mailto:changed@example.com".into()];
+        {
+            let save = AccountStore::save(&store, &record, &lease);
+            tokio::pin!(save);
+            tokio::select! {
+                result = &mut save => panic!("queued write unexpectedly completed: {result:?}"),
+                () = tokio::time::sleep(Duration::from_millis(10)) => {},
+            }
+        }
+        drop(lease);
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(store.lock_path().unwrap())
+            .unwrap();
+        assert!(handle.try_lock().is_err());
+        release.send(()).unwrap();
+        blocker.await.unwrap();
+        let saved = store.metadata().await.unwrap().unwrap();
+        assert_eq!(saved.contacts, record.contacts);
+        handle.try_lock().unwrap();
+    });
 }

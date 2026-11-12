@@ -20,6 +20,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Reconcile the visible view against the catalog that actually survived a write.
+pub(super) fn recover_selection(slot: &Path) -> Result<(), IssueError> {
+    let config = crate::issuance::selection(slot)?;
+    let expected = match config.cert.in_use.as_ref() {
+        Some(id) => crate::issuance::query::read(
+            slot.parent()
+                .ok_or_else(|| failure("missing catalog parent"))?,
+            &aster_acme::storage::query::IssueQuery {
+                name: Some(config.cert.name),
+                operation_id: Some(id.clone()),
+                ..aster_acme::storage::query::IssueQuery::default()
+            },
+        )?
+        .into_iter()
+        .find(|record| &record.operation_id == id)
+        .map(|record| record.generation_name())
+        .ok_or_else(|| failure("selected certificate generation missing"))
+        .map(Some)?,
+        None => None,
+    };
+    NATIVE.recover(slot, expected.as_deref())
+}
+
 const FILES: [&str; 4] = ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pem"];
 const MARKER: &str = ".generation";
 const PREVIOUS: &str = ".in_use.previous";
@@ -39,6 +62,7 @@ impl Publication {
             validate_generation(slot, &target, record)?;
         }
         let stage = slot.join(format!(".in_use-{}", record.operation_id));
+        self.remove_empty_copy(&stage)?;
         if let Some(target) = self.target(&stage)? {
             if target != record.generation_name() {
                 return Err(failure("publication staging belongs to another generation"));
@@ -107,8 +131,23 @@ fn validate_generation(slot: &Path, target: &str, record: &IssueRecord) -> Resul
 impl Publication {
     pub(super) fn recover(&self, slot: &Path, expected: Option<&str>) -> Result<(), IssueError> {
         if self.kind == ViewKind::Link {
+            let active = slot.join("in_use");
+            let actual = self.target(&active)?;
+            if actual.is_some() && actual.as_deref() != expected {
+                match expected {
+                    Some(target) => {
+                        let record = read_journal(&slot.join(target).join("operation.toml"))?;
+                        if record.generation_name() != target {
+                            return Err(failure("selected generation identity mismatch"));
+                        }
+                        self.publish(slot, &record)?;
+                    }
+                    None => self.remove(&active)?,
+                }
+            }
             return Ok(());
         }
+        self.remove_empty_copy(&slot.join(PREVIOUS))?;
         let active = slot.join("in_use");
         let backup = slot.join(PREVIOUS);
         let current = self.target(&active)?;
@@ -220,6 +259,31 @@ fn validate_entries(path: &Path) -> Result<(), IssueError> {
 }
 
 impl Publication {
+    // Only an empty, real reserved directory is safe without a generation marker.
+    // Nonempty unmarked paths remain an error and are never recursively deleted.
+    fn remove_empty_copy(&self, path: &Path) -> Result<(), IssueError> {
+        if self.kind != ViewKind::Copy {
+            return Ok(());
+        }
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                ensure_real_dir(path)?;
+                if fs::read_dir(path)
+                    .map_err(|_| failure("cannot inspect incomplete copy"))?
+                    .next()
+                    .is_none()
+                {
+                    fs::remove_dir(path)
+                        .map_err(|_| failure("cannot remove empty incomplete copy"))?;
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(failure("cannot inspect incomplete copy")),
+        }
+        Ok(())
+    }
+
     pub(super) fn remove(&self, path: &Path) -> Result<(), IssueError> {
         if self.target(path)?.is_none() {
             return Ok(());

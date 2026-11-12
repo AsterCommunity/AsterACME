@@ -1,6 +1,6 @@
 //! ACME account registration and recovery (RFC 8555 §7.3).
 use crate::storage::account::{
-    AccountRotation, AccountRotationStore, AccountStore, AccountStoreError,
+    AccountLease, AccountRotation, AccountRotationStore, AccountStore, AccountStoreError,
 };
 use aster_acme_protocol::url::AcmeUrl;
 
@@ -254,8 +254,19 @@ impl AccountService {
         &self,
         keys: &dyn AccountRotationStore,
         algorithm: Option<crate::crypto::key_algorithm::KeyAlgorithm>,
+        expected: Option<&AccountRecord>,
     ) -> Result<AccountRecord, AccountError> {
         let session = keys.rotation(self.client.directory_url()).await?;
+        if expected.is_some_and(|expected| {
+            let actual = session.record();
+            actual.account_id != expected.account_id
+                || actual.directory_url != expected.directory_url
+                || actual.account_url != expected.account_url
+                || actual.key_thumbprint != expected.key_thumbprint
+                || actual.key_rotation != expected.key_rotation
+        }) {
+            return Err(AccountError::IdentityMismatch);
+        }
         let mut record = session.record();
         let action = record
             .action(AccountOperation::RotateKey)
@@ -351,9 +362,11 @@ impl AccountService {
             phase: KeyRotationPhase::Pending,
         });
         session.save(record).await?;
+        let payload = json_payload(&inner)?;
+        let submitted = std::sync::atomic::AtomicBool::new(false);
         let response = self
             .client
-            .signed(endpoint, old, Some(&account_url), &json_payload(&inner)?)
+            .signed_observed(endpoint, old, Some(&account_url), &payload, &submitted)
             .await;
         let response = match response {
             Ok(response) => response,
@@ -368,7 +381,13 @@ impl AccountService {
                 session.save(record).await?;
                 return Err(error.into());
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                if !submitted.load(std::sync::atomic::Ordering::SeqCst) {
+                    record.key_rotation = None;
+                    session.save(record).await?;
+                }
+                return Err(error.into());
+            }
         };
         if response.status != reqwest::StatusCode::OK {
             return Err(AccountError::InvalidResponse);
@@ -391,7 +410,7 @@ impl AccountService {
         validate_contacts(&contacts)?;
         let directory = self.client.directory_url();
         let thumbprint = signer.jwk()?.thumbprint()?;
-        let _lease = self.store.lock_account(directory, &thumbprint).await?;
+        let lease = self.store.lock_account(directory, &thumbprint).await?;
         let mut record = self
             .store
             .load(directory, &thumbprint)
@@ -411,7 +430,7 @@ impl AccountService {
             .clone()
             .ok_or(AccountError::AccountDoesNotExist)?;
         record.contacts.clone_from(&contacts);
-        self.store.save(&record).await?;
+        self.store.save(&record, &lease).await?;
         let payload = json_payload(&AccountUpdateRequest { contact: &contacts })?;
         let response = self
             .client
@@ -423,7 +442,7 @@ impl AccountService {
         let account: AccountObject =
             serde_json::from_slice(&response.body).map_err(|_| AccountError::InvalidResponse)?;
         record.observe(&account, self.clock.now());
-        self.store.save(&record).await?;
+        self.store.save(&record, &lease).await?;
         Ok(AcmeAccount {
             key_algorithm: signer.algorithm(),
             times: record.times,
@@ -453,9 +472,15 @@ impl AccountService {
         let directory = self.client.directory_url().clone();
         let jwk = signer.jwk()?;
         let thumbprint = jwk.thumbprint()?;
-        let _lease = self.store.lock_account(&directory, &thumbprint).await?;
+        let lease = self.store.lock_account(&directory, &thumbprint).await?;
         let mut record = self
-            .load_or_prepare(&directory, &thumbprint, &options, signer.algorithm())
+            .load_or_prepare(
+                &directory,
+                &thumbprint,
+                &options,
+                signer.algorithm(),
+                &lease,
+            )
             .await?;
         match record
             .action(AccountOperation::Register)
@@ -476,7 +501,7 @@ impl AccountService {
                 let account: AccountObject = serde_json::from_slice(&response.body)
                     .map_err(|_| AccountError::InvalidResponse)?;
                 record.observe(&account, self.clock.now());
-                self.store.save(&record).await?;
+                self.store.save(&record, &lease).await?;
                 return Ok(AcmeAccount {
                     key_algorithm: signer.algorithm(),
                     times: record.times,
@@ -523,7 +548,7 @@ impl AccountService {
         record.account_url = Some(account_url.clone());
         record.observe(&account, self.clock.now());
         record.state = AccountRecordState::Registered;
-        self.store.save(&record).await?;
+        self.store.save(&record, &lease).await?;
         Ok(AcmeAccount {
             key_algorithm: signer.algorithm(),
             times: record.times,
@@ -543,7 +568,7 @@ impl AccountService {
     pub async fn recover(&self, signer: &dyn AccountSigner) -> Result<AcmeAccount, AccountError> {
         let directory = self.client.directory_url().clone();
         let thumbprint = signer.jwk()?.thumbprint()?;
-        let _lease = self.store.lock_account(&directory, &thumbprint).await?;
+        let lease = self.store.lock_account(&directory, &thumbprint).await?;
         let previous = self.store.load(&directory, &thumbprint).await?;
         let mut record = previous.unwrap_or_else(|| AccountRecord {
             key_algorithm: signer.algorithm(),
@@ -582,7 +607,7 @@ impl AccountService {
         record.account_url = Some(account_url.clone());
         record.observe(&account, self.clock.now());
         record.state = AccountRecordState::Registered;
-        self.store.save(&record).await?;
+        self.store.save(&record, &lease).await?;
         Ok(AcmeAccount {
             key_algorithm: signer.algorithm(),
             times: record.times,
@@ -603,7 +628,7 @@ impl AccountService {
         let directory = self.client.directory_url();
         let thumbprint = signer.jwk()?.thumbprint()?;
         {
-            let _lease = self.store.lock_account(directory, &thumbprint).await?;
+            let lease = self.store.lock_account(directory, &thumbprint).await?;
             if let Some(mut record) = self.store.load(directory, &thumbprint).await? {
                 record
                     .action(AccountOperation::Inspect)
@@ -625,7 +650,7 @@ impl AccountService {
                     let account: AccountObject = serde_json::from_slice(&response.body)
                         .map_err(|_| AccountError::InvalidResponse)?;
                     record.observe(&account, self.clock.now());
-                    self.store.save(&record).await?;
+                    self.store.save(&record, &lease).await?;
                     return Ok(AcmeAccount {
                         key_algorithm: signer.algorithm(),
                         times: record.times,
@@ -657,7 +682,7 @@ impl AccountService {
     ) -> Result<AcmeAccount, AccountError> {
         let directory = self.client.directory_url();
         let thumbprint = signer.jwk()?.thumbprint()?;
-        let _lease = self.store.lock_account(directory, &thumbprint).await?;
+        let lease = self.store.lock_account(directory, &thumbprint).await?;
         let mut record = self
             .store
             .load(directory, &thumbprint)
@@ -701,7 +726,7 @@ impl AccountService {
             }
         }
         record.deactivation = DeactivationState::Pending;
-        self.store.save(&record).await?;
+        self.store.save(&record, &lease).await?;
         let response = self
             .client
             .signed(
@@ -722,7 +747,7 @@ impl AccountService {
             return Err(AccountError::InvalidResponse);
         }
         record.observe(&account, self.clock.now());
-        self.store.save(&record).await?;
+        self.store.save(&record, &lease).await?;
         Ok(AcmeAccount {
             key_algorithm: signer.algorithm(),
             times: record.times,
@@ -741,6 +766,7 @@ impl AccountService {
         thumbprint: &str,
         options: &RegistrationOptions,
         key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
+        lease: &Arc<dyn AccountLease>,
     ) -> Result<AccountRecord, AccountError> {
         if let Some(mut record) = self.store.load(directory, thumbprint).await? {
             if &record.directory_url != directory
@@ -757,7 +783,7 @@ impl AccountService {
                 // Keep local intent even if a CA omits contact in its account response.
                 // Updating this input does not update an already registered remote account.
                 record.contacts.clone_from(&options.contacts);
-                self.store.save(&record).await?;
+                self.store.save(&record, lease).await?;
             }
             match &self.client.directory().meta.terms_of_service {
                 // Consent is recorded as the discovered URL, not a reusable boolean:
@@ -765,7 +791,7 @@ impl AccountService {
                 Some(current) if record.accepted_terms_url.as_ref() == Some(current) => {}
                 Some(current) if options.terms_accepted => {
                     record.accepted_terms_url = Some(current.clone());
-                    self.store.save(&record).await?;
+                    self.store.save(&record, lease).await?;
                 }
                 Some(current) => return Err(AccountError::TermsRequired(current.clone())),
                 None => {}
@@ -800,7 +826,7 @@ impl AccountService {
             accepted_terms_url: self.client.directory().meta.terms_of_service.clone(),
             state: AccountRecordState::RegistrationPending,
         };
-        self.store.save(&record).await?;
+        self.store.save(&record, lease).await?;
         Ok(record)
     }
 

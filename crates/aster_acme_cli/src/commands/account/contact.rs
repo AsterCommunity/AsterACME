@@ -20,7 +20,7 @@ pub(crate) fn normalize(contacts: Vec<String>) -> Result<Vec<String>, AccountErr
                 || domain.contains('@')
                 || address.chars().any(|c| c.is_whitespace() || c.is_control())
                 || address.contains([
-                    ':', '?', '#', ',', ';', '%', '<', '>', '"', '\\', '/', '[', ']',
+                    ':', '?', '#', ',', ';', '%', '<', '>', '"', '\\', '/', '[', ']', '=', '&',
                 ])
                 || address.len() > 2041
             {
@@ -67,6 +67,8 @@ mod tests {
             "a@example.com,b@example.com",
             "a@example.com;b@example.com",
             "a%0Ab@example.com",
+            "ops=acme@example.com",
+            "ops&acme@example.com",
             "https://a@example.com",
             "<a@example.com>",
         ] {

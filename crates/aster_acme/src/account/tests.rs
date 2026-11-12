@@ -209,7 +209,13 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
         ..RegistrationOptions::default()
     };
     let record = service
-        .load_or_prepare(&directory, &thumbprint, &accepted, KeyAlgorithm::EcdsaP256)
+        .load_or_prepare(
+            &directory,
+            &thumbprint,
+            &accepted,
+            KeyAlgorithm::EcdsaP256,
+            &(Arc::new(()) as Arc<dyn AccountLease>),
+        )
         .await
         .unwrap();
     assert_eq!(record.accepted_terms_url, Some(first));
@@ -219,7 +225,8 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
                 &directory,
                 &thumbprint,
                 &RegistrationOptions::default(),
-                KeyAlgorithm::EcdsaP256
+                KeyAlgorithm::EcdsaP256,
+                &(Arc::new(()) as Arc<dyn AccountLease>)
             )
             .await
             .is_ok()
@@ -237,13 +244,20 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
                 &directory,
                 &thumbprint,
                 &RegistrationOptions::default(),
-                KeyAlgorithm::EcdsaP256
+                KeyAlgorithm::EcdsaP256,
+                &(Arc::new(()) as Arc<dyn AccountLease>)
             )
             .await,
         Err(AccountError::TermsRequired(_))
     ));
     let record = changed
-        .load_or_prepare(&directory, &thumbprint, &accepted, KeyAlgorithm::EcdsaP256)
+        .load_or_prepare(
+            &directory,
+            &thumbprint,
+            &accepted,
+            KeyAlgorithm::EcdsaP256,
+            &(Arc::new(()) as Arc<dyn AccountLease>),
+        )
         .await
         .unwrap();
     assert_eq!(record.accepted_terms_url, Some(second));
@@ -255,8 +269,8 @@ impl AccountStore for MemoryStore {
         &self,
         _directory: &AcmeUrl,
         _thumbprint: &str,
-    ) -> Result<Box<dyn AccountLease>, AccountStoreError> {
-        Ok(Box::new(()))
+    ) -> Result<Arc<dyn AccountLease>, AccountStoreError> {
+        Ok(Arc::new(()))
     }
     async fn load(
         &self,
@@ -265,7 +279,11 @@ impl AccountStore for MemoryStore {
     ) -> Result<Option<AccountRecord>, AccountStoreError> {
         Ok(self.record.lock().await.clone())
     }
-    async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError> {
+    async fn save(
+        &self,
+        record: &AccountRecord,
+        _lease: &Arc<dyn AccountLease>,
+    ) -> Result<(), AccountStoreError> {
         if self.fail_save.load(Ordering::SeqCst) {
             return Err(AccountStoreError {
                 message: "injected disk failure".into(),

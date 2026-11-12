@@ -67,6 +67,9 @@ impl StateDirectory {
     }
 
     /// Replace one complete file using a synced sibling temporary file.
+    /// Unix also syncs the parent directory. Windows guarantees process-level
+    /// replacement/recovery only; successful return does not promise rename durability
+    /// across power loss because parent-directory flushing is unavailable here.
     ///
     /// # Errors
     /// Keeps the previous file on failed write/rename; rejects unsafe names and paths.

@@ -16,7 +16,11 @@ impl CliAccountStore {
     ///
     /// # Errors
     /// Reports missing identity, unsafe managed files, lock timeout, cleanup or sync failures.
-    pub async fn remove(&self) -> Result<(), AccountStoreError> {
+    pub async fn remove(
+        &self,
+        expected: &aster_acme::account::AccountRecord,
+    ) -> Result<(), AccountStoreError> {
+        let expected = expected.clone();
         let slot = self.account_slot();
         ensure_real_dir(&slot)?;
         let lease = self
@@ -26,6 +30,10 @@ impl CliAccountStore {
         let name = self.name.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            let actual = crate::account::read_record(&slot.join("account.toml"))?.ok_or_else(|| store_error("account identity disappeared before removal"))?;
+            if actual.account_id != expected.account_id || actual.directory_url != expected.directory_url || actual.key_thumbprint != expected.key_thumbprint {
+                return Err(store_error("account identity changed after confirmation; select and confirm again"));
+            }
             let parent = slot.parent().ok_or_else(|| store_error("account directory has no parent"))?;
             ensure_real_dir(&slot)?;
             private_dir(&slot)?;

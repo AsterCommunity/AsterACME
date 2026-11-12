@@ -16,7 +16,7 @@ def check(table, path):
 
 
 for path in sorted((root / "crates").glob("*/Cargo.toml")):
-    manifest = tomllib.loads(path.read_text())
+    manifest = tomllib.loads(path.read_text(encoding="utf-8"))
     if not isinstance(manifest.get("package", {}).get("version"), str):
         errors.append(f"{path.relative_to(root)}: package.version must be explicit per crate")
     check(manifest, path.relative_to(root))

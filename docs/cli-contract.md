@@ -50,7 +50,7 @@
 | `-a` | `--account` | cert issue 的账户选择 |
 | `-d` | `--domain` | cert issue 的域名，可重复 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
-| `-c` | `--challenge` | 验证实现，目前只有 manual_dns |
+| `-c` | `--challenge` | manual_dns/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
 
@@ -73,7 +73,7 @@
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、-a、-c manual_dns、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、-a、-c manual_dns/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
@@ -86,7 +86,7 @@
 
 - `--data-dir PATH`：唯一状态根覆盖；配置固定为其中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
 - `--ca` 与 `--ca-directory` 互斥；内置只有公开生产提供商 letsencrypt/zerossl/google。已有账户始终绑定原 CA，显式不同 CA 拒绝，不因选项换成新账户。
-- `--user-agent` 与 `--request-timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；wait-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
+- `--user-agent` 与 `--request-timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；--operation-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。
 - `--contact` 是完整替换列表，`--clear-contacts` 明确清空，二者互斥；缺省输入不当作清空。
 - `--eab-kid` 与 `--eab-key-file` 必须成对且只属于注册。秘密从文件读取，不直接放 CLI 参数中。
@@ -99,7 +99,7 @@
 
 交互终端执行裸 add 时先选择证书、确认或修改默认部署名称，再输入已存在的目标目录，最后询问可选 reload 命令；留空则只发布文件，不启动进程。交互引导只支持目录，精确文件地址需要显式传参。目标使用 `--target DIR`（写入 fullchain.pem、cert.pem、ca.pem、private-key.pem），或独立提供 `--cert-path`、`--key-path`、`--ca-path`、`--fullchain-path` 的任意非空组合，只发布指定的产物，不强制配对或依赖。目录模式与精确路径互斥，所有精确目标必须互不相同，父目录必须预先存在。无效输入会留在提示内重试，取消不保存绑定。脚本/JSON 必须提供 CERT_NAME 与完整目标路径，部署名和 reload 均可省略（脚本不询问部署名），不弹提示。
 
-文件通过同目录暂存后逐文件原子替换，不保证整组切换。Unix 默认0600；add/update 的 `--file-mode 0644` 设置证书、CA链和fullchain，`--key-mode 0640` 单独设置私钥。输入为3–4位八进制且仅接受000–777普通权限位，在临时文件发布前设置，不修改父目录。权限随绑定保存并用于后续续期；Windows 使用继承权限，显式 Unix mode 明确报不支持，不静默忽略。服务必须能读取配置后的私钥。
+全部选定文件先在各自父目录完成暂存、写入、设权和同步，再逐文件原子替换并同步父目录；准备阶段任何失败都不改变现有目标，正常错误返回时清理已准备临时文件。提交前重新检查整组目标，拒绝准备期间变成目录或链接的路径。部署直接发布普通文件并保持目录路径，不使用部署链接或目录交换，不保证整组切换。提交中途失败可能留下部分更新，记录PublishFailed且不执行reload；显式run重新发布完整选定集合，全部成功后才reload。取消后已启动的阻塞文件任务仍持锁执行，未完成检查点保留，不能据此声称发布或reload成功；进程崩溃可能遗留临时文件，不按前缀擅自清理。Unix 默认0600；add/update 的 `--file-mode 0644` 设置证书、CA链和fullchain，`--key-mode 0640` 单独设置私钥。输入为3–4位八进制且仅接受000–777普通权限位，在临时文件发布前设置，不修改父目录。权限随绑定保存并用于后续续期；Windows 使用继承权限，显式 Unix mode 明确报不支持，不静默忽略。服务必须能读取配置后的私钥。
 
 可选 `--reload-cmd "systemctl restart nginx"` 按引用规则拆成程序与 argv，不启动 shell。未配置命令时发布完成即 deployed，attempts=0；不会声称 reload 成功。`--reload-timeout` 仅在配置 reload 时限制每次进程及输出收集，默认30秒（1–3600）；`--max-retries` 为额外尝试次数，默认3（0–10）。续期后仍默认自动部署，只有配置了 reload 才执行进程。
 
@@ -189,7 +189,7 @@ aster-acme cert issue --resume <NAME> --yes --debug
 | CLI参数 | config.toml字段 | 内置默认 | 范围/含义 |
 | --- | --- | --- | --- |
 | --request-timeout | request_timeout | 30秒 | 1–300秒；单个HTTP请求连接到响应读取 |
-| --operation-timeout | operation_timeout | 600秒 | 1–86400秒；单次证书签发/恢复执行预算，包含确认与轮询等待 |
+| --operation-timeout | operation_timeout | 600秒 | 1–86400秒；单次证书签发/恢复执行预算，包含CA发现、确认、轮询及自动部署 |
 | --max-polls | max_polls | 30轮 | 1–1000；每份证书每次调用的订单轮询次数 |
 
 优先级统一为显式CLI > 配置 > 内置。CLI不写回这些单次覆盖，配置缺省可用内置默认；生成模板写明三项用途。批量续期为每份证书独立应用预算，Retry-After仍限制下次查询，不被轮数覆盖。未发布：timeout配置字段、--timeout及--wait-timeout删除，无兼容别名/自动迁移；已有timeout需由用户改成request_timeout。operation预算目前围绕实际签发执行，不包含进入执行前的账户/证书目标选择。
@@ -244,3 +244,5 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | account list、cert list、version、help、cert renew --all | 直接输出/按既定范围执行，无需选择 | 不添加无意义的输入流程 |
 
 顶层及 account/cert/deploy 命令组仍需显式选择子命令，不提供动作菜单；JSON/非TTY按设计完全不交互。除了 deploy show 的证书/部署名两个位置参数，其余业务命令最多一个位置参数，由解析测试递归验证；子命令路径和选项值不计为业务位置参数。
+
+构建标识的dirty仅描述Git已跟踪文件修改，不包含未跟踪文件；归档构建不会借用父目录仓库revision。Windows存储成功不承诺掉电后的rename目录项持久性，进程重启恢复与断电恢复分开。

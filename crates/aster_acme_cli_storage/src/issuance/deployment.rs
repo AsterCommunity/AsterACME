@@ -1,21 +1,19 @@
 //! CLI-owned deployment bindings, artifact publication and reload checkpoints.
 use crate::issuance::{
-    CertificateName, CliIssueStore, IssueError, IssueRecord, ensure_real_dir, failure, selection,
-    write_selection,
+    CertificateName, CliIssueStore, IssueError, IssueRecord, failure, selection, write_selection,
 };
 use crate::toml_file::{FileLease, read_private};
 use aster_acme::issuance::certificate;
 use aster_acme::storage::query::IssueQuery;
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
-    io::Write as _,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use zeroize::Zeroizing;
 
 mod permissions;
+mod publication;
 mod targets;
 mod update;
 
@@ -353,8 +351,10 @@ impl DeploymentSession {
         &self.artifacts
     }
 
-    /// Publish each artifact by sibling temp file and atomic replacement. A crash
-    /// mid-set leaves a durable Publishing phase, so retry rewrites the same version.
+    /// Stage and sync every selected artifact before replacing any destination.
+    /// Each replacement is atomic; a failure during commit can leave a partial set.
+    /// The caller records Publishing before this operation and reloads only on success.
+    /// The worker retains the certificate lease through completion after cancellation.
     ///
     /// # Errors
     /// Returns an error if a destination is unsafe or any staged file cannot be published.
@@ -365,7 +365,7 @@ impl DeploymentSession {
         let artifacts = Arc::clone(&self.artifacts);
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
-            publish_files(&target, &artifacts, &permissions)
+            publication::PreparedPublication::prepare(&target, &artifacts, &permissions)?.commit()
         })
         .await
         .map_err(|_| failure("deployment file worker failed"))?
@@ -415,107 +415,6 @@ impl DeploymentSession {
         self.definition = updated;
         Ok(())
     }
-}
-
-fn publish_files(
-    target: &DeploymentTarget,
-    bytes: &DeploymentArtifacts,
-    permissions: &DeploymentPermissions,
-) -> Result<(), IssueError> {
-    let key_path = match target {
-        DeploymentTarget::Directory { path } => Some(path.join("private-key.pem")),
-        DeploymentTarget::Files { private_key, .. } => private_key.clone(),
-    };
-    let files = match target {
-        DeploymentTarget::Directory { path } => {
-            ensure_real_dir(path)
-                .map_err(|_| failure("deployment target must be an existing real directory"))?;
-            vec![
-                (path.join("fullchain.pem"), bytes.fullchain.as_slice()),
-                (path.join("cert.pem"), bytes.certificate.as_slice()),
-                (path.join("ca.pem"), bytes.ca_chain.as_slice()),
-                (path.join("private-key.pem"), bytes.private_key.as_slice()),
-            ]
-        }
-        DeploymentTarget::Files {
-            certificate,
-            fullchain,
-            ca_chain,
-            private_key,
-        } => {
-            let mut files = Vec::new();
-            for (path, contents) in [
-                (private_key, bytes.private_key.as_slice()),
-                (certificate, bytes.certificate.as_slice()),
-                (fullchain, bytes.fullchain.as_slice()),
-                (ca_chain, bytes.ca_chain.as_slice()),
-            ] {
-                if let Some(path) = path {
-                    files.push((path.clone(), contents));
-                }
-            }
-            files
-        }
-    };
-    for (path, _) in &files {
-        if !path.is_absolute() {
-            return Err(failure("deployment path must be absolute"));
-        }
-        let parent = path
-            .parent()
-            .ok_or_else(|| failure("deployment path has no parent"))?;
-        ensure_real_dir(parent)
-            .map_err(|error| path_error("inspect parent directory", parent, &error))?;
-        match fs::symlink_metadata(path) {
-            Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                return Err(failure(&format!(
-                    "deployment destination is not a regular file: {}",
-                    path.display()
-                )));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(path_error("inspect destination", path, &error)),
-        }
-    }
-    for (path, contents) in files {
-        let mode = if key_path.as_deref() == Some(path.as_path()) {
-            permissions.key_mode
-        } else {
-            permissions.file_mode
-        };
-        atomic_publish(&path, contents, mode)?;
-    }
-    Ok(())
-}
-
-fn atomic_publish(path: &Path, contents: &[u8], mode: Option<u32>) -> Result<(), IssueError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| failure("deployment path has no parent"))?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| path_error("stage file", path, &error))?;
-    #[cfg(unix)]
-    if let Some(mode) = mode {
-        use std::os::unix::fs::PermissionsExt as _;
-        temp.as_file()
-            .set_permissions(fs::Permissions::from_mode(mode))
-            .map_err(|error| path_error("set permissions", path, &error))?;
-    }
-    #[cfg(not(unix))]
-    if mode.is_some() {
-        return Err(failure("Unix file modes are unsupported on this platform"));
-    }
-    temp.write_all(contents)
-        .map_err(|error| path_error("write file", path, &error))?;
-    temp.as_file()
-        .sync_all()
-        .map_err(|error| path_error("sync file", path, &error))?;
-    temp.persist(path)
-        .map_err(|error| path_error("replace destination", path, &error.error))?;
-    crate::state_file::sync_directory(parent)
-        .map_err(|error| path_error("sync parent directory", path, &error))?;
-    Ok(())
 }
 
 fn validate_binding(binding: &DeploymentBinding) -> Result<(), IssueError> {
@@ -571,13 +470,6 @@ fn validate_binding(binding: &DeploymentBinding) -> Result<(), IssueError> {
         DeploymentTarget::Directory { .. } => {}
     }
     Ok(())
-}
-
-fn path_error(stage: &str, path: &Path, error: &dyn std::fmt::Display) -> IssueError {
-    failure(&format!(
-        "deployment {stage} failed at {}: {error}",
-        path.display()
-    ))
 }
 
 fn allocate_name(

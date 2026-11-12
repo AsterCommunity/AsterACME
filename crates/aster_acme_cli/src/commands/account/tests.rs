@@ -1225,3 +1225,61 @@ async fn existing_account_commands_reject_missing_names_before_prompts_keys_or_h
         assert!(!temp.path().join("accounts/missing").exists());
     }
 }
+
+#[tokio::test]
+async fn confirmed_rotation_is_committed_locally_even_when_directory_is_unreachable() {
+    use aster_acme::storage::account::{AccountKeyStore, AccountRotationStore};
+    use aster_acme_cli_storage::account::CliAccountStore;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = AcmeUrl::new("https://127.0.0.1:1/directory").unwrap();
+    let store =
+        CliAccountStore::open(temp.path(), "work", std::time::Duration::from_secs(1)).unwrap();
+    let key = store
+        .signer(&directory, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
+    let mut record = store.metadata().await.unwrap().unwrap();
+    record.state = AccountRecordState::Registered;
+    record.last_status = Some(aster_acme_core::protocol::AccountStatus::Valid);
+    record.account_url = Some(AcmeUrl::new("https://127.0.0.1:1/account").unwrap());
+    store.save(&record).await.unwrap();
+    let session = store.rotation(&directory).await.unwrap();
+    let next = session.stage(None).await.unwrap();
+    let thumb = next.jwk().unwrap().thumbprint().unwrap();
+    assert_ne!(key.jwk().unwrap().thumbprint().unwrap(), thumb);
+    record.key_rotation = Some(aster_acme_core::account::KeyRotation {
+        new_thumbprint: thumb.clone(),
+        phase: aster_acme_core::account::KeyRotationPhase::Confirmed,
+    });
+    session.save(&record).await.unwrap();
+    drop(session);
+    let parsed = Args::try_parse_from([
+        "aster-acme",
+        "account",
+        "rotate-key",
+        "work",
+        "--yes",
+        "--json",
+        "--data-dir",
+        temp.path().to_str().unwrap(),
+    ])
+    .unwrap();
+    let Command::Account { command } = parsed.command else {
+        panic!("account");
+    };
+    let report = crate::commands::account::execute::execute(
+        command,
+        &crate::common::context::CommandContext::new(true),
+    )
+    .await
+    .unwrap();
+    let crate::commands::account::report::AccountReport::KeyRotated { record, .. } = report else {
+        panic!("rotation");
+    };
+    assert_eq!(record.key_thumbprint, thumb);
+    assert!(record.key_rotation.is_none());
+    assert_eq!(
+        store.metadata().await.unwrap().unwrap().key_thumbprint,
+        thumb
+    );
+}

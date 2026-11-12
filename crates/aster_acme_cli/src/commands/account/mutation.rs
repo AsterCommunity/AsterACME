@@ -106,6 +106,7 @@ pub(super) async fn rotate_key(
     // Opening a rotation session validates the existing old/staged key identity without
     // generating material. Release it before user input; service revalidates under lease.
     let checked = context.store.rotation(&context.directory).await?;
+    let expected = checked.record();
     let old_algorithm = checked.old_signer().algorithm();
     let new_label = match args.key_algorithm {
         Some(algorithm) => algorithm.name(),
@@ -125,10 +126,28 @@ pub(super) async fn rotate_key(
         args.yes,
         &cli.output,
     )?;
+    if expected.key_rotation.as_ref().is_some_and(|rotation| {
+        rotation.phase == aster_acme_core::account::KeyRotationPhase::Confirmed
+    }) {
+        let session = context.store.rotation(&context.directory).await?;
+        if session.record() != expected {
+            return Err(AccountError::IdentityMismatch.into());
+        }
+        let new = session.stage(args.key_algorithm).await?;
+        session.commit(&expected).await?;
+        let mut record = expected;
+        record.key_thumbprint = new.jwk()?.thumbprint()?;
+        record.key_algorithm = new.algorithm();
+        record.key_rotation = None;
+        return Ok(AccountReport::KeyRotated {
+            name: context.name,
+            record,
+        });
+    }
     let transport = context.transport_options(&options)?;
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let record = AccountService::new(client, context.store.clone())
-        .rotate_key(context.store.as_ref(), args.key_algorithm)
+        .rotate_key(context.store.as_ref(), args.key_algorithm, Some(&expected))
         .await?;
     Ok(AccountReport::KeyRotated {
         name: context.name,

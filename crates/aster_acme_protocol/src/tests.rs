@@ -194,3 +194,19 @@ fn method_specific_fields_do_not_make_unknown_challenges_require_dns01_tokens() 
         assert!(serde_json::from_value::<AuthorizationObject>(invalid).is_err());
     }
 }
+
+#[test]
+fn exact_urls_reject_characters_the_http_layer_would_reencode() {
+    for value in [
+        "https://ca.example/a b",
+        "https://ca.example/a\\b",
+        "https://ca.example/`",
+        "https://ca.example/{x}",
+        "https://ca.example/<x>",
+        "https://ca.example/\"x",
+    ] {
+        assert!(crate::url::AcmeUrl::new(value).is_err(), "{value}");
+    }
+    let value = "https://ca.example/%41?exact=%2f";
+    assert_eq!(crate::url::AcmeUrl::new(value).unwrap().as_str(), value);
+}

@@ -7,6 +7,97 @@ use crate::commands::cert::{
 use aster_acme::issuance::IssueOutcome;
 
 #[tokio::test]
+async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
+    let fixture = Fixture::new().await;
+    let target = fixture.temp.path().join("verify");
+    fixture
+        .add(
+            "verify",
+            child_command(&format!("verify-publication:{}", target.display())),
+            0,
+        )
+        .await;
+    for renewal in [false, true] {
+        if renewal {
+            fixture.complete(true).await;
+        }
+        let generation = fixture
+            .store
+            .query(IssueQuery {
+                name: Some(fixture.name.clone()),
+                in_use: Some(true),
+                ..IssueQuery::default()
+            })
+            .await
+            .unwrap()
+            .remove(0)
+            .generation_name();
+        for name in ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"] {
+            std::fs::copy(
+                fixture
+                    .temp
+                    .path()
+                    .join("certs/web")
+                    .join(&generation)
+                    .join(name),
+                target.join(format!("expected-{name}")),
+            )
+            .unwrap();
+        }
+        let observed = target.join("reload-observed");
+        if observed.exists() {
+            std::fs::remove_file(&observed).unwrap();
+        }
+        if renewal {
+            let results = fixture.automatic(&fixture.store).await;
+            assert_eq!(results[0].phase, DeploymentPhase::Deployed);
+        } else {
+            let result = run_one(&fixture.store, &fixture.name, "verify", true, None)
+                .await
+                .unwrap();
+            assert_eq!(result.binding.phase, DeploymentPhase::Deployed);
+        }
+        assert_eq!(std::fs::read(&observed).unwrap(), b"complete set");
+    }
+    // A failure in the last configured file must not reload or replace any earlier file.
+    std::fs::remove_file(target.join("reload-observed")).unwrap();
+    std::fs::remove_file(target.join("private-key.pem")).unwrap();
+    std::fs::create_dir(target.join("private-key.pem")).unwrap();
+    let old_chain = std::fs::read(target.join("fullchain.pem")).unwrap();
+    let result = run_one(&fixture.store, &fixture.name, "verify", true, None)
+        .await
+        .unwrap();
+    assert_eq!(result.binding.phase, DeploymentPhase::PublishFailed);
+    assert_eq!(result.binding.attempts, 0);
+    assert!(!target.join("reload-observed").exists());
+    assert_eq!(
+        std::fs::read(target.join("fullchain.pem")).unwrap(),
+        old_chain
+    );
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|event| event.message.contains("files published")
+                || event.message.contains("reload succeeded"))
+    );
+    assert_eq!(
+        fixture.status("verify").await.phase,
+        DeploymentPhase::PublishFailed
+    );
+    std::fs::remove_dir(target.join("private-key.pem")).unwrap();
+    let reopened = CliIssueStore::new(fixture.temp.path().into(), Duration::from_secs(2));
+    let result = run_one(&reopened, &fixture.name, "verify", true, None)
+        .await
+        .unwrap();
+    assert_eq!(result.binding.phase, DeploymentPhase::Deployed);
+    assert_eq!(
+        std::fs::read(target.join("reload-observed")).unwrap(),
+        b"complete set"
+    );
+}
+
+#[tokio::test]
 async fn open_failure_keeps_saved_history_but_reports_current_failure_and_runs_next_target() {
     let fixture = Fixture::new().await;
     let first = fixture.add("first", Vec::new(), 0).await;
@@ -245,8 +336,16 @@ async fn inventory_errors_and_old_deployed_states_make_single_and_batch_reports_
     );
     // No bindings can be read: the absence of entries must not turn the warning into success.
     std::fs::write(fixture.temp.path().join("certs/web/cert.toml"), "corrupt").unwrap();
-    let (deployments, deployment_events) =
-        after_issuance(&fixture.store, &fixture.name, &current.generation_name()).await;
+    let (deployments, deployment_events) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        &current.generation_name(),
+        &aster_acme::solver::ExecutionContext {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: std::time::Instant::now() + Duration::from_secs(30),
+        },
+    )
+    .await;
     assert_eq!(deployments, []);
     let result = CertificateResult::Issued {
         outcome: IssueOutcome::Completed {
@@ -573,4 +672,58 @@ async fn deployment_result_events_make_batch_summary_fail_even_when_inventory_is
         crate::commands::cert::render::render(&report, crate::common::session::Format::plain(true))
             .unwrap();
     assert!(json.contains("deployment inventory read failed"));
+}
+
+#[tokio::test]
+async fn automatic_deployment_inherits_cancellation_and_deadline_without_publication() {
+    let fixture = Fixture::new().await;
+    let target = fixture.add("pending", Vec::new(), 0).await;
+    for cancelled in [false, true] {
+        let context = aster_acme::solver::ExecutionContext {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: std::time::Instant::now()
+                + if cancelled {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::ZERO
+                },
+        };
+        if cancelled {
+            context.cancellation.cancel();
+        }
+        let (_, events) =
+            after_issuance(&fixture.store, &fixture.name, "generation", &context).await;
+        assert!(events.iter().any(|event| event.kind == MessageKind::Error));
+        assert!(!target.join("private-key.pem").exists());
+        assert_eq!(
+            fixture.status("pending").await.phase,
+            DeploymentPhase::Configured
+        );
+    }
+}
+
+#[tokio::test]
+async fn automatic_reload_is_stopped_by_remaining_operation_budget() {
+    let fixture = Fixture::new().await;
+    fixture.add("slow", child_command("timeout"), 0).await;
+    let started = std::time::Instant::now();
+    let (_, events) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        "generation",
+        &aster_acme::solver::ExecutionContext {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: started + Duration::from_millis(250),
+        },
+    )
+    .await;
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.message.contains("deadline exceeded"))
+    );
+    let saved = fixture.status("slow").await;
+    assert_eq!(saved.phase, DeploymentPhase::Reloading);
+    assert_eq!(saved.attempts, 1);
 }

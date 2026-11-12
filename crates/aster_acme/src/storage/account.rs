@@ -6,8 +6,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 /// A held account lease. Dropping it releases any backing process lock.
-pub trait AccountLease: Send {}
-impl<T: Send> AccountLease for T {}
+pub trait AccountLease: Send + Sync {}
+impl<T: Send + Sync> AccountLease for T {}
 
 /// Object-safe persistence contract for embedders and CLI adapters.
 ///
@@ -25,7 +25,7 @@ pub trait AccountStore: Send + Sync {
         &self,
         directory: &AcmeUrl,
         thumbprint: &str,
-    ) -> Result<Box<dyn AccountLease>, AccountStoreError>;
+    ) -> Result<Arc<dyn AccountLease>, AccountStoreError>;
 
     /// Load metadata for an exact CA directory and key thumbprint.
     ///
@@ -37,11 +37,17 @@ pub trait AccountStore: Send + Sync {
         thumbprint: &str,
     ) -> Result<Option<AccountRecord>, AccountStoreError>;
 
-    /// Atomically persist metadata for an exact CA directory and key thumbprint.
+    /// Atomically persist metadata under the caller's account operation lease.
+    /// Blocking writes must clone and retain this lease until all IO finishes,
+    /// including after cancellation. Never acquire a second lock inside this call.
     ///
     /// # Errors
     /// Reports write, permission, validation, or durability failures.
-    async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError>;
+    async fn save(
+        &self,
+        record: &AccountRecord,
+        lease: &Arc<dyn AccountLease>,
+    ) -> Result<(), AccountStoreError>;
 }
 
 /// Key access intent; creation never replaces a saved identity.

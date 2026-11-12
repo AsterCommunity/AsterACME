@@ -147,9 +147,17 @@ fn paths(
         directory.push(part);
         if create {
             match fs::create_dir(&directory) {
-                Ok(()) => state_file::expose_public_directory(&directory).map_err(|_| {
-                    IssueError::InvalidInput("cannot prepare public HTTP directory permissions")
-                })?,
+                Ok(()) => {
+                    state_file::expose_public_directory(&directory).map_err(|_| {
+                        IssueError::InvalidInput("cannot prepare public HTTP directory permissions")
+                    })?;
+                    state_file::sync_directory(
+                        directory
+                            .parent()
+                            .ok_or(IssueError::InvalidInput("missing HTTP directory parent"))?,
+                    )
+                    .map_err(|_| IssueError::InvalidInput("cannot sync HTTP directory creation"))?;
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(_) => {
                     return Err(IssueError::InvalidInput(
@@ -250,6 +258,12 @@ fn publish(
             ));
         }
     };
+    state_file::sync_directory(
+        target
+            .parent()
+            .ok_or(IssueError::InvalidInput("missing challenge directory"))?,
+    )
+    .map_err(|_| IssueError::InvalidInput("cannot sync HTTP publication directory"))?;
     let (file, bytes) = read(&target)?.ok_or(IssueError::InvalidInput(
         "published HTTP challenge disappeared",
     ))?;
@@ -263,10 +277,7 @@ fn publish(
     {
         // Identical preexisting content is borrowed. Delete only our private receipt,
         // retaining the user's independently owned file during later cleanup.
-        drop(stage);
-        fs::remove_file(&receipt).map_err(|_| {
-            IssueError::InvalidInput("cannot discard borrowed HTTP publication receipt")
-        })?;
+        unlink_owned(&receipt, &stage, content.as_bytes())?;
         return Ok(FileAction::Borrowed);
     }
     Ok(if created {
@@ -304,17 +315,58 @@ fn remove_owned(
         }
         if state_file::same_file(&stage, &file)
             .map_err(|_| IssueError::InvalidInput("cannot verify cleanup ownership"))?
+            && unlink_owned(&target, &file, content.as_bytes())?
         {
-            drop(file);
-            fs::remove_file(&target)
-                .map_err(|_| IssueError::InvalidInput("cannot remove owned HTTP challenge file"))?;
             action = FileAction::Removed;
         }
     }
-    drop(stage);
-    fs::remove_file(receipt)
-        .map_err(|_| IssueError::InvalidInput("cannot remove HTTP publication receipt"))?;
+    unlink_owned(&receipt, &stage, content.as_bytes())?;
     Ok(action)
+}
+
+// Move the actual path entry into a private sibling directory before checking it.
+// This binds deletion to the object moved, not to a prior pathname observation.
+fn unlink_owned(path: &Path, expected: &File, content: &[u8]) -> Result<bool, IssueError> {
+    let parent = path
+        .parent()
+        .ok_or(IssueError::InvalidInput("missing HTTP cleanup directory"))?;
+    let quarantine = tempfile::Builder::new()
+        .prefix(".aster-acme-cleanup-")
+        .tempdir_in(parent)
+        .map_err(|_| IssueError::InvalidInput("cannot isolate HTTP cleanup"))?;
+    let moved = quarantine.path().join("entry");
+    match fs::rename(path, &moved) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(IssueError::InvalidInput("cannot isolate HTTP cleanup file")),
+    }
+    let owned = read(&moved).and_then(|actual| match actual {
+        Some((actual, bytes)) => Ok(bytes == content
+            && state_file::same_file(expected, &actual).map_err(|_| {
+                IssueError::InvalidInput("cannot verify isolated cleanup identity")
+            })?),
+        None => Ok(false),
+    });
+    if matches!(owned, Ok(true)) {
+        fs::remove_file(&moved)
+            .map_err(|_| IssueError::InvalidInput("cannot remove isolated owned HTTP file"))?;
+        state_file::sync_directory(parent)
+            .map_err(|_| IssueError::InvalidInput("cannot sync HTTP cleanup directory"))?;
+        return Ok(true);
+    }
+    // hard_link restores without ever overwriting a concurrently created entry.
+    if fs::hard_link(&moved, path).is_err() {
+        let retained = quarantine.keep();
+        return Err(IssueError::Publication(format!(
+            "HTTP cleanup path changed; retained isolated content at {}",
+            retained.display()
+        )));
+    }
+    fs::remove_file(&moved)
+        .map_err(|_| IssueError::InvalidInput("cannot release restored HTTP cleanup entry"))?;
+    state_file::sync_directory(parent)
+        .map_err(|_| IssueError::InvalidInput("cannot sync restored HTTP cleanup entry"))?;
+    owned.map(|_| false)
 }
 
 #[cfg(test)]

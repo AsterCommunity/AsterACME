@@ -22,6 +22,7 @@ pub mod service;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct CertificateName(String);
+
 impl CertificateName {
     /// Accept DNS-style names or explicit ASCII labels; reject path separators and traversal.
     ///
@@ -64,6 +65,7 @@ impl CertificateName {
         &self.0
     }
 }
+
 impl std::fmt::Display for CertificateName {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0)
@@ -76,6 +78,7 @@ impl TryFrom<String> for CertificateName {
         Self::new(&value)
     }
 }
+
 impl From<CertificateName> for String {
     fn from(value: CertificateName) -> Self {
         value.0
@@ -386,6 +389,7 @@ pub struct IssueRecord {
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub certificate_not_after: Option<time::OffsetDateTime>,
 }
+
 impl IssueRecord {
     /// Whether this completed local generation can be offered for deployment.
     /// The storage adapter must additionally verify it is still the selected version.
@@ -450,7 +454,7 @@ impl IssueRecord {
             && self.account_id == account.account_id
             && self.account_name == request.account_name
             && self.directory == account.directory_url
-            && self.account_thumbprint == account.key_thumbprint
+            && account.account_url.as_ref() == Some(&self.account_url)
             && self.challenge == request.challenge
             && self.solver_id == request.solver_id
             && self.solver_config == request.solver_config

@@ -217,3 +217,16 @@ fn effects_distinguish_created_reused_borrowed_removed_and_retained_files() {
             .contains(&target.display().to_string())
     );
 }
+
+#[test]
+fn cleanup_checks_the_actual_moved_object_and_restores_unowned_replacements() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("challenge");
+    fs::write(&file, b"original").unwrap();
+    let old = File::open(&file).unwrap();
+    fs::remove_file(&file).unwrap();
+    fs::write(&file, b"user replacement").unwrap();
+    assert!(!unlink_owned(&file, &old, b"original").unwrap());
+    assert_eq!(fs::read(&file).unwrap(), b"user replacement");
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+}

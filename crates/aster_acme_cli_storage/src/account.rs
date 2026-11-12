@@ -77,6 +77,18 @@ impl CliAccountStore {
             .map_err(|_| store_error("account storage worker failed"))?
     }
 
+    /// Persist an independent local metadata edit under a newly acquired account lease.
+    /// Protocol operations use `AccountStore::save` with their existing lease instead.
+    ///
+    /// # Errors
+    /// Reports lock, identity, schema and persistence errors.
+    pub async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError> {
+        let lease = self
+            .lock_account(&record.directory_url, &record.key_thumbprint)
+            .await?;
+        AccountStore::save(self, record, &lease).await
+    }
+
     fn account_slot(&self) -> PathBuf {
         self.root.join("accounts").join(self.name.as_ref())
     }
@@ -132,8 +144,8 @@ impl AccountStore for CliAccountStore {
         &self,
         _directory: &AcmeUrl,
         _thumbprint: &str,
-    ) -> Result<Box<dyn AccountLease>, AccountStoreError> {
-        Ok(Box::new(
+    ) -> Result<Arc<dyn AccountLease>, AccountStoreError> {
+        Ok(Arc::new(
             self.acquire(self.lock_path()?)
                 .await
                 .map_err(|error| store_error(&error.to_string()))?,
@@ -159,16 +171,22 @@ impl AccountStore for CliAccountStore {
         .map_err(|_| store_error("account storage worker failed"))?
     }
 
-    async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError> {
+    async fn save(
+        &self,
+        record: &AccountRecord,
+        lease: &Arc<dyn AccountLease>,
+    ) -> Result<(), AccountStoreError> {
         if record.account_id.len() != 43
             || record.key_thumbprint.len() != 43
             || record.contacts.len() > 32
         {
             return Err(store_error("invalid account metadata"));
         }
+        let lease = lease.clone();
         let path = self.account_slot().join("account.toml");
         let record = record.clone();
         tokio::task::spawn_blocking(move || {
+            let _lease = lease;
             if let Some(previous) = read_record(&path)? {
                 verify_identity(&previous, &record.directory_url, &record.key_thumbprint)?;
                 if previous.key_algorithm != record.key_algorithm {

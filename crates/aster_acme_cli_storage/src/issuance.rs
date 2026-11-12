@@ -62,34 +62,17 @@ impl CliIssueStore {
             let lease = toml_file::lock(&path, timeout)?;
             if slot.join("cert.toml").is_file() {
                 removal::ensure_idle(&slot).map_err(std::io::Error::other)?;
-                let config = selection(&slot).map_err(std::io::Error::other)?;
-                let expected = match config.cert.in_use.as_ref() {
-                    Some(id) => query::read(
-                        slot.parent()
-                            .ok_or_else(|| std::io::Error::other("missing catalog parent"))?,
-                        &IssueQuery {
-                            name: Some(config.cert.name.clone()),
-                            operation_id: Some(id.clone()),
-                            ..IssueQuery::default()
-                        },
-                    )
-                    .map_err(std::io::Error::other)?
-                    .into_iter()
-                    .find(|record| &record.operation_id == id)
-                    .map(|record| record.generation_name())
-                    .ok_or_else(|| std::io::Error::other("selected certificate generation missing"))
-                    .map(Some)?,
-                    None => None,
-                };
-                publication::NATIVE
-                    .recover(&slot, expected.as_deref())
-                    .map_err(std::io::Error::other)?;
+                publication::recover_selection(&slot).map_err(std::io::Error::other)?;
             }
             Ok::<_, std::io::Error>(lease)
         })
         .await
         .map_err(|_| failure("certificate lock worker failed"))?
-        .map_err(|_| failure("certificate lock, view recovery or timeout failed"))?;
+        .map_err(|error| {
+            failure(&format!(
+                "certificate lock, view recovery or timeout failed: {error}"
+            ))
+        })?;
         Ok(Arc::new(lease))
     }
 }

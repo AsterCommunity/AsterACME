@@ -31,8 +31,13 @@ mod tests {
         let guard = InterruptGuard::new(token.clone());
         let waiter = guard.0.abort_handle();
         drop(guard);
-        tokio::task::yield_now().await;
-        assert!(waiter.is_finished());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !waiter.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(!token.is_cancelled());
     }
 }

@@ -5,7 +5,7 @@ import tomllib
 root = Path(__file__).resolve().parents[1]
 # Audit all resolved packages, including foreign targets and tests, without fetching
 # dependencies for platforms that the current runner does not build.
-packages = {package["name"] for package in tomllib.loads((root / "Cargo.lock").read_text())["package"]}
+packages = {package["name"] for package in tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))["package"]}
 forbidden = packages & {
     "native-tls", "tokio-native-tls", "hyper-tls", "openssl", "openssl-sys",
 }

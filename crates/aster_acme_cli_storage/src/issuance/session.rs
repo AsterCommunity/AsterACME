@@ -105,8 +105,11 @@ impl IssueSession for Session {
                 return Err(failure("cannot promote incomplete issuance"));
             }
             let config = selection(&slot)?;
-            if let Some(previous) = &record.renewal_of
-                && config.cert.in_use.as_deref() != Some(previous.operation_id.as_str())
+            if config.cert.in_use.as_deref()
+                != record
+                    .renewal_of
+                    .as_ref()
+                    .map(|previous| previous.operation_id.as_str())
                 && config.cert.in_use.as_deref() != Some(record.operation_id.as_str())
             {
                 return Err(failure(
@@ -130,7 +133,12 @@ impl IssueSession for Session {
             publication::NATIVE.publish(&slot, &record)?;
             let mut config = selection(&slot)?;
             config.cert.in_use = Some(record.operation_id.clone());
-            write_selection(&slot, &config)?;
+            if let Err(error) = write_selection(&slot, &config) {
+                // The write may have replaced catalog state before a sync error;
+                // recover according to what is actually persisted, not the attempted value.
+                publication::recover_selection(&slot)?;
+                return Err(error);
+            }
             publication::NATIVE.recover(&slot, Some(&record.generation_name()))?;
             record.phase = IssuancePhase::Completed;
             record.is_in_use = true;

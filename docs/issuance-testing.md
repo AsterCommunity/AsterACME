@@ -176,3 +176,20 @@ Windows runner 报告的两个失败源于测试假设：rcgen PEM 使用平台�
 新签发交互用例覆盖全部五种方式、裸issue域名和方法补全、webroot目录输入、standalone/TLS-ALPN默认及IPv6自定义地址、显式参数零提示、恢复零提示、错误输入重试、通配符/显式方法配置限定菜单、每步取消、JSON/脚本缺输入无提示且不创建data-dir；实际PTY仅运行补全，不访问真实CA或绑定公网监听端口。
 
 部署show覆盖两个可省略位置参数解析、额外参数/非法名称拒绝；裸命令/仅证书在脚本里都拒绝缺失身份，终端支持两级选择。详情测试覆盖目录四类解析路径、精确文件15种子集、无reload、带空格argv引用、控制字符转义、JSON完整配置、所有保存执行字段。端到端只读测试删除实际证书私钥后仍可show，并验证配置/journal不变、没有发布/进程调用；吊销未确认/已吊销/缺in_use仍可检查，缺绑定报告错误。列表保留摘要与Tips，不主动泄露reload参数；show按显式查看配置的意图展示argv。
+
+
+部署完整准备边界：存储测试验证全部文件在commit前仍为旧内容、prepare后Drop不发布且清理临时文件、最后文件准备失败保留已有/缺省目标、提交前拒绝期间出现的目录/链接。真实persist失败用例在首次替换后使后续暂存文件缺失，确认部分更新被如实保留、剩余暂存文件释放、重新prepare/commit可修复；权限在暂存文件上先行验证，空CA链仍作为合法空文件发布。CLI使用真实reload子进程检查四个文件与该世代预期内容一致、全部为普通文件且没有暂存残留；覆盖手动部署、续期后自动部署、发布失败零reload尝试及重开存储后显式恢复。测试不替代真实服务或容器验收，不把逐文件提交描述为整组原子切换。
+
+本轮验证：新增7项存储边界用例及1项CLI真实reload子进程用例。`cargo test --workspace --locked -- --test-threads=2` 共505项通过、3项专用fixture默认忽略；严格all-targets Clippy、Windows GNU all-targets交叉检查、rustdoc、格式及import/dependency/TLS/feature策略通过。默认并发首轮既有 `transport::tests::timeout_does_not_retry_mutations` 出现100ms内mock未收到POST的时序失败；该用例单独复跑及上述全仓复跑通过，本轮没有修改transport实现或该用例。没有执行真实CA、容器或服务更新验收。
+
+## PR #2 审查修复与文档发现（2026-11-12）
+
+Review 5868308218基于c203ffc，含16 Major、31 Minor、1 Nitpick。当前工作树已处理47条有效意见；core README的../../docs相对链接正确，未采纳多退一级的建议。Windows掉电持久性采用明确限制契约的处理；build dirty限定为已跟踪修改，未把未跟踪文件检测冒充可靠保证。
+
+账户写入租约改为显式Arc传入，后台保留到写完，无隐藏store租约状态；新增排队阻塞写取消后仍持锁、并发stage同钥、陈旧删除/换钥确认拒绝、nonce失败零keyChange POST及Confirmed断网本地提交用例。签发测试覆盖过期前任续期/恢复、换钥后保留旧挑战材料、明确4xx ack与5xx未知结果分流、不同大小写/空白媒体类型、缺type Problem详情、过时无前任世代拒绝提升，以及Link/Copy恢复边界。批量提交后增加异步等待，确认取消不丢已完成结果；自动部署继承原取消及剩余deadline。
+
+Webroot清理用实际移入私有目录的对象核验身份，替换文件保留；新增目录与硬链接发布后sync。手动确认以真实PTY验证超时与Esc后raw mode已恢复，取消标志与超时分别保留。Reload以真实后代继承管道验证成功父进程退出不会误判超时。构建脚本用临时Git仓库实测packed refs、已有监视路径、重复运行稳定输出、tracked-only dirty和嵌套归档unknown。
+
+当前最终验证：cargo test --workspace --locked -- --test-threads=2，共529项通过、4个专用fixture默认忽略；严格all-targets Clippy、Windows GNU all-targets交叉检查、rustdoc与fmt通过。Python3.13关闭UTF-8模式并把默认编码警告升级为错误时，10项脚本测试通过；文档25页本地链接及import/workspace依赖/TLS/features策略通过。未对真实CA、容器、服务或Windows原生环境验收，未提交/推送或声称CodeRabbit重新通过。
+
+根AGENTS只保留入口与硬约束，具体契约/架构/设计/测试分开；文档发现入口见[文档索引](README.md)与[任务路由](task-routing.md)。新增本地链接校验接入CI，已有带日期验收记录保持历史证据身份，不作为当前契约来源。

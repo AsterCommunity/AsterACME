@@ -31,13 +31,13 @@ CLI 的账户文件存储适配，实现 `dyn AccountStore` 和 `dyn AccountKeyS
 - 账户元数据使用 TOML，默认选择保存在配置里，私钥继续使用 PKCS#8 DER。尚未正式发布，不读取或迁移旧 JSON 及旧目录布局，不提供兼容入口。旧目录不会自动清理或移动。
 - 元数据 schema 版本为 1；未知版本、损坏 TOML、超限文件均报错，不自动重置。
 - 私钥按名称保存后才进入账户注册。取消、超时、注册失败不删除私钥；注册意图与成功元数据分别持久化。
-- 恢复/查看使用 `create=false`，不生成密钥。已有账户记录但私钥缺失/损坏或指纹不符时拒绝换钥；孤立私钥也拒绝猜测 CA。先持久化账户身份再写私钥，记录本身代替初始化标记，崩溃后失败关闭。
+- 恢复/查看使用 `KeyAccess::Existing`，不生成密钥。已有账户记录但私钥缺失/损坏或指纹不符时拒绝换钥；孤立私钥也拒绝猜测 CA。先持久化账户身份再写私钥，记录本身代替初始化标记，崩溃后失败关闭。
 - 元数据上限 256 KiB，私钥上限 64 KiB，锁默认由调用方设置，允许 0–300 秒之间的非零时长。
 - 私钥文件依靠 OS 权限保护，当前不提供静态加密。备份时必须把私钥和元数据一起作为敏感数据保护。
 
 ```rust,no_run
 use std::{sync::Arc, time::Duration};
-use aster_acme::storage::account::{AccountStore, AccountKeyStore};
+use aster_acme::storage::account::{AccountStore, AccountKeyStore, KeyAccess};
 use aster_acme_protocol::url::AcmeUrl;
 use aster_acme_cli_storage::account::CliAccountStore;
 
@@ -46,7 +46,7 @@ let files = Arc::new(CliAccountStore::open("./data", "default", Duration::from_s
 let keys: Arc<dyn AccountKeyStore> = files.clone();
 let records: Arc<dyn AccountStore> = files;
 let directory = AcmeUrl::new("https://acme-staging-v02.api.letsencrypt.org/directory")?;
-let signer = keys.signer(&directory, "default", false).await?;
+let signer = keys.signer(&directory, "default", KeyAccess::Existing).await?;
 # let _ = (records, signer);
 # Ok(())
 # }
@@ -128,6 +128,10 @@ Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副�
 
 部署的 `DeploymentPermissions` 保存可选Unix证书文件/私钥mode，缺省0600；Windows继承权限并拒绝显式mode。`DeploymentPatch` 仅更新给出的字段，目标替换整个目的路径集合，配置变化后重置为Configured，不发布、不reload。add/update/open按跨证书配置锁→证书租约顺序检查目的路径冲突；禁止覆盖其他绑定或托管账户/证书/控制文件，open后只保留证书租约。配置锁仅序列化目标所有权变动/检查，不跨reload持有。
 
-发布在同目录暂存完整内容、应用mode、同步后逐文件替换，默认私钥不会被证书文件mode放宽；不修改父目录或承诺整组原子切换。失败保留路径、IO阶段及OS原因；阻塞写入任务继续持有证书租约直到完成。存储不执行reload，不保存进程stdout/stderr；调用方分别报告本次执行失败和历史检查点。
+发布逻辑位于 `issuance/deployment/publication`，先为全部选定文件在各自父目录准备临时文件、写入内容、应用mode并同步，全部成功后才逐文件替换。准备失败时现有目标不变，已准备临时文件由所有权guard清理；提交前重新检查整组目标，拒绝期间出现的目录/链接。提交中途失败可能留下部分更新，后续显式重试重新发布完整选定集合；只有全部替换和目录同步成功后，CLI才执行reload。直接发布普通文件并保留父目录，不创建部署链接或交换目录；默认私钥不会被证书文件mode放宽，不承诺整组原子切换。进程崩溃可能遗留临时文件，不扫描删除仅凭文件名前缀匹配的内容。失败保留路径、IO阶段及OS原因；阻塞写入任务继续持有证书租约直到完成。存储不执行reload，不保存进程stdout/stderr；调用方分别报告本次执行失败和历史检查点。
 
 精确文件部署支持独立可选的 certificate/private_key/ca_chain/fullchain 四类路径；任意非空子集合法，不要求证书和私钥配对。None 不发布该文件；指定目标预检后只替换对应文件。仅保留绝对路径、目标互不重复及与目录模式互斥的安全边界。配置中的原证书/私钥字符串字段继续可读，新可选字段缺省为 None，不改变原有绑定及续期行为。
+
+Windows持久化边界：替换前同步临时文件，成功表示进程级替换完成并支持进程重启恢复；目录同步当前只验证目录可访问，不保证断电后rename目录项落盘。Unix文件及父目录同步有更强保证；不要把Windows进程崩溃恢复等同掉电事务。
+
+账户写入接口显式持锁：`AccountStore::lock_account` 返回 `Arc<dyn AccountLease>`，`AccountStore::save(record, &lease)` 把同一租约克隆进阻塞写任务；不使用隐藏store状态寻找当前锁，也不在协议写入内重获锁。`CliAccountStore::save(record)` 是独立本地编辑入口，会自行新获取租约。轮换会话内部串行化stage/save/commit，确认快照变化拒绝操作；删除要求调用方传入确认过的AccountRecord身份。

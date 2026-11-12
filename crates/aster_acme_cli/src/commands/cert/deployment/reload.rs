@@ -62,7 +62,13 @@ pub(super) async fn run(
     let mut err = Captured::default();
     let waited = tokio::time::timeout(timeout, async {
         let (status, (), ()) = tokio::join!(
-            child.0.wait(),
+            async {
+                // Observe the immediate process, then close inherited pipes by
+                // terminating owned descendants before waiting for capture EOF.
+                let status = child.0.inner_mut().wait().await;
+                let _ = child.0.start_kill();
+                status
+            },
             capture(stdout, &mut out, id, attempt, "stdout", progress),
             capture(stderr, &mut err, id, attempt, "stderr", progress)
         );

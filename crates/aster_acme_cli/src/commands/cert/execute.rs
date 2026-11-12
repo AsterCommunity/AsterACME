@@ -204,6 +204,17 @@ pub(super) async fn transact(
 ) -> CliResult<super::report::CertificateResult> {
     let progress = Arc::new(Progress::new(cli.output.clone()));
     let context = settings.account(&options).await?;
+    let (operation_timeout, _, _) = run.limits(&context.config);
+    let cancellation = match &mode {
+        RunMode::Single => CancellationToken::new(),
+        RunMode::Batch(token) => token.clone(),
+    };
+    let _signal = matches!(mode, RunMode::Single)
+        .then(|| crate::common::signal::InterruptGuard::new(cancellation.clone()));
+    let execution = ExecutionContext {
+        cancellation,
+        deadline: Instant::now() + Duration::from_secs(operation_timeout),
+    };
     let signer = context
         .store
         .signer(
@@ -252,6 +263,7 @@ pub(super) async fn transact(
         mode,
         cli,
         progress: progress.clone(),
+        execution: execution.clone(),
     };
     let outcome = match foreground
         .run(IssueIdentity { account, signer }, session.as_mut())
@@ -283,18 +295,19 @@ pub(super) async fn transact(
         }
     };
     drop(session);
-    Ok(attach_deployment_results(outcome, store).await)
+    Ok(attach_deployment_results(outcome, store, &execution).await)
 }
 
 async fn attach_deployment_results(
     outcome: IssueOutcome,
     store: &CliIssueStore,
+    execution: &ExecutionContext,
 ) -> super::report::CertificateResult {
     let deployment_results = match &outcome {
         IssueOutcome::Completed { record, .. } => {
             let name = record.name.clone();
             let generation = record.generation_name();
-            super::deployment::after_issuance(store, &name, &generation).await
+            super::deployment::after_issuance(store, &name, &generation, execution).await
         }
         IssueOutcome::ActionRequired { .. } => (Vec::new(), Vec::new()),
     };
@@ -364,7 +377,9 @@ struct Foreground<'a> {
     mode: RunMode,
     cli: &'a crate::common::context::CommandContext,
     progress: Arc<Progress>,
+    execution: ExecutionContext,
 }
+
 impl Foreground<'_> {
     async fn run(
         &self,
@@ -390,36 +405,27 @@ impl Foreground<'_> {
             "Discovering ACME endpoints over verified TLS",
         );
         tracing::debug!("Discovering certificate issuance endpoints");
-        let client = Arc::new(
-            self.cli
-                .http
-                .discover(
-                    self.context.directory.clone(),
-                    self.context.transport_options(self.options)?,
-                )
-                .await?,
-        );
+        self.execution
+            .check()
+            .map_err(|_| IssueError::Interrupted)?;
+        let client = tokio::select! {
+            biased;
+            () = self.execution.cancellation.cancelled() => return Err(IssueError::Interrupted.into()),
+            result = tokio::time::timeout_at(tokio::time::Instant::from_std(self.execution.deadline), self.cli.http.discover(self.context.directory.clone(), self.context.transport_options(self.options)?)) => Arc::new(result.map_err(|_| IssueError::Interrupted)??),
+        };
         self.progress
             .protocol(client.directory(), &session.record().await?);
         let service = IssueService::new(client, identity)?.with_observer(self.progress.clone());
-        let (cancellation, _signal) = match &self.mode {
-            RunMode::Single => {
-                let cancellation = CancellationToken::new();
-                let signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
-                (cancellation, Some(signal))
-            }
-            RunMode::Batch(cancellation) => (cancellation.clone(), None),
-        };
-        let (operation_timeout, max_polls, poll_interval) = self.args.limits(&self.context.config);
+        let (_, max_polls, poll_interval) = self.args.limits(&self.context.config);
         let execution = IssueExecution {
             max_polls,
-            context: ExecutionContext {
-                cancellation,
-                deadline: Instant::now() + Duration::from_secs(operation_timeout),
-            },
+            context: self.execution.clone(),
             poll_interval: Duration::from_secs(poll_interval),
         };
         let result = service.run(session, solver.as_ref(), &execution).await;
+        if result.is_err() && self.execution.cancellation.is_cancelled() {
+            return Err(Box::new(terminal::Canceled));
+        }
         Ok(result?)
     }
 }

@@ -91,7 +91,12 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
         "directory":directory,"account_url":"https://ca.example/account","identifiers":["example.com"],
         "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted","authorizations":[]
     })).unwrap();
-    record.renewal = Some(plan());
+    let mut current_plan = plan();
+    let shift = OffsetDateTime::now_utc() - at(60 * 86400);
+    current_plan.not_before += shift;
+    current_plan.not_after += shift;
+    current_plan.renew_at += shift;
+    record.renewal = Some(current_plan);
     record.is_in_use = true;
     (
         server,
@@ -307,7 +312,10 @@ async fn server_errors_retry_with_bound_and_then_keep_fallback() {
         .renewal
         .unwrap();
     assert_eq!(p.source, RenewalSource::Fallback);
-    assert!(p.renew_at > at(59 * 86400) && p.renew_at < at(60 * 86400));
+    assert!(
+        p.renew_at > p.not_before + time::Duration::days(59)
+            && p.renew_at < p.not_before + time::Duration::days(60)
+    );
     assert!(p.last_query_failed);
 }
 
@@ -401,7 +409,10 @@ async fn request_timeouts_retry_but_do_not_erase_fallback() {
         .renewal
         .unwrap();
     assert!(p.last_query_failed);
-    assert!(p.renew_at > at(59 * 86400) && p.renew_at < at(60 * 86400));
+    assert!(
+        p.renew_at > p.not_before + time::Duration::days(59)
+            && p.renew_at < p.not_before + time::Duration::days(60)
+    );
     assert_eq!(p.source, RenewalSource::Fallback);
 }
 
@@ -464,4 +475,42 @@ async fn cancellation_during_backoff_prevents_another_attempt() {
             .unwrap()
             .last_query_failed
     );
+}
+
+#[tokio::test]
+async fn expired_certificates_keep_the_plan_without_any_ari_request_or_write() {
+    let (server, service, mut session) = fixture(true, Duration::from_secs(1)).await;
+    session
+        .record
+        .lock()
+        .await
+        .renewal
+        .as_mut()
+        .unwrap()
+        .not_after = OffsetDateTime::now_utc() - time::Duration::seconds(1);
+    let before = serde_json::to_value(session.record.lock().await.clone()).unwrap();
+    let result = service.refresh(&mut session, &execution(2)).await.unwrap();
+    assert_eq!(serde_json::to_value(result).unwrap(), before);
+    assert_eq!(session.saves.load(Ordering::SeqCst), 0);
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|request| request.url.path().contains("/custom/renewal"))
+    );
+}
+
+#[test]
+fn expired_certificate_identifier_extraction_does_not_create_a_schedule() {
+    let mut params = rcgen::CertificateParams::new(vec!["example.com".into()]).unwrap();
+    params.not_before = OffsetDateTime::now_utc() - time::Duration::days(90);
+    params.not_after = OffsetDateTime::now_utc() - time::Duration::days(1);
+    let cert = params
+        .self_signed(&rcgen::KeyPair::generate().unwrap())
+        .unwrap()
+        .pem();
+    assert!(identifier_from_certificate(cert.as_bytes()).is_ok());
+    assert!(RenewalPlan::from_certificate(cert.as_bytes()).is_err());
 }

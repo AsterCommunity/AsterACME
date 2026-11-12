@@ -39,6 +39,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
+crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
 inquire = { version = "0.9", default-features = false, features = ["crossterm", "fuzzy"] }
 unicode-width = "0.2"
 hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }

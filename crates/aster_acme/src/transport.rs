@@ -127,6 +127,7 @@ impl TransportOptions {
         Ok(())
     }
 }
+
 impl Default for TransportOptions {
     fn default() -> Self {
         Self {
@@ -144,6 +145,7 @@ impl Default for TransportOptions {
 /// and request policy remain per ACME client.
 #[derive(Clone, Default)]
 pub struct HttpPool(std::sync::Arc<tokio::sync::OnceCell<aster_forge_http::HttpClient>>);
+
 impl HttpPool {
     async fn client(&self) -> Result<&aster_forge_http::HttpClient, TransportError> {
         self.0
@@ -378,6 +380,24 @@ impl AcmeClient {
         kid: Option<&AcmeUrl>,
         payload: &[u8],
     ) -> Result<AcmeResponse, TransportError> {
+        self.signed_observed(
+            url,
+            signer,
+            kid,
+            payload,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .await
+    }
+
+    pub(crate) async fn signed_observed(
+        &self,
+        url: &AcmeUrl,
+        signer: &dyn AccountSigner,
+        kid: Option<&AcmeUrl>,
+        payload: &[u8],
+        submitted: &std::sync::atomic::AtomicBool,
+    ) -> Result<AcmeResponse, TransportError> {
         check_transport(url, &self.options)?;
         let jwk = signer.jwk()?;
         let mut current_nonce = self.take_nonce().await?;
@@ -393,16 +413,12 @@ impl AcmeClient {
                 nonce_retry = attempt,
                 "ACME request started"
             );
-            let sent = request(
-                self.http_pool.client().await?,
-                Method::POST,
-                url,
-                &self.options,
-            )
-            .header("Content-Type", "application/jose+json")
-            .json(&jws)
-            .send()
-            .await;
+            let http = self.http_pool.client().await?;
+            let prepared = request(http, Method::POST, url, &self.options)
+                .header("Content-Type", "application/jose+json")
+                .json(&jws);
+            submitted.store(true, std::sync::atomic::Ordering::SeqCst);
+            let sent = prepared.send().await;
             if let Err(error) = &sent {
                 tracing::debug!(
                     request_kind = "signed_post",
@@ -434,6 +450,7 @@ impl AcmeClient {
             if error.is_problem(&ProblemKind::BadNonce) && attempt < self.options.bad_nonce_retries
             {
                 // RFC 8555 §6.5: retry MUST consume this response's nonce, not a pooled nonce.
+                submitted.store(false, std::sync::atomic::Ordering::SeqCst);
                 current_nonce = fresh.ok_or(TransportError::MissingNonce)?;
             } else {
                 self.remember_nonce(fresh).await;

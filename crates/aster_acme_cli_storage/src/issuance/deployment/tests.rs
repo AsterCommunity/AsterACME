@@ -1,5 +1,6 @@
 //! Deployment regression and resource lifecycle tests.
 use crate::issuance::deployment::*;
+use std::fs;
 
 fn binding(target: DeploymentTarget) -> DeploymentBinding {
     DeploymentBinding {
@@ -73,13 +74,14 @@ fn directory_publication_writes_exact_pem_set() {
         ca_chain: b"ca".to_vec(),
         private_key: Zeroizing::new(b"private".to_vec()),
     };
-    publish_files(
+    publication::PreparedPublication::prepare(
         &DeploymentTarget::Directory {
             path: target.clone(),
         },
         &bytes,
         &DeploymentPermissions::default(),
     )
+    .and_then(publication::PreparedPublication::commit)
     .unwrap();
     assert_eq!(fs::read(target.join("fullchain.pem")).unwrap(), b"chain");
     assert_eq!(fs::read(target.join("cert.pem")).unwrap(), b"leaf");
@@ -97,7 +99,7 @@ fn single_file_publication_replaces_regular_files_but_never_follows_symlinks() {
     let private_key = temp.path().join("key.pem");
     fs::write(&certificate, b"old").unwrap();
     fs::write(&private_key, b"old-key").unwrap();
-    publish_files(
+    publication::PreparedPublication::prepare(
         &DeploymentTarget::Files {
             fullchain: None,
             ca_chain: None,
@@ -113,6 +115,7 @@ fn single_file_publication_replaces_regular_files_but_never_follows_symlinks() {
         },
         &DeploymentPermissions::default(),
     )
+    .and_then(publication::PreparedPublication::commit)
     .unwrap();
     assert_eq!(fs::read(&certificate).unwrap(), b"new");
     assert_eq!(fs::read(&private_key).unwrap(), b"new-key");
@@ -126,7 +129,7 @@ fn publication_refuses_symlink_destinations_without_modifying_the_link_target() 
     let link = temp.path().join("link.pem");
     fs::write(&target, b"original").unwrap();
     std::os::unix::fs::symlink(&target, &link).unwrap();
-    let result = publish_files(
+    let result = publication::PreparedPublication::prepare(
         &DeploymentTarget::Files {
             fullchain: None,
             ca_chain: None,
@@ -154,7 +157,7 @@ fn all_destinations_are_preflighted_before_any_existing_file_is_replaced() {
     let bad_key = temp.path().join("key-directory");
     fs::write(&certificate, b"original").unwrap();
     fs::create_dir(&bad_key).unwrap();
-    let result = publish_files(
+    let result = publication::PreparedPublication::prepare(
         &DeploymentTarget::Files {
             fullchain: None,
             ca_chain: None,

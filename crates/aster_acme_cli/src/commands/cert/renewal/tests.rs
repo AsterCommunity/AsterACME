@@ -35,8 +35,8 @@ impl RenewalExecutor for Executor {
                 }],
             })),
             "blocked" => {
-                std::future::pending::<()>().await;
-                Err("unreachable after cancellation".into())
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Err(Box::new(crate::common::terminal::Canceled))
             }
             _ => Ok(CertificateResult::Issuance(IssueOutcome::Completed {
                 record: Box::new(record.clone()),
@@ -446,6 +446,8 @@ struct CommitThenCancel(CancellationToken);
 impl RenewalExecutor for CommitThenCancel {
     async fn run(&self, record: &IssueRecord) -> CliResult<CertificateResult> {
         self.0.cancel();
+        // Simulate an asynchronous deployment inventory/save after certificate commit.
+        tokio::time::sleep(Duration::from_millis(25)).await;
         Ok(CertificateResult::Issuance(IssueOutcome::Completed {
             record: Box::new(record.clone()),
             cleanup: vec![],

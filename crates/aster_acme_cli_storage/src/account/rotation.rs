@@ -12,6 +12,7 @@ struct Rotation {
     lease: Arc<FileLease>,
     record: AccountRecord,
     old: Arc<dyn AccountSigner>,
+    io: Arc<std::sync::Mutex<()>>,
 }
 
 impl Rotation {
@@ -90,6 +91,7 @@ impl AccountRotationStore for CliAccountStore {
                 lease,
                 record,
                 old,
+                io: Arc::new(std::sync::Mutex::new(())),
             }) as Box<dyn AccountRotation>)
         })
         .await
@@ -141,10 +143,14 @@ impl AccountRotation for Rotation {
     ) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
         let slot = self.slot.clone();
         let lease = self.lease.clone();
+        let io = self.io.clone();
         let pending = self.record.key_rotation.is_some();
         let fallback = self.old.algorithm();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            let _io = io
+                .lock()
+                .map_err(|_| store_error("rotation IO state poisoned"))?;
             let path = slot.join("account-key.next.pk8");
             match read_private(&path, MAX_KEY_FILE) {
                 Ok(_) => {
@@ -180,9 +186,13 @@ impl AccountRotation for Rotation {
         self.validate(record)?;
         let slot = self.slot.clone();
         let lease = self.lease.clone();
+        let io = self.io.clone();
         let record = record.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            let _io = io
+                .lock()
+                .map_err(|_| store_error("rotation IO state poisoned"))?;
             write_record(&slot.join("account.toml"), &record)
         })
         .await
@@ -193,9 +203,13 @@ impl AccountRotation for Rotation {
         self.validate(record)?;
         let slot = self.slot.clone();
         let lease = self.lease.clone();
+        let io = self.io.clone();
         let mut record = record.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
+            let _io = io
+                .lock()
+                .map_err(|_| store_error("rotation IO state poisoned"))?;
             let rotation = record
                 .key_rotation
                 .as_ref()

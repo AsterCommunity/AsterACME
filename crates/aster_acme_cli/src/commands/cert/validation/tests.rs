@@ -26,6 +26,7 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
     }];
     for yes in [false, true] {
         let manual = manual::Manual {
+            prompt: std::sync::Mutex::new(None),
             method: ChallengeKind::Http01,
             saved: false,
             interactive: false,
@@ -35,6 +36,7 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
         assert!(!manual.ready(&requirements, &execution()).await.unwrap());
     }
     let manual = manual::Manual {
+        prompt: std::sync::Mutex::new(None),
         method: ChallengeKind::Http01,
         saved: true,
         interactive: false,

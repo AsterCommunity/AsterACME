@@ -1034,7 +1034,7 @@ async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_
         match case {
             0 => other.account_id = "replaced".into(),
             1 => other.account_name = "other".into(),
-            2 => other.account_thumbprint = "other".into(),
+            2 => other.account_url = AcmeUrl::new("https://other.example/account").unwrap(),
             3 => other.directory = AcmeUrl::new("https://other.example/directory").unwrap(),
             4 => other.challenge = ChallengeKind::Dns01,
             5 => other.solver_id = "manual_http".into(),

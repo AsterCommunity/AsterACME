@@ -11,12 +11,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - run: rustup show
       - run: python3 scripts/check-workspace-deps.py
       - run: python3 scripts/check-rust-imports.py
+      - run: python3 scripts/check-doc-links.py
       - run: python3 scripts/check-tls-backend.py
       - run: python3 scripts/check-dependency-features.py
       - run: python3 -m unittest discover -s scripts/tests

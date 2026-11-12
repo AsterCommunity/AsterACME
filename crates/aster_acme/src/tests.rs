@@ -439,3 +439,23 @@ fn validation_requirements_roundtrip_without_a_parallel_unused_receipt_schema() 
 }
 
 fn accepts_solver(_solver: Option<&dyn ChallengeSolver>) {}
+
+#[test]
+fn url_host_ipv4_aliases_are_never_dns_certificate_identifiers() {
+    for host in [
+        "127.1",
+        "2130706433",
+        "0x7f000001",
+        "0177.0.0.1",
+        "127.0.0.1",
+        "*.127.1",
+    ] {
+        assert!(
+            crate::identifier::DnsIdentifier::new(host).is_err(),
+            "{host}"
+        );
+    }
+    for host in ["127.example.com", "example.com", "*.example.com"] {
+        assert!(crate::identifier::DnsIdentifier::new(host).is_ok());
+    }
+}

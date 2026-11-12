@@ -222,7 +222,16 @@ impl Write for DiagnosticWriter {
             .state
             .lock()
             .map_err(|_| io::Error::other("output session lock poisoned"))?;
-        state.stderr.flush()
+        match state.stderr.flush() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                state.error = Some(io::Error::new(
+                    error.kind(),
+                    "diagnostic output flush failed",
+                ));
+                Err(error)
+            }
+        }
     }
 }
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for OutputSession {

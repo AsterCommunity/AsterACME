@@ -129,7 +129,7 @@ EAB 是 CA 外部账户绑定，Let’s Encrypt 通常不需要；ZeroSSL 和 Go
 
 根命令帮助按 `account`、`cert`、`version` 排列。`aster-acme version` 显示产品版本、Git revision、dirty 状态、target、profile、features 和构建时间，`aster-acme version --json` 返回同一份结构化信息。保留 `--version` 的简短版本输出。版本命令不加载配置、不创建数据文件、不发 HTTP，运行时无需 Git。
 
-构建脚本在编译时捕获元数据，源码归档缺少 Git 时输出 unknown。可用 `ASTER_BUILD_REVISION`（unknown 或 7–64 位十六进制）、`ASTER_BUILD_TIME`（RFC 3339）显式注入；否则使用 Git revision 和当前构建 UTC 时间，`SOURCE_DATE_EPOCH` 可提供可复现时间戳。dirty 状态来自构建时工作树，不能作为代码已提交的证明。
+构建脚本在编译时捕获元数据，源码归档缺少 Git 时输出 unknown。可用 `ASTER_BUILD_REVISION`（unknown 或 7–64 位十六进制）、`ASTER_BUILD_TIME`（RFC 3339）显式注入；否则使用 Git revision 和当前构建 UTC 时间，`SOURCE_DATE_EPOCH` 可提供可复现时间戳。dirty 状态只包含构建时Git已跟踪文件变更，不包含未跟踪文件，不能作为代码已提交的证明。
 
 注册帮助按参数组声明顺序排列 name、contact、ca、ca-directory、accept-terms、user-agent、timeout、yes，不使用 display_order；存储/输出与 EAB 分组保持独立。
 
@@ -204,7 +204,7 @@ aster-acme cert show example.com
 aster-acme cert show example.com --operation <ID> --verify
 ```
 
-`-n/--name` 指定证书名称，不指定使用主域名加随机后缀，自动碰撞重试；显式名称已存在则拒绝；`-a` 账户、`-d` 域名可重复、`-c` 验证实现、`-f` 跳过本地 DNS 检查。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
+`-n/--name` 指定证书名称，不指定使用主域名加随机后缀，自动碰撞重试；显式名称已存在则拒绝；`-a` 账户、`-d` 域名可重复、`-c` 验证实现。账户命令支持 `-n` 名称、`-m` 邮箱、`-y` 确认；-y 不代表同意条款或 DNS 已发布。--data-dir/--json 等保留长参数。
 
 只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 不允许绕过过期/失效状态或重新下单。
 
@@ -283,4 +283,4 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 
 `cert deploy update CERT_NAME -n DEPLOY_NAME` 只保存给出的配置；`--clear-reload`清除命令，目标路径参数整体替换目的集合，原文件保留。Unix支持 `--file-mode 0644 --key-mode 0640`，分别控制证书/CA/fullchain和私钥，缺省0600；Windows继承权限并拒绝显式Unix mode。模式保存在绑定、后续续期沿用；修改不立即部署。
 
-部署逐目标继续执行并汇总失败。库存/锁/打开失败也退出非零，执行错误不覆盖历史成功观察。Reload使用process-wrap管理Unix进程组/Windows Job Object，取消/超时清理拥有的进程树；stdout/stderr并行读取，每路每次收集64KiB后继续排空。手动命令实时显示，自动部署在统一部署报告展示；JSON仅一个结果并带events/deployment_events。输出不自动脱敏也不写入绑定文件。仍按单文件替换，不提供整组原子切换。
+部署逐目标继续执行并汇总失败。库存/锁/打开失败也退出非零，执行错误不覆盖历史成功观察。Reload使用process-wrap管理Unix进程组/Windows Job Object，取消/超时清理拥有的进程树；stdout/stderr并行读取，每路每次收集64KiB后继续排空。手动命令实时显示，自动部署在统一部署报告展示；JSON仅一个结果并带events/deployment_events。输出不自动脱敏也不写入绑定文件。Storage先完成全部选定文件的暂存、设权和同步，再逐文件替换，只有全部成功后CLI才reload；准备失败不改现有文件，提交失败不启动reload并保留失败检查点。部署直接发布普通文件，保持目录路径，不使用部署链接或目录交换，不提供整组原子切换。

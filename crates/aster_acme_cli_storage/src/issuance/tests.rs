@@ -3103,3 +3103,110 @@ fn selected_view(slot: &Path) -> PathBuf {
     assert!(publication::NATIVE.matches(slot, &record).unwrap());
     PathBuf::from(target)
 }
+
+#[tokio::test]
+async fn no_predecessor_generation_cannot_promote_over_a_later_selected_certificate() {
+    let fixture = fixture().await;
+    let first = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let stale = first.record().await.unwrap();
+    drop(first);
+    let winner = fixture
+        .store
+        .renew(&stale.name, &fixture.account)
+        .await
+        .unwrap();
+    let mut record = winner.record().await.unwrap();
+    let folder = fixture
+        .temp
+        .path()
+        .join("certs")
+        .join(record.name.as_str())
+        .join(record.generation_name());
+    let leaf = leaf_for(&folder, &record.identifiers);
+    record.phase = IssuancePhase::Completed;
+    winner.complete(&record, leaf.as_bytes()).await.unwrap();
+    drop(winner);
+    let first = fixture
+        .store
+        .open(&stale.name, &stale.operation_id)
+        .await
+        .unwrap();
+    let mut attempted = first.record().await.unwrap();
+    let folder = fixture
+        .temp
+        .path()
+        .join("certs")
+        .join(attempted.name.as_str())
+        .join(attempted.generation_name());
+    let leaf = leaf_for(&folder, &attempted.identifiers);
+    attempted.phase = IssuancePhase::Completed;
+    assert!(
+        first
+            .complete(&attempted, leaf.as_bytes())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("stale promotion")
+    );
+    assert_eq!(
+        selection(&fixture.temp.path().join("certs").join(stale.name.as_str()))
+            .unwrap()
+            .cert
+            .in_use
+            .as_deref(),
+        Some(record.operation_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn renewing_an_expired_predecessor_does_not_try_to_reschedule_the_old_certificate() {
+    let fixture = fixture().await;
+    let old = completed_generation(&fixture).await;
+    let generation = fixture.store.slot(&old.name).join(old.generation_name());
+    let key = KeyPair::try_from(
+        fs::read(generation.join("private-key.pk8"))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    let mut params = CertificateParams::new(
+        old.identifiers
+            .iter()
+            .map(DnsIdentifier::value)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(90);
+    params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+    let leaf = params.self_signed(&key).unwrap().pem();
+    atomic_write(&generation.join("fullchain.pem"), leaf.as_bytes()).unwrap();
+    let next = fixture
+        .store
+        .renew(&old.name, &fixture.account)
+        .await
+        .unwrap();
+    assert_eq!(
+        next.record()
+            .await
+            .unwrap()
+            .renewal_of
+            .unwrap()
+            .operation_id,
+        old.operation_id
+    );
+    let record = next.record().await.unwrap();
+    drop(next);
+    let reopened = fixture
+        .store
+        .renew(&old.name, &fixture.account)
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.record().await.unwrap().operation_id,
+        record.operation_id
+    );
+}

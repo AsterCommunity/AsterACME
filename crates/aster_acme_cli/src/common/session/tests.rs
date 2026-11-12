@@ -254,3 +254,29 @@ fn debug_events_share_progress_format_and_remain_suppressed_in_json() {
         }
     }
 }
+
+#[test]
+fn diagnostic_flush_failure_is_retained_and_prevents_a_success_report() {
+    use tracing_subscriber::fmt::MakeWriter as _;
+    struct FlushFailure;
+    impl Write for FlushFailure {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "flush failed"))
+        }
+    }
+    let stdout = Buffer::default();
+    let output = OutputSession::with_writers(
+        Box::new(stdout.clone()),
+        Box::new(FlushFailure),
+        Format::plain(false),
+        Format::plain(false),
+    );
+    let mut writer = output.make_writer();
+    writer.write_all(b"diagnostic").unwrap();
+    assert!(writer.flush().is_err());
+    assert!(output.finish("success", FinalChannel::Result).is_err());
+    assert_eq!(stdout.text(), "");
+}

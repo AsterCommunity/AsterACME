@@ -20,6 +20,55 @@ fn generation(slot: &Path, letter: char) -> IssueRecord {
 }
 
 #[test]
+fn empty_unmarked_copy_staging_and_backup_are_recoverable_but_user_content_is_retained() {
+    let temp = tempfile::tempdir().unwrap();
+    let publication = Publication {
+        kind: ViewKind::Copy,
+    };
+    let record = generation(temp.path(), 'a');
+    let stage = temp.path().join(format!(".in_use-{}", record.operation_id));
+    fs::create_dir(&stage).unwrap();
+    private_dir(&stage).unwrap();
+    publication.publish(temp.path(), &record).unwrap();
+    let backup = temp.path().join(PREVIOUS);
+    fs::create_dir(&backup).unwrap();
+    private_dir(&backup).unwrap();
+    publication
+        .recover(temp.path(), Some(&record.generation_name()))
+        .unwrap();
+    assert!(!backup.exists());
+    fs::create_dir(&backup).unwrap();
+    private_dir(&backup).unwrap();
+    fs::write(backup.join("user"), b"retain").unwrap();
+    assert!(
+        publication
+            .recover(temp.path(), Some(&record.generation_name()))
+            .is_err()
+    );
+    assert_eq!(fs::read(backup.join("user")).unwrap(), b"retain");
+}
+
+#[cfg(unix)]
+#[test]
+fn link_recovery_restores_actual_catalog_selection_after_uncommitted_promotion() {
+    let temp = tempfile::tempdir().unwrap();
+    let publication = Publication {
+        kind: ViewKind::Link,
+    };
+    let first = generation(temp.path(), 'a');
+    let second = generation(temp.path(), 'b');
+    publication.publish(temp.path(), &first).unwrap();
+    publication.publish(temp.path(), &second).unwrap();
+    publication
+        .recover(temp.path(), Some(&first.generation_name()))
+        .unwrap();
+    assert!(publication.matches(temp.path(), &first).unwrap());
+    publication.recover(temp.path(), None).unwrap();
+    assert!(!temp.path().join("in_use").exists());
+    assert!(temp.path().join(second.generation_name()).is_dir());
+}
+
+#[test]
 fn copy_publication_switches_complete_sets_and_retains_backup_until_catalog_commit() {
     let temp = tempfile::tempdir().unwrap();
     let publication = Publication {

@@ -77,11 +77,15 @@ impl std::fmt::Display for ProblemKind {
     }
 }
 
+fn default_problem_kind() -> ProblemKind {
+    ProblemKind::Unknown("about:blank".into())
+}
+
 /// ACME problem document, including extension details and nested subproblems.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Problem {
     /// Full problem URI; unknown namespaces are preserved.
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default = "default_problem_kind")]
     pub kind: ProblemKind,
     /// Human-readable server explanation.
     pub detail: Option<String>,
@@ -156,5 +160,20 @@ mod tests {
             assert_eq!(kind.to_string(), uri);
         }
         assert!(serde_json::from_str::<ProblemKind>("400").is_err());
+    }
+
+    #[test]
+    fn missing_problem_type_defaults_at_every_nesting_level_without_losing_details() {
+        let problem: Problem = serde_json::from_str(
+            r#"{"detail":"maintenance","status":503,"subproblems":[{"detail":"nested"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(problem.kind, ProblemKind::Unknown("about:blank".into()));
+        assert_eq!(problem.detail.as_deref(), Some("maintenance"));
+        assert_eq!(problem.extensions["status"], 503);
+        assert_eq!(
+            problem.subproblems[0].kind,
+            ProblemKind::Unknown("about:blank".into())
+        );
     }
 }

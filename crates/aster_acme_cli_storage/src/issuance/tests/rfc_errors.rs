@@ -1,5 +1,6 @@
 //! RFC 8555 error responses are evidence, not synthesized order states.
 use crate::issuance::tests::*;
+use aster_acme::crypto::AccountSigner as _;
 use aster_acme_protocol::problem::ProblemKind;
 
 fn assert_saved_response(
@@ -37,6 +38,22 @@ fn assert_saved_response(
     }
 }
 
+fn assert_creation_metadata(
+    failure: &aster_acme::issuance::RequestFailure,
+    custom: bool,
+) -> time::OffsetDateTime {
+    if custom {
+        assert_eq!(
+            serde_json::to_value(failure.problem.as_ref().unwrap()).unwrap()["extension"],
+            "retained"
+        );
+    }
+    assert!(
+        failure.retry_at.unwrap() > time::OffsetDateTime::now_utc() + time::Duration::seconds(115)
+    );
+    failure.retry_at.unwrap()
+}
+
 #[tokio::test]
 async fn new_order_error_matrix_is_persisted_losslessly_and_never_replayed() {
     for (status, kind) in [
@@ -55,6 +72,9 @@ async fn new_order_error_matrix_is_persisted_losslessly_and_never_replayed() {
         (400, None),
     ] {
         let fixture = fixture().await;
+        let expected_kind = kind
+            .clone()
+            .or_else(|| Some(ProblemKind::Unknown("about:blank".into())));
         let body = kind.as_ref().map_or_else(|| serde_json::json!({"unexpected":"body"}), |kind| serde_json::json!({"type":kind,"detail":"CA refusal","instance":"https://ca.example/action","subproblems":[{"type":"urn:ietf:params:acme:error:rejectedIdentifier","detail":"forbidden","identifier":{"type":"dns","value":"example.com"}}],"extension":"retained"}));
         Mock::given(method("POST"))
             .and(path("/vendor/create"))
@@ -90,15 +110,11 @@ async fn new_order_error_matrix_is_persisted_losslessly_and_never_replayed() {
         let saved = session.record().await.unwrap();
         let failure = saved.creation_failure.as_ref().unwrap();
         assert_eq!(failure.status, status);
-        assert_eq!(failure.problem.as_ref().map(|p| &p.kind), kind.as_ref());
-        if let Some(problem) = &failure.problem {
-            assert_eq!(
-                serde_json::to_value(problem).unwrap()["extension"],
-                "retained"
-            );
-        }
-        let retry = failure.retry_at.unwrap();
-        assert!(retry > time::OffsetDateTime::now_utc() + time::Duration::seconds(115));
+        assert_eq!(
+            failure.problem.as_ref().map(|p| &p.kind),
+            expected_kind.as_ref()
+        );
+        let retry = assert_creation_metadata(failure, kind.is_some());
         assert!(saved.order.is_none());
         assert!(saved.order_url.is_none());
         assert!(!saved.resume_candidate());
@@ -120,7 +136,7 @@ async fn new_order_error_matrix_is_persisted_losslessly_and_never_replayed() {
             .await
             .err()
             .unwrap();
-        assert_saved_response(error, status, kind, &body);
+        assert_saved_response(error, status, expected_kind, &body);
         assert_eq!(
             fixture.server.received_requests().await.unwrap().len(),
             before
@@ -411,4 +427,159 @@ async fn terminal_authorization_and_selected_challenge_failures_keep_problem_and
             before.len()
         );
     }
+}
+
+#[tokio::test]
+async fn rejected_acknowledgement_is_retryable_but_server_errors_remain_submitted() {
+    for status in [403, 503] {
+        let fixture = fixture().await;
+        mount_flow(&fixture).await;
+        Mock::given(method("POST"))
+            .and(path("/challenge/0"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Replay-Nonce", "refused")
+                    .set_body_json(
+                        serde_json::json!({"type":ProblemKind::Unauthorized,"detail":"refused"}),
+                    ),
+            )
+            .with_priority(1)
+            .mount(&fixture.server)
+            .await;
+        let mut session = fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .service
+                .run(session.as_mut(), &Dns(true), &execution())
+                .await
+                .is_err()
+        );
+        let saved = session.record().await.unwrap();
+        assert_eq!(
+            saved.authorizations[0].acknowledgement,
+            if status == 403 {
+                SubmissionState::NotSubmitted
+            } else {
+                SubmissionState::Submitted
+            }
+        );
+        let before = saved.authorizations[0].validation.clone();
+        if status == 403 {
+            // The next explicit invocation reaches acknowledgement again with unchanged material.
+            assert!(
+                fixture
+                    .service
+                    .run(session.as_mut(), &Dns(true), &execution())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                session.record().await.unwrap().authorizations[0].validation,
+                before
+            );
+            assert_eq!(
+                fixture
+                    .server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|r| r.url.path() == "/challenge/0")
+                    .count(),
+                2
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn chain_media_type_accepts_case_and_optional_whitespace() {
+    let fixture = fixture().await;
+    mount_flow(&fixture).await.store(3, Ordering::SeqCst);
+    let mut session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let record = session.record().await.unwrap();
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    let leaf = leaf_for(&generation, &record.identifiers);
+    Mock::given(method("POST"))
+        .and(path("/certificate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "chain")
+                .set_body_raw(leaf, "Application/PEM-Certificate-Chain ; charset=utf-8"),
+        )
+        .with_priority(1)
+        .mount(&fixture.server)
+        .await;
+    assert!(matches!(
+        fixture
+            .service
+            .run(session.as_mut(), &Dns(true), &execution())
+            .await
+            .unwrap(),
+        IssueOutcome::Completed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn rotated_account_signer_can_resume_saved_material_without_changing_its_thumbprint() {
+    let fixture = fixture().await;
+    mount_flow(&fixture).await;
+    let mut session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .run(session.as_mut(), &Dns(false), &execution())
+        .await
+        .unwrap();
+    let before = session.record().await.unwrap();
+    let old_material = serde_json::to_value(&before.authorizations).unwrap();
+    let new =
+        Arc::new(aster_acme::crypto::key::AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
+    let mut account = fixture.account.clone();
+    account.key_thumbprint = new.jwk().unwrap().thumbprint().unwrap();
+    let client = aster_acme::transport::HttpPool::default()
+        .discover(
+            account.directory_url.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let service = IssueService::new(
+        Arc::new(client),
+        IssueIdentity {
+            account,
+            signer: new,
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        service
+            .run(session.as_mut(), &Dns(false), &execution())
+            .await
+            .unwrap(),
+        IssueOutcome::ActionRequired { .. }
+    ));
+    let after = session.record().await.unwrap();
+    assert_eq!(after.account_thumbprint, before.account_thumbprint);
+    assert_eq!(
+        serde_json::to_value(after.authorizations).unwrap(),
+        old_material
+    );
 }

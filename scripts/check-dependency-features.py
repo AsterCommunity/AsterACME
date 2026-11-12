@@ -42,7 +42,7 @@ def audit(tree):
 def main():
     tree = subprocess.run(
         ["cargo", "tree", "--workspace", "--locked", "--edges", "normal,build", "--prefix", "none", "--format", "{p}|{f}"],
-        cwd=ROOT, check=True, text=True, capture_output=True,
+        cwd=ROOT, check=True, text=True, encoding="utf-8", capture_output=True,
     ).stdout
     errors = audit(tree)
     if errors:

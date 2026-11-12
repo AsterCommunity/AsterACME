@@ -201,6 +201,7 @@ pub(super) fn adapter(
                     IssueError::InvalidInput("invalid saved manual validation configuration")
                 })?;
             Ok(Box::new(manual::Manual {
+                prompt: std::sync::Mutex::new(None),
                 method: record.challenge,
                 saved: record
                     .authorizations

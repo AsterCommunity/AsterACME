@@ -67,11 +67,15 @@ pub enum AccountAction {
 }
 
 /// Account lifecycle refusal; the caller maps it to its user-facing error contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AccountStateError {
+    #[error("account is not registered")]
     NotRegistered,
+    #[error("account is not active")]
     NotActive,
+    #[error("account deactivation requires reconciliation")]
     ReconciliationRequired,
+    #[error("account key rotation requires reconciliation")]
     KeyRotationUncertain,
 }
 

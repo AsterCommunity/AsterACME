@@ -35,7 +35,11 @@ impl AcmeUrl {
             || !parsed.username().is_empty()
             || parsed.password().is_some()
             || parsed.fragment().is_some()
-            || value.chars().any(char::is_control)
+            || value.chars().any(|c| {
+                c.is_control()
+                    || c.is_whitespace()
+                    || matches!(c, '"' | '<' | '>' | '`' | '{' | '}' | '\\')
+            })
             || value.trim() != value
         {
             return Err(InvalidAcmeUrl);

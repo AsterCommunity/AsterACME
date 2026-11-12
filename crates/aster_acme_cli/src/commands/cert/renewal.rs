@@ -164,20 +164,16 @@ async fn run_batch(
         } else if !record.is_in_use {
             RenewalResult::Skipped(SkipReason::NoInUseCertificate)
         } else {
-            let result = tokio::select! {
-                biased;
-                () = cancellation.cancelled() => None,
-                result = executor.run(&record) => Some(result),
-            };
-            match result {
-                None => RenewalResult::Cancelled,
-                Some(Ok(outcome)) => RenewalResult::Outcome(outcome),
-                Some(Err(_)) if cancellation.is_cancelled() => RenewalResult::Cancelled,
-                Some(Err(error)) if error.is::<crate::common::terminal::Canceled>() => {
+            // Executor owns cancellation through durable issuance completion and
+            // deployment reporting. Do not drop committed work at this outer boundary.
+            match executor.run(&record).await {
+                Ok(outcome) => RenewalResult::Outcome(outcome),
+                Err(_) if cancellation.is_cancelled() => RenewalResult::Cancelled,
+                Err(error) if error.is::<crate::common::terminal::Canceled>() => {
                     cancellation.cancel();
                     RenewalResult::Cancelled
                 }
-                Some(Err(error)) => {
+                Err(error) => {
                     let (message, hint) = diagnostic(error.as_ref());
                     RenewalResult::Failed { message, hint }
                 }

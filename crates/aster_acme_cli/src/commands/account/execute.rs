@@ -227,9 +227,11 @@ async fn remove(
     options: &AccountArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
-    if context.store.metadata().await?.is_none() {
-        return Err("No local account record exists for this name.".into());
-    }
+    let confirmed = context
+        .store
+        .metadata()
+        .await?
+        .ok_or("No local account record exists for this name.")?;
     let root = context
         .config_path
         .parent()
@@ -251,7 +253,7 @@ async fn remove(
         options.yes,
         &cli.output,
     )?;
-    context.store.remove().await?;
+    context.store.remove(&confirmed).await?;
     crate::config::clear_removed_default(context.config_path, context.name.clone()).await
         .map_err(|error| format!("Local account was removed, but default-account configuration cleanup failed: {error}"))?;
     Ok(AccountReport::Removed {
@@ -515,7 +517,7 @@ async fn save_registration_intent(
     {
         // Discovery failure must not lose local input; this is not CA acceptance.
         let thumbprint = signer.jwk()?.thumbprint()?;
-        let _lease = context
+        let lease = context
             .store
             .lock_account(&context.directory, &thumbprint)
             .await?;
@@ -530,7 +532,7 @@ async fn save_registration_intent(
         if user_agent.is_some() {
             record.user_agent = user_agent;
         }
-        context.store.save(&record).await?;
+        AccountStore::save(context.store.as_ref(), &record, &lease).await?;
     }
     Ok(())
 }

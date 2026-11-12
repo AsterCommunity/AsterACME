@@ -1,4 +1,6 @@
 //! Portable/Windows storage: inherit permissions, reject links, sync files before rename.
+//! Successful writes support process-restart recovery, not power-loss durability of
+//! rename metadata: directory sync below only validates accessibility.
 //!
 //! TODO(AsterFs #3/#4): move reparse/single-link handle validation and explicit Windows
 //! replacement/durability guarantees upstream when implemented. Inherited permissions

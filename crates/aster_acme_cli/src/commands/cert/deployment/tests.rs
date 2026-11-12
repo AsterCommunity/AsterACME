@@ -144,7 +144,17 @@ impl Fixture {
             .unwrap()
             .remove(0)
             .generation_name();
-        after_issuance(store, &self.name, &generation).await.0
+        after_issuance(
+            store,
+            &self.name,
+            &generation,
+            &aster_acme::solver::ExecutionContext {
+                cancellation: tokio_util::sync::CancellationToken::new(),
+                deadline: std::time::Instant::now() + Duration::from_secs(30),
+            },
+        )
+        .await
+        .0
     }
 
     async fn status(&self, id: &str) -> DeploymentBinding {
@@ -342,6 +352,25 @@ fn reload_child() {
             println!("output before timeout");
             std::thread::sleep(Duration::from_secs(30));
         }
+        value if value.starts_with("verify-publication:") => {
+            let target = Path::new(value.trim_start_matches("verify-publication:"));
+            for name in ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"] {
+                assert_eq!(
+                    std::fs::read(target.join(name)).unwrap(),
+                    std::fs::read(target.join(format!("expected-{name}"))).unwrap()
+                );
+                let metadata = std::fs::symlink_metadata(target.join(name)).unwrap();
+                assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+            }
+            assert!(std::fs::read_dir(target).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".aster-acme-deploy-")
+            }));
+            std::fs::write(target.join("reload-observed"), b"complete set").unwrap();
+        }
         "large-output" => {
             use std::io::Write as _;
             let out = std::thread::spawn(|| {
@@ -360,16 +389,21 @@ fn reload_child() {
                 std::thread::sleep(Duration::from_millis(25));
             }
         }
-        value if value.starts_with("tree-success:") => {
-            let file = value.trim_start_matches("tree-success:");
+        value if value.starts_with("tree-success:") || value.starts_with("tree-inherited:") => {
+            let file = value
+                .strip_prefix("tree-success:")
+                .or_else(|| value.strip_prefix("tree-inherited:"))
+                .unwrap();
             let mut command = child_command(&format!("heartbeat:{file}"));
             let program = command.remove(0);
-            let _child = std::process::Command::new(program)
-                .args(command)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap();
+            let mut child = std::process::Command::new(program);
+            child.args(command);
+            if value.starts_with("tree-success:") {
+                child
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+            }
+            let _child = child.spawn().unwrap();
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !Path::new(file).exists() {
                 assert!(std::time::Instant::now() < deadline);
@@ -1078,8 +1112,16 @@ async fn optional_reload_publishes_and_renews_without_any_process_attempt() {
     assert_eq!(saved.reload_command, [] as [&str; 0]);
     let old_key = std::fs::read(target.join("private-key.pem")).unwrap();
     let renewal = fixture.complete(true).await;
-    let (bindings, events) =
-        after_issuance(&fixture.store, &fixture.name, &renewal.generation_name()).await;
+    let (bindings, events) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        &renewal.generation_name(),
+        &aster_acme::solver::ExecutionContext {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: std::time::Instant::now() + Duration::from_secs(30),
+        },
+    )
+    .await;
     assert_eq!(bindings[0].phase, DeploymentPhase::Deployed);
     assert_eq!(bindings[0].attempts, 0);
     assert!(
@@ -1436,4 +1478,16 @@ async fn bare_show_in_json_requires_certificate_and_missing_deployments_never_gu
             .is_err()
     );
     assert_eq!(fixture.store.deployments(&fixture.name).await.unwrap(), []);
+}
+
+#[test]
+fn bare_deployment_filename_resolves_against_current_directory() {
+    assert_eq!(
+        canonical_file_path(Path::new("cert.pem")).unwrap(),
+        std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("cert.pem")
+    );
 }

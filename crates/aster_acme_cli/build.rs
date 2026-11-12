@@ -28,6 +28,40 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
         .map(|value| value.trim().to_owned())
 }
 
+fn watch_repository(root: &Path, repository: Option<&str>) {
+    if let Some(top) = repository {
+        for args in [
+            ["rev-parse", "--git-path", "HEAD"],
+            ["rev-parse", "--git-path", "index"],
+            ["rev-parse", "--git-path", "packed-refs"],
+            ["rev-parse", "--git-path", "logs/HEAD"],
+        ] {
+            if let Some(path) = git(root, &args) {
+                let path = root.join(path);
+                if path.exists() {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
+            }
+        }
+        if let Some(branch) = git(root, &["symbolic-ref", "-q", "HEAD"])
+            && let Some(path) = git(root, &["rev-parse", "--git-path", &branch])
+        {
+            let path = root.join(path);
+            if path.exists() {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+        if let Some(files) = git(Path::new(top), &["ls-files"]) {
+            for file in files.lines() {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    Path::new(top).join(file).display()
+                );
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let root = Path::new(&manifest);
@@ -41,34 +75,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     // Watch actual source/index/HEAD paths, never target/, so rebuild metadata stays
     // accurate without rebuilding solely because Cargo produced another artifact.
-    if let Some(top) = git(root, &["rev-parse", "--show-toplevel"]) {
-        for args in [
-            ["rev-parse", "--git-path", "HEAD"],
-            ["rev-parse", "--git-path", "index"],
-        ] {
-            if let Some(path) = git(root, &args) {
-                println!("cargo:rerun-if-changed={}", root.join(path).display());
-            }
-        }
-        if let Some(branch) = git(root, &["symbolic-ref", "-q", "HEAD"])
-            && let Some(path) = git(root, &["rev-parse", "--git-path", &branch])
-        {
-            println!("cargo:rerun-if-changed={}", root.join(path).display());
-        }
-        if let Some(files) = git(Path::new(&top), &["ls-files", "-co", "--exclude-standard"]) {
-            for file in files.lines() {
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    Path::new(&top).join(file).display()
-                );
-            }
-        }
-    }
+    let repository = git(root, &["rev-parse", "--show-toplevel"]).filter(|top| {
+        git(
+            Path::new(top),
+            &[
+                "ls-files",
+                "--error-unmatch",
+                "crates/aster_acme_cli/build.rs",
+            ],
+        )
+        .is_some()
+            && root.canonicalize().ok()
+                == Path::new(top)
+                    .join("crates/aster_acme_cli")
+                    .canonicalize()
+                    .ok()
+    });
+    watch_repository(root, repository.as_deref());
     let revision = match env::var("ASTER_BUILD_REVISION") {
         Ok(value) => value,
-        Err(env::VarError::NotPresent) => {
-            git(root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into())
-        }
+        Err(env::VarError::NotPresent) => repository
+            .as_ref()
+            .and_then(|_| git(root, &["rev-parse", "HEAD"]))
+            .unwrap_or_else(|| "unknown".into()),
         Err(error) => return Err(error.into()),
     };
     if revision != "unknown"
@@ -80,7 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    let dirty = match git(root, &["status", "--porcelain", "--untracked-files=normal"]) {
+    let dirty = match repository
+        .as_ref()
+        .and_then(|_| git(root, &["status", "--porcelain", "--untracked-files=no"]))
+    {
         Some(status) if status.is_empty() => "false",
         Some(_) => "true",
         None => "unknown",

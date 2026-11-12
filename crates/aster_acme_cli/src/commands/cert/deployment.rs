@@ -311,14 +311,22 @@ pub(super) async fn after_issuance(
     store: &CliIssueStore,
     name: &CertificateName,
     generation: &str,
+    execution: &aster_acme::solver::ExecutionContext,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
-    let cancellation = tokio_util::sync::CancellationToken::new();
-    let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
+    if execution.check().is_err() {
+        return (
+            Vec::new(),
+            vec![event(
+                MessageKind::Error,
+                "Deployment not started: issuance execution was cancelled or its deadline expired; issued certificate retained. Run cert deploy explicitly.",
+            )],
+        );
+    }
     tokio::select! {
         biased;
-        () = cancellation.cancelled() => (Vec::new(), vec![event(MessageKind::Error,
+        () = execution.cancellation.cancelled() => (Vec::new(), vec![event(MessageKind::Error,
             "Deployment interrupted; issued certificate retained. Inspect saved deployment state before retrying.")]),
-        result = automatic_inner(store, name, generation) => result,
+        result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline), automatic_inner(store, name, generation)) => result.unwrap_or_else(|_| (Vec::new(), vec![event(MessageKind::Error, "Deployment deadline exceeded; issued certificate retained. Inspect saved deployment state before retrying.")])),
     }
 }
 
@@ -650,7 +658,8 @@ fn directory(path: &Path) -> CliResult<PathBuf> {
 fn canonical_file_path(path: &Path) -> CliResult<PathBuf> {
     let parent = path
         .parent()
-        .ok_or("deployment file path must have a parent")?
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
         .canonicalize()?;
     let name = path
         .file_name()

@@ -243,10 +243,10 @@ fn predecessor(
         1024 * 1024,
     )
     .map_err(|_| failure("in_use certificate is missing or unsafe"))?;
-    let plan = aster_acme::renewal::RenewalPlan::from_certificate(&chain)?;
+    let certificate_id = aster_acme::renewal::identifier_from_certificate(&chain)?;
     Ok(Some(aster_acme::issuance::RenewalPredecessor {
         operation_id: in_use,
-        certificate_id: plan.certificate_id,
+        certificate_id,
     }))
 }
 

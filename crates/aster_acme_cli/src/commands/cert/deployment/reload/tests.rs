@@ -126,3 +126,24 @@ async fn dropping_reload_future_terminates_the_owned_process_tree() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(std::fs::read(heartbeat).unwrap(), before);
 }
+
+#[tokio::test]
+async fn successful_parent_with_inherited_pipes_does_not_turn_into_a_timeout() {
+    let temp = tempfile::tempdir().unwrap();
+    let heartbeat = temp.path().join("heartbeat");
+    let result = run(
+        &child_command(&format!("tree-inherited:{}", heartbeat.display())),
+        Duration::from_secs(3),
+        "test",
+        1,
+        &mut Vec::new(),
+        None,
+    )
+    .await;
+    assert!(!result.timed_out);
+    assert!(result.status.unwrap().success());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let before = std::fs::read(&heartbeat).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(before, std::fs::read(heartbeat).unwrap());
+}
