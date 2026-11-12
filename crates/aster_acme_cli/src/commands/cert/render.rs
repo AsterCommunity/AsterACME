@@ -1120,6 +1120,20 @@ pub(crate) fn batch(
         ))?);
     }
     let color = format.color;
+    if report.entries.is_empty() {
+        let (kind, message) = if report.was_cancelled() {
+            (
+                output::MessageKind::Warning,
+                "Batch renewal cancelled before any certificates were processed.",
+            )
+        } else {
+            (
+                output::MessageKind::Info,
+                "No managed certificates to check.",
+            )
+        };
+        return Ok(format!("{} {message}", kind.badge(color)));
+    }
     let mut rows = vec![["NAME".into(), "STATUS".into(), "NEXT RENEWAL (UTC)".into()]];
     let mut details = Vec::new();
     for entry in &report.entries {

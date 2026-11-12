@@ -13,7 +13,7 @@ use crate::{
     },
 };
 use aster_acme::{
-    maintenance::{self, Entry, Observer, Options, Outcome, Report},
+    maintenance::{self, Observer, Options, Outcome, Report},
     transport::TransportOptions,
 };
 use aster_acme_cli_storage::issuance::CliIssueStore;
@@ -102,16 +102,12 @@ pub(crate) async fn execute(
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
     let cancellation = CancellationToken::new();
     let _signal = InterruptGuard::new(cancellation.clone());
-    cli.output.progress(
-        MessageKind::Info,
-        "Starting maintenance: refresh due ARI suggestions",
-    );
     let ari = maintenance::run_once(
         &store,
         &cli.http,
         &options,
         &cancellation,
-        Some(&Progress(&cli.output)),
+        Some(&AriProgress(cli.output.clone())),
     )
     .await?;
     if cancellation.is_cancelled() {
@@ -121,8 +117,6 @@ pub(crate) async fn execute(
             data_dir: settings.data_dir,
         });
     }
-    cli.output
-        .progress(MessageKind::Info, "Checking automatic renewal eligibility");
     let renewals = crate::commands::cert::renewal::execute_automatic(
         settings.clone(),
         &store,
@@ -154,25 +148,16 @@ pub(crate) fn exit_status(report: &DaemonReport) -> ExitStatus {
     }
 }
 
-struct Progress<'a>(&'a OutputSession);
-impl Observer for Progress<'_> {
-    fn observed(&self, entry: &Entry) {
-        let kind = match entry.outcome {
-            Outcome::Refreshed => MessageKind::Success,
-            Outcome::RetryScheduled | Outcome::Failed(_) | Outcome::Unavailable => {
-                MessageKind::Warning
-            }
-            Outcome::Skipped | Outcome::Cancelled | Outcome::NotStarted => MessageKind::Info,
-        };
+struct AriProgress(OutputSession);
+impl Observer for AriProgress {
+    fn started(&self, items: usize) {
         self.0.progress(
-            kind,
-            &format!(
-                "ARI {}: {}",
-                entry.name.as_str(),
-                render::status(&entry.outcome)
-            ),
+            MessageKind::Info,
+            &format!("Refreshing ARI suggestions for {items} certificates"),
         );
     }
+
+    fn observed(&self, _: &aster_acme::maintenance::Entry) {}
 }
 
 #[cfg(test)]

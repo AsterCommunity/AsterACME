@@ -162,6 +162,14 @@ async fn empty_inventory_and_pre_cancelled_batches_do_not_execute() {
         empty.summary(),
         super::super::report::RenewalSummary::default()
     );
+    let human = render::batch(
+        &empty,
+        crate::common::session::Format::plain(false),
+        std::path::Path::new("/data"),
+    )
+    .unwrap();
+    assert_eq!(human, "[INFO] No managed certificates to check.");
+    assert!(!human.contains("NAME"));
     token.cancel();
     let report = run_batch(vec![record("later")], &executor, &token).await;
     assert!(executor.calls.borrow().is_empty());

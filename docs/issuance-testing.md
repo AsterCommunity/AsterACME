@@ -204,4 +204,6 @@ Webroot清理用实际移入私有目录的对象核验身份，替换文件保�
 
 自动续期阶段新增准入：storage以类型化查询筛选当前、到期、完成且未吊销证书；CLI只准入webroot/standalone/tls_alpn，并将manual DNS/HTTP作为显式跳过。复用现有renew事务和签发后的部署hook。测试包含五种验证实现的准入矩阵和storage续期精确边界。跨进程测试启动两个独立Rust test子进程模拟daemon候选选择与前台renew，共用同一根目录和账户/证书外置锁；断言仅产生一个固定续期operation、两方拿到相同ID且旧in_use保留。此测试验证存储事务并发契约，不代表两个完整公网签发流程的端到端CA验收。
 
+输出一致性回归：空 daemon 周期只返回一条`No ARI refreshes or automatic renewals were due.`，不显示阶段日志或表格；`cert renew --all`空库存不生成表头。daemon ARI逐项状态只由最终表格呈现，只有存在ARI候选时显示一个阶段开始消息；签发/部署长事务保留实时进度。
+
 最终全仓单元测试626项通过、5项按原配置忽略；本轮调整后的续期/core相关22项及过期发现用例复跑通过。全仓命令末尾doctest首次出现依赖加载E0463；停止交错构建后串行`cargo test --workspace --all-features --doc --locked`通过。严格原生/Windows GNU all-targets/all-features Clippy、rustdoc、fmt、文档/依赖/import/TLS策略及11项Python测试通过；没有公网CA、原生Windows或实际cron验收。

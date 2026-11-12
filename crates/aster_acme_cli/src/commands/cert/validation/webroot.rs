@@ -91,7 +91,6 @@ impl ChallengeSolver for Webroot {
             Ok::<_, IssueError>(())
         })
         .await?;
-        self.progress.output.progress(MessageKind::Info, "HTTP challenge files prepared in webroot; your server must expose them on public port 80");
         Ok(true)
     }
     async fn cleanup(

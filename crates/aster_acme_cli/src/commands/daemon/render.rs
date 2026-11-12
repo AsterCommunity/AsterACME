@@ -36,9 +36,32 @@ pub(crate) fn render(report: &super::DaemonReport, format: Format) -> CliResult<
             "renewal": renewal_value,
         }))?);
     }
-    let ari = render_ari(&report.ari, format)?;
-    let renewal = crate::commands::cert::render::batch(&report.renewals, format, &report.data_dir)?;
-    Ok(format!("{ari}\n\n{renewal}"))
+    if report.ari.entries.is_empty() && report.renewals.is_empty() {
+        let (kind, message) = if report.ari.cancelled || report.renewals.was_cancelled() {
+            (
+                MessageKind::Warning,
+                "Maintenance cancelled before any certificate work was started.",
+            )
+        } else {
+            (
+                MessageKind::Info,
+                "No ARI refreshes or automatic renewals were due.",
+            )
+        };
+        return Ok(format!("{} {message}", kind.badge(format.color)));
+    }
+    let mut sections = Vec::with_capacity(2);
+    if !report.ari.entries.is_empty() {
+        sections.push(render_ari(&report.ari, format)?);
+    }
+    if !report.renewals.is_empty() {
+        sections.push(crate::commands::cert::render::batch(
+            &report.renewals,
+            format,
+            &report.data_dir,
+        )?);
+    }
+    Ok(sections.join("\n\n"))
 }
 
 fn render_ari(report: &aster_acme::maintenance::Report, format: Format) -> CliResult<String> {

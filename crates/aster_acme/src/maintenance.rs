@@ -72,6 +72,8 @@ pub struct Report {
 
 /// Nonblocking product-owned progress sink, used by CLI or embedded hosts.
 pub trait Observer: Send + Sync {
+    /// Called only when the snapshot contains work, before the first item starts.
+    fn started(&self, _items: usize) {}
     /// Called after this entry is complete; final rendering remains caller-owned.
     fn observed(&self, entry: &Entry);
 }
@@ -113,6 +115,12 @@ pub async fn run_once(
             .cmp(b.name.as_str())
             .then(a.operation_id.cmp(&b.operation_id))
     });
+    if let Some(observer) = observer
+        && !records.is_empty()
+        && !cancellation.is_cancelled()
+    {
+        observer.started(records.len());
+    }
     let mut report = Report {
         cancelled: cancellation.is_cancelled(),
         ..Report::default()

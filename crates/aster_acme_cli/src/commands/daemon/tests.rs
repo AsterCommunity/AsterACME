@@ -180,6 +180,12 @@ async fn empty_inventory_is_noninteractive_and_needs_no_account_or_http() {
         .unwrap()["ari"]["entries"],
         serde_json::json!([])
     );
+    let human = render::render(&report, Format::plain(false)).unwrap();
+    assert_eq!(
+        human,
+        "[INFO] No ARI refreshes or automatic renewals were due."
+    );
+    assert!(!human.contains("NAME"));
 }
 
 #[test]

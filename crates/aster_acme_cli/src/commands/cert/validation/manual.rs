@@ -122,10 +122,7 @@ impl ChallengeSolver for Manual {
                     .await?;
                 Ok(true)
             }
-            ChallengeKind::Http01 => {
-                self.progress.output.progress(MessageKind::Info, "HTTP publication confirmed by caller; the CA will verify public access on port 80");
-                Ok(true)
-            }
+            ChallengeKind::Http01 => Ok(true),
             ChallengeKind::TlsAlpn01 => Err(IssueError::InvalidInput(
                 "manual TLS-ALPN is not implemented",
             )),

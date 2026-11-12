@@ -250,6 +250,10 @@ impl RenewalBatch {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub(crate) fn was_cancelled(&self) -> bool {
         self.cancelled
             || self.entries.iter().any(|entry| {

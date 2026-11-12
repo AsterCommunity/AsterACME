@@ -50,7 +50,7 @@ ARI刷新只扫描当前 in_use、已完成、未吊销、未过期且有ARI标�
 
 cron触发频率只决定何时检查保存的期限，不会绕过CA的Retry-After。
 
-`daemon help`、`daemon help run-once`与`--help`由clap原生生成，包含cron示例。维护表格与证书/部署/批量续期列表共用`common::table::listing`，统一表头与状态样式；同一ARI窗口保留已有`renew_at`，成功刷新不意味着续期时间必然改变。
+`daemon help`、`daemon help run-once`与`--help`由clap原生生成，包含cron示例。维护表格与证书/部署/批量续期列表共用`common::table::listing`，统一表头与状态样式；同一ARI窗口保留已有`renew_at`，成功刷新不意味着续期时间必然改变。空周期只输出一条摘要，不打印空表、无工作阶段日志或重复逐项日志；有工作时才报告ARI阶段开始，逐项结果由最终报告统一列出。续期中的签发阶段仍保留实时CA/验证进度。
 
 ## 吊销
 
