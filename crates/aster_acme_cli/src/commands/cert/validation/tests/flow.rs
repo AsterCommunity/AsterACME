@@ -818,7 +818,14 @@ async fn mismatched_solver_fails_before_any_order_or_acknowledgement() {
             .service
             .run(
                 fixture.session.as_mut().unwrap().as_mut(),
-                &aster_acme_validation::dns01::visibility::DnsVisibility,
+                &crate::commands::cert::validation::manual::Manual {
+                    method: ChallengeKind::Dns01,
+                    saved: false,
+                    interactive: false,
+                    yes: false,
+                    progress: progress(),
+                    prompt: std::sync::Mutex::new(None),
+                },
                 &context
             )
             .await

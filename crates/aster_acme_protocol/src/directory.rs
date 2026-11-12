@@ -77,6 +77,10 @@ pub struct Directory {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryMeta {
+    /// RFC 8555 §7.1.1: issuer names accepted as alternatives in CAA properties.
+    /// Absence provides no identity; never infer it from the directory hostname.
+    #[serde(default)]
+    pub caa_identities: Vec<String>,
     /// Terms must be accepted explicitly before creating an account.
     pub terms_of_service: Option<AcmeUrl>,
     /// Whether registration requires EAB credentials.

@@ -19,6 +19,7 @@ pub(super) enum RemovalFilter {
     History,
     Revoked,
     All,
+    Failed,
 }
 
 pub(super) async fn execute(
@@ -45,12 +46,13 @@ pub(super) async fn execute(
                 .map(aster_acme::issuance::CertificateName::new)
                 .transpose()?,
             operation_id: target.operation.clone(),
+            failed_at: matches!(filter, RemovalFilter::Failed).then(time::OffsetDateTime::now_utc),
             view: if matches!(filter, RemovalFilter::All) {
                 aster_acme::storage::query::IssueView::Managed
             } else {
                 aster_acme::storage::query::IssueView::All
             },
-            in_use: if matches!(filter, RemovalFilter::History) {
+            in_use: if matches!(filter, RemovalFilter::History | RemovalFilter::Failed) {
                 Some(false)
             } else {
                 None
@@ -81,6 +83,7 @@ pub(super) async fn execute(
     )?;
     let scope = match filter {
         RemovalFilter::All => RemovalScope::All,
+        RemovalFilter::Failed => RemovalScope::Failed,
         RemovalFilter::History => RemovalScope::History,
         RemovalFilter::Revoked => RemovalScope::Revoked,
         RemovalFilter::Request => RemovalScope::Operation(
@@ -115,6 +118,10 @@ pub(super) async fn execute(
 fn confirmation_details(removal: &CertificateRemoval) -> String {
     use crate::common::time::timestamp;
     let (heading, scope) = match removal.scope() {
+        RemovalScope::Failed => (
+            "Remove terminally failed certificate requests",
+            "Only unissued, non-selected requests with terminal failure evidence will be deleted. Issued, resumable and uncertain requests are retained.",
+        ),
         RemovalScope::Revoked => (
             "Remove locally confirmed revoked certificates",
             "Only versions with a saved CA revocation confirmation will be deleted. Unconfirmed requests are retained.",
@@ -174,6 +181,7 @@ fn confirmation_details(removal: &CertificateRemoval) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod failed;
     use crate::commands::cert::removal::*;
     use aster_acme::issuance::{CertificateName, IssueRequest};
     use aster_acme::storage::account::{AccountKeyStore, AccountStore};

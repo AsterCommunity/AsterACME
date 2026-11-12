@@ -26,4 +26,17 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo check --workspace --locked
       - run: cargo test --workspace --locked
+      - if: runner.os != 'Windows'
+        run: python3 scripts/test-confirmation-terminal.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  precheck-features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python3 scripts/check-precheck-features.py

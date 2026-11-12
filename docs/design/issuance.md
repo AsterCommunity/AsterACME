@@ -22,9 +22,19 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 只读verify不调用ready、ack、finalize或清理。IssueSession.record读取最新持久化状态；每会话IO串行，后台任务携带许可和租约到写完，即使上层等待取消也不提前解锁。
 
+## 统一建议性预检
+
+库 `aster_acme::precheck::Runner` 为显式调用的检查器提供每阶段默认5秒预算、取消和整体deadline，返回带输入索引的结构化Report；本地超时保留完成项，并标记TimedOut/NotChecked。检查器由应用注入：HTTP归aster_acme的precheck-http，CAA/TXT归validation的precheck-caa/precheck-dns。CLI `cert/precheck/{caa,dns,http}` 仅负责调用时机和展示；solver负责发布材料，CAA不会成为签发状态或执行资格。普通不匹配、解析错误和本地超时只提示，CA最终检查；JSON仍只输出既有业务报告，不夹杂人类预检日志。
+
+库默认不启用预检，IssueService::run不自动调用预检；CLI默认启用自己的precheck feature，关闭后仍可正常签发。嵌入者可自行选择检查器并通过Runner::new覆盖默认预算。
+
+issue与renew共用Foreground：directory发现后、首次newOrder前检查全部DNS标识符。恢复已有订单或已提交的创建不重复查CAA；directory未广告caaIdentities时输出无法判断，不根据CA URL猜测身份。CAA阶段所有SAN共享5秒，保留已完成观察，超时后的未检查项为未知。
+
+`protocol::DirectoryMeta.caa_identities`对应RFC8555 §7.1.1，多个issuer是任选匹配，不要求全部发布。`core::caa`按RFC8659处理issue/issuewild、加法授权和未知critical；`validation::caa`使用系统递归解析器（包含别名跟随），只对原标识符爬父域，遇到首个非空CAA集合停止，不合并父子集合、不查询根。NODATA/NXDOMAIN与SERVFAIL等失败分开。通配符去掉*.查询，有issuewild则覆盖issue；仅iodef不限制。RFC8657账户URI/验证方式逐条匹配，CA参数支持和未知critical支持仍由CA决定，客户端结果只为建议。DEBUG可查看本地记录；INFO/WARN显示标识符、查询来源及匹配／无法判断原因。
+
 ## 人工验证与终端
 
-DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制。普通预检失败或耗尽自身预算时仅警告后继续CA验证；用户取消或整体deadline到达时立即停止执行，不继续CA验证。Manual确认线程使用25ms有界终端轮询，观察同一取消/deadline；shutdown结束读取并恢复raw mode，Esc/Ctrl-C映射CLI取消，终端IO失败独立报告。
+DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制。普通预检失败或耗尽自身预算时仅警告后继续CA验证；用户取消或整体deadline到达时立即停止执行，不继续CA验证。人工验证确认复用原生inquire::Confirm，输入/编辑/回显与其他CLI一致；默认否，Esc/Ctrl-C退出。inquire公开API不支持外部取消钩子：等待用户输入期间不强制中断控件，shutdown等待其结束，随后重新检查取消/整体期限，在失效执行中不得继续通知CA。终端raw mode由inquire管理，不跨线程强制关闭、不遗留后台提示。
 
 ## Webroot文件所有权
 

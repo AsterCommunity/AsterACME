@@ -248,8 +248,12 @@ name = "aster_acme_validation"
 version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme",
+ "aster_acme_core",
+ "aster_acme_protocol",
  "async-trait",
  "hickory-resolver",
+ "serde_json",
+ "thiserror",
  "tokio",
  "tokio-util",
 ]

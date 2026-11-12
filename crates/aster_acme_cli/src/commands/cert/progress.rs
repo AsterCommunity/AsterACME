@@ -21,16 +21,6 @@ impl Progress {
         }
     }
 
-    pub(super) fn protocol(
-        &self,
-        directory: &aster_acme_protocol::directory::Directory,
-        record: &aster_acme::issuance::IssueRecord,
-    ) {
-        for message in protocol_messages(directory, record) {
-            self.output.progress(MessageKind::Info, &message);
-        }
-    }
-
     fn should_display(&self, event: &IssueEvent) -> bool {
         if self.output.is_json() {
             return false;
@@ -47,6 +37,24 @@ impl Progress {
                     != Some(status)
             }
             _ => true,
+        }
+    }
+}
+
+impl aster_acme::issuance::workflow::WorkflowObserver for Progress {
+    fn discovering(&self) {
+        self.output.progress(
+            MessageKind::Info,
+            "Discovering ACME endpoints over verified TLS",
+        );
+    }
+    fn discovered(
+        &self,
+        directory: &aster_acme_protocol::directory::Directory,
+        record: &aster_acme::issuance::IssueRecord,
+    ) {
+        for message in protocol_messages(directory, record) {
+            self.output.progress(MessageKind::Info, &message);
         }
     }
 }

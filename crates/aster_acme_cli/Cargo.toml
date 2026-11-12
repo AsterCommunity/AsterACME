@@ -15,6 +15,10 @@ name = "aster-acme"
 path = "src/main.rs"
 doc = false
 
+[features]
+default = ["precheck"]
+precheck = ["dep:aster_acme_validation", "aster_acme/precheck-http", "aster_acme_validation/precheck-caa", "aster_acme_validation/precheck-dns"]
+
 [dependencies]
 hyper.workspace = true
 hyper-util.workspace = true
@@ -28,7 +32,7 @@ base64.workspace = true
 aster_forge_panic.workspace = true
 async-trait.workspace = true
 tokio-util.workspace = true
-aster_acme_validation.workspace = true
+aster_acme_validation = { workspace = true, optional = true }
 aster_acme_protocol.workspace = true
 aster_acme.workspace = true
 aster_acme_core.workspace = true

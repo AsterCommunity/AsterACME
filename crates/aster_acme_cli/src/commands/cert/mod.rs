@@ -3,6 +3,8 @@ pub(crate) mod args;
 pub(crate) mod deployment;
 pub(crate) mod execute;
 mod interaction;
+#[cfg(feature = "precheck")]
+mod precheck;
 mod progress;
 mod removal;
 pub(crate) mod render;

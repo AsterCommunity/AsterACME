@@ -62,14 +62,17 @@ pub(crate) enum CertCommand {
         #[command(flatten)]
         target: SavedTargetArgs,
         /// Remove every local request and key under this certificate name.
-        #[arg(long, conflicts_with_all = ["operation", "history", "revoked"])]
+        #[arg(long, conflicts_with_all = ["operation", "history", "revoked", "failed"])]
         all: bool,
         /// Remove issued historical versions; retain `in_use` and unfinished requests.
-        #[arg(long, conflicts_with_all = ["operation", "all", "revoked"])]
+        #[arg(long, conflicts_with_all = ["operation", "all", "revoked", "failed"])]
         history: bool,
         /// Remove versions with a saved CA revocation confirmation, including `in_use` if matched.
-        #[arg(long, conflicts_with_all = ["operation", "all", "history"])]
+        #[arg(long, conflicts_with_all = ["operation", "all", "history", "failed"])]
         revoked: bool,
+        /// Remove terminally failed, unissued requests that cannot resume; retain uncertain requests.
+        #[arg(long, conflicts_with_all = ["operation", "all", "history", "revoked"])]
+        failed: bool,
         /// Confirm deletion of local certificate material without prompting.
         #[arg(short = 'y', long)]
         yes: bool,
@@ -248,6 +251,54 @@ mod tests {
     use crate::app::{Args, Command};
     use crate::commands::cert::args::*;
     use clap::Parser;
+
+    #[test]
+    fn failed_cleanup_is_explicit_and_conflicts_with_other_scopes_and_operations() {
+        let parsed = crate::app::Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "remove",
+            "web",
+            "--failed",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            crate::app::Command::Cert {
+                command: crate::commands::cert::args::CertCommand::Remove {
+                    failed: true,
+                    yes: true,
+                    ..
+                }
+            }
+        ));
+        for other in ["--all", "--history", "--revoked"] {
+            assert!(
+                crate::app::Args::try_parse_from([
+                    "aster-acme",
+                    "cert",
+                    "remove",
+                    "web",
+                    "--failed",
+                    other
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            crate::app::Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "remove",
+                "web",
+                "--failed",
+                "--operation",
+                &"a".repeat(43)
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn revoke_supports_interaction_names_exact_requests_and_script_confirmation() {

@@ -24,8 +24,8 @@ aster_forge_panic = { version = "=0.1.0-alpha.2", default-features = false }
 aster_forge_macros = { version = "=0.1.0-alpha.1" }
 aster_acme_protocol = { path = "crates/aster_acme_protocol" }
 aster_acme_core = { path = "crates/aster_acme_core" }
-aster_acme = { path = "crates/aster_acme" }
-aster_acme_validation = { path = "crates/aster_acme_validation" }
+aster_acme = { path = "crates/aster_acme", default-features = false }
+aster_acme_validation = { path = "crates/aster_acme_validation", default-features = false }
 aster_acme_cli_storage = { path = "crates/aster_acme_cli_storage" }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util", "signal", "process"] }
 # Forge HTTP selects transport features; this entry supplies shared public types only.

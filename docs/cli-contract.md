@@ -22,7 +22,7 @@
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
 | `account deactivate` | 不可逆地停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
-| `cert remove` | 确认所选申请或显式 --history/--revoked/--all 的本地清理范围；不会吊销 CA 证书 |
+| `cert remove` | 确认所选申请或显式 --history/--revoked/--failed/--all 的本地清理范围；不会吊销 CA 证书 |
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
 | `cert issue --resume <NAME>` | 跳过“Have you published these TXT values?”，然后正常检查 DNS |
 
@@ -77,7 +77,7 @@
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
-| cert remove | [NAME] / -n、--operation 或 --history/--revoked/--all、-y；纯本地，无 HTTP 参数 |
+| cert remove | [NAME] / -n、--operation 或 --history/--revoked/--failed/--all、-y；纯本地，无 HTTP 参数 |
 | version | 仅 --json，不读取配置或初始化状态 |
 
 已有账户的显式 CA 选择只用于匹配其绑定，不能修改绑定。--name 表示当前子命令的目标；--account 专门表示证书申请使用的账户，避免两个名字含混。
@@ -248,3 +248,11 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 构建标识的dirty仅描述Git已跟踪文件修改，不包含未跟踪文件；归档构建不会借用父目录仓库revision。Windows存储成功不承诺掉电后的rename目录项持久性，进程重启恢复与断电恢复分开。
 
 `cert deploy show`是操作者显式查看本地配置的入口，按请求展示保存的reload命令与参数；与普通列表、执行摘要不输出argv的边界不同。调用方应按敏感配置保护其输出，工具不按参数名猜测和破坏原始配置。
+
+CAA建议性检查：issue/renew在首次newOrder前按directory的meta.caaIdentities核对所有域名及通配符；多个CA身份任选匹配，不要求全部配置。各域名按RFC8659取首个非空有效CAA集合，不混合各层记录；检查issue/issuewild及RFC8657参数。CAA阶段全部域名共用5秒预算，DNS失败、不匹配、未知属性和超时均只提示并继续；没有caaIdentities时无法判断且不猜测身份。CAA结果仅明确匹配或无适用限制使用INFO，未匹配、未知、不可用、失败、超时和未检查均使用WARN；等级不改变建议性语义。恢复已有订单不重查，不修改DNS或保存请求状态。取消／整体deadline仍停止。TXT与HTTP预检移至同一precheck层，但在挑战发布后执行，不提前读取尚不存在的材料。
+
+预检为编译期可选能力：CLI的默认precheck feature启用CAA/TXT/HTTP建议性观察，`--no-default-features`构建不调用这些预检，仍保留CA正式验证与正常签发。嵌入者直接使用库的feature-gated Runner与检查器，不需要CLI，也不会由IssueService隐式增加DNS/HTTP观察请求。
+
+`cert remove NAME --failed`清理该名称下明确失败且不可恢复的未签发申请；终端省略NAME时只从失败候选中选择，非交互必须给出名称。creation明确4xx拒绝（排除408/429）、固定CSR被拒、order/authorization终态和订单过期可匹配；已签发、in_use、可恢复以及远端结果未知的申请保留。筛选由IssueRecord规则与storage查询提供，执行持锁重验；需确认或--yes，不访问CA，也不自动删除DNS/webroot材料或部署副本。
+
+人工验证确认复用其他命令相同的inquire::Confirm：默认否，y/yes和n/no、退格编辑、可见输入，由控件恢复终端模式。Esc/Ctrl-C即时结束；当前inquire没有外部中断接口，整体期限或程序取消在用户结束输入后复核，不再执行后续CA操作。

@@ -21,6 +21,8 @@ pub enum RemovalScope {
     Revoked,
     /// All requests and artifacts under this local name.
     All,
+    /// Unissued requests with terminal failure evidence; never uncertain results.
+    Failed,
 }
 
 /// Prepared removal retains the execution lease through confirmation and blocking cleanup.
@@ -178,6 +180,16 @@ fn select_records(
 ) -> Result<Vec<IssueRecord>, IssueError> {
     match scope {
         RemovalScope::All => Ok(records.to_vec()),
+        RemovalScope::Failed => {
+            let now = time::OffsetDateTime::now_utc();
+            Ok(records
+                .iter()
+                .filter(|record| {
+                    in_use != Some(record.operation_id.as_str()) && record.failed_unresumable(now)
+                })
+                .cloned()
+                .collect())
+        }
         RemovalScope::Revoked => Ok(records
             .iter()
             .filter(|record| {

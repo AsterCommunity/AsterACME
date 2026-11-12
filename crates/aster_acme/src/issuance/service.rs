@@ -124,7 +124,7 @@ impl IssueService {
         result
     }
 
-    async fn run_active(
+    pub(crate) async fn run_active(
         &self,
         session: &mut dyn IssueSession,
         solver: &dyn ChallengeSolver,
@@ -290,7 +290,7 @@ impl IssueService {
 
     // One library-owned guard for new issuance, recovery and renewal. Product
     // adapters cannot reinterpret the saved method or bypass protocol eligibility.
-    fn check_execution(
+    pub(crate) fn check_execution(
         &self,
         record: &IssueRecord,
         solver: &dyn ChallengeSolver,
@@ -431,7 +431,7 @@ impl IssueService {
         }
     }
 
-    fn check_identity(&self, record: &IssueRecord) -> Result<(), IssueError> {
+    pub(crate) fn check_identity(&self, record: &IssueRecord) -> Result<(), IssueError> {
         if record.account_id != self.identity.account.account_id
             || record.directory != *self.client.directory_url()
             || record.account_url

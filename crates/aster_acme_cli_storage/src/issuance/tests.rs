@@ -1,6 +1,8 @@
 //! Loopback CA exercises real journals, fixed CSR and restartable foreground execution.
+mod failed_removal;
 mod query;
 mod rfc_errors;
+mod workflow;
 use crate::issuance::*;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
 use aster_acme::identifier::DnsIdentifier;

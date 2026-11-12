@@ -17,6 +17,7 @@ pub mod certificate;
 
 pub mod progress;
 pub mod service;
+pub mod workflow;
 
 /// Portable application-visible certificate name, independent of DNS wildcard syntax.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,6 +503,29 @@ impl IssueRecord {
         Ok(())
     }
 
+    /// An unissued request with affirmative, terminal failure evidence.
+    /// Unknown network outcomes and deferred 408/429/5xx responses are retained;
+    /// being absent from resume candidates alone never authorizes deletion.
+    #[must_use]
+    pub fn failed_unresumable(&self, now: time::OffsetDateTime) -> bool {
+        use aster_acme_core::protocol::OrderStatus;
+        self.unfinished()
+            && self.certificate_not_after.is_none()
+            && !self
+                .order
+                .as_ref()
+                .is_some_and(|order| matches!(order.status, OrderStatus::Valid))
+            && (self.creation_failure.as_ref().is_some_and(|failure| {
+                (400..500).contains(&failure.status) && !matches!(failure.status, 408 | 429)
+            }) || self.finalize_rejection.is_some()
+                || self.authorization_failure().is_some()
+                || self
+                    .order
+                    .as_ref()
+                    .is_some_and(|order| matches!(order.status, OrderStatus::Invalid))
+                || self.expired(now))
+    }
+
     /// Known terminal orders are retained for inspection but excluded from resume selection.
     #[must_use]
     pub fn resume_candidate(&self) -> bool {
@@ -710,6 +734,7 @@ pub struct IssueIdentity {
 
 #[cfg(test)]
 mod tests {
+    mod failed;
     use crate::issuance::*;
 
     #[test]

@@ -1,6 +1,6 @@
 //! Manual implementations share confirmation semantics but keep method-specific instructions.
 use crate::commands::cert::validation::{
-    Arc, ChallengeKind, ChallengeSolver, IssueError, PRECHECK_TIMEOUT, Progress,
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
 };
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
@@ -117,13 +117,9 @@ impl ChallengeSolver for Manual {
         }
         match self.method {
             ChallengeKind::Dns01 => {
-                dns_precheck(
-                    aster_acme_validation::dns01::visibility::DnsVisibility
-                        .ready(requirements, execution),
-                    execution,
-                    &self.progress,
-                )
-                .await?;
+                #[cfg(feature = "precheck")]
+                crate::commands::cert::precheck::dns::run(requirements, execution, &self.progress)
+                    .await?;
                 Ok(true)
             }
             ChallengeKind::Http01 => {
@@ -137,103 +133,47 @@ impl ChallengeSolver for Manual {
     }
 }
 
-// Every blocking read is preceded by a short bounded poll; shutdown can always
-// join this worker. The raw-mode guard restores the terminal before sending an answer.
+// Use the same native inquire widget as other CLI confirmations. Its public
+// API is blocking and has no external cancellation hook: never detach a live
+// prompt or force-disable its raw mode from a different thread. Shutdown joins
+// it, then the saved execution scope is checked before any CA operation.
 fn confirm(
     question: &str,
     execution: &ExecutionContext,
     stop: &tokio_util::sync::CancellationToken,
     progress: &Progress,
 ) -> Result<bool, IssueError> {
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-    struct RawMode;
-    impl Drop for RawMode {
-        fn drop(&mut self) {
-            let _ = crossterm::terminal::disable_raw_mode();
-        }
+    execution.check().map_err(|_| IssueError::Interrupted)?;
+    if stop.is_cancelled() {
+        return Err(IssueError::Interrupted);
     }
-    crossterm::terminal::enable_raw_mode()
-        .map_err(|_| IssueError::Publication("cannot initialize confirmation terminal".into()))?;
-    let _raw = RawMode;
     progress.output.interaction_started();
-    progress.output.context(&format!("> {question} [y/N]"));
-    let mut answer = false;
-    loop {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
-        if stop.is_cancelled() {
+    let answer = inquire::Confirm::new(question)
+        .with_default(false)
+        .with_render_config(crate::common::terminal::prompt_style(
+            progress.output.diagnostic_format().color,
+            false,
+        ))
+        .prompt();
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(
+            inquire::InquireError::OperationCanceled | inquire::InquireError::OperationInterrupted,
+        ) => {
+            execution.cancellation.cancel();
             return Err(IssueError::Interrupted);
         }
-        if !event::poll(std::time::Duration::from_millis(25))
-            .map_err(|_| IssueError::Publication("cannot poll confirmation terminal".into()))?
-        {
-            continue;
+        Err(error) => {
+            return Err(IssueError::Publication(format!(
+                "confirmation terminal failed: {error}"
+            )));
         }
-        let Event::Key(key) = event::read()
-            .map_err(|_| IssueError::Publication("cannot read confirmation terminal".into()))?
-        else {
-            continue;
-        };
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        match key.code {
-            KeyCode::Esc => {
-                execution.cancellation.cancel();
-                return Err(IssueError::Interrupted);
-            }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                execution.cancellation.cancel();
-                return Err(IssueError::Interrupted);
-            }
-            KeyCode::Char('y' | 'Y') => answer = true,
-            KeyCode::Char('n' | 'N') | KeyCode::Backspace => answer = false,
-            KeyCode::Enter => return Ok(answer),
-            _ => {}
-        }
-    }
-}
-
-/// Local resolver observations are advisory, bounded independently of the ACME
-/// request budget. A broken resolver must not reject domain control on behalf of a CA.
-/// User cancellation/overall expiry still stops the operation.
-pub(super) async fn dns_precheck(
-    check: impl std::future::Future<Output = Result<bool, IssueError>>,
-    execution: &ExecutionContext,
-    progress: &Progress,
-) -> Result<(), IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
-    progress.output.progress(
-        MessageKind::Info,
-        &format!(
-            "Checking local DNS visibility (advisory, up to {} seconds)",
-            PRECHECK_TIMEOUT.as_secs()
-        ),
-    );
-    let result = tokio::select! {
-        biased;
-        () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
-        result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline.min(std::time::Instant::now() + PRECHECK_TIMEOUT)), check) => result,
     };
     execution.check().map_err(|_| IssueError::Interrupted)?;
-    match result {
-        Ok(Ok(true)) => progress.output.progress(
-            MessageKind::Success,
-            "Required TXT values are visible through the local DNS resolver",
-        ),
-        Ok(Ok(false)) => progress.output.progress(
-            MessageKind::Warning,
-            "TXT values are not visible locally yet; continuing to CA validation",
-        ),
-        Ok(Err(_)) => progress.output.progress(
-            MessageKind::Warning,
-            "Local DNS resolver is unavailable; continuing to CA validation",
-        ),
-        Err(_) => progress.output.progress(
-            MessageKind::Warning,
-            "Local DNS precheck timed out; continuing to CA validation",
-        ),
+    if stop.is_cancelled() {
+        return Err(IssueError::Interrupted);
     }
-    Ok(())
+    Ok(answer)
 }
 
 #[cfg(test)]
@@ -272,8 +212,15 @@ mod tests {
         .await;
         solver.shutdown().await;
         assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
-        assert!(result.is_err() || result.unwrap().is_err());
-        assert_eq!(cancellation.is_cancelled(), mode == "escape");
+        match mode.as_str() {
+            "yes" | "yes-word" | "replace" => assert!(result.unwrap().unwrap()),
+            "no" | "no-word" | "default" | "erase" => assert!(!result.unwrap().unwrap()),
+            _ => assert!(result.is_err() || result.unwrap().is_err()),
+        }
+        assert_eq!(
+            cancellation.is_cancelled(),
+            matches!(mode.as_str(), "escape" | "ctrl-c")
+        );
         println!(
             "CONFIRM_RESTORED mode={mode} cancelled={}",
             cancellation.is_cancelled()

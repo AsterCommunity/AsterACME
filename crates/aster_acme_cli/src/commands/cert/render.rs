@@ -1421,6 +1421,7 @@ pub(super) fn removed(
         RemovalScope::History => "history",
         RemovalScope::Revoked => "revoked",
         RemovalScope::All => "all",
+        RemovalScope::Failed => "failed",
     };
     if format.json {
         return Ok(serde_json::to_string_pretty(&CertificateDeletionOutput {
@@ -1435,6 +1436,15 @@ pub(super) fn removed(
     }
     let color = format.color;
     let message = match scope {
+        RemovalScope::Failed if ids.is_empty() => format!(
+            "No terminally failed requests to remove for {}.",
+            output::safe(name)
+        ),
+        RemovalScope::Failed => format!(
+            "Removed {} terminally failed certificate request(s) for {}.",
+            ids.len(),
+            output::safe(name)
+        ),
         RemovalScope::Operation(_) => format!(
             "Removed local certificate request for {}.",
             output::safe(name)

@@ -241,3 +241,21 @@ fn exact_urls_reject_dot_segment_normalization_without_reencoding_valid_paths() 
         assert!(crate::url::AcmeUrl::new(&format!("https://ca.example/{path}")).is_ok());
     }
 }
+
+#[test]
+fn directory_caa_identities_preserve_alternatives_and_optional_absence() {
+    let directory: crate::directory::Directory = serde_json::from_value(serde_json::json!({
+        "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account",
+        "meta":{"caaIdentities":["ca.example", "alternate.example"]}
+    }))
+    .unwrap();
+    assert_eq!(
+        directory.meta.caa_identities,
+        ["ca.example", "alternate.example"]
+    );
+    let no_meta: crate::directory::Directory = serde_json::from_value(serde_json::json!({
+        "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account"
+    }))
+    .unwrap();
+    assert_eq!(no_meta.meta.caa_identities, Vec::<String>::new());
+}

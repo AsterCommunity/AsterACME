@@ -387,45 +387,44 @@ impl Foreground<'_> {
         session: &mut dyn IssueSession,
     ) -> CliResult<IssueOutcome> {
         let saved = session.record().await?;
-        tracing::debug!(operation_id = %saved.operation_id, phase = ?saved.phase, creation_submitted = saved.creation_submitted, has_order_url = saved.order_url.is_some(), "Checking saved request before CA discovery");
-        saved.check_recovery(time::OffsetDateTime::now_utc())?;
         let solver = super::validation::adapter(
             &saved,
             matches!(self.mode, RunMode::Single) && terminal::interactive(self.options.json),
             self.args.yes,
             self.progress.clone(),
         )?;
-        let solver = super::validation::with_http_precheck(
+        #[cfg(feature = "precheck")]
+        let solver = crate::commands::cert::precheck::with_http(
             solver,
             self.cli.http.clone(),
             self.progress.clone(),
         );
-        self.progress.output.progress(
-            MessageKind::Info,
-            "Discovering ACME endpoints over verified TLS",
-        );
-        tracing::debug!("Discovering certificate issuance endpoints");
-        if self.execution.cancellation.is_cancelled() {
-            return Err(crate::common::terminal::Canceled.into());
-        }
-        self.execution
-            .check()
-            .map_err(|_| IssueError::Interrupted)?;
-        let client = tokio::select! {
-            biased;
-            () = self.execution.cancellation.cancelled() => return Err(crate::common::terminal::Canceled.into()),
-            result = tokio::time::timeout_at(tokio::time::Instant::from_std(self.execution.deadline), self.cli.http.discover(self.context.directory.clone(), self.context.transport_options(self.options)?)) => Arc::new(result.map_err(|_| IssueError::Interrupted)??),
-        };
-        self.progress
-            .protocol(client.directory(), &session.record().await?);
-        let service = IssueService::new(client, identity)?.with_observer(self.progress.clone());
+        let workflow = aster_acme::issuance::workflow::Workflow::new(
+            self.cli.http.clone(),
+            self.context.directory.clone(),
+            self.context.transport_options(self.options)?,
+        )?
+        .with_observer(self.progress.clone());
         let (_, max_polls, poll_interval) = self.args.limits(&self.context.config);
         let execution = IssueExecution {
             max_polls,
             context: self.execution.clone(),
             poll_interval: Duration::from_secs(poll_interval),
         };
-        let result = service.run(session, solver.as_ref(), &execution).await;
+        #[cfg(feature = "precheck")]
+        let result = {
+            let check = aster_acme_validation::caa::order::OrderCaa::default();
+            let observer =
+                crate::commands::cert::precheck::caa::Display::new(&saved, &self.progress);
+            let stage = aster_acme::precheck::order::Stage::new(&check).with_observer(&observer);
+            workflow
+                .run_with_precheck(identity, session, solver.as_ref(), &execution, &stage)
+                .await
+        };
+        #[cfg(not(feature = "precheck"))]
+        let result = workflow
+            .run(identity, session, solver.as_ref(), &execution)
+            .await;
         if matches!(result, Err(IssueError::Interrupted))
             && self.execution.cancellation.is_cancelled()
         {
@@ -450,16 +449,22 @@ pub(crate) async fn execute(
             all,
             history,
             revoked,
+            failed,
             yes,
             local,
         } => {
             use crate::commands::cert::removal::RemovalFilter;
-            let filter = match (all, history, revoked) {
-                (false, false, false) => RemovalFilter::Request,
-                (true, false, false) => RemovalFilter::All,
-                (false, true, false) => RemovalFilter::History,
-                (false, false, true) => RemovalFilter::Revoked,
-                _ => return Err("--all, --history and --revoked are mutually exclusive.".into()),
+            let filter = match (all, history, revoked, failed) {
+                (false, false, false, false) => RemovalFilter::Request,
+                (true, false, false, false) => RemovalFilter::All,
+                (false, true, false, false) => RemovalFilter::History,
+                (false, false, true, false) => RemovalFilter::Revoked,
+                (false, false, false, true) => RemovalFilter::Failed,
+                _ => {
+                    return Err(
+                        "--all, --history, --revoked and --failed are mutually exclusive.".into(),
+                    );
+                }
             };
             super::removal::execute(target, filter, yes, local, cli).await
         }

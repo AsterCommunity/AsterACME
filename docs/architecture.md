@@ -47,3 +47,5 @@ CLI app / dispatch
 | 规范出处与尚未实现的扩展 | [RFC索引](rfc-reference.md) |
 
 开发者文档组织规则和验证入口统一见[文档索引](README.md)，不在本文追加每轮修改日记或复制测试结果。
+
+预检所有权：aster_acme的precheck feature提供Runner/Check/Report，precheck-http提供HTTP实现；validation的precheck-caa和precheck-dns按需引入Hickory。CLI只负责预检时机和渲染，protocol只描述directory字段。禁用CLI预检不会改变ACME正式验证。

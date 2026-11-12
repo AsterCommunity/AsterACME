@@ -10,6 +10,11 @@ description = "Embeddable ACME client and certificate lifecycle orchestration."
 publish.workspace = true
 readme = "README.md"
 
+[features]
+default = []
+precheck = []
+precheck-http = ["precheck"]
+
 [dependencies]
 tracing.workspace = true
 rcgen.workspace = true

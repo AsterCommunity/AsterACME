@@ -5,9 +5,10 @@
 - `account`：注册/复用、停用及可用账户选择的显式纯决策；本地注册与停用意图、CA 观察驱动的状态转换。
 - `protocol`：保留未知值的资源状态枚举，使用 Forge 的 `wire_enum!`。
 - `machine`：订单、授权及 challenge 的纯推进决策。未知和失败状态返回明确错误；processing 不重复提交 CSR。
+- `caa`：RFC8659/RFC8657的纯建议性策略评估，不进行DNS查询，不决定CA能否签发。
 - `workflow`：本地阶段，签发完成与清理完成分开记录。
 
-不认识 DNS-01/HTTP-01/TLS-ALPN-01，不处理域名、验证材料、密码学、网络、文件或运行时。生产依赖仅为 Forge 声明式宏、Serde 与 thiserror。
+不执行 DNS-01/HTTP-01/TLS-ALPN-01，不处理验证材料、密码学、网络、文件或运行时。生产依赖仅为 Forge 声明式宏、Serde 与 thiserror。
 
 ```rust
 use aster_acme_core::{machine::{order_action, OrderAction}, protocol::OrderStatus};

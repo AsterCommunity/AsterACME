@@ -10,11 +10,6 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
-/// Shared advisory precheck budget, independent of HTTP requests and CA polls.
-/// A shorter operation deadline or cancellation always takes precedence.
-const PRECHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-mod http;
 mod listener;
 mod manual;
 mod standalone;
@@ -229,24 +224,6 @@ pub(super) fn adapter(
                 progress,
             }))
         }
-    }
-}
-
-/// Reuse the command pool for advisory HTTP checks without teaching protocol
-/// services about local DNS/network reachability or CLI publication policy.
-pub(super) fn with_http_precheck(
-    solver: Box<dyn ChallengeSolver>,
-    pool: aster_acme::transport::HttpPool,
-    progress: Arc<Progress>,
-) -> Box<dyn ChallengeSolver> {
-    if solver.kind() == ChallengeKind::Http01 {
-        Box::new(http::Checked {
-            inner: solver,
-            pool,
-            progress,
-        })
-    } else {
-        solver
     }
 }
 

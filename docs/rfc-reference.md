@@ -141,3 +141,5 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 | CAA、签名/公钥、联系人、EAB、用户操作、compound等 | 原type/detail/instance/子问题及现有专项提示；不为每种problem虚构一个CA资源状态，也不设置通用自动重放 |
 
 newOrder收到明确错误后，当前策略要求用户检查原因并显式新建，不实现同操作重发或自动等待429后重下单。未发布的finalize_rejection改为带HTTP证据的结构；旧JSON/TOML字段形状不兼容、不迁移。本次不操作用户已有失败记录，也不从旧日志猜测补写证据。
+
+CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取caaIdentities（任一身份可匹配）；RFC8659 §3首个非空CAA集合与别名解析、§4.1 critical位、§4.2/4.3 issue/issuewild；RFC8657 §3/4账户与验证方式参数。CA扩展支持、DNSSEC及CA多视角检查不由客户端替代，结果始终建议性。系统解析器配置和DNS视角可能与CA不同，CAA并未添加强制拒绝或DNS写入能力。

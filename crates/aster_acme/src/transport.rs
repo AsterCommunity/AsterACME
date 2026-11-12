@@ -22,6 +22,7 @@ use aster_acme_protocol::{
     url::AcmeUrl,
 };
 
+#[cfg(feature = "precheck-http")]
 mod http_precheck;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;

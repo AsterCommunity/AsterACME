@@ -439,52 +439,6 @@ fn tls_alpn_configuration_defaults_to_public_port_443_and_is_immutable_on_resume
     );
 }
 
-#[tokio::test]
-async fn dns_precheck_missing_values_errors_and_short_timeout_are_advisory_but_cancellation_is_not()
-{
-    for result in [
-        Ok(true),
-        Ok(false),
-        Err(IssueError::InvalidInput(
-            "cannot load system DNS configuration",
-        )),
-    ] {
-        manual::dns_precheck(async { result }, &execution(), &progress())
-            .await
-            .unwrap();
-    }
-    let started = Instant::now();
-    manual::dns_precheck(
-        std::future::pending(),
-        &ExecutionContext {
-            deadline: Instant::now() + Duration::from_secs(10),
-            ..execution()
-        },
-        &progress(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(PRECHECK_TIMEOUT, Duration::from_secs(5));
-    assert!(started.elapsed() >= PRECHECK_TIMEOUT);
-    assert!(started.elapsed() < Duration::from_secs(8));
-    let cancelled = execution();
-    cancelled.cancellation.cancel();
-    assert!(
-        manual::dns_precheck(async { Ok(false) }, &cancelled, &progress())
-            .await
-            .is_err()
-    );
-    let expired = ExecutionContext {
-        deadline: Instant::now(),
-        ..execution()
-    };
-    assert!(
-        manual::dns_precheck(async { Ok(false) }, &expired, &progress())
-            .await
-            .is_err()
-    );
-}
-
 #[test]
 fn old_dns_bypass_flags_are_not_retained_as_compatibility_aliases() {
     for flag in ["--skip-dns-check", "--skip-local-dns", "--force", "-f"] {

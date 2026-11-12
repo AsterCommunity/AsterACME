@@ -654,6 +654,7 @@ async fn shared_pool_keeps_request_deadlines_independent_and_initializes_lazily(
     assert!(pool.0.get().is_some());
 }
 
+#[cfg(feature = "precheck-http")]
 #[tokio::test]
 async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
     let server = MockServer::start().await;
@@ -716,6 +717,7 @@ async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
     ));
 }
 
+#[cfg(feature = "precheck-http")]
 #[tokio::test]
 async fn advisory_redirect_loops_invalid_schemes_and_missing_locations_are_bounded() {
     let server = MockServer::start().await;

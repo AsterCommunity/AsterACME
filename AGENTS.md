@@ -15,7 +15,7 @@ AsterACME是可嵌入的Rust ACME客户端与CLI。全局身份和工程流程�
 - 保留现有修改和暂存边界；不reset、stash、批量覆盖或清理用户数据。
 - core纯决策，protocol拥有wire，aster_acme拥有协议编排，cli_storage拥有文件/查询，CLI拥有交互和进程；具体规则回到所有者，不复制状态机。
 - 禁止use super（含测试），使用crate::实际所有者路径。禁止生产unsafe及unwrap/expect/panic占位。
-- 依赖版本和features仅根workspace定义，成员只workspace=true；稳定Rust，标准库锁，HTTP复用Forge/rustls/AWS-LC。
+- 依赖版本和features仅根workspace定义，成员继承workspace=true，仅optional可由本crate feature控制；稳定Rust，标准库锁，HTTP复用Forge/rustls/AWS-LC。
 - 不增加纯透传facade、隐藏全局注册表、旧导入路径兼容层。内部API/schema改变同步全部调用方、测试、示例及文档；未发布格式不自动迁移或删除旧数据。
 - 持久化先保存意图，取消不提前释放后台写任务租约；不确定远端结果不自动重放。私钥/凭据不进入日志或公开输出。
 - deploy直接发布普通文件并保持目录，全部文件准备成功后逐文件替换，全部发布成功才reload；不使用部署链接或承诺整组原子事务。容器与reload的服务更新逻辑由用户负责。

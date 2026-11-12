@@ -116,3 +116,9 @@ CLI已实现manual_dns、manual_http、webroot、HTTP standalone和TLS-ALPN。HT
 临时挑战服务可实现`ChallengeSolver::restore`重建已保存的pending授权响应，包括已经通知CA的挑战；该hook不重发ack。`IssueService::run`在所有返回路径调用有界`shutdown`，与终态持久化材料`cleanup`分开；嵌入者直接丢弃运行future时必须关闭或丢弃solver。CLI HTTP standalone使用该契约；TLS-ALPN复用同一生命周期并提供TLS监听实现。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
+
+## 可选预检
+
+默认features为空。启用 `precheck` 获得 `precheck::Runner`、可注入的 `Check` 与结构化 `Report`；`precheck-http` 额外提供 `precheck::http::Http`。默认每阶段5秒，可用 `Runner::new(Duration)` 设置嵌入者预算；取消或整体执行期限到达返回中断。普通失败是报告项，本地超时保留已完成项并标记未检查项，不拒绝签发。
+
+`Runner::run(&checker, &inputs, &execution)` 是显式调用；`IssueService::run` 不自动执行预检。HTTP检查器复用调用方HttpPool；CAA/TXT检查器由aster_acme_validation的对应feature提供，避免协议库依赖DNS解析器或CLI。
