@@ -103,6 +103,8 @@ impl CliIssueStore {
             // initialization is listed and fails closed on resume, never generates a new key.
             write_journal(&generation.join("operation.toml"), &record)?;
             write_material(&generation, &material)?;
+            crate::state_file::sync_directory(&slot)
+                .map_err(|_| failure("cannot sync issuance generation parent"))?;
             write_journal(&generation.join("operation.toml"), &record)?;
             Ok(RenewalPreparation::Ready(Box::new(Session {
                 slot,
@@ -176,7 +178,7 @@ fn prepare_initialization(
 ) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
     match input {
         Initialization::New(_) => {
-            fs::create_dir_all(slot).map_err(|_| failure("cannot create certificate directory"))?;
+            crate::toml_file::durable_private_dir(slot)?;
         }
         Initialization::Renewal(_) | Initialization::Scheduled { .. } => {}
     }

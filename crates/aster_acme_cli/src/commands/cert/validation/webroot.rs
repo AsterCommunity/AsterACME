@@ -13,13 +13,21 @@ use aster_acme_cli_storage::state_file;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest as _, Sha256};
+use std::path::{Path, PathBuf};
+#[cfg(not(unix))]
+use std::{fs::OpenOptions, io::Write as _};
+#[cfg(any(test, not(unix)))]
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    path::{Path, PathBuf},
+    fs::{self, File},
+    io::Read as _,
 };
 
+#[cfg(unix)]
+mod anchored;
+pub(in crate::commands::cert::validation) mod workers;
+
 pub(super) struct Webroot {
+    pub(super) workers: workers::Workers,
     pub(super) root: PathBuf,
     pub(super) operation: String,
     pub(super) progress: Arc<Progress>,
@@ -52,6 +60,9 @@ impl FileAction {
 
 #[async_trait]
 impl ChallengeSolver for Webroot {
+    async fn shutdown(&self) {
+        self.workers.shutdown().await;
+    }
     fn kind(&self) -> ChallengeKind {
         ChallengeKind::Http01
     }
@@ -65,7 +76,7 @@ impl ChallengeSolver for Webroot {
         let requirements = requirements.to_vec();
         let execution = execution.clone();
         let progress = self.progress.clone();
-        tokio::task::spawn_blocking(move || {
+        self.workers.run(move || {
             for requirement in &requirements {
                 execution.check().map_err(|_| IssueError::Interrupted)?;
                 let (target, _, _) = paths(&root, &operation, requirement, true)?;
@@ -79,8 +90,7 @@ impl ChallengeSolver for Webroot {
             execution.check().map_err(|_| IssueError::Interrupted)?;
             Ok::<_, IssueError>(())
         })
-        .await
-        .map_err(|_| IssueError::InvalidInput("webroot publication worker failed"))??;
+        .await?;
         self.progress.output.progress(MessageKind::Info, "HTTP challenge files prepared in webroot; your server must expose them on public port 80");
         Ok(true)
     }
@@ -94,19 +104,19 @@ impl ChallengeSolver for Webroot {
         let requirements = requirements.to_vec();
         let execution = execution.clone();
         let progress = self.progress.clone();
-        tokio::task::spawn_blocking(move || {
-            for requirement in &requirements {
-                execution.check().map_err(|_| IssueError::Interrupted)?;
-                let (target, _, _) = paths(&root, &operation, requirement, false)?;
-                let action = remove_owned(&root, &operation, requirement)?;
-                progress
-                    .output
-                    .progress(MessageKind::Info, &action.message(&target));
-            }
-            Ok::<_, IssueError>(())
-        })
-        .await
-        .map_err(|_| IssueError::InvalidInput("webroot cleanup worker failed"))??;
+        self.workers
+            .run(move || {
+                for requirement in &requirements {
+                    execution.check().map_err(|_| IssueError::Interrupted)?;
+                    let (target, _, _) = paths(&root, &operation, requirement, false)?;
+                    let action = remove_owned(&root, &operation, requirement)?;
+                    progress
+                        .output
+                        .progress(MessageKind::Info, &action.message(&target));
+                }
+                Ok::<_, IssueError>(())
+            })
+            .await?;
         self.progress.output.progress(
             MessageKind::Info,
             "HTTP challenge cleanup finished; preexisting or replaced user files were retained",
@@ -142,6 +152,29 @@ fn paths(
     }
     state_file::ensure_directory(root)
         .map_err(|_| IssueError::InvalidInput("webroot is missing or linked"))?;
+    #[cfg(unix)]
+    if create {
+        anchored::prepare(root)?;
+    }
+    #[cfg(not(unix))]
+    prepare_paths(root, create)?;
+    let directory = root.join(".well-known/acme-challenge");
+    let receipt = format!(
+        ".aster-acme-{operation}-{}",
+        URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
+    );
+    Ok((
+        directory.join(token),
+        directory.join(receipt),
+        content.clone(),
+    ))
+}
+
+#[cfg(not(unix))]
+fn prepare_paths(root: &Path, create: bool) -> Result<(), IssueError> {
+    #[cfg(windows)]
+    let mut guard = state_file::windows_guard::DirectoryGuard::open(root)
+        .map_err(|error| IssueError::Publication(error.to_string()))?;
     let mut directory = root.to_path_buf();
     for part in [".well-known", "acme-challenge"] {
         directory.push(part);
@@ -173,18 +206,15 @@ fn paths(
         state_file::ensure_directory(&directory).map_err(|_| {
             IssueError::InvalidInput("HTTP challenge directory is missing, linked or unsafe")
         })?;
+        #[cfg(windows)]
+        guard
+            .pin(&directory)
+            .map_err(|error| IssueError::Publication(error.to_string()))?;
     }
-    let receipt = format!(
-        ".aster-acme-{operation}-{}",
-        URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
-    );
-    Ok((
-        directory.join(token),
-        directory.join(receipt),
-        content.clone(),
-    ))
+    Ok(())
 }
 
+#[cfg(any(test, not(unix)))]
 fn read(path: &Path) -> Result<Option<(File, Vec<u8>)>, IssueError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -215,12 +245,43 @@ fn read(path: &Path) -> Result<Option<(File, Vec<u8>)>, IssueError> {
     Ok(Some((file, bytes)))
 }
 
+#[cfg(unix)]
+fn publish(
+    root: &Path,
+    operation: &str,
+    requirement: &ValidationRequirement,
+) -> Result<FileAction, IssueError> {
+    anchored::publish(root, operation, requirement)
+}
+#[cfg(unix)]
+fn remove_owned(
+    root: &Path,
+    operation: &str,
+    requirement: &ValidationRequirement,
+) -> Result<FileAction, IssueError> {
+    anchored::remove(root, operation, requirement)
+}
+
+#[cfg(windows)]
+fn pin_directories(root: &Path) -> Result<state_file::windows_guard::DirectoryGuard, IssueError> {
+    let mut guard = state_file::windows_guard::DirectoryGuard::open(root)
+        .map_err(|error| IssueError::Publication(error.to_string()))?;
+    guard
+        .pin(&root.join(".well-known"))
+        .and_then(|()| guard.pin(&root.join(".well-known/acme-challenge")))
+        .map_err(|error| IssueError::Publication(error.to_string()))?;
+    Ok(guard)
+}
+
+#[cfg(not(unix))]
 fn publish(
     root: &Path,
     operation: &str,
     requirement: &ValidationRequirement,
 ) -> Result<FileAction, IssueError> {
     let (target, receipt, content) = paths(root, operation, requirement, true)?;
+    #[cfg(windows)]
+    let _guard = pin_directories(root)?;
     let stage = match OpenOptions::new()
         .write(true)
         .read(true)
@@ -291,12 +352,15 @@ fn publish(
     })
 }
 
+#[cfg(not(unix))]
 fn remove_owned(
     root: &Path,
     operation: &str,
     requirement: &ValidationRequirement,
 ) -> Result<FileAction, IssueError> {
     let (target, receipt, content) = paths(root, operation, requirement, false)?;
+    #[cfg(windows)]
+    let _guard = pin_directories(root)?;
     let Some((stage, bytes)) = read(&receipt)? else {
         return Ok(if target.exists() {
             FileAction::Retained
@@ -330,6 +394,7 @@ fn remove_owned(
 
 // Move the actual path entry into a private sibling directory before checking it.
 // This binds deletion to the object moved, not to a prior pathname observation.
+#[cfg(any(test, not(unix)))]
 fn unlink_owned(path: &Path, expected: &File, content: &[u8]) -> Result<bool, IssueError> {
     let parent = path
         .parent()
@@ -338,6 +403,9 @@ fn unlink_owned(path: &Path, expected: &File, content: &[u8]) -> Result<bool, Is
         .prefix(".aster-acme-cleanup-")
         .tempdir_in(parent)
         .map_err(|_| IssueError::InvalidInput("cannot isolate HTTP cleanup"))?;
+    #[cfg(windows)]
+    let _quarantine_guard = state_file::windows_guard::DirectoryGuard::open(quarantine.path())
+        .map_err(|error| IssueError::Publication(error.to_string()))?;
     let moved = quarantine.path().join("entry");
     match fs::rename(path, &moved) {
         Ok(()) => {}
@@ -359,6 +427,11 @@ fn unlink_owned(path: &Path, expected: &File, content: &[u8]) -> Result<bool, Is
         return Ok(true);
     }
     // hard_link restores without ever overwriting a concurrently created entry.
+    #[cfg(windows)]
+    let restore_guard = state_file::windows_guard::pin_regular(&moved);
+    #[cfg(windows)]
+    let regular = restore_guard.is_ok();
+    #[cfg(not(windows))]
     let regular = fs::symlink_metadata(&moved)
         .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink());
     if !regular || fs::hard_link(&moved, path).is_err() {
@@ -368,6 +441,8 @@ fn unlink_owned(path: &Path, expected: &File, content: &[u8]) -> Result<bool, Is
             retained.display()
         )));
     }
+    #[cfg(windows)]
+    drop(restore_guard);
     fs::remove_file(&moved)
         .map_err(|_| IssueError::InvalidInput("cannot release restored HTTP cleanup entry"))?;
     state_file::sync_directory(parent)

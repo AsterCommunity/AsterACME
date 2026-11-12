@@ -89,7 +89,7 @@ pub(crate) fn safe(value: &str) -> String {
     value
         .chars()
         .flat_map(|c| {
-            if c.is_control() {
+            if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
                 c.escape_default().collect::<Vec<_>>()
             } else {
                 vec![c]
@@ -190,5 +190,16 @@ mod tests {
             assert_eq!(styled("value", style, false), "value");
         }
         assert_eq!(styled("value", Style::Plain, true), "value");
+    }
+}
+
+#[cfg(test)]
+mod bidi_tests {
+    #[test]
+    fn directional_controls_are_visible_and_normal_unicode_remains_readable() {
+        assert_eq!(
+            crate::common::output::safe("错误\u{202e}abc\u{2069}"),
+            "错误\\u{202e}abc\\u{2069}"
+        );
     }
 }

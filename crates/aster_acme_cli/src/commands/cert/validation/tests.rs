@@ -145,6 +145,7 @@ fn webroot_arguments_are_scoped_and_resume_cannot_override_saved_configuration()
 async fn webroot_honors_cancellation_and_keeps_material_when_cleanup_cannot_finish() {
     let temp = tempfile::tempdir().unwrap();
     let handler = webroot::Webroot {
+        workers: crate::commands::cert::validation::webroot::workers::Workers::default(),
         root: temp.path().into(),
         operation: "a".repeat(43),
         progress: progress(),
@@ -527,4 +528,38 @@ fn poll_budget_defaults_and_cli_bounds_apply_to_both_issue_and_renew() {
             _ => panic!("wrong command"),
         }
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn webroot_rejects_replaced_directory_components_and_removes_only_inside_pinned_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let handler = webroot::Webroot {
+        workers: crate::commands::cert::validation::webroot::workers::Workers::default(),
+        root: temp.path().into(),
+        operation: "b".repeat(43),
+        progress: progress(),
+    };
+    let requirement = [ValidationRequirement::Http01 {
+        url: "http://example.com/file".into(),
+        path: "/.well-known/acme-challenge/abcdefghijklmnopqrstuvwxyz012345".into(),
+        content: "key.authorization".into(),
+    }];
+    handler.ready(&requirement, &execution()).await.unwrap();
+    let pinned = temp.path().join(".well-known");
+    let moved = temp.path().join("moved");
+    std::fs::rename(&pinned, &moved).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &pinned).unwrap();
+    assert!(handler.cleanup(&requirement, &execution()).await.is_err());
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    assert!(
+        moved
+            .join(
+                requirements_path(&requirement[0])
+                    .strip_prefix(".well-known/")
+                    .unwrap()
+            )
+            .is_file()
+    );
 }

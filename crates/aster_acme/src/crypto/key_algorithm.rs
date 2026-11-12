@@ -126,6 +126,10 @@ impl KeyAlgorithm {
             return Err(CryptoError::InvalidKey);
         }
         let key = KeyPair::try_from(bytes).map_err(|_| CryptoError::InvalidKey)?;
+        // rcgen's generic DER loader also accepts SEC1/PKCS#1. Re-decode
+        // explicitly as PKCS#8 so validation agrees with account signer loading.
+        KeyPair::from_pkcs8_der_and_sign_algo(&bytes.into(), key.algorithm())
+            .map_err(|_| CryptoError::InvalidKey)?;
         match key.algorithm() {
             algorithm if algorithm == &rcgen::PKCS_ECDSA_P256_SHA256 => Ok(Self::EcdsaP256),
             algorithm if algorithm == &rcgen::PKCS_ECDSA_P384_SHA384 => Ok(Self::EcdsaP384),

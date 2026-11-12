@@ -40,7 +40,7 @@ pub enum IssueEvent {
         delay: Duration,
         attempt: u32,
         limit: u32,
-        source: super::PollWaitSource,
+        source: crate::issuance::PollWaitSource,
     },
     /// The fixed CSR is about to be submitted.
     Finalizing,

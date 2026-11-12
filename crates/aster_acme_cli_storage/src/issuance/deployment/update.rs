@@ -55,7 +55,8 @@ impl CliIssueStore {
             }
             validate_binding(binding)?;
             targets::check_conflicts(&root, &name, binding)?;
-            if *binding != old {
+            // Configuration changes do not confirm an earlier process outcome.
+            if *binding != old && !old.phase.reload_uncertain() {
                 binding.phase = DeploymentPhase::Configured;
                 binding.generation = None;
                 binding.attempts = 0;

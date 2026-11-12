@@ -49,6 +49,19 @@ impl AcmeUrl {
         {
             return Err(InvalidAcmeUrl);
         }
+        // RFC 8555 §6.4 requires the exact supplied target, while WHATWG
+        // removes literal/encoded dot segments. Never sign a different path.
+        let authority = value.find("://").ok_or(InvalidAcmeUrl)? + 3;
+        let rest = &value[authority..];
+        let raw_path = rest
+            .find('/')
+            .filter(|index| rest.find('?').is_none_or(|query| *index < query))
+            .map_or("/", |index| {
+                rest[index..].split(['?', '#']).next().unwrap_or("/")
+            });
+        if raw_path != parsed.path() {
+            return Err(InvalidAcmeUrl);
+        }
         match parsed.scheme() {
             "https" => Ok(Self(value.to_owned())),
             "http" if loopback => Ok(Self(value.to_owned())),

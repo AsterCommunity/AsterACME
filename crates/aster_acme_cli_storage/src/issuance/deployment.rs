@@ -95,6 +95,14 @@ pub struct DeploymentDefinition {
     pub max_retries: u8,
 }
 
+impl DeploymentPhase {
+    /// A previous reload may have affected a service and requires explicit reconciliation.
+    #[must_use]
+    pub const fn reload_uncertain(self) -> bool {
+        matches!(self, Self::Reloading | Self::ReloadUncertain)
+    }
+}
+
 /// Per-certificate target. Reload is an executable plus argv; no shell is invoked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -313,14 +321,11 @@ impl CliIssueStore {
             let path = slot.join(&generation);
             let fullchain = read_private(&path.join("fullchain.pem"), 1024 * 1024)
                 .map_err(|_| failure("fullchain unavailable"))?;
-            let private_key = Zeroizing::new(
-                read_private(&path.join("private-key.pem"), 128 * 1024)
-                    .map_err(|_| failure("private key unavailable"))?,
-            );
             let der = Zeroizing::new(
                 read_private(&path.join("private-key.pk8"), 64 * 1024)
                     .map_err(|_| failure("certificate key unavailable"))?,
             );
+            certificate::validate(&fullchain, &der, &record.identifiers)?;
             let artifacts = certificate::artifacts(&fullchain, &der)?;
             Ok(DeploymentSession {
                 slot,
@@ -332,7 +337,7 @@ impl CliIssueStore {
                     fullchain,
                     certificate: artifacts.certificate.into_bytes(),
                     ca_chain: artifacts.ca_chain.into_bytes(),
-                    private_key,
+                    private_key: Zeroizing::new(artifacts.private_key.as_bytes().to_vec()),
                 }),
                 lease,
             })
@@ -499,7 +504,11 @@ fn allocate_name(
     ))
 }
 
-fn validate_id(id: &str) -> Result<(), IssueError> {
+/// Validate a deployment component shared by storage and CLI.
+///
+/// # Errors
+/// Rejects names outside 1–64 ASCII letters, digits, hyphens and underscores.
+pub fn validate_id(id: &str) -> Result<(), IssueError> {
     if id.is_empty()
         || id.len() > 64
         || !id

@@ -22,7 +22,7 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 注册的交互决策位于 commands/account/interaction：可注入提示接口测试邮箱选择和条款同意；终端适配使用 inquire，JSON/非终端从不提示。邮箱参数/配置/本地已有输入优先，空输入时可询问添加；条款依据已发现 URL 与已持久化接受 URL 比较，同意只作用于当前注册选项，由协议层保存实际 URL。--yes 与条款同意独立；拒绝条款时已完成 directory GET，但未发送账户 POST，本地身份及联系人保留。
 
-参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。switch 无注册、网络或 --name 选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
+参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。switch 支持位置 NAME 或 -n/--name，无注册、网络选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
 
 配置只读写 <data-dir>/config.toml，不支持独立 --config 或配置内 data_dir。ca 为 letsencrypt/zerossl/google 生产预设，ca_directory 为显式自定义 URL，两者互斥。默认生产 Let’s Encrypt，生产代码无 staging/test 提供商或按构建类型切换。测试地址只在独立测试命令中显式传入。配置加载校验版本、账户名、URL、超时和邮箱；旧 directory/server 参数不保留别名。
 
@@ -74,3 +74,5 @@ AccountStore::lock_account返回Arc<dyn AccountLease>，AccountStore::save显式
 历史签发使用稳定账户ID、directory和kid绑定当前账户；保存的旧thumbprint继续绑定原挑战材料，不因换钥而重算。
 
 换钥提交先保存Prepared，nonce/HTTP初始化完成后才保存Pending。Pending保存与HTTP请求由同一个独立持锁任务负责；调用方取消后任务仍完成结果分类，避免“Pending已写但future被丢弃、请求从未发出”的窗口。进入Pending前取消则不提交，保留可重试Prepared；收到RFC 8555 §7.3.5的200后先保存Confirmed，恢复只补本地提交。传输结果未知保持Pending，不自动重复keyChange。
+
+EAB确认与账户身份找回分开：RFC 8555 §7.3.4要求创建成功时回显相同绑定，否则本次创建返回ExternalAccountNotConfirmed。§7.3.1的onlyReturnExisting可找回同一密钥已存在的账户，这只能证明账户身份，不证明此前外部绑定成功；不持久化EAB MAC凭据或把找回伪装成绑定确认。离线show仅持锁读取metadata，不要求私钥；远端verify仍要求真实签名器。

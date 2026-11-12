@@ -130,7 +130,8 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 | newOrder断网、取消、超时、未完整读到响应 | 保留提交意图，CreationUncertain；不能由本地重建Location |
 | finalize badCSR（4xx，不限定400） | 保存完整失败证据，拒绝恢复固定CSR；Order可仍ready，不伪造invalid或HTTP400 |
 | finalize orderNotReady（RFC要求403） | 保存明确未提交状态及Retry-After，按max_polls/总期限先查询Order；仅再次观察ready才提交相同CSR |
-| finalize 429/5xx/未知problem或响应丢失 | 不据此允许重复finalize；恢复只观察Order，保留固定CSR/key |
+| finalize其他明确4xx Problem（含429及未知类型） | 重置未提交状态并保存Retry-After；显式恢复先查询Order，保留固定CSR/key |
+| finalize 5xx/传输错误或响应丢失 | 不据此允许重复finalize；恢复只观察Order，保留固定CSR/key |
 | Order invalid | 保存原Order并补充授权challenge problem，终态不恢复；清理本次拥有且未变的publication |
 | Authorization invalid/deactivated/expired/revoked或选中Challenge invalid | 保存实际授权状态和原problem/subproblems，以AuthorizationFailed报告；不伪造Order invalid，不继续ack/finalize或推荐resume；已签发valid订单仍可下载 |
 | badNonce | transport在有限预算内用替换nonce重签；预算耗尽不推断请求成功 |

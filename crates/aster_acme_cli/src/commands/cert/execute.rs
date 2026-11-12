@@ -405,12 +405,15 @@ impl Foreground<'_> {
             "Discovering ACME endpoints over verified TLS",
         );
         tracing::debug!("Discovering certificate issuance endpoints");
+        if self.execution.cancellation.is_cancelled() {
+            return Err(crate::common::terminal::Canceled.into());
+        }
         self.execution
             .check()
             .map_err(|_| IssueError::Interrupted)?;
         let client = tokio::select! {
             biased;
-            () = self.execution.cancellation.cancelled() => return Err(IssueError::Interrupted.into()),
+            () = self.execution.cancellation.cancelled() => return Err(crate::common::terminal::Canceled.into()),
             result = tokio::time::timeout_at(tokio::time::Instant::from_std(self.execution.deadline), self.cli.http.discover(self.context.directory.clone(), self.context.transport_options(self.options)?)) => Arc::new(result.map_err(|_| IssueError::Interrupted)??),
         };
         self.progress

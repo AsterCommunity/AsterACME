@@ -33,3 +33,5 @@ build.rs只在Git仓库确实管理当前源码时读取revision，嵌套源码�
 仅CLI在创建Tokio前安装发布的Forge panic hook。私有报告写统一根crash.log，正常命令不创建；Unix私有权限、无链接、有界大小及非阻塞锁，Windows继承权限。公开错误不含原始payload/回溯，panic不授权重放ACME mutation。
 
 normal/build依赖feature由scripts策略检查，限定rustls/AWS-LC、需要的HTTP/交互/日志功能。根workspace统一版本及features，库不安装宿主hook；详细Rust规则见[Rust约定](../rust-guidelines.md)。
+
+HTTP-01建议性探测使用独立的无代理、DNS固定客户端：逐跳拒绝解析到非公开地址的目标，回环测试显式启用。池内ACME签名请求继续复用既有客户端。User-Agent限定可见ASCII；终端输出转义双向控制字符。

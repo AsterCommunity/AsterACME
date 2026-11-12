@@ -30,9 +30,12 @@ pub(crate) fn build() -> Result<HttpClient, TransportError> {
 /// Shared validation for an explicit command User-Agent override.
 ///
 /// # Errors
-/// Rejects empty, oversized, or control-character-containing header values.
+/// Rejects empty, oversized, non-ASCII, or control-character-containing header values.
 pub(crate) fn validate_user_agent(user_agent: &str) -> Result<(), TransportError> {
-    if user_agent.is_empty() || user_agent.len() > 512 || user_agent.chars().any(char::is_control) {
+    if user_agent.is_empty()
+        || user_agent.len() > 512
+        || !user_agent.bytes().all(|byte| (0x20..0x7f).contains(&byte))
+    {
         Err(TransportError::InvalidUserAgent)
     } else {
         Ok(())
@@ -46,7 +49,14 @@ mod tests {
 
     #[test]
     fn user_agent_boundaries_are_checked_in_one_place() {
-        for value in [String::new(), "bad\nagent".into(), "x".repeat(513)] {
+        for value in [
+            String::new(),
+            "bad\nagent".into(),
+            "Aster客户端/1.0".into(),
+            "bad\tagent".into(),
+            "bad\u{7f}".into(),
+            "x".repeat(513),
+        ] {
             let options = TransportOptions {
                 user_agent: Some(value),
                 ..TransportOptions::default()

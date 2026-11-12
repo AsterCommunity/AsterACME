@@ -1556,3 +1556,4 @@ fn bare_deployment_filename_resolves_against_current_directory() {
 }
 
 mod lifecycle;
+mod reliability;

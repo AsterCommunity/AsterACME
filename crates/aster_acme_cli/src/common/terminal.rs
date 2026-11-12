@@ -12,7 +12,7 @@ pub(crate) struct Canceled;
 
 impl fmt::Display for Canceled {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Canceled; the requested operation was not submitted.")
+        formatter.write_str("Canceled; inspect saved state before retrying or resuming.")
     }
 }
 

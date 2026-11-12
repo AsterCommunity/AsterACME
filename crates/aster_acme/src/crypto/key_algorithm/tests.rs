@@ -93,3 +93,18 @@ fn invalid_choice_and_key_data_fail_without_fallback() {
         assert!(algorithm.validate_key(b"invalid pkcs8").is_err());
     }
 }
+
+#[test]
+fn pkcs1_and_sec1_inner_keys_are_not_accepted_as_pkcs8() {
+    for algorithm in [KeyAlgorithm::Rsa2048, KeyAlgorithm::EcdsaP256] {
+        let key = algorithm.generate().unwrap();
+        let der = key.serialize_der();
+        let (_, object) = x509_parser::der_parser::der::parse_der_sequence(&der).unwrap();
+        let fields = object.as_sequence().unwrap();
+        let inner = fields[2].as_slice().unwrap();
+        assert!(x509_parser::der_parser::der::parse_der_sequence(inner).is_ok());
+        assert!(KeyAlgorithm::from_pkcs8(inner).is_err());
+        assert!(algorithm.validate_key(inner).is_err());
+        assert!(KeyAlgorithm::from_pkcs8(&der).is_ok());
+    }
+}

@@ -212,3 +212,17 @@ async fn overall_deadline_terminates_waiting_parent_and_inherited_pipe_descendan
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(before, std::fs::read(&heartbeat).unwrap());
 }
+
+#[test]
+fn streaming_utf8_preserves_split_characters_and_replaces_only_invalid_bytes() {
+    let mut text = StreamText::default();
+    let bytes = "中文🙂".as_bytes();
+    let mut output = String::new();
+    for byte in bytes {
+        output.push_str(&text.push(&[*byte], false));
+    }
+    output.push_str(&text.push(&[], true));
+    assert_eq!(output, "中文🙂");
+    assert_eq!(text.push(&[0xff, b'a', 0xe4], false), "�a");
+    assert_eq!(text.push(&[], true), "�");
+}

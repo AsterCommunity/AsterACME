@@ -223,7 +223,7 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 
 人工待办使用 [WARN]，最终签发使用 [DONE]；恢复说明与命令分行便于复制。签发阶段事件通过库的 dyn IssueObserver 注入，CLI 翻译为阶段文字、限频等待，不将人类日志硬编码进协议层。账户选择项仅名称/状态；危险确认详情和字段使用共享样式，默认否的问题保持明确。
 
-新产物布局为 `certs/<name>/<UTC-time>-<random8>/`，`in_use` 相对链接在完整文件落盘后原子切换。成功输出固定指向 in_use/fullchain.pem、cert.pem、ca.pem、private-key.pem。DER 私钥与固定 CSR 是内部恢复资料；PEM 私钥和 DER 是同一把钥。CA 文件只包含服务端返回的剩余链，不自行追加根证书；只有叶子时 ca.pem 为空。旧未发布目录格式不兼容或迁移。
+新产物布局为 `certs/<name>/<UTC-time>-<random8>/`，Unix 的 `in_use` 相对链接在完整文件落盘后原子切换；Windows 使用可恢复目录副本，两次重命名之间路径可能短暂不存在。成功输出固定指向 in_use/fullchain.pem、cert.pem、ca.pem、private-key.pem。DER 私钥与固定 CSR 是内部恢复资料；PEM 私钥和 DER 是同一把钥。CA 文件只包含服务端返回的剩余链，不自行追加根证书；只有叶子时 ca.pem 为空。旧未发布目录格式不兼容或迁移。
 
 
 账户写入前检查本地身份。注册成功后仅在最新配置没有 default_account 时补为本次名称；注册失败/取消不设默认，已有默认或并发切换不覆盖。remove 默认会清除同名选择，随后成功注册可补回；switch 对合法缺省字段安全插入，重复同一值不改变已有字符串格式。缺账户主错误与 Hint 分开显示，提示核对 --name / --data-dir。

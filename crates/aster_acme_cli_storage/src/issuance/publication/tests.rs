@@ -1,6 +1,7 @@
 //! Exercise Windows-style complete-copy publication on every test host.
 use crate::issuance::publication::*;
 use crate::issuance::write_journal;
+use crate::toml_file::atomic_write;
 
 fn generation(slot: &Path, letter: char) -> IssueRecord {
     let record: IssueRecord = serde_json::from_value(serde_json::json!({
@@ -172,4 +173,32 @@ fn copy_markers_and_actual_artifacts_are_checked_before_trusting_or_removing_vie
     assert!(publication.target(&temp.path().join("in_use")).is_err());
     assert!(publication.remove(&temp.path().join("in_use")).is_err());
     assert!(temp.path().join("in_use/private-key.pem").exists());
+}
+
+#[test]
+fn copy_stage_partial_fixed_files_recover_without_accepting_unknown_entries() {
+    for partial in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let record = generation(temp.path(), 'a');
+        let stage = temp.path().join(format!(".in_use-{}", record.operation_id));
+        fs::create_dir(&stage).unwrap();
+        private_dir(&stage).unwrap();
+        let name = record.generation_name();
+        atomic_write(
+            &stage.join(MARKER),
+            if partial {
+                &name.as_bytes()[..3]
+            } else {
+                name.as_bytes()
+            },
+        )
+        .unwrap();
+        atomic_write(&stage.join("cert.pem"), b"partial").unwrap();
+        let publication = Publication {
+            kind: ViewKind::Copy,
+        };
+        publication.publish(temp.path(), &record).unwrap();
+        assert!(publication.matches(temp.path(), &record).unwrap());
+        assert!(!stage.exists());
+    }
 }

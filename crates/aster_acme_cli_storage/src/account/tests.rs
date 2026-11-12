@@ -17,7 +17,7 @@ async fn timestamp_metadata_roundtrips_without_inventing_unknown_values() {
     let at = time::OffsetDateTime::from_unix_timestamp(123).unwrap();
     record.times.registered_at = Some(at);
     record.times.last_status_at = Some(at);
-    store.save(&record).await.unwrap();
+    write_record(&store.account_slot().join("account.toml"), &record).unwrap();
     let text = fs::read_to_string(store.account_slot().join("account.toml")).unwrap();
     assert!(text.contains("1970-01-01T00:02:03Z"));
     assert!(!text.contains("last_used_at"));
@@ -404,7 +404,7 @@ async fn metadata_roundtrips_atomically_and_rejects_corrupt_unknown_and_oversize
     let thumb = "t".repeat(43);
     assert!(store.load(&directory, &thumb).await.unwrap().is_none());
     let mut record = fixture(&directory, &thumb);
-    store.save(&record).await.unwrap();
+    write_record(&store.account_slot().join("account.toml"), &record).unwrap();
     assert_eq!(
         store.load(&directory, &thumb).await.unwrap(),
         Some(record.clone())
@@ -795,4 +795,19 @@ fn cancelled_save_retains_the_operation_lease_until_queued_write_finishes() {
         assert_eq!(saved.contacts, record.contacts);
         handle.try_lock().unwrap();
     });
+}
+
+#[tokio::test]
+async fn protocol_save_cannot_recreate_a_removed_initialized_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let ca = AcmeUrl::new("https://ca.example/directory").unwrap();
+    let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
+    store
+        .signer(&ca, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
+    let record = store.metadata().await.unwrap().unwrap();
+    store.remove(&record).await.unwrap();
+    assert!(store.save(&record).await.is_err());
+    assert!(!store.account_slot().exists());
 }

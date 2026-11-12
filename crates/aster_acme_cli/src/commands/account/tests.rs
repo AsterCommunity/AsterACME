@@ -972,6 +972,8 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
         .await
         .unwrap();
     let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
+    // Offline inspection is metadata-only, even if the operator lost the key.
+    std::fs::remove_file(temp.path().join("accounts/work/account-key.pk8")).unwrap();
     for (state, expected) in [
         (None, "registration_pending"),
         (

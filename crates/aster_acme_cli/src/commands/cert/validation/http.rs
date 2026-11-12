@@ -50,7 +50,12 @@ impl ChallengeSolver for Checked {
                 };
                 if !self
                     .pool
-                    .check_http_challenge(url, content.as_bytes(), Duration::from_secs(2))
+                    .check_http_challenge(
+                        url,
+                        content.as_bytes(),
+                        Duration::from_secs(2),
+                        aster_acme::transport::HttpPrecheckPolicy::Public,
+                    )
                     .await?
                 {
                     return Ok(false);

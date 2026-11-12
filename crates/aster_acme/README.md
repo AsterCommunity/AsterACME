@@ -28,7 +28,7 @@ assert_eq!(method, ChallengeKind::Dns01);
 
 Prefer 只在开始验证时选择兼容方法，不代表失败后自动回退。未知 wire 方法保留用于诊断，不能执行。当前仅定义 solver 接口，并未内置任何可用验证实现。
 
-调用方在 prepare 前持久化意图和 preparation ID，之后保存 receipt；同一 ID 的重试必须由 solver 对账。取消/超时不等于无副作用或清理完成；活动验证材料撤下前须核对 CA 状态。恢复句柄不存凭据，Debug 隐去资源信息。
+验证材料先保存到签发检查点，再调用 `ChallengeSolver::ready` 发布；恢复时通过 `restore` 重建运行期资源，并在终态调用 `cleanup` 清理自身材料，所有路径调用 `shutdown` 回收运行期任务。
 
 ```sh
 cargo test -p aster_acme --locked
@@ -109,7 +109,7 @@ cert renew --all 提供按托管身份顺序执行的批量入口，复用同一
 
 ## 方法与发布实现
 
-ChallengeKind/ValidationRequirement及IssueService归本库；调用方实现ChallengeSolver::kind/ready/cleanup。库保存材料后才调用ready，准备好后由库通知CA；完成产物后尝试cleanup，失败保留清理状态而不抹掉证书。IssueRequest验证域名与通配符约束，IssueRecord::matches_unfinished_request统一完整定义匹配。CLI不复制协议状态机。移除未接线的旧receipt/prepare接口，不保留兼容层。
+验证材料先保存到签发检查点，再调用 `ChallengeSolver::ready` 发布；恢复时通过 `restore` 重建运行期资源，并在终态调用 `cleanup` 清理自身材料，所有路径调用 `shutdown` 回收运行期任务。
 
 CLI已实现manual_dns、manual_http、webroot、HTTP standalone和TLS-ALPN。HTTP材料是未经哈希的key authorization，公开URL/路径由请求标识符和CA token推导；TLS-ALPN使用临时SNI/ALPN挑战监听器。本库不写webroot文件、不提示终端、不决定DNS预检是否应阻止用户操作。
 

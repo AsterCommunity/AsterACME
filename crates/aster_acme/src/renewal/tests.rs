@@ -144,12 +144,7 @@ fn windows_sample_in_range_keep_identical_selection_and_reject_invalid_intervals
     p.apply(info(5, 10)).unwrap();
     assert_eq!(p.renew_at, chosen);
     assert!(p.renew_at < OffsetDateTime::now_utc()); // Due now; no backwards waiting.
-    for (start, end) in [
-        (10, 10),
-        (11, 10),
-        (90 * 86400, 91 * 86400),
-        (1, 91 * 86400),
-    ] {
+    for (start, end) in [(10, 10), (11, 10), (90 * 86400, 91 * 86400)] {
         assert!(p.apply(info(start, end)).is_err());
         assert_eq!(p.renew_at, chosen);
     }
@@ -513,4 +508,19 @@ fn expired_certificate_identifier_extraction_does_not_create_a_schedule() {
         .pem();
     assert!(identifier_from_certificate(cert.as_bytes()).is_ok());
     assert!(RenewalPlan::from_certificate(cert.as_bytes()).is_err());
+}
+
+#[test]
+fn ari_window_spanning_expiry_samples_only_its_usable_prefix_and_keeps_ca_window() {
+    let mut p = plan();
+    let expiry = p.not_after;
+    for _ in 0..100 {
+        p.suggested_window = None;
+        p.apply(info(89 * 86400, 91 * 86400)).unwrap();
+        assert!((at(89 * 86400)..expiry).contains(&p.renew_at));
+        assert_eq!(p.suggested_window.as_ref().unwrap().end, at(91 * 86400));
+    }
+    let saved = p.renew_at;
+    p.apply(info(89 * 86400, 91 * 86400)).unwrap();
+    assert_eq!(saved, p.renew_at);
 }

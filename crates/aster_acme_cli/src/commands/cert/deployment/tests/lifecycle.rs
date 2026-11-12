@@ -260,14 +260,14 @@ async fn manual_add_and_run_propagate_cancellation_to_reload_and_preserve_the_ch
             "deploy".into(),
             action.into(),
             "web".into(),
-            "-n".into(),
-            "manual".into(),
             "--json".into(),
             "--data-dir".into(),
             fixture.temp.path().to_str().unwrap().into(),
         ];
         if action == "add" {
             words.extend([
+                "-n".into(),
+                "manual".into(),
                 "--target".into(),
                 target.to_str().unwrap().into(),
                 "--reload-cmd".into(),
@@ -275,6 +275,9 @@ async fn manual_add_and_run_propagate_cancellation_to_reload_and_preserve_the_ch
                 "--reload-timeout".into(),
                 "30".into(),
             ]);
+        }
+        if action == "run" {
+            fixture.add("zzz-skipped", Vec::new(), 0).await;
         }
         let parsed = crate::app::Args::try_parse_from(words).unwrap();
         let crate::app::Command::Cert {
@@ -304,6 +307,20 @@ async fn manual_add_and_run_propagate_cancellation_to_reload_and_preserve_the_ch
             .unwrap()
             .unwrap();
         assert_cancelled_report(&result);
+        if action == "run" {
+            let CertificateReport::Deployment(report) = &result else {
+                panic!("missing report");
+            };
+            assert_eq!(report.entries.len(), 2);
+            assert_eq!(report.entries[1].phase, DeploymentPhase::Configured);
+            assert!(
+                !fixture
+                    .temp
+                    .path()
+                    .join("zzz-skipped/private-key.pem")
+                    .exists()
+            );
+        }
         assert!(target.join("private-key.pem").exists());
         let saved = fixture.status("manual").await;
         assert_eq!(saved.phase, DeploymentPhase::ReloadUncertain);

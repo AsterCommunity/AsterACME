@@ -672,7 +672,8 @@ async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
             pool.check_http_challenge(
                 &format!("{}/{path_name}", server.uri()),
                 b"token.thumb",
-                Duration::from_secs(2)
+                Duration::from_secs(2),
+                crate::transport::HttpPrecheckPolicy::LoopbackTest,
             )
             .await
             .unwrap(),
@@ -690,7 +691,8 @@ async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
         pool.check_http_challenge(
             &format!("{}/redirect", server.uri()),
             b"token.thumb",
-            Duration::from_secs(2)
+            Duration::from_secs(2),
+            crate::transport::HttpPrecheckPolicy::LoopbackTest,
         )
         .await
         .unwrap()
@@ -704,7 +706,8 @@ async fn advisory_http_checks_bound_content_and_follow_bounded_redirects() {
         pool.check_http_challenge(
             &format!("{}/large", server.uri()),
             b"token.thumb",
-            Duration::from_secs(2)
+            Duration::from_secs(2),
+            crate::transport::HttpPrecheckPolicy::LoopbackTest,
         )
         .await,
         Err(TransportError::BodyTooLarge)
@@ -734,6 +737,7 @@ async fn advisory_redirect_loops_invalid_schemes_and_missing_locations_are_bound
                 &format!("{}/{name}", server.uri()),
                 b"body",
                 Duration::from_secs(2),
+                crate::transport::HttpPrecheckPolicy::LoopbackTest,
             )
             .await;
         assert!(!matches!(result, Ok(true)));

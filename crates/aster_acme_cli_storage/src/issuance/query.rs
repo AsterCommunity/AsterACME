@@ -109,6 +109,14 @@ fn read_identity(
         record.deployment_count = Some(config.cert.deployments.len());
         versions.push(record);
     }
+    if let Some(selected) = config.cert.in_use.as_ref()
+        && (query.in_use == Some(true) || !matches!(query.view, IssueView::All))
+        && !versions
+            .iter()
+            .any(|record| &record.operation_id == selected)
+    {
+        return Err(failure("selected certificate generation missing"));
+    }
     Ok(query
         .view
         .project(versions)?

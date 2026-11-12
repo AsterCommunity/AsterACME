@@ -46,6 +46,7 @@ impl Listener {
         let deadline = execution.deadline;
         let task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
+            let mut retry_at = tokio::time::Instant::now();
             loop {
                 tokio::select! {
                     biased;
@@ -53,7 +54,7 @@ impl Listener {
                     () = cancellation.cancelled() => break,
                     () = tokio::time::sleep_until(deadline.into()) => break,
                     _ = connections.join_next(), if !connections.is_empty() => {},
-                    accepted = listener.accept(), if connections.len() < MAX_CONNECTIONS => {
+                    accepted = async { tokio::time::sleep_until(retry_at).await; listener.accept().await }, if connections.len() < MAX_CONNECTIONS => {
                         match accepted {
                             Ok((stream, _)) => {
                                 let serving = handler(stream);
@@ -62,8 +63,15 @@ impl Listener {
                                 });
                             }
                             Err(error) => {
-                                tracing::warn!(kind = ?error.kind(), "Challenge listener accept failed; closing listener");
-                                break;
+                                if retry_accept(&error) {
+                                    // Backoff lives inside the accept branch, so
+                                    // shutdown and deadlines remain responsive.
+                                    retry_at = tokio::time::Instant::now() + Duration::from_millis(50);
+                                    tracing::debug!(kind = ?error.kind(), "Challenge listener accept failed transiently; retrying");
+                                } else {
+                                    tracing::warn!(kind = ?error.kind(), "Challenge listener accept failed; closing listener");
+                                    break;
+                                }
                             }
                         }
                     }
@@ -90,6 +98,13 @@ impl Listener {
             let _ = task.await;
         }
     }
+}
+
+fn retry_accept(error: &std::io::Error) -> bool {
+    matches!(error.kind(), std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::OutOfMemory)
+        // Unix ENFILE/EMFILE and Winsock WSAEMFILE/WSAENOBUFS.
+        || matches!(error.raw_os_error(), Some(23 | 24 | 10024 | 10055))
 }
 
 impl Drop for Listener {
@@ -184,5 +199,31 @@ mod tests {
         assert_eq!(active.load(Ordering::SeqCst), 0);
         assert!(!listener.is_finished());
         listener.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod accept_tests {
+    #[test]
+    fn transient_and_resource_errors_retry_but_fatal_errors_close() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::ConnectionAborted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::Interrupted,
+            ErrorKind::WouldBlock,
+        ] {
+            assert!(crate::commands::cert::validation::listener::retry_accept(
+                &Error::from(kind)
+            ));
+        }
+        for code in [23, 24, 10024, 10055] {
+            assert!(crate::commands::cert::validation::listener::retry_accept(
+                &Error::from_raw_os_error(code)
+            ));
+        }
+        assert!(!crate::commands::cert::validation::listener::retry_accept(
+            &Error::from(ErrorKind::InvalidInput)
+        ));
     }
 }

@@ -21,6 +21,7 @@ pub struct RenewalInfo {
     /// Renewal window, not certificate validity or an order deadline.
     pub suggested_window: SuggestedWindow,
     /// Optional operator-facing explanation; never fetched automatically.
+    #[serde(rename = "explanationURL")]
     pub explanation_url: Option<String>,
 }
 
@@ -75,5 +76,19 @@ mod tests {
         for id in ["", "a", ".a", "a.", "a.b.c", "a../b", "a.b=", "a.b?x"] {
             assert!(information_url(&AcmeUrl::new("https://ca.example/ari").unwrap(), id).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    #[test]
+    fn rfc9773_explanation_url_uses_the_exact_registered_spelling() {
+        let value = serde_json::json!({"suggestedWindow":{"start":"2026-11-12T00:00:00Z","end":"2026-11-13T00:00:00Z"},"explanationURL":"https://ca.example/notice"});
+        let info: crate::renewal::RenewalInfo = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            info.explanation_url.as_deref(),
+            Some("https://ca.example/notice")
+        );
+        assert_eq!(serde_json::to_value(info).unwrap(), value);
     }
 }

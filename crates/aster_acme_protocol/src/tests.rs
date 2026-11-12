@@ -225,3 +225,19 @@ fn exact_urls_reject_only_characters_reencoded_by_http_url_parsing() {
         assert_eq!(crate::url::AcmeUrl::new(value).unwrap().as_str(), value);
     }
 }
+
+#[test]
+fn exact_urls_reject_dot_segment_normalization_without_reencoding_valid_paths() {
+    for path in [
+        "a/../order",
+        "a/./order",
+        "a/%2e%2e/order",
+        "%2E/order",
+        "a/.%2e/order",
+    ] {
+        assert!(crate::url::AcmeUrl::new(&format!("https://ca.example/{path}")).is_err());
+    }
+    for path in ["a%2fb", "order'quote", "x..y/order", "%252e%252e/order"] {
+        assert!(crate::url::AcmeUrl::new(&format!("https://ca.example/{path}")).is_ok());
+    }
+}

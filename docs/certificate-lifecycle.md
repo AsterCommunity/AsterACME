@@ -117,7 +117,7 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 
 ## 批量续期
 
-`cert renew --all` 按托管名称排序顺序执行，每份托管证书只处理选用的 in_use 版本，历史版本不单独调度。--all 与位置 NAME / --name 互斥，--now、--yes、HTTP 参数和 --operation-timeout 保持单次含义；wait-timeout 是每项执行预算，不是整个批次预算。
+`cert renew --all` 按托管名称排序顺序执行，每份托管证书只处理选用的 in_use 版本，历史版本不单独调度。--all 与位置 NAME / --name 互斥，--now、--yes、HTTP 参数和 --operation-timeout 保持单次含义；operation-timeout 是每项执行预算，不是整个批次预算。
 
 批量复用单份证书的事务执行入口、账户→证书锁序、到期检查、未完成恢复、ARI/replaces 和产物校验，不另写签发逻辑。一项失败继续后续项；无 in_use 的托管证书标记 skipped，不隐式完成初次申请。目录损坏等无法安全枚举的库存错误在批次开始前整体报错。
 

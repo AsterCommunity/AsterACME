@@ -158,6 +158,56 @@ impl Captured {
     }
 }
 
+/// Keep an incomplete UTF-8 suffix across reads; only invalid sequences are
+/// replaced. A valid multibyte character split by the pipe stays intact.
+#[derive(Default)]
+struct StreamText(Vec<u8>);
+impl StreamText {
+    fn push(&mut self, bytes: &[u8], eof: bool) -> String {
+        self.0.extend_from_slice(bytes);
+        let mut text = String::new();
+        let mut consumed = 0;
+        while consumed < self.0.len() {
+            match std::str::from_utf8(&self.0[consumed..]) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    consumed = self.0.len();
+                }
+                Err(error) => {
+                    let end = consumed + error.valid_up_to();
+                    text.push_str(&String::from_utf8_lossy(&self.0[consumed..end]));
+                    consumed = end;
+                    match error.error_len() {
+                        Some(length) => {
+                            text.push('\u{fffd}');
+                            consumed += length;
+                        }
+                        None if eof => {
+                            text.push('\u{fffd}');
+                            consumed = self.0.len();
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        self.0.drain(..consumed);
+        text
+    }
+}
+
+fn stream_output(text: &str, id: &str, attempt: u8, stream: &str, progress: Option<&Progress>) {
+    if !text.is_empty()
+        && let Some(progress) = progress
+    {
+        progress.output.details(
+            MessageKind::Info,
+            &format!("Deployment '{id}' reload attempt {attempt} {stream}:"),
+            &text.lines().map(str::to_owned).collect::<Vec<_>>(),
+        );
+    }
+}
+
 async fn capture(
     stream: Option<impl AsyncRead + Unpin>,
     saved: &mut Captured,
@@ -170,22 +220,18 @@ async fn capture(
         return;
     };
     let mut buffer = [0_u8; 4096];
+    let mut text = StreamText::default();
     loop {
         match stream.read(&mut buffer).await {
-            Ok(0) => break,
+            Ok(0) => {
+                stream_output(&text.push(&[], true), id, attempt, stream_name, progress);
+                break;
+            }
             Ok(size) => {
                 let keep = size.min(MAX_OUTPUT.saturating_sub(saved.bytes.len()));
                 saved.bytes.extend_from_slice(&buffer[..keep]);
-                if keep > 0
-                    && let Some(progress) = progress
-                {
-                    let text = String::from_utf8_lossy(&buffer[..keep]);
-                    progress.output.details(
-                        MessageKind::Info,
-                        &format!("Deployment '{id}' reload attempt {attempt} {stream_name}:"),
-                        &text.lines().map(str::to_owned).collect::<Vec<_>>(),
-                    );
-                }
+                let chunk = text.push(&buffer[..keep], false);
+                stream_output(&chunk, id, attempt, stream_name, progress);
                 saved.truncated |= keep < size;
             }
             Err(error) => {

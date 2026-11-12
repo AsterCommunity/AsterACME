@@ -843,7 +843,14 @@ impl IssueService {
                         | ProblemKind::UnsupportedContact
                         | ProblemKind::UnsupportedIdentifier
                         | ProblemKind::UserActionRequired
-                        | ProblemKind::Unknown(_) => {}
+                        | ProblemKind::Unknown(_) => {
+                            // RFC 8555 §§6.7/7.4: an explicit 4xx refusal
+                            // permits a later attempt after refreshing the order.
+                            record.finalize_submitted = SubmissionState::NotSubmitted;
+                            record.phase = IssuancePhase::AwaitingOrderReady;
+                            schedule_retry(record, retry_after.as_ref(), execution.poll_interval);
+                            session.save(record).await?;
+                        }
                     }
                 }
                 return Err(error);

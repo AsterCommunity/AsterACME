@@ -12,7 +12,7 @@
 use crate::issuance::{IssueRecord, failure, read_journal};
 use crate::{
     state_file::{self, ViewKind},
-    toml_file::{atomic_write, ensure_real_dir, private_dir, read_private},
+    toml_file::{ensure_real_dir, private_dir, read_private},
 };
 use aster_acme::issuance::IssueError;
 use std::{
@@ -63,7 +63,9 @@ impl Publication {
         }
         let stage = slot.join(format!(".in_use-{}", record.operation_id));
         self.remove_empty_copy(&stage)?;
-        if let Some(target) = self.target(&stage)? {
+        if kind == ViewKind::Copy {
+            recover_stage(&stage, &record.generation_name())?;
+        } else if let Some(target) = self.target(&stage)? {
             if target != record.generation_name() {
                 return Err(failure("publication staging belongs to another generation"));
             }
@@ -79,14 +81,14 @@ impl Publication {
             ViewKind::Copy => {
                 fs::create_dir(&stage).map_err(|_| failure("cannot prepare certificate view"))?;
                 private_dir(&stage)?;
-                atomic_write(&stage.join(MARKER), record.generation_name().as_bytes())
+                write_stage(&stage.join(MARKER), record.generation_name().as_bytes())
                     .map_err(|_| failure("cannot identify certificate view"))?;
                 for name in FILES {
                     let bytes = zeroize::Zeroizing::new(
                         read_private(&slot.join(record.generation_name()).join(name), 1024 * 1024)
                             .map_err(|_| failure("cannot read complete certificate artifacts"))?,
                     );
-                    atomic_write(&stage.join(name), &bytes)
+                    write_stage(&stage.join(name), &bytes)
                         .map_err(|_| failure("cannot prepare certificate view artifacts"))?;
                 }
                 state_file::sync_directory(&stage)
@@ -116,6 +118,46 @@ impl Publication {
         }
         state_file::sync_directory(slot).map_err(|_| failure("cannot sync certificate publication"))
     }
+}
+
+fn recover_stage(stage: &Path, expected: &str) -> Result<(), IssueError> {
+    if !stage.exists() {
+        return Ok(());
+    }
+    ensure_real_dir(stage)?;
+    validate_entries(stage)?;
+    // Direct stage writes may leave a partial marker. Only a prefix of this
+    // exact operation's generation is recoverable; unknown content stays intact.
+    let marker = read_private(&stage.join(MARKER), 256)
+        .map_err(|_| failure("certificate staging marker missing or unsafe"))?;
+    if !expected.as_bytes().starts_with(&marker) {
+        return Err(failure("publication staging belongs to another generation"));
+    }
+    for name in FILES.into_iter().chain([MARKER]) {
+        match fs::remove_file(stage.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(failure("cannot remove incomplete certificate staging file")),
+        }
+    }
+    fs::remove_dir(stage)
+        .map_err(|_| failure("cannot remove incomplete certificate staging directory"))
+}
+
+// The unpublished directory is private and contains only deterministic names.
+// A crash leaves a bounded partial file, not an unrecognizable random temp.
+fn write_stage(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 fn validate_generation(slot: &Path, target: &str, record: &IssueRecord) -> Result<(), IssueError> {

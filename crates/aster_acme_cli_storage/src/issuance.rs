@@ -28,6 +28,7 @@ use crate::issuance::generation::Initialization;
 pub use deployment::{
     DeploymentArtifacts, DeploymentBinding, DeploymentDefinition, DeploymentPatch,
     DeploymentPermissions, DeploymentPhase, DeploymentSession, DeploymentTarget,
+    validate_id as validate_deployment_id,
 };
 pub mod removal;
 

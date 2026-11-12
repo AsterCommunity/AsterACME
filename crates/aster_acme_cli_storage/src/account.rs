@@ -51,14 +51,8 @@ impl CliAccountStore {
             return Err(store_error("invalid lock timeout"));
         }
         let root = root.into();
-        fs::create_dir_all(&root).map_err(|_| store_error("cannot create data directory"))?;
-        ensure_real_dir(&root)?;
-        private_dir(&root)?;
-        let accounts = root.join("accounts");
-        fs::create_dir_all(&accounts)
-            .map_err(|_| store_error("cannot create account directory"))?;
-        ensure_real_dir(&accounts)?;
-        private_dir(&accounts)?;
+        toml_file::durable_private_dir(&root)?;
+        toml_file::durable_private_dir(&root.join("accounts"))?;
         Ok(Self {
             root: Arc::new(root),
             name: Arc::from(name),
@@ -187,7 +181,10 @@ impl AccountStore for CliAccountStore {
         let record = record.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
-            if let Some(previous) = read_record(&path)? {
+            let previous = read_record(&path)?.ok_or_else(|| {
+                store_error("initialized account identity was removed; refusing to recreate it")
+            })?;
+            {
                 verify_identity(&previous, &record.directory_url, &record.key_thumbprint)?;
                 if previous.key_algorithm != record.key_algorithm {
                     return Err(store_error(
@@ -228,7 +225,7 @@ impl AccountKeyStore for CliAccountStore {
         let directory = directory.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
-            if create { fs::create_dir_all(&slot).map_err(|_|store_error("cannot create account directory"))?; }
+            if create { toml_file::durable_private_dir(&slot)?; }
             if slot.exists() {ensure_real_dir(&slot)?;private_dir(&slot)?;}
             let metadata = slot.join("account.toml");
             let previous = read_record(&metadata)?;

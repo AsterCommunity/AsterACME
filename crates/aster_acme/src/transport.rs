@@ -22,6 +22,9 @@ use aster_acme_protocol::{
     url::AcmeUrl,
 };
 
+mod http_precheck;
+pub use crate::transport::http_precheck::HttpPrecheckPolicy;
+
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const NONCE_POOL_CAPACITY: usize = 64;
 
@@ -154,88 +157,6 @@ impl HttpPool {
         self.0
             .get_or_try_init(|| async { crate::http_client::build() })
             .await
-    }
-
-    /// Advisory HTTP-01 observation through the shared pool. Follow at most ten
-    /// explicit HTTP/HTTPS redirects; signed ACME requests still never redirect.
-    /// TLS verification remains enabled, unlike some CAs' validation policy.
-    ///
-    /// # Errors
-    /// Reports unsafe URLs, transport failures, exhausted deadlines or oversized bodies.
-    pub async fn check_http_challenge(
-        &self,
-        url: &str,
-        expected: &[u8],
-        timeout: Duration,
-    ) -> Result<bool, TransportError> {
-        let mut current = url::Url::parse(url).map_err(|_| TransportError::InvalidOptions)?;
-        if current.scheme() != "http" || timeout.is_zero() {
-            return Err(TransportError::InvalidOptions);
-        }
-        let deadline = std::time::Instant::now() + timeout;
-        for hop in 0..=10 {
-            if !matches!(current.scheme(), "http" | "https")
-                || !current.username().is_empty()
-                || current.password().is_some()
-                || current.fragment().is_some()
-            {
-                return Err(TransportError::InvalidOptions);
-            }
-            // Public validation starts on port 80. Loopback fixture ports are also
-            // accepted for tests; redirects on public hosts stay on 80/443.
-            if hop > 0
-                && !matches!(current.port_or_known_default(), Some(80 | 443))
-                && !current.host_str().is_some_and(|host| {
-                    host.parse::<std::net::IpAddr>()
-                        .is_ok_and(|ip| ip.is_loopback())
-                })
-            {
-                return Err(TransportError::InvalidOptions);
-            }
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            let mut response = self
-                .client()
-                .await?
-                .get(current.as_str())
-                .timeout(remaining)
-                .send()
-                .await?;
-            if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                if hop == 10 {
-                    return Ok(false);
-                }
-                let Some(location) = response
-                    .headers()
-                    .get(LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                else {
-                    return Ok(false);
-                };
-                current = current
-                    .join(location)
-                    .map_err(|_| TransportError::InvalidOptions)?;
-                continue;
-            }
-            if response.status() != StatusCode::OK {
-                return Ok(false);
-            }
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
-                if body.len().saturating_add(chunk.len()) > 8192 {
-                    return Err(TransportError::BodyTooLarge);
-                }
-                body.extend_from_slice(&chunk);
-            }
-            return Ok(body
-                .strip_suffix(b"\r\n")
-                .or_else(|| body.strip_suffix(b"\n"))
-                .unwrap_or(&body)
-                == expected);
-        }
-        Ok(false)
     }
 
     /// Discover a CA using verified TLS, without redirects or automatic mutation retries.

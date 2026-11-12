@@ -251,3 +251,28 @@ async fn invalid_or_missing_operation_filters_never_select_a_different_request()
         0
     );
 }
+
+#[tokio::test]
+async fn missing_catalog_selection_is_inconsistent_instead_of_an_empty_managed_view() {
+    let f = fixture().await;
+    completed_generation(&f).await;
+    let current = completed_generation(&f).await;
+    std::fs::remove_file(
+        f.temp
+            .path()
+            .join("certs")
+            .join(current.name.as_str())
+            .join(current.generation_name())
+            .join("operation.toml"),
+    )
+    .unwrap();
+    assert!(
+        f.store
+            .query(IssueQuery {
+                view: IssueView::Managed,
+                ..IssueQuery::default()
+            })
+            .await
+            .is_err()
+    );
+}

@@ -211,3 +211,9 @@ fn validate_name(name: &str) -> io::Result<()> {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(unix)]
+pub mod public_directory;
+
+#[cfg(windows)]
+pub mod windows_guard;

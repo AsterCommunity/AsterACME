@@ -119,21 +119,15 @@ async fn execute_inner(
                         .into(),
                 );
             }
-            let mut entries = Vec::with_capacity(selected.len());
-            for definition in selected {
-                execution.check()?;
-                let execution = run_target(
-                    &store,
-                    &name,
-                    &definition,
-                    true,
-                    Some(&progress),
-                    Some(execution),
-                )
-                .await;
-                entries.push(execution.binding);
-                execution_events.extend(execution.events);
-            }
+            let entries = run_selected(
+                &store,
+                &name,
+                selected,
+                &progress,
+                execution,
+                &mut execution_events,
+            )
+            .await;
             (entries, true)
         }
     };
@@ -145,6 +139,42 @@ async fn execute_inner(
             attempted,
         },
     ))
+}
+
+async fn run_selected(
+    store: &CliIssueStore,
+    name: &CertificateName,
+    selected: Vec<DeploymentBinding>,
+    progress: &Progress,
+    execution: &Execution,
+    execution_events: &mut Vec<DeploymentEvent>,
+) -> Vec<DeploymentBinding> {
+    let mut entries = Vec::with_capacity(selected.len());
+    let mut selected = selected.into_iter();
+    while let Some(definition) = selected.next() {
+        if execution.check().is_err() {
+            execution_events.push(event(
+                MessageKind::Error,
+                "Deployment cancelled before next target; completed results retained.",
+            ));
+            entries.push(definition);
+            entries.extend(selected);
+            break;
+        }
+        let execution = run_target(
+            store,
+            name,
+            &definition,
+            true,
+            Some(progress),
+            Some(execution),
+        )
+        .await;
+        entries.push(execution.binding);
+        execution_events.extend(execution.events);
+    }
+
+    entries
 }
 
 async fn complete_add(
@@ -487,13 +517,7 @@ async fn run_one(
             events: events.clone(),
         });
     }
-    if !force
-        && same_generation
-        && matches!(
-            session.definition().phase,
-            DeploymentPhase::Reloading | DeploymentPhase::ReloadUncertain
-        )
-    {
+    if !force && session.definition().phase.reload_uncertain() {
         record_event(
             &mut events,
             MessageKind::Warning,
@@ -525,10 +549,7 @@ async fn run_one(
 }
 
 fn uncertain(binding: &DeploymentBinding) -> bool {
-    matches!(
-        binding.phase,
-        DeploymentPhase::Reloading | DeploymentPhase::ReloadUncertain
-    )
+    binding.phase.reload_uncertain()
 }
 
 async fn prepare_publication(
@@ -636,10 +657,7 @@ async fn finish_publication(
             .await?;
     }
     if execution.is_some_and(|execution| execution.check().is_err()) {
-        if matches!(
-            session.definition().phase,
-            DeploymentPhase::Reloading | DeploymentPhase::ReloadUncertain
-        ) {
+        if session.definition().phase.reload_uncertain() {
             return Err("previous reload outcome remains unconfirmed after cancellation; inspect the service before retry".into());
         }
         let error = "files were published, but reload was not started because the issuance was cancelled or its deadline expired";

@@ -109,16 +109,18 @@ impl RenewalPlan {
 
     fn apply(&mut self, info: RenewalInfo) -> Result<(), IssueError> {
         let window = &info.suggested_window;
-        if window.end <= window.start
-            || window.start >= self.not_after
-            || window.end > self.not_after
-        {
+        if window.end <= window.start || window.start >= self.not_after {
             return Err(IssueError::InvalidInput(
                 "invalid ARI suggested renewal window",
             ));
         }
         if self.suggested_window.as_ref() != Some(window) {
-            self.renew_at = sample(window)?;
+            // RFC 9773 §4.2 permits windows spanning certificate expiry.
+            // Sample the usable prefix while retaining the original CA window.
+            self.renew_at = sample(&SuggestedWindow {
+                start: window.start,
+                end: window.end.min(self.not_after),
+            })?;
         }
         self.source = RenewalSource::Ari;
         self.suggested_window = Some(info.suggested_window);

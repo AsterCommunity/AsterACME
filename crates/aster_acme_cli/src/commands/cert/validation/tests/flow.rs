@@ -462,11 +462,7 @@ async fn standalone_serves_real_http_and_resumes_acknowledged_challenges_without
             fixture.reopen().await;
         }
         let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
-        let solver = with_http_precheck(
-            adapter(&saved, false, false, progress()).unwrap(),
-            HttpPool::default(),
-            progress(),
-        );
+        let solver = adapter(&saved, false, false, progress()).unwrap();
         let controls = IssueExecution {
             max_polls: 30,
             ..controls

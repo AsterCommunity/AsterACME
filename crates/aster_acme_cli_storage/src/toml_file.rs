@@ -16,6 +16,41 @@ use std::{
     time::Duration,
 };
 
+/// Create private state directories and sync each new entry in its parent.
+/// Syncing a child alone cannot make its name durable across a power loss.
+pub(crate) fn durable_private_dir(path: &Path) -> Result<(), AccountStoreError> {
+    if !path.is_absolute() {
+        let absolute = std::env::current_dir()
+            .map_err(|_| store_error("cannot resolve state directory"))?
+            .join(path);
+        return durable_private_dir(&absolute);
+    }
+    if !path.exists() {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| store_error("missing state directory parent"))?;
+        if !parent.exists() {
+            durable_private_dir(parent)?;
+        }
+        match fs::create_dir(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(store_error("cannot create state directory")),
+        }
+    }
+    ensure_real_dir(path)?;
+    private_dir(path)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        crate::state_file::sync_directory(parent)
+            .map_err(|_| store_error("cannot sync state directory parent"))?;
+    }
+    Ok(())
+}
+
 /// Stable synchronization identity lives outside deletable product directories.
 #[derive(Clone, Copy)]
 pub(crate) enum ObjectKind {
@@ -37,9 +72,7 @@ pub(crate) fn object_lock(
         root.join(".locks"),
         root.join(".locks").join(category),
     ] {
-        fs::create_dir_all(&directory).map_err(|_| store_error("cannot create lock directory"))?;
-        ensure_real_dir(&directory)?;
-        private_dir(&directory)?;
+        durable_private_dir(&directory)?;
     }
     Ok(root
         .join(".locks")

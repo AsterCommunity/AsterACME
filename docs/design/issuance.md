@@ -13,7 +13,7 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 1. newOrder前保存创建意图；201响应先保存Location再解析body。无URL且结果不确定时拒绝自动再下单。
 2. 保存全部验证材料后调用ready；返回false产生action_required。人工方式首次脚本执行先展示材料，后续显式确认。
 3. ack前保存Submitted。明确4xx Problem拒绝时恢复NotSubmitted供下次显式调用重试；超时/传输错误/5xx保留Submitted，不重放。
-4. finalize提交固定CSR；未知结果只轮询。明确orderNotReady后先查订单，再按ready推进；badCSR拒绝保留原HTTP证据，不能靠resume更换CSR。
+4. finalize提交固定CSR；未知结果只轮询。明确4xx Problem拒绝后保存未提交状态和Retry-After，显式恢复先查订单再按ready推进；orderNotReady在本次有界流程内继续查询；badCSR拒绝保留原HTTP证据，不能靠resume更换CSR。
 5. valid后下载并检查PEM、SAN、公钥、有效期及相邻链签名，写完整产物与回退计划，再发布in_use视图、提交catalog，最后Completed。提交失败按实际catalog恢复视图。
 
 账户ID、directory和kid绑定签发身份；轮换后的当前签名器可继续旧申请。旧thumbprint继续绑定原挑战材料，不被新密钥替换。授权/选中challenge终态保留Problem并拒绝恢复；已valid订单不会因历史challenge记录而错误阻止下载。
@@ -24,11 +24,11 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 ## 人工验证与终端
 
-DNS/HTTP本地预检最多2秒且建议性，不代替CA验证。Manual确认线程使用25ms有界终端轮询，观察同一取消/deadline；shutdown结束读取并恢复raw mode，Esc/Ctrl-C映射CLI取消，终端IO失败独立报告。
+DNS/HTTP本地预检最多2秒且建议性，不代替CA验证。HTTP预检禁用代理，每一跳解析并检查全部地址、拒绝回环/私网/链路本地等非公开目标后固定DNS地址；公网入口80、跳转80/443，测试回环需要显式策略。Manual确认线程使用25ms有界终端轮询，观察同一取消/deadline；shutdown结束读取并恢复raw mode，Esc/Ctrl-C映射CLI取消，终端IO失败独立报告。
 
 ## Webroot文件所有权
 
-根目录只在新申请时规范化一次，所有SAN共用。token决定HTTP路径；操作ID与token摘要决定同级receipt。先写完整内容并sync，用独占hard_link发布，随后同步挑战目录；新建公开文件/目录使用Unix0644/0755，Windows继承权限。不把私钥或CSR写入webroot。
+根目录只在新申请时规范化一次，所有SAN共用。token决定HTTP路径；操作ID与token摘要决定同级receipt。先写完整内容并sync，用独占hard_link发布，随后同步挑战目录；新建公开文件/目录使用Unix0644/0755，Windows继承权限。不把私钥或CSR写入webroot。Unix从可信根固定子目录句柄，所有创建、设权、hard_link、隔离和删除使用no-follow目录相对操作；Windows用拒绝reparse且不共享DELETE的目录句柄阻止使用中的目录被替换。后台IO任务登记到solver，shutdown等待已启动worker结束后才释放签发租约。
 
 已有挑战目录从不自动修改权限；适配器只保证自己新建的目录为公开可遍历权限。webroot就绪后可做短时建议性HTTP读取，CA仍是最终可达性判断者；运维者需确保现有HTTP服务器能穿过既有目录层级。
 

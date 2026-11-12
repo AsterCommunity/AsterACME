@@ -290,12 +290,7 @@ async fn order_not_ready_403_queries_order_before_resubmitting_and_respects_poll
 #[tokio::test]
 async fn finalize_transient_or_unknown_errors_do_not_authorize_replay() {
     for (status, kind) in [
-        (429, ProblemKind::RateLimited),
         (503, ProblemKind::ServerInternal),
-        (
-            400,
-            ProblemKind::Unknown("https://ca.example/custom".into()),
-        ),
         (503, ProblemKind::BadCsr),
     ] {
         let fixture = fixture().await;
@@ -655,6 +650,72 @@ async fn rejected_acknowledgement_retry_after_survives_reopen_and_blocks_early_r
         assert_eq!(
             reopened.record().await.unwrap().next_poll_at,
             saved.next_poll_at
+        );
+    }
+}
+
+#[tokio::test]
+async fn definitive_finalize_refusals_reset_submission_and_preserve_retry_deadline() {
+    for (status, kind) in [
+        (429, ProblemKind::RateLimited),
+        (403, ProblemKind::Unauthorized),
+        (
+            400,
+            ProblemKind::Unknown("https://ca.example/custom".into()),
+        ),
+    ] {
+        let fixture = fixture().await;
+        mount_flow(&fixture).await.store(2, Ordering::SeqCst);
+        Mock::given(method("POST"))
+            .and(path("/finalize/custom"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Replay-Nonce", "refused")
+                    .insert_header("Retry-After", "120")
+                    .set_body_json(serde_json::json!({"type":kind})),
+            )
+            .with_priority(1)
+            .expect(1)
+            .mount(&fixture.server)
+            .await;
+        let mut session = fixture
+            .store
+            .create(&request(), &fixture.account)
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .service
+                .run(session.as_mut(), &Dns(true), &execution())
+                .await
+                .is_err()
+        );
+        let saved = session.record().await.unwrap();
+        assert_eq!(saved.finalize_submitted, SubmissionState::NotSubmitted);
+        assert!(saved.finalize_rejection.is_none());
+        assert!(
+            saved.next_poll_at.unwrap()
+                > time::OffsetDateTime::now_utc() + time::Duration::seconds(110)
+        );
+        drop(session);
+        let before = fixture.server.received_requests().await.unwrap().len();
+        let mut reopened = fixture
+            .store
+            .open(&saved.name, &saved.operation_id)
+            .await
+            .unwrap();
+        let mut limits = execution();
+        limits.context.deadline = Instant::now() + Duration::from_millis(100);
+        assert!(
+            fixture
+                .service
+                .run(reopened.as_mut(), &Dns(true), &limits)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fixture.server.received_requests().await.unwrap().len(),
+            before
         );
     }
 }

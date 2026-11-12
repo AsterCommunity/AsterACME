@@ -219,6 +219,7 @@ pub(super) fn adapter(
                 return Err(IssueError::InvalidInput("saved webroot must be absolute"));
             }
             Ok(Box::new(webroot::Webroot {
+                workers: crate::commands::cert::validation::webroot::workers::Workers::default(),
                 root: config.root,
                 operation: record.operation_id.clone(),
                 progress,

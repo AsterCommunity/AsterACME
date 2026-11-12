@@ -108,6 +108,9 @@ pub(crate) async fn execute(
     if let Operation::Switch = operation {
         return switch(context).await;
     }
+    if matches!(operation, Operation::Show { verify: false }) {
+        return offline(&context).await;
+    }
     let name = context.name.clone();
     let signer = context
         .store
@@ -363,6 +366,25 @@ async fn switch(context: CliContext) -> CliResult<AccountReport> {
         name: target,
         directory: context.directory,
     })
+}
+
+async fn offline(context: &CliContext) -> CliResult<AccountReport> {
+    let expected = context.require_account().await?;
+    let _lease = context
+        .store
+        .lock_account(&context.directory, &expected.key_thumbprint)
+        .await?;
+    let record = context
+        .store
+        .load(&context.directory, &expected.key_thumbprint)
+        .await?;
+    Ok(AccountReport::Local(LocalAccountReport {
+        verified: false,
+        name: context.name.clone(),
+        directory: context.directory.clone(),
+        key_thumbprint: expected.key_thumbprint,
+        record,
+    }))
 }
 
 /// Read a consistent local snapshot; no discovery, recovery, or metadata refresh occurs.

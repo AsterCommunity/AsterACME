@@ -178,12 +178,7 @@ impl DeployArgs {
 }
 
 pub(crate) fn parse_deployment_id(value: &str) -> Result<String, String> {
-    if value.is_empty()
-        || value.len() > 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
+    if aster_acme_cli_storage::issuance::validate_deployment_id(value).is_err() {
         return Err(
             "Use 1-64 ASCII letters, digits, hyphens or underscores for deployment name.".into(),
         );

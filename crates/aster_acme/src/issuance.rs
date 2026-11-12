@@ -29,7 +29,9 @@ impl CertificateName {
     /// # Errors
     /// Rejects names unsafe as a single private directory component.
     pub fn new(value: &str) -> Result<Self, IssueError> {
-        if !aster_acme_core::local_name::valid_component(value)
+        // Reserve five bytes for the sibling lock file's .lock suffix.
+        if value.len() > 250
+            || !aster_acme_core::local_name::valid_component(value)
             || value.bytes().any(|byte| byte.is_ascii_uppercase())
         {
             return Err(IssueError::InvalidInput("invalid certificate name"));
@@ -55,7 +57,7 @@ impl CertificateName {
         } else {
             format!("cert-{source}")
         };
-        let prefix = source.chars().take(244).collect::<String>();
+        let prefix = source.chars().take(241).collect::<String>();
         Self::new(&format!("{prefix}-{:08x}", u32::from_be_bytes(random)))
     }
 
@@ -735,7 +737,7 @@ mod tests {
                 value.to_owned()
             };
             assert!(expected.starts_with(prefix));
-            assert!(name.as_str().len() <= 253);
+            assert!(name.as_str().len() <= 250);
             assert_eq!(domain.value(), value);
         }
     }
@@ -771,5 +773,16 @@ mod tests {
         assert!(
             RequestFailure::from_error(&IssueError::InvalidInput("malformed response")).is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod name_boundaries {
+    #[test]
+    fn certificate_name_reserves_lock_suffix_space() {
+        assert!(crate::issuance::CertificateName::new(&"a".repeat(250)).is_ok());
+        for length in [251, 252, 253, 254, 255] {
+            assert!(crate::issuance::CertificateName::new(&"a".repeat(length)).is_err());
+        }
     }
 }
