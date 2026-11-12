@@ -4,7 +4,7 @@
 
 实现对照 RFC 8555 原文 §7.1.3（订单与 expires）、§7.1.4–7.1.5（授权/challenge）、§7.4（newOrder、finalize 与 CSR）、§7.4.2（PEM 链下载）、§7.5.1（通知与轮询）、§8.4（TXT 摘要），并复用 §6 的精确 URL、kid/JWS、nonce、POST-as-GET 和错误策略。证书/CSR 采用 PKCS#8、PKCS#10 和 X.509/SAN。
 
-当前实现manual_dns/manual_http/webroot/standalone/tls_alpn。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性限2秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+当前实现manual_dns/manual_http/webroot/standalone/tls_alpn。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性固定限5秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
 
 TLS-ALPN专项覆盖：默认443及自定义监听地址、每域名单独证书、单DNS SAN、critical `id-pe-acmeIdentifier` DER摘要、SNI/`acme-tls/1`门控、重复/混合材料拒绝、恢复重建及终态释放。普通Rustls客户端拒绝未知critical扩展是预期行为，ACME验证器应按RFC8737读取该扩展。
 

@@ -464,7 +464,9 @@ async fn dns_precheck_missing_values_errors_and_short_timeout_are_advisory_but_c
     )
     .await
     .unwrap();
-    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_eq!(PRECHECK_TIMEOUT, Duration::from_secs(5));
+    assert!(started.elapsed() >= PRECHECK_TIMEOUT);
+    assert!(started.elapsed() < Duration::from_secs(8));
     let cancelled = execution();
     cancelled.cancellation.cancel();
     assert!(

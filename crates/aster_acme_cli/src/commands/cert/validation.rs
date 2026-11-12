@@ -10,6 +10,10 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
+/// Shared advisory precheck budget, independent of HTTP requests and CA polls.
+/// A shorter operation deadline or cancellation always takes precedence.
+const PRECHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 mod http;
 mod listener;
 mod manual;

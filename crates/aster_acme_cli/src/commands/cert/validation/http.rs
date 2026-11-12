@@ -1,13 +1,13 @@
 //! Bounded advisory observation of public HTTP-01 files after publication.
 use crate::commands::cert::validation::{
-    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
+    Arc, ChallengeKind, ChallengeSolver, IssueError, PRECHECK_TIMEOUT, Progress,
 };
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext, transport::HttpPool};
 use async_trait::async_trait;
-use std::time::{Duration, Instant};
-
-const PRECHECK_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 pub(super) struct Checked {
     pub(super) inner: Box<dyn ChallengeSolver>,
@@ -40,7 +40,10 @@ impl ChallengeSolver for Checked {
         execution.check().map_err(|_| IssueError::Interrupted)?;
         self.progress.output.progress(
             MessageKind::Info,
-            "Checking public HTTP challenge files (advisory, up to 5 seconds)",
+            &format!(
+                "Checking public HTTP challenge files (advisory, up to {} seconds)",
+                PRECHECK_TIMEOUT.as_secs()
+            ),
         );
         let deadline = execution.deadline.min(Instant::now() + PRECHECK_TIMEOUT);
         let check = async {

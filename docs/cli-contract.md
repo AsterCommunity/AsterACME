@@ -163,7 +163,7 @@ cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN
 
 新申请显式 -c 或交互选择 manual_dns/manual_http/webroot/standalone/tls_alpn，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH或终端输入目录，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
 
-本地DNS预检限2秒，仅建议：不存在TXT、系统解析器失败和查询超时均WARN后继续CA。用户取消/整体deadline仍终止。DNS skip/force参数已删除，无别名。`--yes`只接受操作确认，不补填验证方式、名称或条款；恢复人工材料才可提交确认。
+本地DNS预检固定限5秒，仅建议：不存在TXT、系统解析器失败和查询超时均WARN后继续CA。用户取消/整体deadline仍终止。DNS skip/force参数已删除，无别名。`--yes`只接受操作确认，不补填验证方式、名称或条款；恢复人工材料才可提交确认。
 
 --if-similar-order 与--resume/--name互斥。新请求没有显式名称时，完整定义匹配库返回的未完成候选；终端默认选择恢复或新建。脚本不带该参数且存在匹配则失败并输出精确恢复命令；带该参数时唯一匹配恢复、零匹配新建、多匹配失败。--yes不承担目标选择。创建已提交而缺少订单URL的记录也是候选，避免静默重复；选中后库仍返回CreationUncertain而不重发newOrder。已过期、invalid及明确CSR拒绝不自动恢复。
 

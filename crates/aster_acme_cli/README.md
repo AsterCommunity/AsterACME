@@ -208,7 +208,7 @@ aster-acme cert show example.com --operation <ID> --verify
 
 只有 cert issue 推进签发；cert list/show 是只读/显式远端刷新入口，根 order 命令已删除。正常 issue 明确新建一个世代，--resume 只继续已存操作；只有一条未完成申请自动选择，多条时交互只显示主域名、UTC 申请时间和状态，脚本/JSON 必须用 --operation 指定，不猜最新记录。过期记录仍可查看，但 不允许绕过过期/失效状态或重新下单。
 
-手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多2秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
+手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多5秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
 --request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone/tls_alpn，前台续期、吊销、绑定多目标部署与有界服务 reload 已实现；自动 DNS 和后台 daemon 未实现。
 
@@ -241,7 +241,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
@@ -263,7 +263,7 @@ main 在 Tokio 创建前安装 registry 的 aster_forge_panic =0.1.0-alpha.2，�
 
 `cert issue -c manual_http -d example.com`输出HTTP URL/相对文件路径/精确内容；部署到现有HTTP服务器后`cert issue --resume NAME --yes`继续。`cert issue -c webroot --webroot /srv/www -d example.com`自动发布文件；仅使用同一webroot服务所有SAN，需要公网80端口和文件系统hard-link支持。只清理本次拥有且未变的文件，已有/替换文件保留；取消保留可恢复材料。
 
-CLI的ValidationMethod映射ACME的ChallengeKind，恢复/续期从持久化定义重建适配器。newOrder/finalize/challenge选择/材料派生及可恢复性判断都属于ACME。--if-similar-order支持脚本唯一匹配恢复；终端默认提供选择，多个候选不自动猜最新。DNS预检建议性、限2秒，错误不阻止CA，取消仍有效。无DNS跳过参数。
+CLI的ValidationMethod映射ACME的ChallengeKind，恢复/续期从持久化定义重建适配器。newOrder/finalize/challenge选择/材料派生及可恢复性判断都属于ACME。--if-similar-order支持脚本唯一匹配恢复；终端默认提供选择，多个候选不自动猜最新。DNS预检建议性、固定限5秒，错误不阻止CA，取消仍有效。无DNS跳过参数。
 
 Local polling defaults to 5 seconds. Set config `poll_interval` or override it with `--poll-interval <SECONDS>` (1–300); CLI > config > built-in default. Valid CA Retry-After still takes precedence. Applies to issue/resume and per-certificate renew, including --all.
 

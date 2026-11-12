@@ -1,6 +1,6 @@
 //! Manual implementations share confirmation semantics but keep method-specific instructions.
 use crate::commands::cert::validation::{
-    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
+    Arc, ChallengeKind, ChallengeSolver, IssueError, PRECHECK_TIMEOUT, Progress,
 };
 use crate::common::output::MessageKind;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
@@ -204,12 +204,15 @@ pub(super) async fn dns_precheck(
     execution.check().map_err(|_| IssueError::Interrupted)?;
     progress.output.progress(
         MessageKind::Info,
-        "Checking local DNS visibility (advisory, up to 2 seconds)",
+        &format!(
+            "Checking local DNS visibility (advisory, up to {} seconds)",
+            PRECHECK_TIMEOUT.as_secs()
+        ),
     );
     let result = tokio::select! {
         biased;
         () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
-        result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline.min(std::time::Instant::now() + std::time::Duration::from_secs(2))), check) => result,
+        result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline.min(std::time::Instant::now() + PRECHECK_TIMEOUT)), check) => result,
     };
     execution.check().map_err(|_| IssueError::Interrupted)?;
     match result {
