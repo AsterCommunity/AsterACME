@@ -21,6 +21,8 @@ python3 scripts/check-precheck-features.py
 
 共享开发机资源紧张或计时测试受调度干扰时可用 `-- --test-threads=2`；记录实际失败和复测，不能把首次失败抹掉。CI矩阵以.github/workflows/ci.yml为准。
 
+覆盖率由CI的Linux `coverage`任务收集：`cargo llvm-cov --workspace --locked --lcov --output-path coverage/rust/lcov.info`，随后发布摘要并上传Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
+
 ## 证据记录
 
 | 范围 | 记录 |

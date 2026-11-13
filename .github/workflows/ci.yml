@@ -40,3 +40,45 @@ jobs:
         with:
           python-version: '3.13'
       - run: python3 scripts/check-precheck-features.py
+
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      # CI 每个任务只做一次干净构建，增量产物只占磁盘不提供本地反馈
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: rustup show
+      - run: rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: mkdir -p coverage/rust
+      - run: cargo llvm-cov --workspace --locked --no-fail-fast --lcov --output-path coverage/rust/lcov.info
+      - name: Publish coverage summary
+        if: always() && hashFiles('coverage/rust/lcov.info') != ''
+        run: node scripts/coverage-summary.mjs "Rust" coverage/rust/lcov.info
+      - name: Upload coverage reports to Codecov
+        if: always() && hashFiles('coverage/rust/lcov.info') != ''
+        uses: codecov/codecov-action@v7
+        with:
+          files: coverage/rust/lcov.info
+          flags: rust
+          name: rust-backend
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          verbose: true
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          if-no-files-found: ignore
+          path: coverage/rust
