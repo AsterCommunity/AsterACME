@@ -2,6 +2,7 @@
 mod failed_removal;
 mod maintenance;
 mod query;
+mod retry;
 mod rfc_errors;
 mod workflow;
 use crate::issuance::*;
@@ -13,6 +14,7 @@ use aster_acme::storage::account::KeyAccess;
 use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 use aster_acme::storage::query::IssueQuery;
 use aster_acme::{
+    deployment::DeploymentPhase,
     issuance::{IssueExecution, IssueIdentity, IssueOutcome, ValidationRequirement},
     solver::ExecutionContext,
     transport::TransportOptions,
@@ -2899,6 +2901,84 @@ async fn scheduled_renewal_checks_due_time_stale_in_use_and_revocation_before_cr
             .len(),
         2
     );
+}
+
+#[tokio::test]
+async fn deployment_retry_is_durable_bounded_and_uncertain_reload_is_never_scheduled() {
+    let fixture = fixture().await;
+    let current = completed_generation(&fixture).await;
+    let target = fixture.temp.path().join("deploy-retry");
+    fs::create_dir(&target).unwrap();
+    let binding = fixture
+        .store
+        .add_deployment(
+            &current.name,
+            DeploymentDefinition {
+                permissions: DeploymentPermissions::default(),
+                name: Some("retry-test".into()),
+                target: DeploymentTarget::Directory { path: target },
+                reload_command: vec!["false".into()],
+                timeout_seconds: 1,
+                max_retries: 0,
+            },
+        )
+        .await
+        .unwrap();
+    let mut session = fixture
+        .store
+        .open_deployment(&current.name, &binding.id)
+        .await
+        .unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    session
+        .save_state(DeploymentPhase::Publishing, 0, None)
+        .await
+        .unwrap();
+    session
+        .record_failure(
+            DeploymentPhase::PublishFailed,
+            0,
+            "injected publication failure".into(),
+            now,
+        )
+        .await
+        .unwrap();
+    let scheduled = session.definition().clone();
+    assert_eq!(scheduled.retry_failures, 1);
+    assert_eq!(scheduled.retry_at, Some(now + time::Duration::minutes(1)));
+    let second = session
+        .record_failure(
+            DeploymentPhase::PublishFailed,
+            0,
+            "second injected failure".into(),
+            now + time::Duration::minutes(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.retry_failures, 2);
+    assert_eq!(second.retry_at, Some(now + time::Duration::minutes(12)));
+    drop(session);
+    let saved = fixture
+        .store
+        .deployment(&current.name, &binding.id)
+        .await
+        .unwrap();
+    assert_eq!(saved.retry_at, second.retry_at);
+
+    let mut session = fixture
+        .store
+        .open_deployment(&current.name, &binding.id)
+        .await
+        .unwrap();
+    session
+        .save_state(
+            DeploymentPhase::ReloadUncertain,
+            1,
+            Some("reload result unknown".into()),
+        )
+        .await
+        .unwrap();
+    assert!(session.schedule_retry(now).await.is_err());
 }
 
 #[tokio::test]

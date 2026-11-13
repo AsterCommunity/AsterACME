@@ -25,12 +25,12 @@ const SCHEDULING_HELP: &str = "Scheduling (cron example, every 15 minutes):
   */15 * * * * /absolute/path/to/aster-acme daemon run-once --data-dir /absolute/path/to/state
 
 Use absolute paths and the same --data-dir as issue/renew. Quote paths containing spaces.
-Refreshes ARI advice, renews due webroot/standalone/tls_alpn certificates, and runs configured deployments. Manual validation is skipped. The command does not install a cron job.";
+Refreshes ARI advice, renews due webroot/standalone/tls_alpn certificates, retries due known deployment failures, and runs configured deployments. Manual validation is skipped. Uncertain ACME submissions and reloads are never replayed automatically. The command does not install a cron job.";
 
 #[derive(clap::Subcommand)]
 #[command(after_help = SCHEDULING_HELP)]
 pub(crate) enum DaemonCommand {
-    /// Refresh ARI suggestions and automatically renew eligible due certificates once.
+    /// Refresh ARI, renew eligible certificates, and retry due known deployment failures once.
     #[command(after_help = SCHEDULING_HELP)]
     RunOnce(RunOnceArgs),
 }
@@ -76,6 +76,8 @@ impl RunOnceArgs {
 pub(crate) struct DaemonReport {
     pub(crate) ari: Report,
     pub(crate) renewals: crate::commands::cert::report::RenewalBatch,
+    pub(crate) deployment_retries: Vec<crate::commands::cert::report::DeploymentReport>,
+    pub(crate) deployment_cancelled: bool,
     pub(crate) data_dir: std::path::PathBuf,
 }
 
@@ -102,38 +104,84 @@ pub(crate) async fn execute(
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
     let cancellation = CancellationToken::new();
     let _signal = InterruptGuard::new(cancellation.clone());
-    let ari = maintenance::run_once(
+    let tasks = CliAutomaticTasks {
+        settings: settings.clone(),
+        store: &store,
+        run: &renewal_run,
+        timeout: options.certificate_timeout,
+        cli,
+    };
+    let cycle = maintenance::run_cycle(
         &store,
         &cli.http,
         &options,
         &cancellation,
         Some(&AriProgress(cli.output.clone())),
-    )
-    .await?;
-    if cancellation.is_cancelled() {
-        return Ok(DaemonReport {
-            ari,
-            renewals: crate::commands::cert::report::RenewalBatch::cancelled(),
-            data_dir: settings.data_dir,
-        });
-    }
-    let renewals = crate::commands::cert::renewal::execute_automatic(
-        settings.clone(),
-        &store,
-        &renewal_run,
-        cli,
-        &cancellation,
+        &tasks,
     )
     .await?;
     Ok(DaemonReport {
-        ari,
-        renewals,
+        ari: cycle.ari,
+        renewals: match cycle.renewals {
+            maintenance::Stage::Completed(report) => report,
+            maintenance::Stage::NotRun => crate::commands::cert::report::RenewalBatch::cancelled(),
+        },
+        deployment_retries: match cycle.deployments {
+            maintenance::Stage::Completed(reports) => reports,
+            maintenance::Stage::NotRun => Vec::new(),
+        },
+        deployment_cancelled: cancellation.is_cancelled(),
         data_dir: settings.data_dir,
     })
 }
 
+struct CliAutomaticTasks<'a> {
+    settings: CliSettings,
+    store: &'a CliIssueStore,
+    run: &'a RunArgs,
+    timeout: Duration,
+    cli: &'a CommandContext,
+}
+
+#[async_trait::async_trait(?Send)]
+impl maintenance::AutomaticTasks for CliAutomaticTasks<'_> {
+    type Renewals = crate::commands::cert::report::RenewalBatch;
+    type Deployments = Vec<crate::commands::cert::report::DeploymentReport>;
+
+    async fn renew(
+        &self,
+        candidates: Vec<aster_acme::issuance::IssueRecord>,
+        cancellation: &CancellationToken,
+    ) -> Self::Renewals {
+        crate::commands::cert::renewal::execute_automatic(
+            self.settings.clone(),
+            self.store,
+            self.run,
+            self.cli,
+            cancellation,
+            candidates,
+        )
+        .await
+    }
+
+    async fn deploy(
+        &self,
+        candidates: Vec<aster_acme::issuance::IssueRecord>,
+        cancellation: &CancellationToken,
+    ) -> Self::Deployments {
+        crate::commands::cert::deployment::retry_due(
+            self.store,
+            self.timeout,
+            cancellation,
+            self.cli,
+            candidates,
+        )
+        .await
+    }
+}
+
 pub(crate) fn exit_status(report: &DaemonReport) -> ExitStatus {
-    if report.ari.cancelled || report.renewals.was_cancelled() {
+    if report.ari.cancelled || report.renewals.was_cancelled() || report.deployment_cancelled {
         ExitStatus::Cancelled
     } else if report
         .ari
@@ -141,6 +189,10 @@ pub(crate) fn exit_status(report: &DaemonReport) -> ExitStatus {
         .iter()
         .any(|entry| matches!(entry.outcome, Outcome::Failed(_) | Outcome::RetryScheduled))
         || report.renewals.has_failures()
+        || report
+            .deployment_retries
+            .iter()
+            .any(crate::commands::cert::report::DeploymentReport::has_failures)
     {
         ExitStatus::Failed
     } else {

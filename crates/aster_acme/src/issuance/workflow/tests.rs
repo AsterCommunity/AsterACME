@@ -45,6 +45,16 @@ impl IssueSession for Session {
     async fn complete(&self, _: &IssueRecord, _: &[u8]) -> Result<IssueRecord, IssueError> {
         panic!("not issued")
     }
+    async fn record_renewal_failure(
+        &self,
+        _: time::OffsetDateTime,
+        _: Option<time::OffsetDateTime>,
+        _: Option<String>,
+    ) -> Result<crate::issuance::RenewalRetryState, IssueError> {
+        Err(IssueError::InvalidInput(
+            "renewal retry checkpoint not used",
+        ))
+    }
 }
 #[derive(Default)]
 struct Solver(AtomicUsize);

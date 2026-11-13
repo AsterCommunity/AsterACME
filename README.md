@@ -93,7 +93,7 @@ Adding a binding deploys immediately; later successful renewals use it automatic
 - [Developer guide](docs/README.md): project contract, task routing, architecture, crate ownership, and tests.
 - [RFC reference](docs/rfc-reference.md) and [changelog](CHANGELOG.md).
 
-State is stored in the platform directory for `com.astercosm.acme`; pass `--data-dir PATH` to each command to use another root. `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
+State is stored in the platform directory for `com.astercosm.acme`; use `--data-dir PATH` or `ASTER_ACME_DATA_DIR` to select another root (`--data-dir` takes precedence). `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
 
 ## License
 

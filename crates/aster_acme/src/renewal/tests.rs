@@ -69,6 +69,14 @@ impl IssueSession for Session {
             "ARI must not promote certificates",
         ))
     }
+    async fn record_renewal_failure(
+        &self,
+        _: time::OffsetDateTime,
+        _: Option<time::OffsetDateTime>,
+        _: Option<String>,
+    ) -> Result<crate::issuance::RenewalRetryState, IssueError> {
+        Err(IssueError::InvalidInput("ARI must not schedule renewals"))
+    }
 }
 
 async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalService, Session) {
@@ -700,6 +708,22 @@ fn renewal_due_requires_current_complete_unrevoked_and_instant_boundary() {
     record.renewal = Some(due);
     assert!(renewal_due(&record, now));
     assert!(!renewal_due(&record, now - time::Duration::nanoseconds(1)));
+    let retry_at = now + time::Duration::seconds(60);
+    record.renewal_retry = Some(crate::issuance::RenewalRetryState {
+        failures: 1,
+        retry_at: Some(retry_at),
+        ca_retry_at: Some(retry_at + time::Duration::seconds(60)),
+        blocked_reason: None,
+    });
+    assert!(!renewal_due(
+        &record,
+        retry_at - time::Duration::nanoseconds(1)
+    ));
+    assert!(!renewal_due(&record, retry_at));
+    assert!(renewal_due(&record, retry_at + time::Duration::seconds(60)));
+    record.renewal_retry.as_mut().unwrap().blocked_reason = Some("uncertain order".into());
+    assert!(!renewal_due(&record, retry_at + time::Duration::days(30)));
+    record.renewal_retry = None;
     record.is_in_use = false;
     assert!(!renewal_due(&record, now));
     record.is_in_use = true;

@@ -1,6 +1,6 @@
 # aster_acme
 
-面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；自动 DNS 发布与常驻调度尚未实现；`maintenance::run_once`提供可嵌入的ARI维护周期。
+面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；`maintenance::run_cycle`按序协调ARI刷新、到期续期和部署重试，由宿主注入续期与reload执行器；自动 DNS 发布与常驻调度尚未实现。
 
 - `account`：账户服务、注册恢复、不可恢复停用、条款/EAB。
 - `storage::{account,issuance}`：对象安全的账户/签名器/轮换与证书会话契约；`storage::query` 提供类型化查询及纯版本投影，库不依赖文件系统。

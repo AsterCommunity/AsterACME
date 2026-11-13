@@ -315,6 +315,54 @@ impl RequestFailure {
     }
 }
 
+/// Automatic renewal retry state attached to the still-selected predecessor.
+/// Historical issue records remain the source of the failed attempt details.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenewalRetryState {
+    /// Consecutive failed attempts for this selected certificate generation.
+    pub failures: u32,
+    /// Earliest automatic retry; absent when the remote outcome needs inspection.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub retry_at: Option<time::OffsetDateTime>,
+    /// CA-provided minimum deadline; administrators cannot bypass this with `--now`.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub ca_retry_at: Option<time::OffsetDateTime>,
+    /// A mutation outcome that cannot safely be replayed automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+}
+
+impl RenewalRetryState {
+    /// Advance one failed invocation without erasing earlier CA deadlines or
+    /// uncertainty. All callers persist this while owning the certificate lease.
+    #[must_use]
+    pub fn after_failure(
+        previous: Option<&Self>,
+        now: time::OffsetDateTime,
+        ca_retry_at: Option<time::OffsetDateTime>,
+        blocked_reason: Option<String>,
+    ) -> Self {
+        let failures = previous.map_or(1, |state| state.failures.saturating_add(1));
+        let retry_at = now.checked_add(time::Duration::seconds(
+            aster_acme_core::renewal::renewal_retry_delay_seconds(failures),
+        ));
+        let blocked_reason = previous
+            .and_then(|state| state.blocked_reason.clone())
+            .or(blocked_reason)
+            .or_else(|| retry_at.is_none().then(|| "retry deadline overflow".into()));
+        Self {
+            failures,
+            retry_at: blocked_reason.is_none().then_some(retry_at).flatten(),
+            ca_retry_at: previous
+                .and_then(|state| state.ca_retry_at)
+                .into_iter()
+                .chain(ca_retry_at)
+                .max(),
+            blocked_reason,
+        }
+    }
+}
+
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueRecord {
@@ -388,6 +436,9 @@ pub struct IssueRecord {
     /// Durable renewal schedule, available only after certificate validation.
     #[serde(default)]
     pub renewal: Option<crate::renewal::RenewalPlan>,
+    /// Backoff for renewal attempts against this generation while it remains in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_retry: Option<RenewalRetryState>,
     /// Leaf certificate expiry, distinct from order and authorization expiry.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub certificate_not_after: Option<time::OffsetDateTime>,
@@ -634,6 +685,9 @@ impl IssueRecord {
 /// Protocol/service failures without private key material.
 #[derive(Debug, Error)]
 pub enum IssueError {
+    /// Another process owns the execution lease; this is not a failed CA attempt.
+    #[error("{0} execution lock is unavailable: {1}")]
+    LeaseUnavailable(&'static str, String),
     /// Authorization or selected challenge reached a terminal failure independently of order status.
     #[error("CA authorization/challenge failed (authorization status: {status:?})")]
     AuthorizationFailed {

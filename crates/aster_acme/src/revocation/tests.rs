@@ -49,6 +49,16 @@ impl IssueSession for Session {
     async fn complete(&self, _: &IssueRecord, _: &[u8]) -> Result<IssueRecord, IssueError> {
         Err(IssueError::InvalidInput("revocation must not promote"))
     }
+    async fn record_renewal_failure(
+        &self,
+        _: time::OffsetDateTime,
+        _: Option<time::OffsetDateTime>,
+        _: Option<String>,
+    ) -> Result<crate::issuance::RenewalRetryState, IssueError> {
+        Err(IssueError::InvalidInput(
+            "revocation must not schedule renewals",
+        ))
+    }
 }
 
 async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RevocationService, Session) {

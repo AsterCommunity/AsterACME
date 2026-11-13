@@ -3,7 +3,7 @@
 use crate::account::*;
 use crate::inventory;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
-use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::account::{AccountStoreErrorKind, KeyAccess};
 use aster_acme::storage::query::AccountQuery;
 use aster_acme_core::account::AccountRecordState;
 use tokio::time::sleep;
@@ -446,7 +446,12 @@ async fn locks_timeout_release_and_allow_waiting_contenders() {
     let thumb = "t".repeat(43);
     let held = store.lock_account(&directory, &thumb).await.unwrap();
     let start = tokio::time::Instant::now();
-    assert!(store.lock_account(&directory, &thumb).await.is_err());
+    let error = store
+        .lock_account(&directory, &thumb)
+        .await
+        .err()
+        .expect("held lock must time out");
+    assert_eq!(error.kind, AccountStoreErrorKind::LockUnavailable);
     assert!(start.elapsed() >= Duration::from_millis(60));
     drop(held);
     let held = store.lock_account(&directory, &thumb).await.unwrap();

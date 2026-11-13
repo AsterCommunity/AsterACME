@@ -128,4 +128,26 @@ pub trait AccountRotation: Send + Sync {
 pub struct AccountStoreError {
     /// Sanitized diagnostic.
     pub message: String,
+    /// Failure category used by orchestration to distinguish contention from faults.
+    pub kind: AccountStoreErrorKind,
+}
+
+/// Stable category for account-store failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountStoreErrorKind {
+    /// A competing operation held the account lease through the configured timeout.
+    LockUnavailable,
+    /// Any other storage or key-access failure.
+    Other,
+}
+
+impl AccountStoreError {
+    /// Build a storage failure that must not count as a failed renewal attempt.
+    #[must_use]
+    pub fn lock_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: AccountStoreErrorKind::LockUnavailable,
+        }
+    }
 }

@@ -1,14 +1,116 @@
 //! One finite maintenance cycle for external schedulers and future daemon loops.
-//! Refreshes due ARI advice only; certificate issuance and deployment are host-owned stages.
 use crate::{
     issuance::{CertificateName, IssueError, IssueRecord},
     renewal::refresh::{RefreshCycle, RefreshStatus},
     solver::ExecutionContext,
-    storage::{issuance::IssueStore, query::IssueQuery},
+    storage::{
+        issuance::IssueStore,
+        query::{IssueQuery, IssueView},
+    },
     transport::{HttpPool, TransportOptions},
 };
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+
+/// Host-owned certificate operations invoked after the library selects stable candidates.
+/// Implementations perform protocol-specific issuance and host-specific deployment effects;
+/// storage sessions remain responsible for lease acquisition and under-lease revalidation.
+#[async_trait::async_trait(?Send)]
+pub trait AutomaticTasks {
+    /// Result type rendered by the embedding host for one renewal batch.
+    type Renewals;
+    /// Result type rendered by the embedding host for deployment retries.
+    type Deployments;
+
+    /// Renew the supplied due snapshot. Per-certificate eligibility may depend on host solvers.
+    async fn renew(
+        &self,
+        candidates: Vec<IssueRecord>,
+        cancellation: &CancellationToken,
+    ) -> Self::Renewals;
+
+    /// Retry deployments for certificates with configured deployment bindings.
+    async fn deploy(
+        &self,
+        candidates: Vec<IssueRecord>,
+        cancellation: &CancellationToken,
+    ) -> Self::Deployments;
+}
+
+/// A maintenance stage skipped because an earlier stage was cancelled.
+#[derive(Debug)]
+pub enum Stage<T> {
+    /// Stage was not started.
+    NotRun,
+    /// Stage completed and produced the host's report.
+    Completed(T),
+}
+
+/// Ordered ARI, renewal and deployment results for one external-scheduler invocation.
+pub struct CycleReport<R, D> {
+    /// ARI refresh outcomes.
+    pub ari: Report,
+    /// Automatic renewal outcomes.
+    pub renewals: Stage<R>,
+    /// Known deployment retry outcomes.
+    pub deployments: Stage<D>,
+}
+
+/// Run ARI refresh, due automatic renewals, then retries for configured deployments.
+/// Candidate inventories are queried by the library between stages, so a successful
+/// renewal is visible to the deployment stage. Host callbacks execute effects only.
+/// # Errors
+/// Returns invalid settings or inventory query failures; per-item results remain in reports.
+pub async fn run_cycle<T: AutomaticTasks>(
+    store: &dyn IssueStore,
+    pool: &HttpPool,
+    options: &Options,
+    cancellation: &CancellationToken,
+    observer: Option<&dyn Observer>,
+    tasks: &T,
+) -> Result<CycleReport<T::Renewals, T::Deployments>, IssueError> {
+    let ari = run_once(store, pool, options, cancellation, observer).await?;
+    if cancellation.is_cancelled() {
+        return Ok(CycleReport {
+            ari,
+            renewals: Stage::NotRun,
+            deployments: Stage::NotRun,
+        });
+    }
+
+    let mut renewals = store
+        .query(IssueQuery {
+            in_use: Some(true),
+            renewal_due_at: Some(time::OffsetDateTime::now_utc()),
+            ..IssueQuery::default()
+        })
+        .await?;
+    renewals.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    let renewal_results = tasks.renew(renewals, cancellation).await;
+    if cancellation.is_cancelled() {
+        return Ok(CycleReport {
+            ari,
+            renewals: Stage::Completed(renewal_results),
+            deployments: Stage::NotRun,
+        });
+    }
+
+    let mut deployments = store
+        .query(IssueQuery {
+            view: IssueView::Managed,
+            in_use: Some(true),
+            ..IssueQuery::default()
+        })
+        .await?;
+    deployments.retain(|record| record.deployment_count.is_some_and(|count| count > 0));
+    deployments.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    let deployment_results = tasks.deploy(deployments, cancellation).await;
+    Ok(CycleReport {
+        ari,
+        renewals: Stage::Completed(renewal_results),
+        deployments: Stage::Completed(deployment_results),
+    })
+}
 
 /// Execution settings independent of the external scheduler's invocation frequency.
 #[derive(Clone)]
@@ -197,4 +299,147 @@ async fn refresh_one(
         error => Outcome::Failed(error),
     };
     Ok((outcome, saved))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        account::AccountRecord,
+        issuance::{CertificateName, IssueError, IssueRecord, IssueRequest},
+        maintenance::{AutomaticTasks, Options, Stage, run_cycle},
+        storage::{
+            issuance::{IssueSession, IssueStore},
+            query::IssueQuery,
+        },
+        transport::HttpPool,
+    };
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+    use tokio_util::sync::CancellationToken;
+
+    struct Store(Mutex<Vec<&'static str>>);
+
+    #[async_trait]
+    impl IssueStore for Store {
+        async fn create(
+            &self,
+            _: &IssueRequest,
+            _: &AccountRecord,
+        ) -> Result<Box<dyn IssueSession>, IssueError> {
+            Err(IssueError::InvalidInput("unused test operation"))
+        }
+
+        async fn renew(
+            &self,
+            _: &CertificateName,
+            _: &AccountRecord,
+        ) -> Result<Box<dyn IssueSession>, IssueError> {
+            Err(IssueError::InvalidInput("unused test operation"))
+        }
+
+        async fn open(
+            &self,
+            _: &CertificateName,
+            _: &str,
+        ) -> Result<Box<dyn IssueSession>, IssueError> {
+            Err(IssueError::InvalidInput("unused test operation"))
+        }
+
+        async fn open_observation(
+            &self,
+            _: &CertificateName,
+            _: &str,
+        ) -> Result<Box<dyn IssueSession>, IssueError> {
+            Err(IssueError::InvalidInput("unused test operation"))
+        }
+
+        async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
+            let stage = if query.ari_due_at.is_some() {
+                "ari-query"
+            } else if query.renewal_due_at.is_some() {
+                "renewal-query"
+            } else {
+                "deployment-query"
+            };
+            self.0.lock().unwrap().push(stage);
+            Ok(Vec::new())
+        }
+    }
+
+    struct Tasks {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        cancellation: CancellationToken,
+        cancel_after_renewal: bool,
+    }
+
+    #[async_trait(?Send)]
+    impl AutomaticTasks for Tasks {
+        type Renewals = ();
+        type Deployments = ();
+
+        async fn renew(&self, _: Vec<IssueRecord>, _: &CancellationToken) {
+            self.events.lock().unwrap().push("renew");
+            if self.cancel_after_renewal {
+                self.cancellation.cancel();
+            }
+        }
+
+        async fn deploy(&self, _: Vec<IssueRecord>, _: &CancellationToken) {
+            self.events.lock().unwrap().push("deploy");
+        }
+    }
+
+    #[tokio::test]
+    async fn cycle_owns_stage_order_and_requeries_deployment_candidates_after_renewal() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let store = Store(Mutex::new(Vec::new()));
+        let cancellation = CancellationToken::new();
+        let tasks = Tasks {
+            events: Arc::clone(&calls),
+            cancellation: cancellation.clone(),
+            cancel_after_renewal: false,
+        };
+        let report = run_cycle(
+            &store,
+            &HttpPool::default(),
+            &Options::default(),
+            &cancellation,
+            None,
+            &tasks,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(report.renewals, Stage::Completed(())));
+        assert!(matches!(report.deployments, Stage::Completed(())));
+        assert_eq!(
+            *store.0.lock().unwrap(),
+            ["ari-query", "renewal-query", "deployment-query"]
+        );
+        assert_eq!(*calls.lock().unwrap(), ["renew", "deploy"]);
+    }
+
+    #[tokio::test]
+    async fn cancellation_between_stages_never_starts_deployment_retry() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let store = Store(Mutex::new(Vec::new()));
+        let cancellation = CancellationToken::new();
+        let tasks = Tasks {
+            events: Arc::clone(&calls),
+            cancellation: cancellation.clone(),
+            cancel_after_renewal: true,
+        };
+        let report = run_cycle(
+            &store,
+            &HttpPool::default(),
+            &Options::default(),
+            &cancellation,
+            None,
+            &tasks,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(report.deployments, Stage::NotRun));
+        assert_eq!(*store.0.lock().unwrap(), ["ari-query", "renewal-query"]);
+        assert_eq!(*calls.lock().unwrap(), ["renew"]);
+    }
 }

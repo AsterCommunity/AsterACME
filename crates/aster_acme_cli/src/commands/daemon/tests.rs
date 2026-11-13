@@ -106,6 +106,8 @@ fn daemon_report(report: Report) -> DaemonReport {
     DaemonReport {
         ari: report,
         renewals: crate::commands::cert::report::RenewalBatch::empty(),
+        deployment_retries: Vec::new(),
+        deployment_cancelled: false,
         data_dir: ".".into(),
     }
 }
@@ -183,7 +185,7 @@ async fn empty_inventory_is_noninteractive_and_needs_no_account_or_http() {
     let human = render::render(&report, Format::plain(false)).unwrap();
     assert_eq!(
         human,
-        "[INFO] No ARI refreshes or automatic renewals were due."
+        "[INFO] No ARI refreshes, automatic renewals, or deployment retries were due."
     );
     assert!(!human.contains("NAME"));
 }

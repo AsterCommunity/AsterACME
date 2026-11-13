@@ -1,8 +1,10 @@
 //! Locked generation reads, durable updates and certificate promotion.
 use crate::issuance::{
     IssuancePhase, IssueError, IssueRecord, Session, atomic_write, certificate, check_material,
-    failure, publication, read_journal, read_private, selection, write_journal, write_selection,
+    failure, publication, read_generations, read_journal, read_private, selection, write_journal,
+    write_selection,
 };
+use aster_acme::issuance::RenewalRetryState;
 use aster_acme::storage::issuance::IssueSession;
 use async_trait::async_trait;
 
@@ -41,6 +43,54 @@ impl IssueSession for Session {
         })
         .await
         .map_err(|_| failure("issuance journal worker failed"))?
+    }
+
+    async fn record_renewal_failure(
+        &self,
+        now: time::OffsetDateTime,
+        ca_retry_at: Option<time::OffsetDateTime>,
+        blocked_reason: Option<String>,
+    ) -> Result<RenewalRetryState, IssueError> {
+        let child = self.record().await?;
+        let predecessor = child
+            .renewal_of
+            .as_ref()
+            .ok_or_else(|| failure("failed operation is not a renewal"))?;
+        let expected_in_use = predecessor.operation_id.clone();
+        let slot = self.slot.clone();
+        let name = child.name.clone();
+        let lease = self.lease.clone();
+        let permit = self.io.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lease = lease;
+            let config = selection(&slot)?;
+            if config.cert.in_use.as_deref() != Some(expected_in_use.as_str()) {
+                return Err(failure(
+                    "renewal predecessor changed before retry scheduling",
+                ));
+            }
+            let predecessor = read_generations(&slot, &name)?
+                .into_iter()
+                .find(|record| record.operation_id == expected_in_use)
+                .ok_or_else(|| failure("renewal predecessor is missing"))?;
+            let generation = slot.join(predecessor.generation_name());
+            let mut previous = read_journal(&generation.join("operation.toml"))?;
+            if previous.operation_id != expected_in_use || previous.name != name {
+                return Err(failure("renewal predecessor identity mismatch"));
+            }
+            let state = RenewalRetryState::after_failure(
+                previous.renewal_retry.as_ref(),
+                now,
+                ca_retry_at,
+                blocked_reason,
+            );
+            previous.renewal_retry = Some(state.clone());
+            write_journal(&generation.join("operation.toml"), &previous)?;
+            Ok(state)
+        })
+        .await
+        .map_err(|_| failure("renewal retry checkpoint worker failed"))?
     }
 
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {

@@ -139,11 +139,12 @@ impl AccountStore for CliAccountStore {
         _directory: &AcmeUrl,
         _thumbprint: &str,
     ) -> Result<Arc<dyn AccountLease>, AccountStoreError> {
-        Ok(Arc::new(
-            self.acquire(self.lock_path()?)
-                .await
-                .map_err(|error| store_error(&error.to_string()))?,
-        ))
+        Ok(Arc::new(self.acquire(self.lock_path()?).await.map_err(
+            |error| match error {
+                StorageError::LockTimeout => AccountStoreError::lock_unavailable(error.to_string()),
+                other => store_error(&other.to_string()),
+            },
+        )?))
     }
 
     async fn load(
@@ -328,6 +329,7 @@ fn local_account_id(directory: &AcmeUrl, thumbprint: &str) -> String {
 pub(crate) fn store_error(message: &str) -> AccountStoreError {
     AccountStoreError {
         message: message.to_owned(),
+        kind: aster_acme::storage::account::AccountStoreErrorKind::Other,
     }
 }
 

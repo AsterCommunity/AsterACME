@@ -30,14 +30,29 @@ pub(crate) fn render(report: &super::DaemonReport, format: Format) -> CliResult<
                 Format::plain(true),
                 &report.data_dir,
             )?)?;
+        let deployment_values = report
+            .deployment_retries
+            .iter()
+            .map(|deployment| {
+                crate::commands::cert::render::deployment_report(deployment, Format::plain(true))
+                    .and_then(|json| serde_json::from_str(&json).map_err(Into::into))
+            })
+            .collect::<CliResult<Vec<serde_json::Value>>>()?;
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "cancelled": report.ari.cancelled || report.renewals.was_cancelled(),
+            "cancelled": report.ari.cancelled || report.renewals.was_cancelled() || report.deployment_cancelled,
             "ari": ari_value,
             "renewal": renewal_value,
+            "deployment_retries": deployment_values,
         }))?);
     }
-    if report.ari.entries.is_empty() && report.renewals.is_empty() {
-        let (kind, message) = if report.ari.cancelled || report.renewals.was_cancelled() {
+    if report.ari.entries.is_empty()
+        && report.renewals.is_empty()
+        && report.deployment_retries.is_empty()
+    {
+        let (kind, message) = if report.ari.cancelled
+            || report.renewals.was_cancelled()
+            || report.deployment_cancelled
+        {
             (
                 MessageKind::Warning,
                 "Maintenance cancelled before any certificate work was started.",
@@ -45,12 +60,12 @@ pub(crate) fn render(report: &super::DaemonReport, format: Format) -> CliResult<
         } else {
             (
                 MessageKind::Info,
-                "No ARI refreshes or automatic renewals were due.",
+                "No ARI refreshes, automatic renewals, or deployment retries were due.",
             )
         };
         return Ok(format!("{} {message}", kind.badge(format.color)));
     }
-    let mut sections = Vec::with_capacity(2);
+    let mut sections = Vec::with_capacity(2 + report.deployment_retries.len());
     if !report.ari.entries.is_empty() {
         sections.push(render_ari(&report.ari, format)?);
     }
@@ -59,6 +74,11 @@ pub(crate) fn render(report: &super::DaemonReport, format: Format) -> CliResult<
             &report.renewals,
             format,
             &report.data_dir,
+        )?);
+    }
+    for deployment in &report.deployment_retries {
+        sections.push(crate::commands::cert::render::deployment_report(
+            deployment, format,
         )?);
     }
     Ok(sections.join("\n\n"))

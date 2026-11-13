@@ -53,7 +53,7 @@ async fn started_reload_wait_failure_is_uncertain_and_never_authorizes_automatic
         &fixture.store,
         &fixture.name,
         "unobserved",
-        true,
+        aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
     )
@@ -149,7 +149,7 @@ async fn manual_cancel_before_start_does_not_publish_or_reload() {
             &fixture.store,
             &fixture.name,
             "cancel-before",
-            true,
+            aster_acme::deployment::DeploymentIntent::Explicit,
             None,
             Some(&execution)
         )
@@ -497,9 +497,16 @@ async fn explicit_retry_retains_uncertainty_through_publication_and_cancellation
             drop(session);
             let automatic = fixture.automatic(&fixture.store).await;
             assert_eq!(automatic[0], previous);
-            let explicit = run_one(&fixture.store, &fixture.name, "retry", true, None, None)
-                .await
-                .unwrap();
+            let explicit = run_one(
+                &fixture.store,
+                &fixture.name,
+                "retry",
+                aster_acme::deployment::DeploymentIntent::Explicit,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(explicit.binding.phase, DeploymentPhase::Deployed);
         }
     }

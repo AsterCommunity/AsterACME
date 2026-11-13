@@ -25,6 +25,15 @@ pub fn renewal_due(record: &IssueRecord, now: OffsetDateTime) -> bool {
     record.is_in_use
         && !record.unfinished()
         && record.revocation.state == aster_acme_core::revocation::RevocationState::NotRequested
+        && record.renewal_retry.as_ref().is_none_or(|retry| {
+            retry.blocked_reason.is_none()
+                && retry
+                    .retry_at
+                    .into_iter()
+                    .chain(retry.ca_retry_at)
+                    .max()
+                    .is_some_and(|at| now >= at)
+        })
         && record
             .renewal
             .as_ref()

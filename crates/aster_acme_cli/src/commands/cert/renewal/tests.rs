@@ -535,6 +535,126 @@ async fn certificate_lock_timeout_is_one_failure_and_does_not_stop_the_next_due_
         lease.record().await.unwrap().operation_id,
         locked.operation_id
     );
+    assert!(
+        lease.record().await.unwrap().renewal_retry.is_none(),
+        "lease contention must not count as a failed renewal"
+    );
+}
+
+#[tokio::test]
+async fn missing_account_before_session_creation_gets_one_persisted_backoff() {
+    let fixture = LocalFixture::create().await;
+    let current = fixture.seed("missing-account", true).await;
+    std::fs::rename(
+        fixture.settings.data_dir.join("accounts"),
+        fixture.settings.data_dir.join("accounts-offline"),
+    )
+    .unwrap();
+    let token = CancellationToken::new();
+    let executor = Transaction {
+        settings: &fixture.settings,
+        store: &fixture.store,
+        run: &fixture.run,
+        immediate: true,
+        automatic: false,
+        cancellation: Some(&token),
+        cli: &fixture.cli,
+    };
+    assert!(executor.run(&current).await.is_err());
+    let saved = fixture
+        .store
+        .open_observation(&current.name, &current.operation_id)
+        .await
+        .unwrap()
+        .record()
+        .await
+        .unwrap();
+    assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+    assert!(
+        saved
+            .renewal_retry
+            .as_ref()
+            .unwrap()
+            .retry_at
+            .is_some_and(|at| at > time::OffsetDateTime::now_utc())
+    );
+    // A second worker that already selected the old snapshot cannot increment again.
+    assert!(executor.run(&current).await.is_err());
+    let saved = fixture
+        .store
+        .open_observation(&current.name, &current.operation_id)
+        .await
+        .unwrap()
+        .record()
+        .await
+        .unwrap();
+    assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn unreadable_account_key_and_fixed_csr_failures_are_checkpointed_before_session_opens() {
+    for corrupt_account in [true, false] {
+        let fixture = LocalFixture::create().await;
+        let current = fixture.seed("preparation", true).await;
+        if corrupt_account {
+            std::fs::write(
+                fixture
+                    .settings
+                    .data_dir
+                    .join("accounts/default/account-key.pk8"),
+                b"broken account key",
+            )
+            .unwrap();
+        } else {
+            let attempt = fixture
+                .store
+                .renew(&current.name, &fixture.account)
+                .await
+                .unwrap();
+            let pending = attempt.record().await.unwrap();
+            drop(attempt);
+            std::fs::write(
+                fixture
+                    .settings
+                    .data_dir
+                    .join("certs/preparation")
+                    .join(pending.generation_name())
+                    .join("request.der"),
+                b"broken fixed CSR",
+            )
+            .unwrap();
+        }
+        let token = CancellationToken::new();
+        let executor = Transaction {
+            settings: &fixture.settings,
+            store: &fixture.store,
+            run: &fixture.run,
+            immediate: true,
+            automatic: false,
+            cancellation: Some(&token),
+            cli: &fixture.cli,
+        };
+        assert!(executor.run(&current).await.is_err());
+        let saved = fixture
+            .store
+            .open_observation(&current.name, &current.operation_id)
+            .await
+            .unwrap()
+            .record()
+            .await
+            .unwrap();
+        assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+        assert!(saved.is_in_use);
+    }
 }
 
 #[tokio::test]
@@ -603,9 +723,17 @@ async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_tra
             &fixture.run,
             &fixture.cli,
             &cancellation,
+            fixture
+                .store
+                .query(IssueQuery {
+                    in_use: Some(true),
+                    renewal_due_at: Some(time::OffsetDateTime::now_utc()),
+                    ..IssueQuery::default()
+                })
+                .await
+                .unwrap(),
         )
-        .await
-        .unwrap();
+        .await;
         let records = fixture.store.query(IssueQuery::default()).await.unwrap();
         if method.automatic() {
             assert_eq!(

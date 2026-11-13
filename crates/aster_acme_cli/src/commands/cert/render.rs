@@ -595,6 +595,9 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
     if let Some(at) = plan.next_check_at {
         lines.push(field("ARI next check:", &timestamp(Some(at)), color));
     }
+    if let Some(retry) = &record.renewal_retry {
+        lines.extend(renewal_retry_lines(retry, color));
+    }
     if plan.last_query_failed {
         lines.push(field(
             "ARI status:",
@@ -608,6 +611,35 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
     }
     if let Some(url) = &plan.explanation_url {
         lines.push(field("ARI explanation:", &output::safe(url), color));
+    }
+    lines
+}
+
+fn renewal_retry_lines(
+    retry: &aster_acme::issuance::RenewalRetryState,
+    color: bool,
+) -> Vec<String> {
+    let mut lines = vec![field(
+        "Renewal failures:",
+        &retry.failures.to_string(),
+        color,
+    )];
+    if let Some(reason) = &retry.blocked_reason {
+        lines.push(field(
+            "Automatic retry:",
+            &format!("blocked: {reason}"),
+            color,
+        ));
+    } else {
+        let effective_retry = retry.retry_at.into_iter().chain(retry.ca_retry_at).max();
+        lines.push(field(
+            "Automatic retry:",
+            &timestamp(effective_retry),
+            color,
+        ));
+        if let Some(at) = retry.ca_retry_at {
+            lines.push(field("CA Retry-After:", &timestamp(Some(at)), color));
+        }
     }
     lines
 }
@@ -714,8 +746,11 @@ struct ArtifactPaths {
 struct DeploymentStatusView<'a> {
     id: &'a str,
     generation: Option<&'a str>,
-    phase: aster_acme_cli_storage::issuance::DeploymentPhase,
+    phase: aster_acme::deployment::DeploymentPhase,
     attempts: u8,
+    retry_failures: u32,
+    #[serde(with = "time::serde::rfc3339::option")]
+    retry_at: Option<time::OffsetDateTime>,
     last_error: Option<&'a str>,
     execution_error: Option<&'a str>,
 }
@@ -729,6 +764,8 @@ impl<'a> From<&'a aster_acme_cli_storage::issuance::DeploymentBinding>
             generation: binding.generation.as_deref(),
             phase: binding.phase,
             attempts: binding.attempts,
+            retry_failures: binding.retry_failures,
+            retry_at: binding.retry_at,
             last_error: binding.last_error.as_deref(),
             execution_error: None,
         }
@@ -833,7 +870,7 @@ fn deployment_removed(name: &str, id: &str, format: Format) -> CliResult<String>
     ))
 }
 
-fn deployment_report(
+pub(crate) fn deployment_report(
     report: &super::report::DeploymentReport,
     format: Format,
 ) -> CliResult<String> {
@@ -859,6 +896,20 @@ fn deployment_report(
         })?);
     }
     if report.entries.is_empty() {
+        if !report.events.is_empty() {
+            return Ok(report
+                .events
+                .iter()
+                .map(|event| {
+                    format!(
+                        "{} {}",
+                        event.kind.badge(format.color),
+                        output::safe(&event.message)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
         return Ok(format!(
             "No deployment targets configured for {}.\n{}",
             output::safe(&report.name),
@@ -889,6 +940,7 @@ fn deployment_table(
         "GENERATION".into(),
         "STATUS".into(),
         "ATTEMPTS".into(),
+        "RETRY AT (UTC)".into(),
         "ERROR".into(),
     ]];
     for entry in entries {
@@ -902,6 +954,7 @@ fn deployment_table(
                 deployment_phase(entry.phase).0.into()
             },
             entry.attempts.to_string(),
+            timestamp(entry.retry_at),
             error
                 .map(str::to_owned)
                 .or_else(|| entry.last_error.clone())
@@ -944,10 +997,8 @@ fn current_error<'a>(events: &'a [super::report::DeploymentEvent], id: &str) -> 
         .map(|event| event.message.as_str())
 }
 
-fn deployment_phase(
-    phase: aster_acme_cli_storage::issuance::DeploymentPhase,
-) -> (&'static str, Style) {
-    use aster_acme_cli_storage::issuance::DeploymentPhase;
+fn deployment_phase(phase: aster_acme::deployment::DeploymentPhase) -> (&'static str, Style) {
+    use aster_acme::deployment::DeploymentPhase;
     match phase {
         DeploymentPhase::Configured => ("configured", Style::Yellow),
         DeploymentPhase::Publishing => ("publishing", Style::Yellow),
@@ -1213,8 +1264,7 @@ fn render_batch_entry(
                         .iter()
                         .any(|event| event.kind == output::MessageKind::Error)
                         || deployments.iter().any(|entry| {
-                            entry.phase
-                                != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                            entry.phase != aster_acme::deployment::DeploymentPhase::Deployed
                         }) =>
                 {
                     (
@@ -1287,9 +1337,9 @@ fn batch_status_style(result: &RenewalResult) -> Style {
         }) if deployment_events
             .iter()
             .any(|event| event.kind == output::MessageKind::Error)
-            || deployments.iter().any(|entry| {
-                entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-            }) =>
+            || deployments
+                .iter()
+                .any(|entry| entry.phase != aster_acme::deployment::DeploymentPhase::Deployed) =>
         {
             Style::Red
         }
@@ -1550,9 +1600,8 @@ mod tests {
 
     #[test]
     fn deployment_list_uses_shared_alignment_and_semantic_styles_for_every_phase() {
-        use aster_acme_cli_storage::issuance::{
-            DeploymentBinding, DeploymentPhase, DeploymentTarget,
-        };
+        use aster_acme::deployment::DeploymentPhase;
+        use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
         let phases = [
             DeploymentPhase::Configured,
             DeploymentPhase::Publishing,
@@ -1581,6 +1630,8 @@ mod tests {
                     generation: None,
                     phase: *phase,
                     attempts: 0,
+                    retry_failures: 0,
+                    retry_at: None,
                     last_error: Some("error\nvalue".into()),
                 })
                 .collect(),
@@ -2020,8 +2071,10 @@ mod tests {
             timeout_seconds: 30,
             max_retries: 3,
             generation: Some("generation-1".into()),
-            phase: aster_acme_cli_storage::issuance::DeploymentPhase::Deployed,
+            phase: aster_acme::deployment::DeploymentPhase::Deployed,
             attempts: 1,
+            retry_failures: 0,
+            retry_at: None,
             last_error: None,
         };
         let serialized = serde_json::to_string(&DeploymentStatusView::from(&entry)).unwrap();
@@ -2033,9 +2086,8 @@ mod tests {
     #[test]
     fn issued_deployment_failure_is_visible_in_single_and_batch_json_and_exit_status() {
         use crate::commands::cert::report::{CertificateReport, RenewalEntry, RenewalResult};
-        use aster_acme_cli_storage::issuance::{
-            DeploymentBinding, DeploymentPhase, DeploymentTarget,
-        };
+        use aster_acme::deployment::DeploymentPhase;
+        use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
         for phase in [
             DeploymentPhase::Deployed,
             DeploymentPhase::ReloadFailed,
@@ -2059,6 +2111,8 @@ mod tests {
                     generation: Some("generation".into()),
                     phase,
                     attempts: 1,
+                    retry_failures: 0,
+                    retry_at: None,
                     last_error: None,
                 }],
             };
@@ -2119,9 +2173,8 @@ mod tests {
     #[test]
     fn automatic_deployment_uses_same_table_and_orders_events_after_certificate_summary() {
         use crate::commands::cert::report::{DeploymentEvent, DeploymentReport};
-        use aster_acme_cli_storage::issuance::{
-            DeploymentBinding, DeploymentPhase, DeploymentTarget,
-        };
+        use aster_acme::deployment::DeploymentPhase;
+        use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
         let record = detailed_record();
         let entry = DeploymentBinding {
             permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
@@ -2135,6 +2188,8 @@ mod tests {
             generation: Some("generation".into()),
             phase: DeploymentPhase::Deployed,
             attempts: 1,
+            retry_failures: 0,
+            retry_at: None,
             last_error: None,
         };
         let events = vec![DeploymentEvent {

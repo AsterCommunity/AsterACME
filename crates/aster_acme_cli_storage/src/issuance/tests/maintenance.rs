@@ -747,6 +747,298 @@ async fn daemon_candidate_selection_and_foreground_renew_share_one_cross_process
 }
 
 #[tokio::test]
+#[ignore = "subprocess renewal retry helper"]
+async fn cross_process_renewal_retry_child() {
+    let Ok(root) = std::env::var("ASTER_ACME_RETRY_ROOT") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let account: aster_acme::account::AccountRecord =
+        serde_json::from_slice(&fs::read(root.join("account.json")).unwrap()).unwrap();
+    let store = CliIssueStore::new(root.clone(), Duration::from_secs(5));
+    let name = CertificateName::new("retry-race").unwrap();
+    let in_use = std::env::var("ASTER_ACME_RETRY_IN_USE").unwrap();
+    match std::env::var("ASTER_ACME_RETRY_ROLE").as_deref() {
+        Ok("daemon") => {
+            let RenewalPreparation::Ready(session) = store
+                .prepare_renewal(&name, &in_use, false, &account)
+                .await
+                .unwrap()
+            else {
+                panic!("first daemon must acquire the due renewal")
+            };
+            fs::write(root.join("retry-session-open"), "open").unwrap();
+            while !root.join("retry-schedule-now").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            session
+                .record_renewal_failure(OffsetDateTime::now_utc(), None, None)
+                .await
+                .unwrap();
+            drop(session);
+            fs::write(root.join("retry-daemon-result"), "scheduled").unwrap();
+        }
+        Ok("foreground") => {
+            let candidate = store
+                .query(IssueQuery {
+                    in_use: Some(true),
+                    renewal_due_at: Some(OffsetDateTime::now_utc()),
+                    ..IssueQuery::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(candidate.len(), 1);
+            fs::write(root.join("retry-foreground-snapshot"), "due").unwrap();
+            let result = store
+                .prepare_renewal(&name, &in_use, false, &account)
+                .await
+                .unwrap();
+            assert!(matches!(result, RenewalPreparation::NotDue(_)));
+            fs::write(root.join("retry-foreground-result"), "not-due").unwrap();
+        }
+        _ => panic!("unknown retry test role"),
+    }
+}
+
+#[tokio::test]
+async fn failed_renewal_deadline_serializes_cross_process_daemon_and_foreground_workers() {
+    let f = fixture().await;
+    let mut current = completed(&f, "retry-race").await;
+    current.renewal.as_mut().unwrap().renew_at =
+        OffsetDateTime::now_utc() - time::Duration::seconds(1);
+    save(&f, &current).await;
+    fs::write(
+        f.temp.path().join("account.json"),
+        serde_json::to_vec(&f.account).unwrap(),
+    )
+    .unwrap();
+    let executable = std::env::current_exe().unwrap();
+    let test_name = "issuance::tests::maintenance::cross_process_renewal_retry_child";
+    let daemon = std::process::Command::new(&executable)
+        .args(["--exact", test_name, "--ignored", "--nocapture"])
+        .env("ASTER_ACME_RETRY_ROOT", f.temp.path())
+        .env("ASTER_ACME_RETRY_IN_USE", &current.operation_id)
+        .env("ASTER_ACME_RETRY_ROLE", "daemon")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !f.temp.path().join("retry-session-open").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("daemon did not acquire renewal lease");
+    let foreground = std::process::Command::new(&executable)
+        .args(["--exact", test_name, "--ignored", "--nocapture"])
+        .env("ASTER_ACME_RETRY_ROOT", f.temp.path())
+        .env("ASTER_ACME_RETRY_IN_USE", &current.operation_id)
+        .env("ASTER_ACME_RETRY_ROLE", "foreground")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !f.temp.path().join("retry-foreground-snapshot").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("foreground worker did not read the due snapshot");
+    fs::write(f.temp.path().join("retry-schedule-now"), "continue").unwrap();
+
+    for (child, result) in [
+        (daemon, "retry-daemon-result"),
+        (foreground, "retry-foreground-result"),
+    ] {
+        let output = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap())
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "retry child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = if result == "retry-daemon-result" {
+            "scheduled"
+        } else {
+            "not-due"
+        };
+        assert_eq!(
+            fs::read_to_string(f.temp.path().join(result)).unwrap(),
+            expected
+        );
+    }
+    let generations = f.store.query(IssueQuery::default()).await.unwrap();
+    assert_eq!(
+        generations.len(),
+        2,
+        "one failed attempt must not fork a second generation"
+    );
+    let saved = read(&f, &current).await;
+    assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+}
+
+#[tokio::test]
+async fn renewal_failure_backoff_persists_on_predecessor_and_admin_now_only_bypasses_deadline() {
+    let f = fixture().await;
+    let mut current = completed(&f, "retry-state").await;
+    let now = OffsetDateTime::now_utc();
+    current.renewal.as_mut().unwrap().renew_at = now - time::Duration::seconds(1);
+    save(&f, &current).await;
+
+    let RenewalPreparation::Ready(attempt) = f
+        .store
+        .prepare_renewal(&current.name, &current.operation_id, true, &f.account)
+        .await
+        .unwrap()
+    else {
+        panic!("initial due renewal expected")
+    };
+    let attempt_id = attempt.record().await.unwrap().operation_id;
+    let first = attempt
+        .record_renewal_failure(now, None, None)
+        .await
+        .unwrap();
+    assert_eq!(first.failures, 1);
+    let retry_at = now + time::Duration::minutes(1);
+    assert_eq!(first.retry_at, Some(retry_at));
+    drop(attempt);
+
+    let saved = read(&f, &current).await;
+    assert_eq!(saved.renewal_retry, Some(first.clone()));
+    let before_deadline = f
+        .store
+        .query(IssueQuery {
+            in_use: Some(true),
+            renewal_due_at: Some(retry_at - time::Duration::nanoseconds(1)),
+            ..IssueQuery::default()
+        })
+        .await
+        .unwrap();
+    assert!(before_deadline.is_empty());
+    let at_deadline = f
+        .store
+        .query(IssueQuery {
+            in_use: Some(true),
+            renewal_due_at: Some(retry_at),
+            ..IssueQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(at_deadline.len(), 1);
+
+    let normal = f
+        .store
+        .prepare_renewal(&current.name, &current.operation_id, false, &f.account)
+        .await
+        .unwrap();
+    assert!(matches!(normal, RenewalPreparation::NotDue(_)));
+    let RenewalPreparation::Ready(manual) = f
+        .store
+        .prepare_renewal(&current.name, &current.operation_id, true, &f.account)
+        .await
+        .unwrap()
+    else {
+        panic!("--now should bypass local retry timing")
+    };
+    assert_eq!(manual.record().await.unwrap().operation_id, attempt_id);
+    let second = manual
+        .record_renewal_failure(now + time::Duration::minutes(11), None, None)
+        .await
+        .unwrap();
+    assert_eq!(second.failures, 2);
+    assert_eq!(second.retry_at, Some(now + time::Duration::minutes(21)));
+}
+
+#[tokio::test]
+async fn ca_retry_after_is_not_bypassed_by_manual_now() {
+    let f = fixture().await;
+    let mut current = completed(&f, "ca-retry-after").await;
+    current.renewal.as_mut().unwrap().renew_at =
+        OffsetDateTime::now_utc() - time::Duration::seconds(1);
+    save(&f, &current).await;
+    let RenewalPreparation::Ready(attempt) = f
+        .store
+        .prepare_renewal(&current.name, &current.operation_id, true, &f.account)
+        .await
+        .unwrap()
+    else {
+        panic!("renewal expected")
+    };
+    let now = OffsetDateTime::now_utc();
+    let ca_retry_at =
+        OffsetDateTime::from_unix_timestamp((now + time::Duration::minutes(10)).unix_timestamp())
+            .unwrap();
+    let state = attempt
+        .record_renewal_failure(now, Some(ca_retry_at), None)
+        .await
+        .unwrap();
+    assert!(state.retry_at.is_some_and(|at| at < ca_retry_at));
+    assert_eq!(state.ca_retry_at, Some(ca_retry_at));
+    drop(attempt);
+
+    for immediate in [false, true] {
+        assert!(
+            f.store
+                .prepare_renewal(&current.name, &current.operation_id, immediate, &f.account)
+                .await
+                .is_err()
+        );
+    }
+    let mut elapsed = read(&f, &current).await;
+    elapsed.renewal_retry.as_mut().unwrap().retry_at = Some(now - time::Duration::seconds(1));
+    elapsed.renewal_retry.as_mut().unwrap().ca_retry_at = Some(now - time::Duration::seconds(1));
+    save(&f, &elapsed).await;
+    assert!(matches!(
+        f.store
+            .prepare_renewal(&current.name, &current.operation_id, false, &f.account)
+            .await
+            .unwrap(),
+        RenewalPreparation::Ready(_)
+    ));
+}
+
+#[tokio::test]
+async fn uncertain_new_order_outcome_blocks_automatic_and_manual_new_attempts() {
+    let f = fixture().await;
+    let mut current = completed(&f, "retry-blocked").await;
+    current.renewal.as_mut().unwrap().renew_at = OffsetDateTime::now_utc();
+    save(&f, &current).await;
+    let RenewalPreparation::Ready(attempt) = f
+        .store
+        .prepare_renewal(&current.name, &current.operation_id, true, &f.account)
+        .await
+        .unwrap()
+    else {
+        panic!("renewal expected")
+    };
+    let state = attempt
+        .record_renewal_failure(
+            OffsetDateTime::now_utc(),
+            None,
+            Some("newOrder outcome is uncertain".into()),
+        )
+        .await
+        .unwrap();
+    assert!(state.retry_at.is_none());
+    assert!(state.blocked_reason.is_some());
+    drop(attempt);
+
+    for immediate in [false, true] {
+        assert!(
+            f.store
+                .prepare_renewal(&current.name, &current.operation_id, immediate, &f.account)
+                .await
+                .is_err()
+        );
+    }
+    let observed = read(&f, &current).await;
+    assert_eq!(observed.renewal_retry, Some(state));
+}
+
+#[tokio::test]
 async fn renewal_due_inventory_query_prunes_history_revocation_and_time_boundaries() {
     let f = fixture().await;
     let first = completed(&f, "first").await;

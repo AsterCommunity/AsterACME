@@ -305,6 +305,7 @@ impl AccountStore for MemoryStore {
         if self.fail_save.load(Ordering::SeqCst) {
             return Err(AccountStoreError {
                 message: "injected disk failure".into(),
+                kind: crate::storage::account::AccountStoreErrorKind::Other,
             });
         }
         *self.record.lock().await = Some(record.clone());

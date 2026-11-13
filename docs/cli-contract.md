@@ -84,7 +84,7 @@
 
 ## 参数组及互斥
 
-- `--data-dir PATH`：唯一状态根覆盖；配置固定为其中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
+- `--data-dir PATH`：唯一状态根覆盖；也可设置 `ASTER_ACME_DATA_DIR`。命令行参数优先于环境变量，未设置时使用平台默认目录；配置固定为状态根中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
 - `--ca` 与 `--ca-directory` 互斥；内置只有公开生产提供商 letsencrypt/zerossl/google。已有账户始终绑定原 CA，显式不同 CA 拒绝，不因选项换成新账户。
 - `--user-agent` 与 `--request-timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；--operation-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。

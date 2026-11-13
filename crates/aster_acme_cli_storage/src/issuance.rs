@@ -23,11 +23,12 @@ mod deployment;
 mod generation;
 mod publication;
 mod query;
+mod retry;
 mod session;
 use crate::issuance::generation::Initialization;
 pub use deployment::{
     DeploymentArtifacts, DeploymentBinding, DeploymentDefinition, DeploymentPatch,
-    DeploymentPermissions, DeploymentPhase, DeploymentSession, DeploymentTarget,
+    DeploymentPermissions, DeploymentSession, DeploymentTarget,
     validate_id as validate_deployment_id,
 };
 pub mod removal;
@@ -60,20 +61,21 @@ impl CliIssueStore {
         let timeout = self.timeout;
         let slot = self.slot(name);
         let lease = tokio::task::spawn_blocking(move || {
-            let lease = toml_file::lock(&path, timeout)?;
+            let lease = toml_file::lock(&path, timeout).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    IssueError::LeaseUnavailable("certificate", error.to_string())
+                } else {
+                    failure(&format!("certificate lock failed: {error}"))
+                }
+            })?;
             if slot.join("cert.toml").is_file() {
-                removal::ensure_idle(&slot).map_err(std::io::Error::other)?;
-                publication::recover_selection(&slot).map_err(std::io::Error::other)?;
+                removal::ensure_idle(&slot)?;
+                publication::recover_selection(&slot)?;
             }
-            Ok::<_, std::io::Error>(lease)
+            Ok::<_, IssueError>(lease)
         })
         .await
-        .map_err(|_| failure("certificate lock worker failed"))?
-        .map_err(|error| {
-            failure(&format!(
-                "certificate lock, view recovery or timeout failed: {error}"
-            ))
-        })?;
+        .map_err(|_| failure("certificate lock worker failed"))??;
         Ok(Arc::new(lease))
     }
 }

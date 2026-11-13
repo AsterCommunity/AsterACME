@@ -6,7 +6,7 @@
 
 托管证书是稳定的本地管理身份，独立于主域名和 CA order。每次新的 cert issue 创建新托管证书；默认名称为首个规范化域名（必要时截短显示前缀）加八位小写十六进制随机后缀。自动分配遇到 NameAlreadyExists 会换随机串重试，最多十六次；权限、损坏、锁失败等其他错误直接返回。显式 -n/--name 已存在时拒绝，不静默追加。
 
-cert.toml 保存稳定的域名集合、账户名称/ID、CA directory、验证实现和 in_use。每个 operation 是一次签发版本，拥有自己的订单观察、固定密钥/CSR 与产物。IssueStore::create 原子声明新身份；IssueStore::renew 只为已有定义准备新版本，不接收新的域名/账户配置，也不会发起 CA 请求。调用方再使用 IssueService 推进该版本。cert renew 已提供；后台调度器仍未实现。
+cert.toml 保存稳定的域名集合、账户名称/ID、CA directory、验证实现和 in_use。每个 operation 是一次签发版本，拥有自己的订单观察、固定密钥/CSR 与产物。IssueStore::create 原子声明新身份；IssueStore::renew 只为已有定义准备新版本，不接收新的域名/账户配置，也不会发起 CA 请求。调用方再使用 IssueService 推进该版本。cert renew 和由外部调度器触发的 `daemon run-once` 已提供。
 
 每份托管证书只有一个 in_use；成功提交新版本后才切换，失败保留旧 in_use。只有 in_use 的续期计划可作为活跃任务；历史日期只是过去的观察。is_in_use 从本地选择读取，不写入版本 journal。未发布格式直接更新，不读取旧 schema、不迁移或删除用户旧数据。
 
@@ -24,7 +24,7 @@ cert list 默认每份托管证书一行，优先当前版本；没有 in_use �
 
 `RenewalPlan` 保存在每个版本的 `operation.toml` 内，包含证书标识、notBefore/notAfter、renew_at、来源 ari/fallback、建议窗口、说明 URL、最近查询及下次查询时间、失败标记。它不包含私钥。`cert issue` 完成后在产物路径下显示 Next renewal 和来源；`cert list` 的 NEXT RENEWAL 列与 `cert show` 使用相同计划。吊销后显示 disabled，未确认时显示 suspended，不把旧计划当成下一次续期。`cert list/show` 默认离线；`cert show --verify` 成功查询订单后刷新到期的 ARI 观察，未到期不额外查询。
 
-`RenewalService::refresh` 接受 `dyn IssueSession` 和调用方的 `ExecutionContext`。这提供嵌入式调度入口，不启动全局任务。CLI 退出后不会自行唤醒；`maintenance::run_once` 按持久化 `next_check_at` 重新查询。自动续期复用现有 `cert renew` 事务；真正的签发与部署仍由既有 workflow 和 deployment hook 执行。cert renew 按发现的 renewalInfo 支持情况选择是否提交 newOrder.replaces。
+`RenewalService::refresh` 接受 `dyn IssueSession` 和调用方的 `ExecutionContext`。这提供嵌入式调度入口，不启动全局任务。CLI退出后不会自行唤醒；`maintenance::run_cycle`按持久化`next_check_at`刷新ARI，并统一查询到期续期和已配置部署重试候选。宿主注入续期事务和部署执行器，库控制阶段顺序、候选查询及取消边界；cert renew按发现的renewalInfo支持情况选择是否提交newOrder.replaces。
 
 ## 单次维护周期
 
@@ -34,9 +34,9 @@ aster-acme daemon run-once --data-dir /srv/aster-acme --json
 aster-acme daemon run-once --request-timeout 30 --operation-timeout 600 --poll-interval 5 --max-polls 30
 ```
 
-ARI刷新只扫描当前 in_use、已完成、未吊销、未过期且有ARI标识且`next_check_at`已到期的证书；这一阶段不需要账户密钥。随后自动续期独立筛选当前 in_use、已完成、未吊销且`renew_at`已到期的证书，不要求该轮先完成ARI刷新。两个阶段分别调用各自期限，不注册账户、不创建订单直到续期事务通过准入检查。续期成功后复用已有自动部署/reload hook。
+ARI刷新只扫描当前 in_use、已完成、未吊销、未过期且有ARI标识且`next_check_at`已到期的证书；这一阶段不需要账户密钥。随后自动续期独立筛选当前 in_use、已完成、未吊销且`renew_at`已到期的证书，不要求该轮先完成ARI刷新。两个阶段分别调用各自期限，不注册账户、不创建订单直到续期事务通过准入检查。最后重新查询当前证书及部署绑定，对到期的已知部署失败执行重试；续期成功仍通过既有自动部署/reload hook立即部署。
 
-可嵌入入口 `aster_acme::maintenance::run_once(store, pool, options, cancellation, observer)` 只负责批次、租约与结果；ARI资格判断、目录缓存与发现、延期重查和更新归`renewal::refresh::RefreshCycle`，实际GET及持久化复用`RenewalService`的同一实现。未来常驻循环可复用同一个维护函数。类型化 `IssueQuery::ari_due_at` 在存储侧筛选；每项调用 `IssueStore::open_observation` 获取与前台执行共用的证书锁，锁内重验选用世代、到期与吊销状态。正常元数据会话不加载固定key/CSR，执行会话 `open` 仍做原有材料验证；Windows视图恢复仍遵循存储契约。查询快照过期则跳过，重叠进程不会基于旧快照重复更新。锁失败记录为该项失败，不跳过为成功。
+可嵌入入口`aster_acme::maintenance::run_cycle`协调ARI、续期与部署重试阶段；ARI资格判断、目录缓存与发现、延期重查和更新归`renewal::refresh::RefreshCycle`，实际GET及持久化复用`RenewalService`的同一实现。续期退避与部署重试准入属于库策略；租约及持锁快照重验由`IssueStore`实现，文件适配器用跨进程锁执行。ARI使用类型化`IssueQuery::ari_due_at`筛选，每项调用`IssueStore::open_observation`获取与前台执行共用的证书锁，锁内重验选用世代、到期与吊销状态。正常元数据会话不加载固定key/CSR，执行会话`open`仍做原有材料验证；Windows视图恢复仍遵循存储契约。查询快照过期则跳过，重叠进程不会基于旧快照重复更新。锁失败记录为该项失败，不跳过为成功。
 
 同一轮共用HTTP池，每个CA成功发现的directory复用一次。发现失败或无 `renewalInfo` 时保留原续期计划，将下一次发现延后六小时，避免频繁cron请求；这不冒充一次成功ARI GET，`last_checked_at`保持不变。实际ARI查询复用 `RenewalService` 的持久化意图、窗口、Retry-After和重试策略。缺少/非法Retry-After仍可应用有效窗口，结果为 `retry scheduled`。全部时间写回对应版本的现有计划，不增加独立任务状态文件。查询前保存一次重试意图；失败或响应没有新信息时不重复写journal，只有计划变化才保存响应结果。成功路径直接返回已保存记录，失败路径仍在锁内重读以报告真实持久化状态。
 
@@ -163,3 +163,11 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 daemon 只对当前 `in_use`、已完成、未过期、续期时间已到且吊销状态为 `NotRequested` 的证书执行自动续期。验证实现白名单是 `webroot`、`standalone` 和 `tls_alpn`；`manual_dns`、`manual_http` 以及未知实现返回 `manual validation` 跳过，不创建续期世代。未来接入自动 DNS 时，只需在验证实现准入处增加实现，不复制续期事务。
 
 续期调用已有 `cert renew` 事务和签发后自动部署流程。账户锁、证书租约、`expected_in_use` 重验、固定 key/CSR、旧世代保护和部署 generation 检查全部复用；两个 daemon 或 daemon 与前台 renew 同时运行时，只有持锁成功的一方创建续期世代，另一方复用或报告锁竞争。
+
+### 失败重试
+
+续期失败状态保存在仍处于 `in_use` 的前任 operation 中，独立于 ARI `next_check_at` 与证书 `renew_at`。每次失败后的本地等待依次为 1 分钟、10 分钟、100 分钟，然后每天一次。若 CA 给出有效 `Retry-After`，实际等待取本地退避与 CA 时间的较晚者。确认的终态失败在期限到达后保留为历史，并创建新的续期世代；未终态、可恢复操作继续使用原 operation、key 和 CSR。newOrder 结果不确定且没有可用 Location 时，自动与 `--now` 重试都被阻止，直到操作员检查并处理该状态。即使进程在前任退避状态落盘前退出，准备新世代时仍核验历史子 operation 的提交证据和 CA Retry-After，不能因缺少重试状态而另下订单。
+
+`cert renew NAME --now` 与 `cert renew --all --now` 可越过本地退避，供管理员提前重试；它们不能绕过 CA `Retry-After`、证书租约、`expected_in_use` 或不确定结果屏障。失败次数在证书租约内持久化，因此后续 cron 不会把同一失败重新当作首次尝试。账户或密钥不可用等签发 session 建立前的失败，通过元数据会话比较原 `in_use` 与重试快照后写入；若已有进程成功换代或记录了新失败，旧结果不再覆盖或重复计数。操作 deadline 耗尽计入失败退避，用户取消与租约竞争不增加失败次数。重试计算保留时间的小数精度，并保留此前更晚的 CA deadline 与不确定屏障。新证书成功提升为 `in_use` 后，旧世代的重试状态不再参与调度。
+
+部署失败按 binding 与 generation 独立退避，使用相同的 1 分钟、10 分钟、100 分钟和每日上限。`daemon run-once` 在续期后扫描到期的 `PublishFailed`、`ReloadFailed` 和已发布但尚未 reload 的状态，只重试部署，不重新签发证书。新 generation 自动部署成功会清除该 binding 的失败计数。`Reloading`/`ReloadUncertain` 表示 reload 可能已影响服务，不进入自动重试；必须先检查服务，再由操作员显式执行 deploy retry。自动执行区分签发后部署与定时重试，两者均在持有证书租约后重新检查当前 generation、不确定状态与期限；定时重试还比较选中的完整 binding 快照，过时任务跳过且不发布文件、不执行 reload、不追加失败记录。只有人工显式执行可请求重试不确定 reload。单个续期或部署失败不阻断其他证书，最终退出状态报告周期内的失败。

@@ -3,6 +3,33 @@ use crate::issuance::*;
 fn record() -> IssueRecord {
     serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"test","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":"a".repeat(43),"directory":"https://ca.example/directory","account_url":"https://ca.example/account/1","account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","creation_submitted":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap()
 }
+
+#[test]
+fn retry_preserves_precision_ca_deadline_and_uncertainty_at_extremes() {
+    let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::nanoseconds(123_456_789);
+    let mut state =
+        RenewalRetryState::after_failure(None, now, Some(now + time::Duration::hours(1)), None);
+    assert_eq!(state.retry_at, Some(now + time::Duration::minutes(1)));
+    for (failures, seconds) in [(2, 600), (3, 6000), (4, 86400), (5, 86400)] {
+        state = RenewalRetryState::after_failure(Some(&state), now, None, None);
+        assert_eq!(state.failures, failures);
+        assert_eq!(state.retry_at, Some(now + time::Duration::seconds(seconds)));
+        assert_eq!(state.ca_retry_at, Some(now + time::Duration::hours(1)));
+    }
+    state.failures = u32::MAX;
+    state.blocked_reason = Some("uncertain mutation".into());
+    let blocked = RenewalRetryState::after_failure(Some(&state), now, Some(now), None);
+    assert_eq!(blocked.failures, u32::MAX);
+    assert_eq!(
+        blocked.blocked_reason.as_deref(),
+        Some("uncertain mutation")
+    );
+    assert!(blocked.retry_at.is_none());
+    let max = time::PrimitiveDateTime::MAX.assume_utc();
+    let overflow = RenewalRetryState::after_failure(None, max, None, None);
+    assert!(overflow.retry_at.is_none());
+    assert!(overflow.blocked_reason.is_some());
+}
 fn order(status: &str) -> OrderObject {
     serde_json::from_value(serde_json::json!({"status":status,"expires":"2026-11-12T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"})).unwrap()
 }

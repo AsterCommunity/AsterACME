@@ -94,7 +94,7 @@ async fn issue(
         &store,
         Start::Issue(input),
         &run,
-        RunMode::Single,
+        RunMode::Single(CancellationToken::new()),
         cli,
     )
     .await?;
@@ -206,10 +206,9 @@ pub(super) async fn transact(
     let context = settings.account(&options).await?;
     let (operation_timeout, _, _) = run.limits(&context.config);
     let cancellation = match &mode {
-        RunMode::Single => CancellationToken::new(),
-        RunMode::Batch(token) => token.clone(),
+        RunMode::Single(token) | RunMode::Batch(token) => token.clone(),
     };
-    let _signal = matches!(mode, RunMode::Single)
+    let _signal = matches!(mode, RunMode::Single(_))
         .then(|| crate::common::signal::InterruptGuard::new(cancellation.clone()));
     let execution = ExecutionContext {
         cancellation,
@@ -229,7 +228,13 @@ pub(super) async fn transact(
     let _account_lease = context
         .store
         .lock_account(&context.directory, &thumbprint)
-        .await?;
+        .await
+        .map_err(|error| match error.kind {
+            aster_acme::storage::account::AccountStoreErrorKind::LockUnavailable => {
+                IssueError::LeaseUnavailable("account", error.to_string())
+            }
+            aster_acme::storage::account::AccountStoreErrorKind::Other => IssueError::Store(error),
+        })?;
     let account = context
         .store
         .load(&context.directory, &thumbprint)
@@ -271,31 +276,109 @@ pub(super) async fn transact(
     {
         Ok(outcome) => outcome,
         Err(error) => {
-            if matches!(
-                error.downcast_ref::<IssueError>(),
-                Some(IssueError::InvalidOrder { .. })
-            ) {
-                progress.output.progress(MessageKind::Warning, "Invalid order retained for inspection. Correct validation and start a new cert issue; this order cannot be resumed.");
-                return Err(error);
-            }
-            if matches!(
-                error.downcast_ref::<IssueError>(),
-                Some(IssueError::CreationUncertain)
-            ) {
-                progress.output.progress(MessageKind::Warning, "Order creation was interrupted before its URL was saved. Inspect the retained request before explicitly starting an independent one; repeating resume cannot recover a missing URL.");
-                return Err(error);
-            }
-            match session.record().await {
-                Ok(saved) if saved.creation_failure.is_some() => progress.output.progress(MessageKind::Warning, "newOrder error response retained for inspection; no order status was observed. Inspect cert show and the CA problem before explicitly starting a new request; this response cannot be resumed as an order."),
-                Ok(saved) if saved.authorization_failure().is_some() => progress.output.progress(MessageKind::Warning, "Failed authorization retained for inspection. Correct validation and start a new cert issue; this authorization cannot be resumed."),
-                Ok(saved) if saved.finalize_rejection.is_some() => progress.output.progress(MessageKind::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection."),
-                _ => progress.output.progress(MessageKind::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id)),
-            }
-            return Err(error);
+            return report_issue_failure(session.as_mut(), &record, &progress, &execution, error)
+                .await;
         }
     };
     drop(session);
     Ok(attach_deployment_results(outcome, store, &execution).await)
+}
+
+async fn report_issue_failure(
+    session: &mut dyn IssueSession,
+    record: &IssueRecord,
+    progress: &Progress,
+    execution: &ExecutionContext,
+    error: Box<dyn std::error::Error>,
+) -> CliResult<super::report::CertificateResult> {
+    let saved = session.record().await?;
+    if saved.renewal_of.is_some() && saved.unfinished() && !execution.cancellation.is_cancelled() {
+        let blocked_reason = if saved.creation_submitted
+            && saved.order_url.is_none()
+            && saved.creation_failure.is_none()
+        {
+            Some("newOrder may have been accepted but no Location was saved".into())
+        } else if saved
+            .creation_failure
+            .as_ref()
+            .is_some_and(|failure| failure.status == 408 || failure.status >= 500)
+        {
+            Some("newOrder response does not establish whether the CA accepted the order".into())
+        } else {
+            None
+        };
+        let ca_retry_at = saved
+            .creation_failure
+            .as_ref()
+            .and_then(|failure| failure.retry_at)
+            .or_else(|| {
+                (saved.poll_wait_source == Some(aster_acme::issuance::PollWaitSource::RetryAfter))
+                    .then_some(saved.next_poll_at)
+                    .flatten()
+            });
+        let retry = session
+            .record_renewal_failure(time::OffsetDateTime::now_utc(), ca_retry_at, blocked_reason)
+            .await?;
+        report_renewal_retry(progress, &saved, &retry);
+    }
+    if matches!(
+        error.downcast_ref::<IssueError>(),
+        Some(IssueError::InvalidOrder { .. })
+    ) {
+        progress.output.progress(MessageKind::Warning, "Invalid order retained for inspection. Correct validation and start a new cert issue; this order cannot be resumed.");
+    } else if matches!(
+        error.downcast_ref::<IssueError>(),
+        Some(IssueError::CreationUncertain)
+    ) {
+        progress.output.progress(MessageKind::Warning, "Order creation was interrupted before its URL was saved. Inspect the retained request before explicitly starting an independent one; repeating resume cannot recover a missing URL.");
+    } else if saved.creation_failure.is_some() {
+        progress.output.progress(MessageKind::Warning, "newOrder error response retained for inspection; no order status was observed. Inspect cert show and the CA problem before explicitly starting a new request; this response cannot be resumed as an order.");
+    } else if saved.authorization_failure().is_some() {
+        progress.output.progress(MessageKind::Warning, "Failed authorization retained for inspection. Correct validation and start a new cert issue; this authorization cannot be resumed.");
+    } else if saved.finalize_rejection.is_some() {
+        progress.output.progress(MessageKind::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection.");
+    } else {
+        progress.output.progress(
+            MessageKind::Info,
+            &format!(
+                "Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",
+                record.name.as_str(),
+                record.operation_id
+            ),
+        );
+    }
+    Err(error)
+}
+
+pub(super) fn report_renewal_retry(
+    progress: &Progress,
+    record: &IssueRecord,
+    retry: &aster_acme::issuance::RenewalRetryState,
+) {
+    match (&retry.blocked_reason, retry.retry_at) {
+        (Some(reason), _) => progress.output.progress(
+            MessageKind::Warning,
+            &format!("Automatic renewal blocked for {}: {reason}", record.name),
+        ),
+        (None, Some(at)) => progress.output.progress(
+            MessageKind::Info,
+            &format!(
+                "Automatic renewal retry after failure {} for {} scheduled at {}",
+                retry.failures,
+                record.name,
+                crate::common::time::timestamp(Some(
+                    retry.ca_retry_at.map_or(at, |ca_at| at.max(ca_at))
+                ))
+            ),
+        ),
+        (None, None) => progress.output.progress(
+            MessageKind::Warning,
+            &format!(
+                "Automatic renewal for {} has no safe retry deadline",
+                record.name
+            ),
+        ),
+    }
 }
 
 async fn attach_deployment_results(
@@ -366,7 +449,7 @@ fn report_material(
 
 /// Batch cancellation and prompt policy are explicit, never inferred from JSON styling.
 pub(super) enum RunMode {
-    Single,
+    Single(CancellationToken),
     Batch(CancellationToken),
 }
 
@@ -389,7 +472,7 @@ impl Foreground<'_> {
         let saved = session.record().await?;
         let solver = super::validation::adapter(
             &saved,
-            matches!(self.mode, RunMode::Single) && terminal::interactive(self.options.json),
+            matches!(self.mode, RunMode::Single(_)) && terminal::interactive(self.options.json),
             self.args.yes,
             self.progress.clone(),
         )?;
@@ -858,6 +941,81 @@ async fn allocate_certificate(
 mod tests {
     use crate::commands::cert::execute::*;
 
+    #[tokio::test]
+    async fn renewal_deadline_enters_backoff_but_user_cancellation_does_not() {
+        use rcgen::{CertificateParams, Issuer, KeyPair};
+        for cancelled in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
+            let account = allocation_account();
+            let request = IssueRequest {
+                name: CertificateName::new("deadline").unwrap(),
+                identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+                account_name: "default".into(),
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                challenge: aster_acme::challenge::ChallengeKind::Dns01,
+                solver_id: "manual_dns".into(),
+                solver_config: serde_json::json!({}),
+            };
+            let session = store.create(&request, &account).await.unwrap();
+            let mut current = session.record().await.unwrap();
+            let key = zeroize::Zeroizing::new(
+                std::fs::read(
+                    temp.path()
+                        .join("certs/deadline")
+                        .join(current.generation_name())
+                        .join("private-key.pk8"),
+                )
+                .unwrap(),
+            );
+            let key = KeyPair::try_from(key.as_slice()).unwrap();
+            let issuer = Issuer::new(
+                CertificateParams::new(Vec::<String>::new()).unwrap(),
+                KeyPair::generate().unwrap(),
+            );
+            let chain = CertificateParams::new(vec!["example.com".to_owned()])
+                .unwrap()
+                .signed_by(&key, &issuer)
+                .unwrap()
+                .pem();
+            current.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+            let current = session.complete(&current, chain.as_bytes()).await.unwrap();
+            drop(session);
+            let mut attempt = store.renew(&current.name, &account).await.unwrap();
+            let record = attempt.record().await.unwrap();
+            let execution = ExecutionContext {
+                cancellation: CancellationToken::new(),
+                deadline: Instant::now(),
+            };
+            if cancelled {
+                execution.cancellation.cancel();
+            }
+            let progress = Progress::new(crate::common::session::OutputSession::new(true));
+            let error = report_issue_failure(
+                attempt.as_mut(),
+                &record,
+                &progress,
+                &execution,
+                Box::new(IssueError::Interrupted),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(error.is::<IssueError>());
+            drop(attempt);
+            let saved = store
+                .open_observation(&current.name, &current.operation_id)
+                .await
+                .unwrap()
+                .record()
+                .await
+                .unwrap();
+            assert_eq!(saved.renewal_retry.is_some(), !cancelled);
+            if let Some(retry) = saved.renewal_retry {
+                assert_eq!(retry.failures, 1);
+            }
+        }
+    }
     fn allocation_account() -> aster_acme::account::AccountRecord {
         serde_json::from_value(serde_json::json!({
             "key_algorithm":"ecdsa-p256","account_id":"test-account","directory_url":"https://ca.example/directory","account_url":"https://ca.example/account",

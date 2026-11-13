@@ -2,7 +2,7 @@
 use crate::storage::query::IssueQuery;
 use crate::{
     account::AccountRecord,
-    issuance::{CertificateName, IssueError, IssueRecord, IssueRequest},
+    issuance::{CertificateName, IssueError, IssueRecord, IssueRequest, RenewalRetryState},
 };
 use async_trait::async_trait;
 
@@ -37,6 +37,19 @@ pub trait IssueSession: Send + Sync {
     /// Failure must retain the previous `in_use` generation and recoverable checkpoint.
     async fn complete(&self, record: &IssueRecord, chain: &[u8])
     -> Result<IssueRecord, IssueError>;
+    /// Persist a failed renewal's retry deadline on its still-selected predecessor.
+    /// The generation lease must remain held while this operation updates the predecessor.
+    /// `ca_retry_at` is an absolute lower bound supplied by an explicit CA response.
+    /// A `blocked_reason` records an outcome that must not start a new order automatically.
+    ///
+    /// # Errors
+    /// Rejects non-renewal sessions, stale predecessors and journal write failures.
+    async fn record_renewal_failure(
+        &self,
+        now: time::OffsetDateTime,
+        ca_retry_at: Option<time::OffsetDateTime>,
+        blocked_reason: Option<String>,
+    ) -> Result<RenewalRetryState, IssueError>;
 }
 
 /// Object-safe generation storage contract for files, databases and embedded services.

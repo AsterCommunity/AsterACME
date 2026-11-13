@@ -1,10 +1,11 @@
 //! Atomic patch of binding configuration; updates never publish files or execute reload.
 use crate::issuance::deployment::{
-    DeploymentBinding, DeploymentPatch, DeploymentPhase, targets, validate_binding, validate_id,
+    DeploymentBinding, DeploymentPatch, targets, validate_binding, validate_id,
 };
 use crate::issuance::{
     CertificateName, CliIssueStore, IssueError, failure, selection, write_selection,
 };
+use aster_acme::deployment::DeploymentPhase;
 
 impl CliIssueStore {
     /// Update selected configuration fields under certificate and destination ownership leases.

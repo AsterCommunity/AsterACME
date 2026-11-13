@@ -1,5 +1,8 @@
 //! Certificate command outcomes, independent of terminal rendering and batch traversal.
-use aster_acme::issuance::{IssueOutcome, IssueRecord};
+use aster_acme::{
+    deployment::DeploymentPhase,
+    issuance::{IssueOutcome, IssueRecord},
+};
 use serde::Serialize;
 
 pub(crate) enum CertificateReport {
@@ -46,6 +49,18 @@ pub(crate) struct DeploymentReport {
     pub(crate) attempted: bool,
 }
 
+impl DeploymentReport {
+    pub(crate) fn has_failures(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.phase != DeploymentPhase::Deployed)
+            || self
+                .events
+                .iter()
+                .any(|event| event.kind == crate::common::output::MessageKind::Error)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct DeploymentEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,6 +74,8 @@ pub(crate) struct DeploymentEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DeploymentExecution {
+    /// False when live state changed and automatic admission skipped execution.
+    pub(super) attempted: bool,
     pub(super) binding: aster_acme_cli_storage::issuance::DeploymentBinding,
     pub(super) events: Vec<DeploymentEvent>,
 }
@@ -80,10 +97,10 @@ impl CertificateReport {
                         .events
                         .iter()
                         .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                        || report.entries.iter().any(|entry| {
-                            entry.phase
-                                != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-                        })) =>
+                        || report
+                            .entries
+                            .iter()
+                            .any(|entry| entry.phase != DeploymentPhase::Deployed)) =>
             {
                 ExitStatus::Failed
             }
@@ -98,9 +115,9 @@ impl CertificateReport {
             } if deployment_events
                 .iter()
                 .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                || deployments.iter().any(|entry| {
-                    entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-                }) =>
+                || deployments
+                    .iter()
+                    .any(|entry| entry.phase != DeploymentPhase::Deployed) =>
             {
                 ExitStatus::Failed
             }
@@ -294,7 +311,7 @@ impl RenewalBatch {
                     .iter()
                     .any(|event| event.kind == crate::common::output::MessageKind::Error)
                     || deployments.iter().any(|entry| {
-                        entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                        entry.phase != aster_acme::deployment::DeploymentPhase::Deployed
                     }) =>
                 {
                     summary.failed += 1;

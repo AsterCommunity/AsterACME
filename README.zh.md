@@ -93,7 +93,7 @@ aster-acme cert deploy show example-cert nginx
 - [开发文档](docs/README.md)：项目契约、任务路由、架构、crate 归属与测试。
 - [RFC 参考](docs/rfc-reference.md)与[更新日志](CHANGELOG.zh.md)。
 
-状态默认保存在 `com.astercosm.acme` 的平台目录；需要自定义根目录时，每条命令传入 `--data-dir PATH`。`list/show` 默认离线；`--json` 禁止交互，只输出一份结构化结果。
+状态默认保存在 `com.astercosm.acme` 的平台目录；可通过 `--data-dir PATH` 或 `ASTER_ACME_DATA_DIR` 指定其他根目录（命令行参数优先）。`list/show` 默认离线；`--json` 禁止交互，只输出一份结构化结果。
 
 ## 许可
 

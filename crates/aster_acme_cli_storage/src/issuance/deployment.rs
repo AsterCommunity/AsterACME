@@ -3,8 +3,11 @@ use crate::issuance::{
     CertificateName, CliIssueStore, IssueError, IssueRecord, failure, selection, write_selection,
 };
 use crate::toml_file::{FileLease, read_private};
-use aster_acme::issuance::certificate;
 use aster_acme::storage::query::IssueQuery;
+use aster_acme::{
+    deployment::{DeploymentIntent, DeploymentPhase},
+    issuance::certificate,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -37,20 +40,6 @@ pub enum DeploymentTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_key: Option<PathBuf>,
     },
-}
-
-/// Durable deployment phase, independent from issuance and CA order state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeploymentPhase {
-    Configured,
-    Publishing,
-    PublishFailed,
-    PublicationComplete,
-    Reloading,
-    ReloadFailed,
-    ReloadUncertain,
-    Deployed,
 }
 
 /// Unix permission overrides; absent fields retain the private 0600 default.
@@ -95,14 +84,6 @@ pub struct DeploymentDefinition {
     pub max_retries: u8,
 }
 
-impl DeploymentPhase {
-    /// A previous reload may have affected a service and requires explicit reconciliation.
-    #[must_use]
-    pub const fn reload_uncertain(self) -> bool {
-        matches!(self, Self::Reloading | Self::ReloadUncertain)
-    }
-}
-
 /// Per-certificate target. Reload is an executable plus argv; no shell is invoked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,9 +110,28 @@ pub struct DeploymentBinding {
     /// Process invocations for the last operation generation.
     #[serde(default)]
     pub attempts: u8,
+    /// Consecutive failed deployment invocations for this generation.
+    #[serde(default)]
+    pub retry_failures: u32,
+    /// Earliest automatic retry for this binding and generation.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub retry_at: Option<time::OffsetDateTime>,
     /// Failure context (including paths/OS or exit status); never contains process output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+}
+
+impl DeploymentBinding {
+    /// Snapshot predicate only. Execution must repeat this check under its lease.
+    #[must_use]
+    pub fn retry_due(&self, generation: &str, now: time::OffsetDateTime) -> bool {
+        aster_acme::deployment::DeploymentRetryState {
+            generation: self.generation.as_deref(),
+            phase: self.phase,
+            retry_at: self.retry_at,
+        }
+        .due(generation, now)
+    }
 }
 
 fn configured() -> DeploymentPhase {
@@ -201,6 +201,8 @@ impl CliIssueStore {
                 generation: None,
                 phase: DeploymentPhase::Configured,
                 attempts: 0,
+                retry_failures: 0,
+                retry_at: None,
                 last_error: None,
             };
             validate_binding(&binding)?;
@@ -348,6 +350,37 @@ impl CliIssueStore {
 }
 
 impl DeploymentSession {
+    /// Revalidate automatic execution against the live binding and generation
+    /// while this session owns the same lease used by renew/update/remove.
+    #[must_use]
+    pub fn admits(
+        &self,
+        intent: DeploymentIntent<'_, DeploymentBinding>,
+        now: time::OffsetDateTime,
+    ) -> bool {
+        let binding = &self.definition;
+        let current = self.artifacts.generation.as_str();
+        match intent {
+            DeploymentIntent::Explicit => true,
+            DeploymentIntent::AfterIssuance { generation } => {
+                generation == current
+                    && aster_acme::deployment::admits_after_issuance(
+                        aster_acme::deployment::DeploymentRetryState {
+                            generation: binding.generation.as_deref(),
+                            phase: binding.phase,
+                            retry_at: binding.retry_at,
+                        },
+                        current,
+                        now,
+                    )
+            }
+            DeploymentIntent::Retry {
+                generation,
+                snapshot,
+            } => generation == current && binding == snapshot && binding.retry_due(current, now),
+        }
+    }
+
     #[must_use]
     pub fn definition(&self) -> &DeploymentBinding {
         &self.definition
@@ -398,6 +431,14 @@ impl DeploymentSession {
         updated.phase = phase;
         updated.attempts = attempts;
         updated.last_error = error;
+        if self.definition.generation.as_deref() != updated.generation.as_deref() {
+            updated.retry_failures = 0;
+            updated.retry_at = None;
+        }
+        if phase == DeploymentPhase::Deployed {
+            updated.retry_failures = 0;
+            updated.retry_at = None;
+        }
         let stored = updated.clone();
         let lease = self.lease.clone();
         tokio::task::spawn_blocking(move || {
@@ -420,6 +461,128 @@ impl DeploymentSession {
         .map_err(|_| failure("deployment state worker failed"))??;
         self.definition = updated;
         Ok(())
+    }
+
+    /// Make a published generation eligible when reload was never started.
+    /// This is not a failure and does not increase the retry count.
+    ///
+    /// # Errors
+    /// Returns an error if the selected generation or binding changed, or state cannot persist.
+    pub async fn schedule_retry(
+        &mut self,
+        now: time::OffsetDateTime,
+    ) -> Result<DeploymentBinding, IssueError> {
+        if self.definition.phase.reload_uncertain()
+            || self.definition.phase != DeploymentPhase::PublicationComplete
+        {
+            return Err(failure(
+                "deployment phase is not eligible for retry scheduling",
+            ));
+        }
+        let slot = self.slot.clone();
+        let name = self.name.clone();
+        let id = self.definition.id.clone();
+        let operation = self.record.operation_id.clone();
+        let generation = self.artifacts.generation.clone();
+        let lease = self.lease.clone();
+        let updated = tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            let mut config = selection(&slot)?;
+            if config.cert.name != name || config.cert.in_use.as_deref() != Some(operation.as_str())
+            {
+                return Err(failure("in_use changed before deployment retry scheduling"));
+            }
+            let binding = config
+                .cert
+                .deployments
+                .iter_mut()
+                .find(|binding| binding.id == id)
+                .ok_or_else(|| failure("deployment binding disappeared before retry scheduling"))?;
+            if binding.generation.as_deref() != Some(generation.as_str())
+                || binding.phase.reload_uncertain()
+            {
+                return Err(failure("deployment retry state changed before scheduling"));
+            }
+            binding.retry_at = Some(now);
+            let saved = binding.clone();
+            write_selection(&slot, &config)?;
+            Ok(saved)
+        })
+        .await
+        .map_err(|_| failure("deployment retry worker failed"))??;
+        self.definition = updated.clone();
+        Ok(updated)
+    }
+
+    /// Persist a known deployment failure and its next retry deadline atomically.
+    ///
+    /// # Errors
+    /// Rejects uncertain/nonfailure phases, stale selection and persistence failures.
+    pub async fn record_failure(
+        &mut self,
+        phase: DeploymentPhase,
+        attempts: u8,
+        error: String,
+        now: time::OffsetDateTime,
+    ) -> Result<DeploymentBinding, IssueError> {
+        if !matches!(
+            phase,
+            DeploymentPhase::PublishFailed | DeploymentPhase::ReloadFailed
+        ) {
+            return Err(failure("deployment failure phase is not retryable"));
+        }
+        if self.definition.phase.reload_uncertain() {
+            return Err(failure("uncertain reload outcomes cannot be auto-retried"));
+        }
+        let slot = self.slot.clone();
+        let name = self.name.clone();
+        let id = self.definition.id.clone();
+        let operation = self.record.operation_id.clone();
+        let generation = self.artifacts.generation.clone();
+        let lease = self.lease.clone();
+        let updated = tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            let mut config = selection(&slot)?;
+            if config.cert.name != name || config.cert.in_use.as_deref() != Some(operation.as_str())
+            {
+                return Err(failure(
+                    "in_use changed before deployment failure checkpoint",
+                ));
+            }
+            let binding = config
+                .cert
+                .deployments
+                .iter_mut()
+                .find(|binding| binding.id == id)
+                .ok_or_else(|| {
+                    failure("deployment binding disappeared before failure checkpoint")
+                })?;
+            if binding.generation.as_deref() != Some(generation.as_str())
+                || binding.phase.reload_uncertain()
+            {
+                return Err(failure(
+                    "deployment failure checkpoint is stale or uncertain",
+                ));
+            }
+            let mut next = binding.clone();
+            next.phase = phase;
+            next.attempts = attempts;
+            next.last_error = Some(error);
+            next.retry_failures = next.retry_failures.saturating_add(1);
+            next.retry_at = now.checked_add(time::Duration::seconds(
+                aster_acme_core::renewal::renewal_retry_delay_seconds(next.retry_failures),
+            ));
+            if next.retry_at.is_none() {
+                return Err(failure("deployment retry deadline overflow"));
+            }
+            *binding = next.clone();
+            write_selection(&slot, &config)?;
+            Ok(next)
+        })
+        .await
+        .map_err(|_| failure("deployment failure checkpoint worker failed"))??;
+        self.definition = updated.clone();
+        Ok(updated)
     }
 }
 

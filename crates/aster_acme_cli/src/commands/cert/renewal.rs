@@ -117,15 +117,8 @@ pub(crate) async fn execute_automatic(
     run: &RunArgs,
     cli: &crate::common::context::CommandContext,
     cancellation: &CancellationToken,
-) -> CliResult<RenewalBatch> {
-    let records = store
-        .query(IssueQuery {
-            in_use: Some(true),
-            renewal_due_at: Some(time::OffsetDateTime::now_utc()),
-            ..IssueQuery::default()
-        })
-        .await?;
-    let candidates = records;
+    candidates: Vec<IssueRecord>,
+) -> RenewalBatch {
     let executor = Transaction {
         settings: &settings,
         store,
@@ -135,7 +128,7 @@ pub(crate) async fn execute_automatic(
         cancellation: Some(cancellation),
         cli,
     };
-    Ok(run_batch(candidates, &executor, cancellation).await)
+    run_batch(candidates, &executor, cancellation).await
 }
 
 #[async_trait(?Send)]
@@ -164,11 +157,12 @@ impl RenewalExecutor for Transaction<'_> {
             &self.run.http,
             Some(record.account_name.clone()),
         );
+        let cancellation = self.cancellation.cloned().unwrap_or_default();
         let mode = match self.cancellation {
-            Some(cancellation) => RunMode::Batch(cancellation.clone()),
-            None => RunMode::Single,
+            Some(_) => RunMode::Batch(cancellation.clone()),
+            None => RunMode::Single(cancellation.clone()),
         };
-        transact(
+        let result = transact(
             self.settings.clone(),
             options,
             self.store,
@@ -181,7 +175,32 @@ impl RenewalExecutor for Transaction<'_> {
             mode,
             self.cli,
         )
-        .await
+        .await;
+        if let Err(error) = &result
+            && !cancellation.is_cancelled()
+            && !error.is::<crate::common::terminal::Canceled>()
+            && !matches!(
+                error.downcast_ref::<aster_acme::issuance::IssueError>(),
+                Some(aster_acme::issuance::IssueError::LeaseUnavailable(..))
+            )
+        {
+            // The generation path already checkpoints protocol failures while
+            // holding its lease. This compare-and-update covers preparation errors
+            // and becomes a no-op if another worker has since changed that state.
+            match self.store.record_renewal_preparation_failure(
+                record, self.immediate, time::OffsetDateTime::now_utc(),
+            ).await {
+                Ok(Some(retry)) => super::execute::report_renewal_retry(
+                    &super::progress::Progress::new(self.cli.output.clone()), record, &retry,
+                ),
+                Ok(None) => {},
+                Err(checkpoint_error) => self.cli.output.progress(
+                    crate::common::output::MessageKind::Warning,
+                    &format!("Renewal failure retained for {} but retry checkpoint could not be saved: {checkpoint_error}", record.name),
+                ),
+            }
+        }
+        result
     }
 
     fn skip_reason(&self, record: &IssueRecord) -> Option<SkipReason> {

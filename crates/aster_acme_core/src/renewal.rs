@@ -35,6 +35,18 @@ pub enum RenewalDecision {
     RevocationUncertain,
 }
 
+/// Delay after a failed issuance attempt, capped at one retry per day.
+/// `failure_count` is one-based: the first failure schedules the first retry.
+#[must_use]
+pub const fn renewal_retry_delay_seconds(failure_count: u32) -> i64 {
+    match failure_count {
+        0 | 1 => 60,
+        2 => 10 * 60,
+        3 => 100 * 60,
+        _ => 24 * 60 * 60,
+    }
+}
+
 /// Resume a durable renewal before considering a new one; --now never bypasses an
 /// uncertain revocation. Confirmed revoked certificates require an explicit early request.
 #[must_use]
@@ -112,5 +124,15 @@ mod tests {
             renewal_decision(false, RevocationState::Confirmed, 0, 100, true),
             RenewalDecision::Start
         );
+    }
+
+    #[test]
+    fn renewal_retry_schedule_grows_then_caps_at_one_day() {
+        assert_eq!(renewal_retry_delay_seconds(0), 60);
+        assert_eq!(renewal_retry_delay_seconds(1), 60);
+        assert_eq!(renewal_retry_delay_seconds(2), 600);
+        assert_eq!(renewal_retry_delay_seconds(3), 6000);
+        assert_eq!(renewal_retry_delay_seconds(4), 86400);
+        assert_eq!(renewal_retry_delay_seconds(u32::MAX), 86400);
     }
 }

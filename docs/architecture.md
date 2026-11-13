@@ -8,10 +8,10 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 | --- | --- | --- |
 | `aster_acme_core` | 账户、订单、授权、challenge、续期和吊销的纯状态决策 | HTTP、文件、运行时、交互 |
 | `aster_acme_protocol` | 具名wire模型、directory与Provider、精确URL、Problem、JWS结构 | HTTP执行、签名、CLI输出DTO |
-| `aster_acme` | ACME编排、JWS签名、transport、证书校验、材料推导、对象安全存储/solver契约 | 文件布局、终端、部署进程 |
+| `aster_acme` | ACME编排、JWS签名、transport、证书校验、材料推导、对象安全存储/solver契约、维护周期编排与重试准入策略 | 文件布局、终端、部署进程 |
 | `aster_acme_validation` | 验证方法实现，目前DNS可见性检查 | ACME协议推进、CLI选择 |
 | `aster_acme_cli_storage` | 账户/证书文件、查询、租约、恢复、部署文件发布 | CLI配置schema、CA请求、reload进程 |
-| `aster_acme_cli` | 参数/配置、交互、solver适配、批量调度、报告、reload | 重新实现协议状态机或查询规则 |
+| `aster_acme_cli` | 参数/配置、交互、solver适配、维护任务执行器、报告、reload | 重新实现协议状态机、维护候选筛选或重试准入 |
 
 依赖由外向内。Forge提供产品无关机制；不要因为潜在复用就迁移ACME领域语义。具体文件/锁留在CLI storage，嵌入者可替换为数据库或远程签名器。
 
@@ -32,7 +32,7 @@ CLI app / dispatch
 
 已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
 
-`daemon run-once`先调用库的`maintenance::run_once`刷新到期ARI建议，再由CLI renewal事务独立查询到期证书、执行验证方式准入并复用签发后的自动部署钩子。Storage负责到期查询与元数据租约；账户锁、证书租约和expected_in_use重验阻止并发重复世代。自动DNS provider与常驻调度尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
+`daemon run-once`调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。验证实现准入及进程执行属于宿主能力，续期退避和部署重试准入属于库策略。Storage负责文件布局、跨进程租约及持锁快照重验；账户锁、证书租约和expected_in_use重验阻止并发重复世代。自动DNS provider与常驻调度尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 
 ## 详细设计入口
 
