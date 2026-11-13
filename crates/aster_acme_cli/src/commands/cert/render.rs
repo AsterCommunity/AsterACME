@@ -328,7 +328,7 @@ pub(super) fn list(records: &[IssueRecord], format: Format) -> CliResult<String>
                 || "not observed".into(),
                 |order| String::from(order.status.clone()),
             ),
-            timestamp(record.certificate_not_after),
+            timestamp(record.certificate_not_after()),
             timestamp(
                 record
                     .renewal
@@ -510,7 +510,7 @@ fn show_text(
             color,
         ));
     }
-    if let Some(at) = record.certificate_not_after {
+    if let Some(at) = record.certificate_not_after() {
         let style = if at <= now { Style::Red } else { Style::Green };
         lines.push(field(
             "Certificate expires:",
@@ -790,7 +790,7 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
             ),
             color,
         ));
-        if let Some(requirement) = &authorization.validation {
+        if let Some(requirement) = &authorization.validation_requirement {
             lines.extend(
                 requirement_lines(std::slice::from_ref(requirement))
                     .into_iter()
@@ -1790,9 +1790,9 @@ mod tests {
             "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00.123456Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
-            "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
+            "phase":"completed","new_order_intent_saved":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
             "order":{"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"},
-            "authorizations":[],"certificate_not_after":"2099-01-01T00:00:00Z"
+            "authorizations":[]
         })).unwrap();
         let mut record = record;
         record.is_in_use = true;
@@ -1957,7 +1957,7 @@ mod tests {
             "key_algorithm":"ecdsa-p521","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
-            "phase":"finalizing","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
+            "phase":"finalizing","new_order_intent_saved":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
             "order":{"status":"ready","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"},"authorizations":[]
         })).unwrap();
         record.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
@@ -2005,7 +2005,7 @@ mod tests {
     #[test]
     fn final_output_variants_cannot_mix_manual_actions_artifacts_or_not_due_results() {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
-            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","creation_submitted":true,"authorizations":[],"finalize_submitted":"not_submitted"
+            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","new_order_intent_saved":true,"authorizations":[],"finalize_submitted":"not_submitted"
         })).unwrap();
         let pending = IssueOutcome::ActionRequired {
             record: Box::new(record.clone()),

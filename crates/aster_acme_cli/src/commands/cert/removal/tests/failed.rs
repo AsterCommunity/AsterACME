@@ -49,7 +49,7 @@ async fn failed_cli_requires_confirmation_then_deletes_only_evidenced_failure_of
         .await
         .unwrap();
     let mut saved = session.record().await.unwrap();
-    saved.creation_submitted = true;
+    saved.new_order_intent_saved = true;
     saved.creation_failure = Some(RequestFailure {
         status: 400,
         problem: None,

@@ -22,7 +22,7 @@ async fn failed_scope_selects_definitive_failures_but_preserves_unknown_outcomes
         let f = fixture().await;
         let session = f.store.create(&request(), &f.account).await.unwrap();
         let mut record = session.record().await.unwrap();
-        record.creation_submitted = true;
+        record.new_order_intent_saved = true;
         record.creation_failure = Some(rejection(status));
         session.save(&record).await.unwrap();
         drop(session);
@@ -61,7 +61,7 @@ async fn failed_renewal_cleanup_retains_current_history_user_files_and_lock_iden
     let session = f.store.renew(&current.name, &f.account).await.unwrap();
     let mut failed = session.record().await.unwrap();
     failed.creation_failure = Some(rejection(400));
-    failed.creation_submitted = true;
+    failed.new_order_intent_saved = true;
     session.save(&failed).await.unwrap();
     drop(session);
     let slot = f.store.slot(&current.name);

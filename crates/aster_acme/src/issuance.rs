@@ -219,6 +219,7 @@ impl ValidationRequirement {
 
 /// Saved authorization observation and local publication receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorizationRecord {
     /// Exact discovered authorization URL.
     pub url: AcmeUrl,
@@ -227,7 +228,7 @@ pub struct AuthorizationRecord {
     /// Chosen challenge, kept stable across resume.
     pub challenge_url: Option<AcmeUrl>,
     /// Persisted public material; publication must not change on recovery.
-    pub validation: Option<ValidationRequirement>,
+    pub validation_requirement: Option<ValidationRequirement>,
     /// Whether publication cleanup is still pending after CA validation ends.
     pub cleanup_pending: bool,
     /// Persisted before acknowledging the CA.
@@ -365,6 +366,7 @@ impl RenewalRetryState {
 
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueRecord {
     /// Immutable selected ACME verification method.
     pub challenge: crate::challenge::ChallengeKind,
@@ -405,8 +407,9 @@ pub struct IssueRecord {
     pub identifiers: Vec<DnsIdentifier>,
     /// Local execution stage, independent of order status.
     pub phase: IssuancePhase,
-    /// Saved before newOrder; missing URL afterwards is an uncertain creation.
-    pub creation_submitted: bool,
+    /// `NewOrder` intent was durably saved before sending; without a Location the
+    /// remote outcome is uncertain, even if the process stopped before the POST.
+    pub new_order_intent_saved: bool,
     /// A complete newOrder error response; no Order status is inferred from it.
     pub creation_failure: Option<RequestFailure>,
     /// Actual RFC 9773 replaces value selected before newOrder; a refreshed directory
@@ -439,12 +442,15 @@ pub struct IssueRecord {
     /// Backoff for renewal attempts against this generation while it remains in use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renewal_retry: Option<RenewalRetryState>,
-    /// Leaf certificate expiry, distinct from order and authorization expiry.
-    #[serde(default, with = "time::serde::rfc3339::option")]
-    pub certificate_not_after: Option<time::OffsetDateTime>,
 }
 
 impl IssueRecord {
+    /// Expiration of the verified leaf certificate, recorded by its renewal plan.
+    #[must_use]
+    pub fn certificate_not_after(&self) -> Option<time::OffsetDateTime> {
+        self.renewal.as_ref().map(|plan| plan.not_after)
+    }
+
     /// Whether this completed local generation can be offered for deployment.
     /// The storage adapter must additionally verify it is still the selected version.
     #[must_use]
@@ -542,7 +548,7 @@ impl IssueRecord {
                 problem: self.failure_problem().cloned().map(Box::new),
             });
         }
-        if self.creation_submitted && self.order_url.is_none() {
+        if self.new_order_intent_saved && self.order_url.is_none() {
             return Err(IssueError::CreationUncertain);
         }
         if let Some(error) = self.authorization_failure() {
@@ -561,7 +567,7 @@ impl IssueRecord {
     pub fn failed_unresumable(&self, now: time::OffsetDateTime) -> bool {
         use aster_acme_core::protocol::OrderStatus;
         self.unfinished()
-            && self.certificate_not_after.is_none()
+            && self.certificate_not_after().is_none()
             && !self
                 .order
                 .as_ref()

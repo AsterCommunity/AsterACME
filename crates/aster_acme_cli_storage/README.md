@@ -82,7 +82,7 @@ certs/<certificate-name>/
   cert.toml                         # version + [cert]，name/in_use
   in_use -> <UTC-time>-<random8>/
   <UTC-time>-<random8>/
-    operation.toml                  # version + [operation]，时间/账户/CA/状态/receipt
+    operation.toml                  # journal version=1 + [operation]，时间/账户/CA/状态/receipt
     private-key.pk8                 # 证书私钥，不是账户私钥
     request.der                     # 固定 PKCS#10 CSR
     material.sha256                 # 固定 key/CSR 的完整性绑定
@@ -94,7 +94,7 @@ certs/<certificate-name>/
 
 证书默认名是主域名加随机后缀，碰撞重试；显式已有名称拒绝；显式名称仍需满足单目录组件规则。每次申请有独立 ID 和 UTC created_at，同名可有多个未完成申请；in_use 只指向已经校验并落盘的版本，失败不覆盖旧版。operation 保存 CA expires、原始 Location、授权/通知阶段、全部手动 TXT 和待清理标记，不含凭据。
 
-锁顺序为账户→证书。后台阻塞写任务保留 Arc 租约，调用 future 取消也不会提前解锁。初始化先写可列举的 journal，再写私钥/CSR/哈希，缺失材料拒绝恢复、不静默生成新身份。落盘按 完整产物集合→Downloading journal→原子 in_use 链接→cert.toml 选择→Completed journal 完成；任一中间失败可重新下载同一订单证书，不重新签发。普通读取不加载私钥，执行恢复会验证材料/路径/权限/版本/数量上限；未知版本和损坏不迁移。保留旧世代，目前不自动清理历史证书。
+锁顺序为账户→证书。后台阻塞写任务保留 Arc 租约，调用 future 取消也不会提前解锁。初始化先写可列举的 journal，再写私钥/CSR/哈希，缺失材料拒绝恢复、不静默生成新身份。落盘按 完整产物集合→Downloading journal→原子 in_use 链接→cert.toml 选择→Completed journal 完成；任一中间失败可重新下载同一订单证书，不重新签发。普通读取不加载私钥，执行恢复会验证材料/路径/权限/版本/数量上限；未知版本和损坏不迁移。预发布字段布局不保留兼容读取；本地测试记录需手动按当前schema更新。保留旧世代，目前不自动清理历史证书。
 
 目录扫描仅以 cert.toml/operation.toml 识别托管对象，忽略 .DS_Store、笔记、额外目录和未识别链接；已识别托管文件仍严格检查类型、身份、schema、权限和尺寸。in_use 是唯一显式托管的相对 symlink，只可指向同级且身份匹配的世代；不覆盖用户同名普通文件或指向外部的链接。版本名为 UTC 秒级创建时间 + 8 位随机后缀，完整 operation ID 留在 journal，不保留旧目录布局读取。
 

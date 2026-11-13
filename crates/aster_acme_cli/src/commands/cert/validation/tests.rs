@@ -534,7 +534,7 @@ fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renew
     let mut record: aster_acme::issuance::IssueRecord = serde_json::from_value(serde_json::json!({
         "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
-        "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"completed","creation_submitted":true,"authorizations":[],"finalize_submitted":"submitted"
+        "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"completed","new_order_intent_saved":true,"authorizations":[],"finalize_submitted":"submitted"
     })).unwrap();
     for method in [
         ValidationMethod::Webroot,

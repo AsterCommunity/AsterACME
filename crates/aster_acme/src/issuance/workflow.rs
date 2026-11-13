@@ -112,7 +112,7 @@ impl Workflow {
         ) -> Result<(), IssueError>,
     ) -> Result<IssueOutcome, IssueError> {
         let saved = session.record().await?;
-        tracing::debug!(operation_id = %saved.operation_id, phase = ?saved.phase, creation_submitted = saved.creation_submitted, has_order_url = saved.order_url.is_some(), "Checking saved request before CA discovery");
+        tracing::debug!(operation_id = %saved.operation_id, phase = ?saved.phase, new_order_intent_saved = saved.new_order_intent_saved, has_order_url = saved.order_url.is_some(), "Checking saved request before CA discovery");
         saved.check_recovery(time::OffsetDateTime::now_utc())?;
         execution
             .context
@@ -139,7 +139,7 @@ impl Workflow {
         }
         // A previously submitted newOrder is not a new request. Do not add DNS
         // dependencies or rerun advice when reconciling its remote outcome.
-        if !saved.creation_submitted && saved.order_url.is_none() {
+        if !saved.new_order_intent_saved && saved.order_url.is_none() {
             before_order(client.directory(), &saved, &execution.context).await?;
         }
         execution

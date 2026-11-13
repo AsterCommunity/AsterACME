@@ -105,7 +105,7 @@ async fn cancellation_in_optional_check_stops_before_order_and_shutdown_is_await
         .await;
     assert!(matches!(result, Err(IssueError::Interrupted)));
     assert_eq!(f.count("/create").await, 0);
-    assert!(!f.session.record().await.unwrap().creation_submitted);
+    assert!(!f.session.record().await.unwrap().new_order_intent_saved);
     assert_eq!(solver.0.load(Ordering::SeqCst), 1);
 }
 

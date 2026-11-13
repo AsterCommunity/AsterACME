@@ -7,7 +7,7 @@ fn record() -> IssueRecord {
         "account_name":"default", "account_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "directory":"https://ca.example/directory",
         "account_url":"https://ca.example/account/1", "account_thumbprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "key_algorithm":"ecdsa-p256", "identifiers":["example.com", "*.example.com"], "solver_id":"manual_dns", "solver_config":{}, "challenge":"dns-01",
-        "phase":"creating_order", "creation_submitted":false, "authorizations":[], "finalize_submitted":"not_submitted"
+        "phase":"creating_order", "new_order_intent_saved":false, "authorizations":[], "finalize_submitted":"not_submitted"
     })).unwrap()
 }
 

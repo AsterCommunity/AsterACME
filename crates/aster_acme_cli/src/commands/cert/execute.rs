@@ -293,7 +293,7 @@ async fn report_issue_failure(
 ) -> CliResult<super::report::CertificateResult> {
     let saved = session.record().await?;
     if saved.renewal_of.is_some() && saved.unfinished() && !execution.cancellation.is_cancelled() {
-        let blocked_reason = if saved.creation_submitted
+        let blocked_reason = if saved.new_order_intent_saved
             && saved.order_url.is_none()
             && saved.creation_failure.is_none()
         {

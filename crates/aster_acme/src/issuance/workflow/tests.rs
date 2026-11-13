@@ -131,7 +131,7 @@ impl Fixture {
         let signer = Arc::new(AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
         let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
         let account: AccountRecord = serde_json::from_value(serde_json::json!({"key_algorithm":"ecdsa-p256","account_id":"a".repeat(43),"directory_url":url("/directory"),"key_thumbprint":thumbprint,"account_url":url("/account/1"),"contacts":[],"server_contacts":null,"last_status":"valid","deactivation":"not_requested","key_rotation":null,"accepted_terms_url":null,"state":"registered"})).unwrap();
-        let record: IssueRecord = serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":account.account_id,"directory":url("/directory"),"account_url":url("/account/1"),"account_thumbprint":thumbprint,"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","creation_submitted":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap();
+        let record: IssueRecord = serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":account.account_id,"directory":url("/directory"),"account_url":url("/account/1"),"account_thumbprint":thumbprint,"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap();
         Self {
             server,
             identity: IssueIdentity { account, signer },
@@ -212,7 +212,7 @@ async fn uncertain_creation_fails_offline_and_cancelled_expired_inputs_never_dis
         let solver = Solver::default();
         let mut limits = execution();
         if mode == "uncertain" {
-            f.session.0.lock().unwrap().creation_submitted = true;
+            f.session.0.lock().unwrap().new_order_intent_saved = true;
         }
         if mode == "cancelled" {
             limits.context.cancellation.cancel();

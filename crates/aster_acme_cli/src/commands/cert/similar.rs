@@ -42,11 +42,16 @@ pub(super) fn choose(
                         name: record.name.as_str(),
                         summary: None,
                         at: Some(record.created_at),
-                        status: Some(if record.creation_submitted && record.order_url.is_none() {
-                            "creating order (result unconfirmed)"
-                        } else {
-                            super::render::request_status(record, time::OffsetDateTime::now_utc())
-                        }),
+                        status: Some(
+                            if record.new_order_intent_saved && record.order_url.is_none() {
+                                "creating order (result unconfirmed)"
+                            } else {
+                                super::render::request_status(
+                                    record,
+                                    time::OffsetDateTime::now_utc(),
+                                )
+                            },
+                        ),
                         marker: None,
                     }
                     .to_string()
@@ -116,7 +121,7 @@ mod tests {
             "operation_id":letter.to_string().repeat(43),"name":format!("web-{letter}"),"created_at":"2026-01-01T00:00:00Z",
             "account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory",
             "account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing",
-            "creation_submitted":true,"order_url":"https://ca.example/order/1","order":null,"authorizations":[],"finalize_submitted":"not_submitted"
+            "new_order_intent_saved":true,"order_url":"https://ca.example/order/1","order":null,"authorizations":[],"finalize_submitted":"not_submitted"
         })).unwrap()
     }
 

@@ -173,7 +173,7 @@ Creating ACME order日志同时带实现ID和协议名；创建密钥/CSR日志�
 
 ## Debug诊断
 
---debug是跨命令诊断选项，可放根命令或具体子命令后。它只打开产品target的安全DEBUG事件，时间/配色/转义复用common/log和输出会话。显示检查点phase、creation_submitted、是否保存order URL、请求类别、HTTP状态/耗时及有限nonce重试序号；不记录私钥、CSR/JWS正文、响应正文、nonce值或带凭据的原始URL。JSON模式仍关闭人类诊断并只输出一份结果/错误；需要详细人类诊断时去掉--json。未传--debug时保留RUST_LOG环境过滤机制。
+--debug是跨命令诊断选项，可放根命令或具体子命令后。它只打开产品target的安全DEBUG事件，时间/配色/转义复用common/log和输出会话。显示检查点phase、new_order_intent_saved、是否保存order URL、请求类别、HTTP状态/耗时及有限nonce重试序号；不记录私钥、CSR/JWS正文、响应正文、nonce值或带凭据的原始URL。JSON模式仍关闭人类诊断并只输出一份结果/错误；需要详细人类诊断时去掉--json。未传--debug时保留RUST_LOG环境过滤机制。
 
 ```sh
 aster-acme cert issue --resume <NAME> --yes --debug

@@ -131,7 +131,7 @@ impl IssueService {
         execution: &IssueExecution,
     ) -> Result<IssueOutcome, IssueError> {
         let mut record = session.record().await?;
-        tracing::debug!(operation_id = %record.operation_id, phase = ?record.phase, creation_submitted = record.creation_submitted, has_order_url = record.order_url.is_some(), finalize = ?record.finalize_submitted, method = record.challenge.name(), "Loaded issuance checkpoint");
+        tracing::debug!(operation_id = %record.operation_id, phase = ?record.phase, new_order_intent_saved = record.new_order_intent_saved, has_order_url = record.order_url.is_some(), finalize = ?record.finalize_submitted, method = record.challenge.name(), "Loaded issuance checkpoint");
 
         self.check_execution(&record, solver, execution)?;
         self.restore_publication(&record, solver, execution).await?;
@@ -241,7 +241,7 @@ impl IssueService {
             .authorizations
             .iter()
             .filter(|auth| matches!(auth.resource.status, AuthorizationStatus::Pending))
-            .filter_map(|auth| auth.validation.clone())
+            .filter_map(|auth| auth.validation_requirement.clone())
             .collect::<Vec<_>>();
         if !pending.is_empty()
             && record
@@ -354,7 +354,7 @@ impl IssueService {
             .authorizations
             .iter()
             .filter(|auth| auth.cleanup_pending)
-            .filter_map(|auth| auth.validation.clone())
+            .filter_map(|auth| auth.validation_requirement.clone())
             .collect::<Vec<_>>();
         if !pending.is_empty() {
             match bounded(execution, solver.cleanup(&pending, &execution.context)).await {
@@ -467,7 +467,7 @@ impl IssueService {
         record: &mut IssueRecord,
         execution: &IssueExecution,
     ) -> Result<(), IssueError> {
-        if record.creation_submitted {
+        if record.new_order_intent_saved {
             return Err(IssueError::CreationUncertain);
         }
         let endpoint = self
@@ -495,7 +495,7 @@ impl IssueService {
             identifiers: &identifiers,
             replaces: record.submitted_replaces.as_deref(),
         })?;
-        record.creation_submitted = true;
+        record.new_order_intent_saved = true;
         record.phase = IssuancePhase::CreatingOrder;
         session.save(record).await?;
         tracing::debug!(operation_id = %record.operation_id, "newOrder intent persisted; about to send request");
@@ -582,7 +582,7 @@ impl IssueService {
                 url: url.clone(),
                 resource,
                 challenge_url: None,
-                validation: None,
+                validation_requirement: None,
                 cleanup_pending: false,
                 acknowledgement: SubmissionState::NotSubmitted,
             }),
@@ -985,7 +985,7 @@ fn completed(record: IssueRecord) -> IssueOutcome {
         .authorizations
         .iter()
         .filter(|auth| auth.cleanup_pending)
-        .filter_map(|auth| auth.validation.clone())
+        .filter_map(|auth| auth.validation_requirement.clone())
         .collect();
     IssueOutcome::Completed {
         record: Box::new(record),
@@ -1062,14 +1062,14 @@ fn prepare_authorizations(
                 )?;
                 let requirement = ValidationRequirement::from_material(material);
                 if auth
-                    .validation
+                    .validation_requirement
                     .as_ref()
                     .is_some_and(|previous| previous != &requirement)
                 {
                     return Err(IssueError::InvalidInput("saved challenge material changed"));
                 }
                 auth.challenge_url = Some(challenge.url.clone());
-                auth.validation = Some(requirement.clone());
+                auth.validation_requirement = Some(requirement.clone());
                 auth.cleanup_pending = true;
                 match &challenge.status {
                     ChallengeStatus::Pending => {

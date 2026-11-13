@@ -73,7 +73,7 @@ impl CliIssueStore {
                 key_algorithm: request.key_algorithm,
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
-                creation_submitted: false,
+                new_order_intent_saved: false,
                 creation_failure: None,
                 submitted_replaces: None,
                 order_url: None,
@@ -83,7 +83,6 @@ impl CliIssueStore {
                 finalize_rejection: None,
                 next_poll_at: None,
                 poll_wait_source: None,
-                certificate_not_after: None,
                 renewal: None,
                 renewal_retry: None,
                 revocation: aster_acme::revocation::RevocationRecord::default(),
@@ -264,7 +263,7 @@ fn existing_renewal(
             if response.retry_at.is_some_and(|at| at > now) {
                 return Err(response.error());
             }
-        } else if record.creation_submitted && record.order_url.is_none() {
+        } else if record.new_order_intent_saved && record.order_url.is_none() {
             return Err(IssueError::CreationUncertain);
         }
     }

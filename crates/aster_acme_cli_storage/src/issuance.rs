@@ -34,6 +34,7 @@ pub use deployment::{
 pub mod removal;
 
 const MAX_JOURNAL: u64 = 1024 * 1024;
+const JOURNAL_VERSION: u32 = 1;
 
 /// Local certificate catalog. Names and operation IDs are validated before joining paths.
 #[derive(Clone)]
@@ -190,7 +191,7 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
         std::str::from_utf8(&bytes).map_err(|_| failure("invalid journal encoding"))?,
     )
     .map_err(|_| failure("issuance journal is corrupt"))?;
-    if stored.version != 1
+    if stored.version != JOURNAL_VERSION
         || !valid_operation_id(&stored.operation.operation_id)
         || stored.operation.identifiers.is_empty()
         || stored.operation.identifiers.len() > 100
@@ -203,7 +204,7 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
 
 fn write_journal(path: &Path, record: &IssueRecord) -> Result<(), IssueError> {
     let text = toml::to_string_pretty(&Journal {
-        version: 1,
+        version: JOURNAL_VERSION,
         operation: record,
     })
     .map_err(|_| failure("cannot encode issuance journal"))?;

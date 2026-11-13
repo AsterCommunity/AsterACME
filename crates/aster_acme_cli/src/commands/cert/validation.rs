@@ -209,7 +209,7 @@ pub(super) fn adapter(
                 saved: record
                     .authorizations
                     .iter()
-                    .any(|auth| auth.validation.is_some()),
+                    .any(|auth| auth.validation_requirement.is_some()),
                 interactive,
                 yes,
                 progress,

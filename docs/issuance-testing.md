@@ -125,7 +125,7 @@ webroot文件边界检查既有同内容借用、不同内容不覆盖、独占�
 
 DNS建议性预检覆盖有/无TXT、系统解析器错误、独立短超时均可继续；取消和总deadline仍停止。删除skip/force参数并有解析拒绝测试，--yes不选择目标、不替代首次人工待办。日志测试覆盖托管名称、创建时验证实现/方法、STATUS与ORDER STATUS有色/无色独立对齐。
 
---debug实际二进制验证：已有unconfirmed创建在CA directory发现前失败，输出安全creation_submitted/has_order_url检查点；可恢复请求的传输失败输出请求类别、耗时和错误分类。RUST_LOG=trace加--json仍只有一个错误JSON，key/CSR/journal字节不变，无crash.log副作用。诊断日志不包含私钥、CSR/JWS正文、HTTP正文或nonce值，不能补回以前已丢失的Location。
+--debug实际二进制验证：已有unconfirmed创建在CA directory发现前失败，输出安全new_order_intent_saved/has_order_url检查点；可恢复请求的传输失败输出请求类别、耗时和错误分类。RUST_LOG=trace加--json仍只有一个错误JSON，key/CSR/journal字节不变，无crash.log副作用。诊断日志不包含私钥、CSR/JWS正文、HTTP正文或nonce值，不能补回以前已丢失的Location。
 
 本轮未对公网CA或真实用户DNS/账户执行修改；用户提供的staging终端结果与上述本地证据分开记录。未增加旧schema读取、参数别名或自动迁移。
 

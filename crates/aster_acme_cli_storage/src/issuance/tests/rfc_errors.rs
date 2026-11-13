@@ -462,7 +462,7 @@ async fn rejected_acknowledgement_is_retryable_but_server_errors_remain_submitte
                 SubmissionState::Submitted
             }
         );
-        let before = saved.authorizations[0].validation.clone();
+        let before = saved.authorizations[0].validation_requirement.clone();
         if status == 403 {
             // The next explicit invocation reaches acknowledgement again with unchanged material.
             assert!(
@@ -473,7 +473,7 @@ async fn rejected_acknowledgement_is_retryable_but_server_errors_remain_submitte
                     .is_err()
             );
             assert_eq!(
-                session.record().await.unwrap().authorizations[0].validation,
+                session.record().await.unwrap().authorizations[0].validation_requirement,
                 before
             );
             assert_eq!(

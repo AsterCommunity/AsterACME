@@ -25,7 +25,7 @@ impl Lookup for Fake {
     }
 }
 fn record() -> IssueRecord {
-    serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":"a".repeat(43),"directory":"https://ca.example/directory","account_url":"https://ca.example/account/1","account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","creation_submitted":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap()
+    serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":"a".repeat(43),"directory":"https://ca.example/directory","account_url":"https://ca.example/account/1","account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap()
 }
 #[tokio::test]
 async fn directory_identity_is_required_and_request_inputs_reach_the_evaluator() {

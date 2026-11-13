@@ -144,12 +144,20 @@ impl IssueSession for Session {
                 read_private(&generation.join("private-key.pk8"), 64 * 1024)
                     .map_err(|_| failure("missing certificate key"))?,
             );
-            record.certificate_not_after =
-                Some(certificate::validate(&chain, &key, &record.identifiers)?);
+            let leaf_not_after = certificate::validate(&chain, &key, &record.identifiers)?;
             // Establish a durable fallback before promotion; ARI network failures cannot
             // invalidate a successfully issued certificate or erase its renewal plan.
             if record.renewal.is_none() {
                 record.renewal = Some(aster_acme::renewal::RenewalPlan::from_certificate(&chain)?);
+            }
+            if record
+                .renewal
+                .as_ref()
+                .is_none_or(|plan| plan.not_after != leaf_not_after)
+            {
+                return Err(failure(
+                    "renewal plan expiry does not match the verified certificate",
+                ));
             }
             if !matches!(record.phase, IssuancePhase::Completed) {
                 return Err(failure("cannot promote incomplete issuance"));

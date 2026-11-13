@@ -8,7 +8,7 @@
 
 cert.toml 保存稳定的域名集合、账户名称/ID、CA directory、验证实现和 in_use。每个 operation 是一次签发版本，拥有自己的订单观察、固定密钥/CSR 与产物。IssueStore::create 原子声明新身份；IssueStore::renew 只为已有定义准备新版本，不接收新的域名/账户配置，也不会发起 CA 请求。调用方再使用 IssueService 推进该版本。cert renew 和由外部调度器触发的 `daemon run-once` 已提供。
 
-每份托管证书只有一个 in_use；成功提交新版本后才切换，失败保留旧 in_use。只有 in_use 的续期计划可作为活跃任务；历史日期只是过去的观察。is_in_use 从本地选择读取，不写入版本 journal。未发布格式直接更新，不读取旧 schema、不迁移或删除用户旧数据。
+每份托管证书只有一个 in_use；成功提交新版本后才切换，失败保留旧 in_use。只有 in_use 的续期计划可作为活跃任务；历史日期只是过去的观察。is_in_use 从本地选择读取，不写入版本 journal。预发布operation journal保持version=1，字段改为准确的新订单意图和授权发布要求，并从RenewalPlan获取证书到期时间；旧字段布局不提供兼容读取或自动迁移。
 
 cert list 默认每份托管证书一行，优先当前版本；没有 in_use 时仅显示未完成/历史库存摘要，不激活旧版本。cert list --history 展开全部版本。cert show NAME 默认当前版本，尚无 in_use 时允许查看唯一未完成申请；不会默认选择历史证书。cert show NAME --history 引导选择具体版本，脚本使用 --operation 精确定位。列表和选择器显示最多三个 SAN 域名，更多的用 +N 提示；详情/JSON 保留完整域名。列表区分 ORDER STATUS 和 CERT EXPIRES，避免将订单期限当作证书到期时间。
 
@@ -139,7 +139,7 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 
 普通证书名称选择器统一显示名称/SAN摘要/UTC申请时间/本地状态，不显示重复in_use标记；普通show也不重复Current字段。显式历史、删除或吊销的版本选择标记in use，历史/精确operation详情显示In use: yes/no，删除确认仍说明清空in_use的影响；JSON和存储继续保留current。账户及证书行展示由common/selection::ChoiceLabel统一，交互身份仍使用独立索引。
 
-人工发布继续资格来自已持久化的TXT要求，而非--resume或creation_submitted参数；早于TXT准备的中断即使带--yes恢复，也先返回新待办，不暗中通知CA。
+人工发布继续资格来自已持久化的TXT要求，而非--resume或new_order_intent_saved参数；早于TXT准备的中断即使带--yes恢复，也先返回新待办，不暗中通知CA。
 
 ## 批量续期
 

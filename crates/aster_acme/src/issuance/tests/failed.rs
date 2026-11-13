@@ -1,7 +1,7 @@
 //! Terminal evidence drives failed cleanup; resume exclusion alone is insufficient.
 use crate::issuance::*;
 fn record() -> IssueRecord {
-    serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"test","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":"a".repeat(43),"directory":"https://ca.example/directory","account_url":"https://ca.example/account/1","account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","creation_submitted":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap()
+    serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"test","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":"a".repeat(43),"directory":"https://ca.example/directory","account_url":"https://ca.example/account/1","account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap()
 }
 
 #[test]
@@ -42,9 +42,9 @@ fn terminal_order_expiry_authorization_and_csr_failures_are_distinct_from_uncert
     .unwrap();
     let mut base = record();
     assert!(!base.failed_unresumable(now));
-    base.creation_submitted = true;
+    base.new_order_intent_saved = true;
     assert!(!base.failed_unresumable(now)); // lost newOrder response
-    base.creation_submitted = false;
+    base.new_order_intent_saved = false;
     for status in ["invalid", "pending", "processing", "ready"] {
         let mut saved = base.clone();
         saved.order = Some(order(status));
@@ -75,11 +75,22 @@ fn terminal_order_expiry_authorization_and_csr_failures_are_distinct_from_uncert
         problem: None,
         retry_at: None,
     });
-    saved.certificate_not_after = Some(now);
+    saved.renewal = Some(crate::renewal::RenewalPlan {
+        certificate_id: None,
+        not_before: now - time::Duration::days(1),
+        not_after: now + time::Duration::days(30),
+        renew_at: now + time::Duration::days(20),
+        source: crate::renewal::RenewalSource::Fallback,
+        suggested_window: None,
+        explanation_url: None,
+        last_checked_at: None,
+        next_check_at: None,
+        last_query_failed: false,
+    });
     assert!(!saved.failed_unresumable(now)); // issued even if phase is damaged
     for status in ["invalid", "expired", "deactivated", "revoked"] {
         let mut saved = base.clone();
-        saved.authorizations = serde_json::from_value(serde_json::json!([{"url":"https://ca.example/auth","resource":{"identifier":{"type":"dns","value":"example.com"},"status":status,"challenges":[]},"challenge_url":null,"validation":null,"cleanup_pending":false,"acknowledgement":"not_submitted"}])).unwrap();
+        saved.authorizations = serde_json::from_value(serde_json::json!([{"url":"https://ca.example/auth","resource":{"identifier":{"type":"dns","value":"example.com"},"status":status,"challenges":[]},"challenge_url":null,"validation_requirement":null,"cleanup_pending":false,"acknowledgement":"not_submitted"}])).unwrap();
         assert!(saved.failed_unresumable(now), "{status}");
     }
 }

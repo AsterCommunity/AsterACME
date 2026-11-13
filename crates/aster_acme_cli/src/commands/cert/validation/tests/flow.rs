@@ -859,8 +859,8 @@ async fn saved_http_token_changes_are_rejected_before_publication_or_acknowledge
     );
     let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
     assert_eq!(
-        saved.authorizations[0].validation,
-        record.authorizations[0].validation
+        saved.authorizations[0].validation_requirement,
+        record.authorizations[0].validation_requirement
     );
 }
 
@@ -1049,7 +1049,7 @@ async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_
             8 => other.identifiers.pop().map(|_| ()).unwrap(),
             9 => other.phase = aster_acme_core::workflow::IssuancePhase::Completed,
             10 => {
-                other.creation_submitted = true;
+                other.new_order_intent_saved = true;
                 other.order_url = None;
             }
             11 => other.revocation.state = aster_acme_core::revocation::RevocationState::Pending,
@@ -1130,7 +1130,7 @@ async fn matching_includes_every_unfinished_phase_but_unconfirmed_creation_never
         );
     }
     record.phase = IssuancePhase::CreatingOrder;
-    record.creation_submitted = true;
+    record.new_order_intent_saved = true;
     record.order_url = None;
     fixture
         .session

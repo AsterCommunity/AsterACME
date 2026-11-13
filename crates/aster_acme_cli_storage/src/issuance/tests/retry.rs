@@ -11,7 +11,7 @@ async fn child_submission_evidence_blocks_new_orders_even_without_parent_retry_c
         let current = completed_generation(&f).await;
         let child = f.store.renew(&current.name, &f.account).await.unwrap();
         let mut pending = child.record().await.unwrap();
-        pending.creation_submitted = true;
+        pending.new_order_intent_saved = true;
         pending.creation_failure = status.map(|status| RequestFailure {
             status,
             problem: None,
@@ -47,7 +47,7 @@ async fn definitive_creation_rejection_keeps_history_and_allows_a_fresh_renewal(
     let current = completed_generation(&f).await;
     let child = f.store.renew(&current.name, &f.account).await.unwrap();
     let mut rejected = child.record().await.unwrap();
-    rejected.creation_submitted = true;
+    rejected.new_order_intent_saved = true;
     rejected.creation_failure = Some(aster_acme::issuance::RequestFailure {
         status: 400,
         problem: None,
