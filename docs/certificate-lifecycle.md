@@ -160,7 +160,7 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 
 ### 自动续期准入
 
-daemon 只对当前 `in_use`、已完成、未过期、续期时间已到且吊销状态为 `NotRequested` 的证书执行自动续期。验证实现白名单是 `webroot`、`standalone` 和 `tls_alpn`；`manual_dns`、`manual_http` 以及未知实现返回 `manual validation` 跳过，不创建续期世代。未来接入自动 DNS 时，只需在验证实现准入处增加实现，不复制续期事务。
+daemon 只对当前 `in_use`、已完成、未过期、续期时间已到且吊销状态为 `NotRequested` 的证书执行自动续期。验证实现白名单是 `webroot`、`standalone`、`tls_alpn` 和 `dns_persist`；`dns_persist`只有与已签发前任快照完全相同的长期TXT才免确认，新增或改变的材料返回待办；`manual_dns`、`manual_http` 以及未知实现返回 `manual validation` 跳过，不创建续期世代。未来接入自动 DNS 时，只需在验证实现准入处增加实现，不复制续期事务。
 
 续期调用已有 `cert renew` 事务和签发后自动部署流程。账户锁、证书租约、`expected_in_use` 重验、固定 key/CSR、旧世代保护和部署 generation 检查全部复用；两个 daemon 或 daemon 与前台 renew 同时运行时，只有持锁成功的一方创建续期世代，另一方复用或报告锁竞争。
 

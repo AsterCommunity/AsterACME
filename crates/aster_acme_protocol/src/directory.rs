@@ -79,11 +79,42 @@ pub struct Directory {
 pub struct DirectoryMeta {
     /// RFC 8555 §7.1.1: issuer names accepted as alternatives in CAA properties.
     /// Absence provides no identity; never infer it from the directory hostname.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "caa_identities")]
     pub caa_identities: Vec<String>,
+    /// Draft-02 pre-provisioning baseline. Malformed metadata is unavailable,
+    /// not a reason to reject discovery for unrelated challenge methods.
+    #[serde(
+        default,
+        deserialize_with = "optional_metadata",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub issuer_domain_names: Option<Vec<String>>,
+    /// Exact prefix used to construct hashed account URIs in dns-persist-01.
+    #[serde(
+        default,
+        deserialize_with = "optional_metadata",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub account_hash_prefix: Option<String>,
     /// Terms must be accepted explicitly before creating an account.
     pub terms_of_service: Option<AcmeUrl>,
     /// Whether registration requires EAB credentials.
     #[serde(default)]
     pub external_account_required: bool,
+}
+
+fn optional_metadata<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+fn caa_identities<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(optional_metadata(deserializer)?.unwrap_or_default())
 }

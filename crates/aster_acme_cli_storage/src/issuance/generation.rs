@@ -34,7 +34,7 @@ impl CliIssueStore {
             {
                 return Ok(RenewalPreparation::NotDue(Box::new(in_use)));
             }
-            let renewal_of = prepare_initialization(&slot, &input)?;
+            let renewal_of = prepare_initialization(&slot, &input, &account)?;
             let request = initialize_definition(&slot, input, &account)?;
             let generations = read_generations(&slot, &request.name)?;
             if let Some(record) = existing_renewal(&generations, renewal_of.as_ref())? {
@@ -205,6 +205,7 @@ fn retry_not_due(
 fn prepare_initialization(
     slot: &Path,
     input: &Initialization,
+    account: &AccountRecord,
 ) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
     match input {
         Initialization::New(_) => {
@@ -217,7 +218,9 @@ fn prepare_initialization(
     removal::ensure_idle(slot)?;
     let renewal_of = match input {
         Initialization::New(_) => None,
-        Initialization::Renewal(_) | Initialization::Scheduled { .. } => predecessor(slot)?,
+        Initialization::Renewal(_) | Initialization::Scheduled { .. } => {
+            predecessor(slot, account)?
+        }
     };
     Ok(renewal_of)
 }
@@ -283,6 +286,7 @@ fn existing_renewal(
 
 fn predecessor(
     slot: &Path,
+    account: &AccountRecord,
 ) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
     let config = selection(slot)?;
     let Some(in_use) = config.cert.in_use else {
@@ -292,6 +296,9 @@ fn predecessor(
         .into_iter()
         .find(|record| record.operation_id == in_use)
         .ok_or_else(|| failure("in_use generation is missing"))?;
+    if Some(&record.account_url) != account.account_url.as_ref() {
+        return Err(failure("renewal account URL changed"));
+    }
     let chain = read_private(
         &slot.join(record.generation_name()).join("fullchain.pem"),
         1024 * 1024,
@@ -299,6 +306,7 @@ fn predecessor(
     .map_err(|_| failure("in_use certificate is missing or unsafe"))?;
     let certificate_id = aster_acme::renewal::identifier_from_certificate(&chain)?;
     Ok(Some(aster_acme::issuance::RenewalPredecessor {
+        retained_validation: record.retained_validation_requirements(),
         operation_id: in_use,
         certificate_id,
     }))

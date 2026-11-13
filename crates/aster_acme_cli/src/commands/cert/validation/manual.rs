@@ -7,6 +7,7 @@ use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
 use async_trait::async_trait;
 
 pub(super) struct Manual {
+    pub(super) reusable: Vec<ValidationRequirement>,
     pub(super) method: ChallengeKind,
     pub(super) saved: bool,
     pub(super) interactive: bool,
@@ -56,16 +57,25 @@ impl ChallengeSolver for Manual {
         }
         // Fresh scripted material must first be exposed to the caller. --yes only
         // confirms an operation; it does not mean newly issued files/TXT already exist.
-        match (self.saved, self.interactive, self.yes) {
-            (false, _, true) | (_, false, false) => return Ok(false),
+        let reused = !requirements.is_empty()
+            && requirements.iter().all(|requirement| {
+                requirement.kind().publication_lifetime()
+                    == aster_acme::challenge::PublicationLifetime::Persistent
+                    && self.reusable.contains(requirement)
+            });
+        match (reused, self.saved, self.interactive, self.yes) {
+            (false, false, _, true) | (false, _, false, false) => return Ok(false),
             _ => {}
         }
-        if self.interactive && !self.yes {
+        if !reused && self.interactive && !self.yes {
             let progress = self.progress.clone();
             let details = super::super::render::requirement_lines(requirements);
             let message = match self.method {
                 ChallengeKind::Dns01 => {
                     "Action required: add all TXT values; keep unrelated values"
+                }
+                ChallengeKind::DnsPersist01 => {
+                    "Action required: add these persistent TXT records; retain them for renewal. They authorize this account until removed"
                 }
                 ChallengeKind::Http01 => {
                     "Action required: serve every HTTP file exactly as shown, reachable on public port 80"
@@ -77,7 +87,9 @@ impl ChallengeSolver for Manual {
                 }
             };
             let question = match self.method {
-                ChallengeKind::Dns01 => "Have you published these TXT values?",
+                ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 => {
+                    "Have you published these TXT values?"
+                }
                 ChallengeKind::Http01 => "Are these HTTP challenge files publicly available?",
                 ChallengeKind::TlsAlpn01 => {
                     return Err(IssueError::InvalidInput(
@@ -116,13 +128,7 @@ impl ChallengeSolver for Manual {
             }
         }
         match self.method {
-            ChallengeKind::Dns01 => {
-                #[cfg(feature = "precheck")]
-                crate::commands::cert::precheck::dns::run(requirements, execution, &self.progress)
-                    .await?;
-                Ok(true)
-            }
-            ChallengeKind::Http01 => Ok(true),
+            ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 | ChallengeKind::Http01 => Ok(true),
             ChallengeKind::TlsAlpn01 => Err(IssueError::InvalidInput(
                 "manual TLS-ALPN is not implemented",
             )),
@@ -188,6 +194,7 @@ mod tests {
                 + std::time::Duration::from_millis(if mode == "timeout" { 400 } else { 10_000 }),
         };
         let solver = Manual {
+            reusable: Vec::new(),
             method: ChallengeKind::Http01,
             saved: true,
             interactive: true,

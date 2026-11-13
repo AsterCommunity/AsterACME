@@ -40,8 +40,11 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 | Validation | Implementation |
 | --- | --- |
 | DNS-01 | `manual_dns`: publish TXT records yourself; supports wildcards |
+| DNS-PERSIST-01 (draft -02) | `dns_persist`: provision persistent TXT records manually, then reuse them for renewal; supports wildcards |
 | HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
 | TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
+
+`dns_persist` requires a CA implementing the [same draft revision](docs/rfc-reference.md#dns-persist-草案实现2026-11-14). Keep its TXT records for renewal. DNS provider writes and public-CA acceptance are separate capabilities.
 
 ## Quick start
 
@@ -69,7 +72,7 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, or `tls_alpn`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
+`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, `tls_alpn`, or already provisioned `dns_persist`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
 
 The resident daemon holds an exclusive lock for its data directory. Set `daemon_interval = 60` in `config.toml` or override it with `daemon run --interval 60`. Human logs use the same timestamped levels as issuance; `--json` streams one JSON object per line.
 

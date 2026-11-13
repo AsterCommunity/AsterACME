@@ -27,3 +27,6 @@ HTTP manual/webroot的实现选择、终端确认和站点文件操作归CLI val
 CAA可注入 `Lookup`（或使用SystemLookup）；TXT可用 `Txt::new(resolver)` 注入应用DNS配置，或 `Txt::system()` 使用系统DNS。调用方显式执行 `Runner::run` 并自行处理报告，不会自动创建订单、修改DNS或运行CLI。
 
 完整可编译示例见 [caa_precheck.rs](examples/caa_precheck.rs)。`cargo run -p aster_acme_validation --example caa_precheck --features precheck-caa` 会显式查询DNS，不会联系ACME CA；自动测试仅编译示例，不执行公网查询。
+
+
+`txt::Txt`同时接受DNS-01及实验性DNS-PERSIST-01材料，分别查询`_acme-challenge`和`_validation-persist`的逻辑TXT值；只拼接同一RR的字符片段，不拼接不同RR。观察不修改或删除长期记录，也不把本地可见性当作CA授权。DNS Persist规范版本与部署限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。

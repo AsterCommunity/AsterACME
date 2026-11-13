@@ -40,8 +40,11 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 | 验证方式 | 实现 |
 | --- | --- |
 | DNS-01 | `manual_dns`：手动发布 TXT，支持通配符 |
+| DNS-PERSIST-01（草案 -02） | `dns_persist`：首次手动配置长期 TXT，后续续期复用；支持通配符 |
 | HTTP-01 | `manual_http`、`webroot`，或临时监听 80 端口的 `standalone` |
 | TLS-ALPN-01 | 临时监听 443 端口的 `tls_alpn` |
+
+`dns_persist`要求CA支持[对应草案版本](docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。TXT保留供续期使用；它不包含DNS provider自动写入，也不表示已通过公网CA验收。
 
 ## 快速开始
 
@@ -69,7 +72,7 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`daemon run` 在前台常驻，启动后立即检查，之后按配置间隔（默认 60 秒）开始下一轮维护。它刷新 ARI 建议、自动续期使用`webroot`、`standalone`或`tls_alpn`的到期证书，并重试已配置部署；人工验证方式会跳过。按 `Ctrl-C` 或 Unix `SIGTERM` 后停止新周期并保留已启动工作的结果。建议通过系统服务管理器启动和重启；`daemon run-once` 仍可供 cron 使用。
+`daemon run` 在前台常驻，启动后立即检查，之后按配置间隔（默认 60 秒）开始下一轮维护。它刷新 ARI 建议、自动续期使用`webroot`、`standalone`、`tls_alpn`或已配置`dns_persist`的到期证书，并重试已配置部署；人工验证方式会跳过。按 `Ctrl-C` 或 Unix `SIGTERM` 后停止新周期并保留已启动工作的结果。建议通过系统服务管理器启动和重启；`daemon run-once` 仍可供 cron 使用。
 
 常驻 daemon 会独占对应的 data-dir。可在 `config.toml` 设置 `daemon_interval = 60`，或用 `daemon run --interval 60` 覆盖。人类日志与签发使用相同的时间戳和级别格式；`--json` 逐行输出 JSON 对象。
 

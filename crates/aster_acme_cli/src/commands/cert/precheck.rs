@@ -5,15 +5,18 @@ use std::sync::Arc;
 
 pub(super) mod caa;
 pub(super) mod dns;
-mod http;
+mod validation;
 
-pub(super) fn with_http(
+pub(super) fn with_validation(
     solver: Box<dyn ChallengeSolver>,
     pool: HttpPool,
     progress: Arc<Progress>,
 ) -> Box<dyn ChallengeSolver> {
-    if solver.kind() == ChallengeKind::Http01 {
-        Box::new(http::Checked {
+    if matches!(
+        solver.kind(),
+        ChallengeKind::Http01 | ChallengeKind::Dns01 | ChallengeKind::DnsPersist01
+    ) {
+        Box::new(validation::Checked {
             inner: solver,
             pool,
             progress,

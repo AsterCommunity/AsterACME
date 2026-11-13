@@ -26,6 +26,7 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
     }];
     for yes in [false, true] {
         let manual = manual::Manual {
+            reusable: Vec::new(),
             prompt: std::sync::Mutex::new(None),
             method: ChallengeKind::Http01,
             saved: false,
@@ -36,6 +37,7 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
         assert!(!manual.ready(&requirements, &execution()).await.unwrap());
     }
     let manual = manual::Manual {
+        reusable: Vec::new(),
         prompt: std::sync::Mutex::new(None),
         method: ChallengeKind::Http01,
         saved: true,
@@ -317,6 +319,7 @@ fn standalone_configuration_defaults_persist_and_reject_irrelevant_flags() {
     );
     for method in [
         ValidationMethod::ManualDns,
+        ValidationMethod::DnsPersist,
         ValidationMethod::ManualHttp,
         ValidationMethod::Webroot,
     ] {
@@ -526,6 +529,7 @@ fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renew
         (ValidationMethod::Webroot, true),
         (ValidationMethod::Standalone, true),
         (ValidationMethod::TlsAlpn, true),
+        (ValidationMethod::DnsPersist, true),
         (ValidationMethod::ManualDns, false),
         (ValidationMethod::ManualHttp, false),
     ] {
@@ -541,6 +545,7 @@ fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renew
         ValidationMethod::Standalone,
         ValidationMethod::TlsAlpn,
         ValidationMethod::ManualDns,
+        ValidationMethod::DnsPersist,
         ValidationMethod::ManualHttp,
     ] {
         record.solver_id = method.id().into();
@@ -552,4 +557,56 @@ fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renew
     }
     record.solver_id = "future-dns-provider".into();
     assert!(ValidationMethod::from_record(&record).is_err());
+}
+
+#[tokio::test]
+async fn retained_material_can_only_skip_confirmation_for_unchanged_persistent_publication() {
+    let temporary = ValidationRequirement::Http01 {
+        url: "http://example.com/.well-known/acme-challenge/token".into(),
+        path: "/.well-known/acme-challenge/token".into(),
+        content: "token.thumb".into(),
+    };
+    let persistent = ValidationRequirement::DnsPersist01 { record: aster_acme::challenge::dns_persist::DnsPersistRecord {
+        name:aster_acme::identifier::DnsName::new("_validation-persist.example.com").unwrap(),
+        value:"ca.example; accounturi=https://ca.example/hash/sha-256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+    }};
+    for (requirement, expected) in [(temporary, false), (persistent.clone(), true)] {
+        let solver = manual::Manual {
+            reusable: vec![requirement.clone()],
+            method: requirement.kind(),
+            saved: false,
+            interactive: false,
+            yes: false,
+            progress: progress(),
+            prompt: std::sync::Mutex::new(None),
+        };
+        assert_eq!(
+            solver
+                .ready(std::slice::from_ref(&requirement), &execution())
+                .await
+                .unwrap(),
+            expected
+        );
+        let cancelled = execution();
+        cancelled.cancellation.cancel();
+        assert!(matches!(
+            solver.ready(&[requirement], &cancelled).await,
+            Err(IssueError::Interrupted)
+        ));
+        assert!(!solver.ready(&[], &execution()).await.unwrap());
+    }
+    let mut changed = persistent.clone();
+    if let ValidationRequirement::DnsPersist01 { record } = &mut changed {
+        record.value.push_str("; policy=wildcard");
+    }
+    let solver = manual::Manual {
+        reusable: vec![persistent],
+        method: ChallengeKind::DnsPersist01,
+        saved: true,
+        interactive: false,
+        yes: false,
+        progress: progress(),
+        prompt: std::sync::Mutex::new(None),
+    };
+    assert!(!solver.ready(&[changed], &execution()).await.unwrap());
 }

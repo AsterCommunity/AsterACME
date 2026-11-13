@@ -477,7 +477,7 @@ impl Foreground<'_> {
             self.progress.clone(),
         )?;
         #[cfg(feature = "precheck")]
-        let solver = crate::commands::cert::precheck::with_http(
+        let solver = crate::commands::cert::precheck::with_validation(
             solver,
             self.cli.http.clone(),
             self.progress.clone(),
@@ -1057,6 +1057,7 @@ mod tests {
                 let session = store.create(&request, &allocation_account()).await.unwrap();
                 let mut record = session.record().await.unwrap();
                 record.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+                    retained_validation: Vec::new(),
                     operation_id: "p".repeat(43),
                     certificate_id: None,
                 });

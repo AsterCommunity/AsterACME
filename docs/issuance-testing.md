@@ -4,7 +4,7 @@
 
 实现对照 RFC 8555 原文 §7.1.3（订单与 expires）、§7.1.4–7.1.5（授权/challenge）、§7.4（newOrder、finalize 与 CSR）、§7.4.2（PEM 链下载）、§7.5.1（通知与轮询）、§8.4（TXT 摘要），并复用 §6 的精确 URL、kid/JWS、nonce、POST-as-GET 和错误策略。证书/CSR 采用 PKCS#8、PKCS#10 和 X.509/SAN。
 
-当前实现manual_dns/manual_http/webroot/standalone/tls_alpn。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性固定限5秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+当前实现manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn；DNS Persist仅按固定草案版本实验性支持，详见本页专项记录。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性固定限5秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
 
 TLS-ALPN专项覆盖：默认443及自定义监听地址、每域名单独证书、单DNS SAN、critical `id-pe-acmeIdentifier` DER摘要、SNI/`acme-tls/1`门控、重复/混合材料拒绝、恢复重建及终态释放。普通Rustls客户端拒绝未知critical扩展是预期行为，ACME验证器应按RFC8737读取该扩展。
 
@@ -22,7 +22,7 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；周期调度、自动DNS和外部CSR尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；自动DNS provider和外部CSR尚未实现；周期调度的当前契约见[生命周期](certificate-lifecycle.md)。
 
 部署专项使用临时目录、真实证书产物与 Rust 测试子进程，覆盖当前版本发布、同版本幂等跳过、续期后新版本/密钥发布及绑定保留、多目标失败继续、非零退出有界重试、启动失败、超时/取消检查点和不自动重放、发布失败后显式恢复、租约与续期/移除互斥、移除绑定保留发布文件。渲染测试覆盖空列表、全部状态配色与可见宽度对齐、控制字符转义、单次及批量 JSON/退出码和命令参数不回显；存储测试覆盖目录/精确路径、非法参数和链接拒绝。PTY 另验证无名称选择（Enter）和取消（Escape）；这些均不代表真实 nginx/systemd 或 Windows 服务 reload 验收。
 
@@ -207,3 +207,29 @@ Webroot清理用实际移入私有目录的对象核验身份，替换文件保�
 输出一致性回归：空 daemon 周期只返回一条`No ARI refreshes or automatic renewals were due.`，不显示阶段日志或表格；`cert renew --all`空库存不生成表头。daemon ARI逐项状态只由最终表格呈现，只有存在ARI候选时显示一个阶段开始消息；签发/部署长事务保留实时进度。
 
 最终全仓单元测试626项通过、5项按原配置忽略；本轮调整后的续期/core相关22项及过期发现用例复跑通过。全仓命令末尾doctest首次出现依赖加载E0463；停止交错构建后串行`cargo test --workspace --all-features --doc --locked`通过。严格原生/Windows GNU all-targets/all-features Clippy、rustdoc、fmt、文档/依赖/import/TLS策略及11项Python测试通过；没有公网CA、原生Windows或实际cron验收。
+
+
+## DNS Persist 草案-02本地验收（2026-11-14）
+
+基线为`91c0ad9`上的本次工作区改动，平台为macOS原生Rust 1.99.1。规范、CA部署差异及未实现的可选参数统一见[RFC参考](rfc-reference.md#dns-persist-草案实现2026-11-14)，本节仅记录验收边界。
+
+纯材料/方法能力/快照回归与真实CLI solver + 文件journal + loopback CA集成回归，覆盖：§10.2实际SHA-256字节向量、域名/精确账户URL绑定、不公开明文URL、通配符policy、issuer范围/规范化/数量、无token、旧字段拒绝、缺失/非法hash prefix在newOrder前失败、多字符串TXT及RDATA上限；首次`--yes`仍返回待办、恢复固定CSR/私钥且不另建订单、签名空payload账户证明、账户重定向/错误/非valid状态拒绝、ack字段变化不重放；长期记录不进cleanup、换钥后无人值守复用、prefix变化重新要求人工确认、账户URL变更拒绝复用，以及CA跳过新challenge时快照保留和裸域/通配符scope分别更新。
+
+整洁度重构后的回归覆盖四种具名材料的独立构造、IDN/域名长度/通配符/错误thumbprint，方法能力和ack身份穷尽矩阵；授权准备显式传入时间，四种方法均测试到期前1纳秒、相等和到期后1纳秒；issuer数量10/11、issuer名253/254字节、DNS owner带前缀253/254字节、TXT字符串254/255/256字节及总RDATA精确上限。临时材料与长期材料使用同一个计数solver，断言restore/cleanup调用和完成提示按生命周期区分；混入临时材料、错配方法、重复快照、改变scope或取消都不能跳过确认或产生重复ack。
+
+TXT检查另用注入的loopback DNS resolver验证DNS-PERSIST-01输入与单RR片段拼接，未执行公网传播或DNS写入。发布solver不隐式启动DNS预检，CLI通过统一建议性装饰器注入；关闭预检的feature组合仍可执行DNS Persist。
+
+验证命令：
+
+```sh
+cargo test --workspace --locked
+cargo test -p aster_acme_cli --locked dns_persist
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all --check
+cargo doc --workspace --no-deps --locked
+python3 scripts/check-precheck-features.py
+python3 scripts/test-confirmation-terminal.py
+python3 scripts/check-doc-links.py
+```
+
+账户换钥场景在本地更换匹配的账户记录/签名器，验证持久TXT复用；真实CA的旧钥保留、实际DNS记录及公网CA签发仍需另验。此次只读查询Let's Encrypt生产/staging directory用于确认元数据差异，未创建公网订单、发布DNS、吊销证书或改动外部服务；未以本机结果声称Linux/Windows原生验收或远端CI通过。

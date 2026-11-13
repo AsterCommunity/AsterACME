@@ -165,9 +165,10 @@ fn method_specific_fields_do_not_make_unknown_challenges_require_dns01_tokens() 
         {"type":"future","status":"pending","url":"https://ca.example/future","token":{"extension":true}}
     ]});
     let parsed: AuthorizationObject = serde_json::from_value(resource.clone()).unwrap();
-    assert!(
-        matches!(&parsed.challenges[0].kind,WireChallengeKind::Unknown(value) if value=="dns-persist-01")
-    );
+    assert!(matches!(
+        &parsed.challenges[0].kind,
+        WireChallengeKind::DnsPersist01
+    ));
     assert_eq!(
         parsed.challenges[0].parameters["issuer-domain-names"],
         serde_json::json!(["letsencrypt.org"])

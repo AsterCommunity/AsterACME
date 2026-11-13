@@ -7,7 +7,7 @@
 - `crypto`：`dyn AccountSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
 - `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。
-- `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization 和三种验证材料。
+- `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization、DNS/HTTP/TLS材料；`challenge::dns_persist`实现草案-02长期TXT及预配置材料计算。
 - `solver`：Send + Sync 的异步 trait，可通过 dyn 注入；方法匹配、ready及cleanup；类型化材料先由ACME持久化。
 
 依赖方向：本 crate → protocol / core / Forge 宏；DNS 实现 → 本 crate。具体供应商代码不放在此处。
@@ -26,9 +26,13 @@ assert_eq!(method, ChallengeKind::Dns01);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+四种材料采用对称的子模块具名类型：`ChallengeMaterial::Dns01(dns01::Dns01Record)`、`DnsPersist01(dns_persist::DnsPersistRecord)`、`Http01(http01::Http01Response)`、`TlsAlpn01(tls_alpn01::TlsAlpn01Response)`。通过各类型的`derive`构造材料；未发布的聚合`ChallengeMaterial::derive`入口已移除，不保留透传兼容方法。`ChallengeKind`提供集中方法能力，订单/存储层通过`PublicationLifetime`及类型化长期快照使用这些能力。
+
 Prefer 只在开始验证时选择兼容方法，不代表失败后自动回退。未知 wire 方法保留用于诊断，不能执行。当前仅定义 solver 接口，并未内置任何可用验证实现。
 
 验证材料先保存到签发检查点，再调用 `ChallengeSolver::ready` 发布；恢复时通过 `restore` 重建运行期资源，并在终态调用 `cleanup` 清理自身材料，所有路径调用 `shutdown` 回收运行期任务。
+
+`ChallengeKind::DnsPersist01`不使用token；其`ValidationRequirement::DnsPersist01`由已发现directory、challenge issuer参数和当前账户身份派生，展示给solver前执行账户控制权证明。长期TXT永不交给临时cleanup。嵌入式存储应在续期时携带同一账户/定义的`RenewalPredecessor.retained_validation`确认快照，保持历史密钥记录复用；缺快照的材料仍需发布。`DnsPersistRecord::provision`只计算材料，独立预配置的账户POST-as-GET及安全交付由调用者负责。规范与限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。
 
 ```sh
 cargo test -p aster_acme --locked

@@ -28,9 +28,13 @@ CLI app / dispatch
 
 账户写入显式接收当前 `Arc<dyn AccountLease>`，后台写任务克隆并持有到结束；独立本地编辑由文件适配器新获取租约。换钥与签发会话分别串行化自身IO，不通过全局状态推断租约归属。
 
+## Challenge边界
+
+`challenge::{dns01,dns_persist,http01,tls_alpn01}`分别拥有响应材料及派生约束，`ChallengeMaterial`只聚合具名类型。方法元数据准入、发布生命周期、账户证明要求和响应身份由`ChallengeKind`集中穷尽分发；纯`issuance::authorization`准备材料与检查点，`IssueService`负责持久化顺序和协议副作用。`create`保持方法无关；存储和CLI续期通过通用`retained_validation`快照携带长期材料，材料所有者判断发布范围，通用层不解析TXT。具体流程见[签发设计](design/issuance.md)。
+
 ## 当前能力
 
-已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
+已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
 
 `daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。自动DNS provider尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 

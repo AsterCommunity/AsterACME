@@ -35,8 +35,14 @@ impl Check for Txt {
     type Input = ValidationRequirement;
     type Output = bool;
     async fn observe(&self, input: &Self::Input, _: &ExecutionContext) -> Result<bool, Failure> {
-        let ValidationRequirement::Dns01 { name, value } = input else {
-            return Err(Failure::UnsupportedInput);
+        let (name, value) = match input {
+            ValidationRequirement::Dns01 { name, value } => (name.as_str(), value.as_str()),
+            ValidationRequirement::DnsPersist01 { record } => {
+                (record.name.as_str(), record.value.as_str())
+            }
+            ValidationRequirement::Http01 { .. } | ValidationRequirement::TlsAlpn01 { .. } => {
+                return Err(Failure::UnsupportedInput);
+            }
         };
         crate::dns01::visibility::observe_lookup(
             self.resolver.txt_lookup(format!("{name}.")).await,
@@ -64,7 +70,7 @@ mod tests {
         let address = socket.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let mut bytes = [0; 4096];
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (length, peer) = socket.recv_from(&mut bytes).await.unwrap();
                 let request = Message::from_vec(&bytes[..length]).unwrap();
                 let query = request.queries[0].clone();
@@ -102,6 +108,13 @@ mod tests {
                 name: "_acme-challenge.two.example".into(),
                 value: "wrong".into(),
             },
+            ValidationRequirement::DnsPersist01 {
+                record: aster_acme::challenge::dns_persist::DnsPersistRecord {
+                    name: aster_acme::identifier::DnsName::new("_validation-persist.three.example")
+                        .unwrap(),
+                    value: "token.thumb".into(),
+                },
+            },
             ValidationRequirement::Http01 {
                 url: "http://example.com/".into(),
                 path: "/".into(),
@@ -118,8 +131,9 @@ mod tests {
             .unwrap();
         assert_eq!(report.observations[0].result, Ok(true));
         assert_eq!(report.observations[1].result, Ok(false));
+        assert_eq!(report.observations[2].result, Ok(true));
         assert_eq!(
-            report.observations[2].result,
+            report.observations[3].result,
             Err(Failure::UnsupportedInput)
         );
         server.await.unwrap();

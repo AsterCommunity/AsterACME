@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 
+mod authorization;
 pub mod certificate;
 
 pub mod progress;
@@ -144,6 +145,13 @@ impl IssueRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "method")]
 pub enum ValidationRequirement {
+    /// Long-lived authorization; never returned as temporary cleanup instructions.
+    #[serde(rename = "dns-persist-01")]
+    DnsPersist01 {
+        /// Exact persistent TXT publication, independent of a challenge token.
+        #[serde(flatten)]
+        record: crate::challenge::dns_persist::DnsPersistRecord,
+    },
     /// All TXT values at a shared owner must coexist.
     #[serde(rename = "dns-01")]
     Dns01 {
@@ -179,39 +187,41 @@ impl ValidationRequirement {
         use crate::challenge::ChallengeKind;
         match self {
             Self::Dns01 { .. } => ChallengeKind::Dns01,
+            Self::DnsPersist01 { .. } => ChallengeKind::DnsPersist01,
             Self::Http01 { .. } => ChallengeKind::Http01,
             Self::TlsAlpn01 { .. } => ChallengeKind::TlsAlpn01,
+        }
+    }
+
+    pub(crate) fn same_publication_scope(&self, other: &Self) -> bool {
+        match self {
+            Self::DnsPersist01 { record } => match other {
+                Self::DnsPersist01 { record: other } => record.same_scope(other),
+                Self::Dns01 { .. } | Self::Http01 { .. } | Self::TlsAlpn01 { .. } => false,
+            },
+            Self::Dns01 { .. } | Self::Http01 { .. } | Self::TlsAlpn01 { .. } => false,
         }
     }
 
     fn from_material(material: crate::challenge::ChallengeMaterial) -> Self {
         use crate::challenge::ChallengeMaterial;
         match material {
-            ChallengeMaterial::Dns01 {
-                record_name,
-                txt_value,
-            } => Self::Dns01 {
-                name: record_name.as_str().into(),
-                value: txt_value,
+            ChallengeMaterial::DnsPersist01(record) => Self::DnsPersist01 { record },
+            ChallengeMaterial::Dns01(record) => Self::Dns01 {
+                name: record.record_name.as_str().into(),
+                value: record.txt_value,
             },
-            ChallengeMaterial::Http01 {
-                identifier,
-                token,
-                key_authorization,
-            } => {
-                let path = format!("/.well-known/acme-challenge/{}", token.as_str());
+            ChallengeMaterial::Http01(response) => {
+                let path = format!("/.well-known/acme-challenge/{}", response.token.as_str());
                 Self::Http01 {
-                    url: format!("http://{}{path}", identifier.value()),
+                    url: format!("http://{}{path}", response.identifier.value()),
                     path,
-                    content: key_authorization.as_str().into(),
+                    content: response.key_authorization.as_str().into(),
                 }
             }
-            ChallengeMaterial::TlsAlpn01 {
-                identifier,
-                authorization_digest,
-            } => Self::TlsAlpn01 {
-                domain: identifier.value(),
-                digest: authorization_digest,
+            ChallengeMaterial::TlsAlpn01(response) => Self::TlsAlpn01 {
+                domain: response.identifier.value(),
+                digest: response.authorization_digest,
             },
         }
     }
@@ -242,6 +252,11 @@ pub struct RenewalPredecessor {
     pub operation_id: String,
     /// RFC 9773 identifier, absent when the certificate cannot provide one.
     pub certificate_id: Option<String>,
+    /// Confirmed persistent records captured under the predecessor lease.
+    /// They retain historical-key binding across account rollover without
+    /// assuming that a freshly derived record has already been published.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_validation: Vec<ValidationRequirement>,
 }
 
 /// Why the next CA query must wait. This records the winning deadline, not an
@@ -445,6 +460,43 @@ pub struct IssueRecord {
 }
 
 impl IssueRecord {
+    /// Long-lived publication carried forward from the confirmed generation.
+    /// Current observations replace the same method-owned publication scope;
+    /// unrefreshed scopes survive CA authorization reuse without history growth.
+    #[must_use]
+    pub fn retained_validation_requirements(&self) -> Vec<ValidationRequirement> {
+        let retain = |requirement: &&ValidationRequirement| {
+            requirement.kind() == self.challenge
+                && requirement.kind().publication_lifetime()
+                    == crate::challenge::PublicationLifetime::Persistent
+        };
+        let current = self
+            .authorizations
+            .iter()
+            .filter_map(|auth| auth.validation_requirement.as_ref())
+            .filter(retain)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut retained = Vec::new();
+        for requirement in &current {
+            if !retained.contains(requirement) {
+                retained.push(requirement.clone());
+            }
+        }
+        if let Some(previous) = &self.renewal_of {
+            for requirement in previous.retained_validation.iter().filter(retain) {
+                if !current
+                    .iter()
+                    .any(|current| current.same_publication_scope(requirement))
+                    && !retained.contains(requirement)
+                {
+                    retained.push(requirement.clone());
+                }
+            }
+        }
+        retained
+    }
+
     /// Expiration of the verified leaf certificate, recorded by its renewal plan.
     #[must_use]
     pub fn certificate_not_after(&self) -> Option<time::OffsetDateTime> {

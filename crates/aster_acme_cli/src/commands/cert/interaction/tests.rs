@@ -70,7 +70,9 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
             ValidationMethod::Standalone | ValidationMethod::TlsAlpn => {
                 inputs.answers.push_back(String::new());
             }
-            ValidationMethod::ManualDns | ValidationMethod::ManualHttp => {}
+            ValidationMethod::ManualDns
+            | ValidationMethod::DnsPersist
+            | ValidationMethod::ManualHttp => {}
         }
         complete(&mut args, true, &mut inputs).unwrap();
         assert_eq!(args.challenge, Some(*method));
@@ -90,11 +92,13 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
                 assert_eq!(args.listen_address.unwrap().to_string(), "0.0.0.0:443");
             }
             ValidationMethod::Webroot => assert_eq!(args.webroot.as_deref(), Some(root.path())),
-            ValidationMethod::ManualDns | ValidationMethod::ManualHttp => {
+            ValidationMethod::ManualDns
+            | ValidationMethod::DnsPersist
+            | ValidationMethod::ManualHttp => {
                 assert_eq!(inputs.asked.len(), 1);
             }
         }
-        assert_eq!(inputs.choices.len(), 5);
+        assert_eq!(inputs.choices.len(), 6);
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }
@@ -134,7 +138,7 @@ fn method_choices_respect_wildcards_and_supplied_configuration() {
     for (words, expected) in [
         (
             vec!["-d", "*.example.com"],
-            vec![ValidationMethod::ManualDns],
+            vec![ValidationMethod::ManualDns, ValidationMethod::DnsPersist],
         ),
         (
             vec!["-d", "example.com", "-w", root.path().to_str().unwrap()],

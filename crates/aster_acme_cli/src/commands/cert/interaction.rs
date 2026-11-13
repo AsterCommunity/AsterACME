@@ -112,7 +112,7 @@ pub(super) fn complete(
                         ValidationMethod::Standalone | ValidationMethod::TlsAlpn
                     ))
                 && (!args.domain.iter().any(DnsIdentifier::is_wildcard)
-                    || *method == ValidationMethod::ManualDns)
+                    || method.kind().supports_wildcards())
         })
         .collect::<Vec<_>>();
     if args.challenge.is_none() {
@@ -133,8 +133,11 @@ pub(super) fn complete(
 }
 
 fn validate_domains(args: &IssueArgs, method: ValidationMethod) -> CliResult<()> {
-    if args.domain.iter().any(DnsIdentifier::is_wildcard) && method != ValidationMethod::ManualDns {
-        return Err("Wildcard domains require DNS-01; choose manual_dns.".into());
+    if args.domain.iter().any(DnsIdentifier::is_wildcard) && !method.kind().supports_wildcards() {
+        return Err(
+            "Wildcard domains require DNS-01 or DNS-PERSIST-01; choose manual_dns or dns_persist."
+                .into(),
+        );
     }
     Ok(())
 }
@@ -176,6 +179,7 @@ fn complete_method(
             });
         }
         ValidationMethod::ManualDns
+        | ValidationMethod::DnsPersist
         | ValidationMethod::ManualHttp
         | ValidationMethod::Webroot
         | ValidationMethod::Standalone

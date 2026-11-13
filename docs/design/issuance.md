@@ -4,7 +4,11 @@
 
 ## 一个状态机，多种发布方式
 
-IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
+IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、dns_persist、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
+
+四种`ChallengeMaterial`均为具名子模块类型：`dns01::Dns01Record`、`dns_persist::DnsPersistRecord`、`http01::Http01Response`和`tls_alpn01::TlsAlpn01Response`；各模块拥有材料定义、派生和方法约束，公共`KeyAuthorization`只拥有token与账户绑定及共享摘要。DNS Persist的`issuer`与`account_uri`子模块分别拥有issuer集合规则和哈希URI规则，记录本身拥有TXT格式及复用范围。
+
+`ChallengeKind`集中以穷尽match声明directory准入、`PublicationLifetime`、发布前账户证明要求及ack身份字段。`check_execution`在新订单准入时统一校验方法所需元数据；`create`只处理通用newOrder，授权编排根据能力要求执行账户控制权证明。纯`issuance::authorization`负责选择challenge、调用材料所有者、检查固定材料并设置检查点，服务负责保存、网络和solver调用。恢复、清理、完成提示及续期快照共用发布生命周期；持久化与通用编排不解析TXT策略。
 
 IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配置。每个世代独立key/CSR，material.sha256绑定固定字节。恢复沿用保存的材料及配置；相似未完成查询按完整定义匹配，不按主域名猜测。
 
@@ -18,15 +22,19 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 账户ID、directory和kid绑定签发身份；轮换后的当前签名器可继续旧申请。旧thumbprint继续绑定原挑战材料，不被新密钥替换。授权/选中challenge终态保留Problem并拒绝恢复；已valid订单不会因历史challenge记录而错误阻止下载。
 
+`dns-persist-01` 按[固定草案版本](../rfc-reference.md#dns-persist-草案实现2026-11-14)推导域名与账户绑定的哈希URI，不要求token。展示发布材料前用当前账户密钥向精确kid执行空payload的POST-as-GET并要求valid；检查失败不调用solver或ack。`ValidationRequirement::DnsPersist01`保留逻辑TXT，CLI独立展示255字节分片。成功或明确失败均不清理长期记录，也不返回临时cleanup提示。
+
+续期的`RenewalPredecessor.retained_validation`保存来自同一账户/定义的已签发世代快照，保持租约内核验和不可变身份检查；当CA已直接返回valid授权而无需新挑战时，仍将快照带到下一代。服务优先复用仍满足当前issuer/prefix/owner/通配符范围的记录，不因换钥改写已发布hash；无法复用则推导新值并要求重新发布。CLI只自动确认与前任快照完全一致的材料，`--yes`仍不能把首次新材料视作已发布。快照保存类型化`ValidationRequirement`，只保留匹配方法的长期材料；owner/scope相等由材料所有者判断并替换，临时、错配和重复材料不进入复用快照。CLI也只对长期且完全相同的材料免确认，不累积全部历史hash。
+
 执行在CA发现前建立同一取消令牌/deadline，发现、确认、轮询及自动部署共享剩余预算。request_timeout只限制单次请求，max_polls限制本次订单轮询轮数。默认local poll_interval为5秒，不缩短有效Retry-After；每轮展示计数和等待来源。
 
 只读verify不调用ready、ack、finalize或清理。IssueSession.record读取最新持久化状态；每会话IO串行，后台任务携带许可和租约到写完，即使上层等待取消也不提前解锁。
 
 ## 统一建议性预检
 
-库 `aster_acme::precheck::Runner` 为显式调用的检查器提供每阶段默认5秒预算、取消和整体deadline，返回带输入索引的结构化Report；本地超时保留完成项，并标记TimedOut/NotChecked。检查器由应用注入：HTTP归aster_acme的precheck-http，CAA/TXT归validation的precheck-caa/precheck-dns。CLI `cert/precheck/{caa,dns,http}` 仅负责调用时机和展示；solver负责发布材料，CAA不会成为签发状态或执行资格。普通不匹配、解析错误和本地超时只提示，CA最终检查；JSON仍只输出既有业务报告，不夹杂人类预检日志。
+库 `aster_acme::precheck::Runner` 为显式调用的检查器提供每阶段默认5秒预算、取消和整体deadline，返回带输入索引的结构化Report；本地超时保留完成项，并标记TimedOut/NotChecked。检查器由应用注入：HTTP归aster_acme的precheck-http，CAA/TXT归validation的precheck-caa/precheck-dns。CLI `cert/precheck/{caa,dns,validation}` 仅负责调用时机和展示；solver负责发布材料，CAA不会成为签发状态或执行资格。普通不匹配、解析错误和本地超时只提示，CA最终检查；JSON仍只输出既有业务报告，不夹杂人类预检日志。
 
-库默认不启用预检，IssueService::run不自动调用预检；CLI默认启用自己的precheck feature，关闭后仍可正常签发。嵌入者可自行选择检查器并通过Runner::new覆盖默认预算。
+库默认不启用预检，IssueService::run不自动调用预检；CLI默认启用自己的precheck feature，关闭后仍可正常签发。CLI在统一`precheck::with_validation`装饰器中对solver已就绪的DNS-01/DNS-PERSIST-01材料执行TXT建议检查、对HTTP-01执行HTTP检查，发布solver本身不隐式做网络预检。嵌入者可自行选择检查器并通过Runner::new覆盖默认预算。
 
 issue与renew共用Foreground：directory发现后、首次newOrder前检查全部DNS标识符。恢复已有订单或已提交的创建不重复查CAA；directory未广告caaIdentities时输出无法判断，不根据CA URL猜测身份。CAA阶段所有SAN共享5秒，保留已完成观察，超时后的未检查项为未知。
 

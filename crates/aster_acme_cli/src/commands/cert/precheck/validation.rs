@@ -1,4 +1,4 @@
-//! Bounded advisory observation of public HTTP-01 files after publication.
+//! Bounded advisory DNS/HTTP observations after the publication solver is ready.
 use crate::commands::cert::progress::Progress;
 use crate::common::output::MessageKind;
 use aster_acme::precheck::{Runner, http::Http};
@@ -40,6 +40,15 @@ impl ChallengeSolver for Checked {
             return Ok(false);
         }
         execution.check().map_err(|_| IssueError::Interrupted)?;
+        match self.kind() {
+            ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 => {
+                crate::commands::cert::precheck::dns::run(requirements, execution, &self.progress)
+                    .await?;
+                return Ok(true);
+            }
+            ChallengeKind::TlsAlpn01 => return Ok(true),
+            ChallengeKind::Http01 => {}
+        }
         self.progress.output.progress(
             MessageKind::Info,
             &format!(
@@ -76,7 +85,7 @@ impl ChallengeSolver for Checked {
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::cert::precheck::http::*;
+    use crate::commands::cert::precheck::validation::*;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},

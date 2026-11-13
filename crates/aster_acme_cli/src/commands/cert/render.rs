@@ -807,6 +807,11 @@ pub(super) fn requirement_lines(requirements: &[ValidationRequirement]) -> Vec<S
     let mut lines = Vec::new();
     for requirement in requirements {
         match requirement {
+            ValidationRequirement::DnsPersist01 { record } => lines.push(format!(
+                "{}  TXT  {}  (persistent; retain for renewal)",
+                output::safe(record.name.as_str()),
+                output::safe(&record.presentation_value())
+            )),
             ValidationRequirement::Dns01 { name, value } => lines.push(format!(
                 "{}  TXT  {}",
                 output::safe(name),
@@ -1517,6 +1522,11 @@ pub(super) fn outcome(
             time::OffsetDateTime::now_utc(),
             color,
         ));
+        let retained = record.retained_validation_requirements();
+        if !retained.is_empty() {
+            lines.push("Retain these persistent validation requirements for renewal; remove publication only to revoke future validation:".into());
+            lines.extend(requirement_lines(&retained));
+        }
     }
     if !records.is_empty() {
         lines.push(
@@ -2036,6 +2046,7 @@ mod tests {
             complete.phase = aster_acme_core::workflow::IssuancePhase::Completed;
             if renewal {
                 complete.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+                    retained_validation: Vec::new(),
                     operation_id: "old".into(),
                     certificate_id: None,
                 });

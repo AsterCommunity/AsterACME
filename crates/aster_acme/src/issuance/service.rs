@@ -7,19 +7,17 @@ use crate::issuance::{
 use crate::solver::ChallengeSolver;
 use crate::storage::issuance::IssueSession;
 use crate::{
-    challenge::{ChallengeMaterial, ChallengeToken},
+    challenge::{PublicationAccountProof, PublicationLifetime},
     identifier::{Identifier, authorization_identifier},
     transport::{AcmeClient, AcmeResponse, json_payload},
 };
 use aster_acme_core::{
-    machine::{
-        AuthorizationAction, ChallengeAction, OrderAction, authorization_action, challenge_action,
-        order_action,
-    },
-    protocol::{AuthorizationStatus, ChallengeStatus, OrderStatus},
+    machine::{ChallengeAction, OrderAction, challenge_action, order_action},
+    protocol::{AuthorizationStatus, OrderStatus},
     workflow::{IssuancePhase, SubmissionState},
 };
 use aster_acme_protocol::{
+    account::AccountObject,
     order::{
         AcknowledgeRequest, AuthorizationObject, ChallengeObject, FinalizeRequest, NewOrderRequest,
         OrderObject, WireIdentifier,
@@ -242,6 +240,9 @@ impl IssueService {
             .iter()
             .filter(|auth| matches!(auth.resource.status, AuthorizationStatus::Pending))
             .filter_map(|auth| auth.validation_requirement.clone())
+            .filter(|requirement| {
+                requirement.kind().publication_lifetime() == PublicationLifetime::Temporary
+            })
             .collect::<Vec<_>>();
         if !pending.is_empty()
             && record
@@ -317,6 +318,11 @@ impl IssueService {
             ));
         }
         record.check_recovery(time::OffsetDateTime::now_utc())?;
+        if !record.new_order_intent_saved && record.order_url.is_none() {
+            record
+                .challenge
+                .validate_directory(&self.client.directory().meta)?;
+        }
         if !matches!(
             record.revocation.state,
             aster_acme_core::revocation::RevocationState::NotRequested
@@ -355,6 +361,9 @@ impl IssueService {
             .iter()
             .filter(|auth| auth.cleanup_pending)
             .filter_map(|auth| auth.validation_requirement.clone())
+            .filter(|requirement| {
+                requirement.kind().publication_lifetime() == PublicationLifetime::Temporary
+            })
             .collect::<Vec<_>>();
         if !pending.is_empty() {
             match bounded(execution, solver.cleanup(&pending, &execution.context)).await {
@@ -629,9 +638,19 @@ impl IssueService {
                 .await;
             return Err(error);
         }
-        let outstanding = prepare_authorizations(record)?;
+        let outstanding = crate::issuance::authorization::prepare(
+            record,
+            &self.client.directory().meta,
+            time::OffsetDateTime::now_utc(),
+        )?;
         session.save(record).await?;
         if !outstanding.is_empty() {
+            match record.challenge.publication_account_proof() {
+                PublicationAccountProof::ActiveAccount => {
+                    bounded(execution, self.verify_account_control(record)).await?;
+                }
+                PublicationAccountProof::NotRequired => {}
+            }
             self.observe(&IssueEvent::PublicationRequired {
                 method: record.challenge,
                 count: outstanding.len(),
@@ -650,6 +669,29 @@ impl IssueService {
             return Err(error);
         }
         Ok(None)
+    }
+
+    // Draft-02 section 4.5: prove the exact digest account URL is controlled by
+    // the active signer before giving publication instructions to a DNS operator.
+    // Transport already disables redirects; POST-as-GET is an empty byte string.
+    async fn verify_account_control(&self, record: &IssueRecord) -> Result<(), IssueError> {
+        let response = self.post(&record.account_url, b"").await?;
+        if response.status != reqwest::StatusCode::OK {
+            return Err(IssueError::InvalidInput(
+                "publication account control proof must return 200",
+            ));
+        }
+        let account: AccountObject = serde_json::from_slice(&response.body)
+            .map_err(|_| IssueError::InvalidInput("malformed publication account control proof"))?;
+        if !matches!(
+            account.status,
+            aster_acme_core::protocol::AccountStatus::Valid
+        ) {
+            return Err(IssueError::InvalidInput(
+                "publication account control proof requires a valid account",
+            ));
+        }
+        Ok(())
     }
 
     // The notification boundary owns intent, expiry recheck and response identity validation.
@@ -732,10 +774,7 @@ impl IssueService {
                         .map_err(|_| {
                             IssueError::InvalidInput("malformed challenge acknowledgement response")
                         })?;
-                    if observed.url != expected.url
-                        || observed.kind != expected.kind
-                        || observed.parameters.get("token") != expected.parameters.get("token")
-                    {
+                    if !record.challenge.matches_response(&expected, &observed) {
                         return Err(IssueError::InvalidInput(
                             "challenge acknowledgement identity changed",
                         ));
@@ -986,6 +1025,9 @@ fn completed(record: IssueRecord) -> IssueOutcome {
         .iter()
         .filter(|auth| auth.cleanup_pending)
         .filter_map(|auth| auth.validation_requirement.clone())
+        .filter(|requirement| {
+            requirement.kind().publication_lifetime() == PublicationLifetime::Temporary
+        })
         .collect();
     IssueOutcome::Completed {
         record: Box::new(record),
@@ -1010,87 +1052,4 @@ async fn bounded<T>(
         ()=execution.context.cancellation.cancelled()=>Err(IssueError::Interrupted),
         result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.context.deadline),future)=>result.map_err(|_|IssueError::Interrupted)?,
     }
-}
-
-fn prepare_authorizations(
-    record: &mut IssueRecord,
-) -> Result<Vec<ValidationRequirement>, IssueError> {
-    let mut outstanding = Vec::new();
-    for auth in &mut record.authorizations {
-        if auth
-            .resource
-            .expires
-            .is_some_and(|expires| expires <= time::OffsetDateTime::now_utc())
-        {
-            return Err(IssueError::Expired);
-        }
-        match authorization_action(&auth.resource.status)? {
-            AuthorizationAction::AlreadyValid => {}
-            AuthorizationAction::ResolveChallenge => {
-                let challenge = match &auth.challenge_url {
-                    Some(url) => auth
-                        .resource
-                        .challenges
-                        .iter()
-                        .find(|challenge| challenge.url == *url),
-                    None => auth.resource.challenges.iter().find(|challenge| {
-                        crate::challenge::known_method(&challenge.kind) == Some(record.challenge)
-                    }),
-                }
-                .ok_or(IssueError::InvalidInput(
-                    "CA did not offer the selected challenge method",
-                ))?;
-                if crate::challenge::known_method(&challenge.kind) != Some(record.challenge) {
-                    return Err(IssueError::InvalidInput("saved challenge method changed"));
-                }
-                let token = challenge
-                    .parameters
-                    .get("token")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or(IssueError::InvalidInput(
-                        "selected challenge omitted its required string token",
-                    ))?;
-                let Identifier::Dns(identifier) = authorization_identifier(
-                    auth.resource.identifier.clone(),
-                    auth.resource.wildcard,
-                )?;
-                let material = ChallengeMaterial::derive(
-                    record.challenge,
-                    &identifier,
-                    &ChallengeToken::new(token)?,
-                    &record.account_thumbprint,
-                )?;
-                let requirement = ValidationRequirement::from_material(material);
-                if auth
-                    .validation_requirement
-                    .as_ref()
-                    .is_some_and(|previous| previous != &requirement)
-                {
-                    return Err(IssueError::InvalidInput("saved challenge material changed"));
-                }
-                auth.challenge_url = Some(challenge.url.clone());
-                auth.validation_requirement = Some(requirement.clone());
-                auth.cleanup_pending = true;
-                match &challenge.status {
-                    ChallengeStatus::Pending => {
-                        if matches!(auth.acknowledgement, SubmissionState::NotSubmitted) {
-                            outstanding.push(requirement);
-                        }
-                    }
-                    ChallengeStatus::Processing | ChallengeStatus::Valid => {}
-                    ChallengeStatus::Invalid => {
-                        return Err(IssueError::AuthorizationFailed {
-                            status: auth.resource.status.clone(),
-                            problem: challenge.error.clone().map(Box::new),
-                        });
-                    }
-                    ChallengeStatus::Unknown(_) => {
-                        return Err(IssueError::InvalidInput("unsupported challenge state"));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(outstanding)
 }

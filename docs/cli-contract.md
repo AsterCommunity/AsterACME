@@ -26,7 +26,7 @@
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
 | `cert issue --resume <NAME>` | 跳过“Have you published these TXT values?”，然后正常检查 DNS |
 
-人工验证首次脚本调用先返回新材料待办，--yes不能让尚未展示的材料被当作已发布。非TTY/JSON恢复不弹问题；必须--yes显式确认，否则仍返回action_required。终端未带--yes可现场确认；CA始终决定实际授权。
+人工验证首次脚本调用先返回新材料待办，--yes不能让尚未展示的材料被当作已发布。非TTY/JSON恢复不弹问题；必须--yes显式确认，否则仍返回action_required。终端未带--yes可现场确认；CA始终决定实际授权。`dns_persist`续期只对与已签发前任快照完全一致的长期记录免确认；首次或改变的值仍遵守上述规则。
 
 --yes 不出现在 list/show/switch/recover/version；这些命令没有相同的危险操作确认。issue/renew及后续验证实现均按这里的通用确认语义扩展，不让 --yes 获得额外隐式权限。
 
@@ -50,7 +50,7 @@
 | `-a` | `--account` | cert issue 的账户选择 |
 | `-d` | `--domain` | cert issue 的域名，可重复 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
-| `-c` | `--challenge` | manual_dns/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
+| `-c` | `--challenge` | manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
 
@@ -73,7 +73,7 @@
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、-a、-c manual_dns/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、-a、-c manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
@@ -91,6 +91,19 @@
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。
 - `--contact` 是完整替换列表，`--clear-contacts` 明确清空，二者互斥；缺省输入不当作清空。
 - `--eab-kid` 与 `--eab-key-file` 必须成对且只属于注册。秘密从文件读取，不直接放 CLI 参数中。
+
+## 持久DNS验证（草案）
+
+```sh
+aster-acme cert issue -n example-cert -a default -d example.com -c dns_persist
+# 首次发布 _validation-persist TXT 后继续同一订单
+aster-acme cert issue --resume example-cert --yes
+aster-acme cert renew example-cert
+```
+
+要求CA符合`draft-ietf-acme-dns-persist-02`；具体wire字段和互操作边界见[RFC参考](rfc-reference.md#dns-persist-草案实现2026-11-14)。`--webroot`和`--listen-address`不适用于`dns_persist`。首次人工发布，确认后由CA验证。多SAN逐条展示；通配符显式增加`policy=wildcard`，长期记录保留供续期使用，完成后不显示“可以删除”。记录授予指定账户持续验证权限，用户要撤回时须手动删除对应TXT，而非依赖证书到期或本地`cert remove`。
+
+续期/daemon可免交互复用已签发前任的相同记录；CA要求的issuer/prefix变化、缺失可复用记录或范围变化均返回新材料待办，不能靠自动维护把未发布的新值当作已就绪。可选TXT建议性检查不代替CA验证；关闭precheck构建仍支持此方式。当前不提供`persistUntil`、跨域hash opt-out或DNS写入选项。
 
 ## 证书部署
 
@@ -139,7 +152,7 @@ cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / auth
 
 cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN摘要/UTC时间/状态；脚本提供名称或完整operation ID，不猜最新。完成版本不参与签发恢复选择，DNS预检仅建议，JSON不输出人类日志。
 
-新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单只提供 manual_dns，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
+新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单提供 manual_dns 与 dns_persist，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
 
 仅在实际存在证书前台进度时与最终结果之间留一空行；无进度的全未到期批次及单次not_due不加开头空行（JSON不加分隔）；批量标题/计数使用INFO/WARN/ERROR标签，表格复用公共对齐和Style，待办/取消黄色、失败红色、完成绿色、未到期青色。
 
@@ -162,7 +175,7 @@ cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN
 
 ## 方法驱动签发及相似请求
 
-新申请显式 -c 或交互选择 manual_dns/manual_http/webroot/standalone/tls_alpn，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH或终端输入目录，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
+新申请显式 -c 或交互选择 manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH或终端输入目录，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
 
 本地DNS预检固定限5秒，仅建议：不存在TXT、系统解析器失败和查询超时均WARN后继续CA。用户取消/整体deadline仍终止。DNS skip/force参数已删除，无别名。`--yes`只接受操作确认，不补填验证方式、名称或条款；恢复人工材料才可提交确认。
 

@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；`daemon run-once`运行一个周期，`daemon run`以前台常驻方式每60秒重复维护，可由配置或`--interval`调整；两种模式自动续期到期的webroot/standalone/tls_alpn证书并执行已配置部署，manual验证会跳过。自动DNS provider尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；`daemon run-once`运行一个周期，`daemon run`以前台常驻方式每60秒重复维护，可由配置或`--interval`调整；两种模式自动续期到期的webroot/standalone/tls_alpn/dns_persist证书并执行已配置部署，manual验证会跳过。自动DNS provider尚未实现。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -241,7 +241,7 @@ cert remove 默认选一次申请，--history 清理非当前已签发版本，-
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；常驻`daemon run`复用同一维护周期，默认60秒间隔，可由`config.daemon_interval`或`--interval`覆盖；`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn证书并执行已配置部署；manual验证会跳过。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；常驻`daemon run`复用同一维护周期，默认60秒间隔，可由`config.daemon_interval`或`--interval`覆盖；`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn/dns_persist证书并执行已配置部署；manual验证会跳过。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
@@ -284,3 +284,8 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 `cert deploy update CERT_NAME -n DEPLOY_NAME` 只保存给出的配置；`--clear-reload`清除命令，目标路径参数整体替换目的集合，原文件保留。Unix支持 `--file-mode 0644 --key-mode 0640`，分别控制证书/CA/fullchain和私钥，缺省0600；Windows继承权限并拒绝显式Unix mode。模式保存在绑定、后续续期沿用；修改不立即部署。
 
 部署逐目标继续执行并汇总失败。库存/锁/打开失败也退出非零，执行错误不覆盖历史成功观察。Reload使用process-wrap管理Unix进程组/Windows Job Object，取消/超时清理拥有的进程树；stdout/stderr并行读取，每路每次收集64KiB后继续排空。手动命令实时显示，自动部署在统一部署报告展示；JSON仅一个结果并带events/deployment_events。输出不自动脱敏也不写入绑定文件。Storage先完成全部选定文件的暂存、设权和同步，再逐文件替换，只有全部成功后CLI才reload；准备失败不改现有文件，提交失败不启动reload并保留失败检查点。部署直接发布普通文件，保持目录路径，不使用部署链接或目录交换，不提供整组原子切换。
+
+
+## DNS Persist（实验性草案）
+
+`cert issue -c dns_persist -n example-cert -a default -d example.com`按`draft-ietf-acme-dns-persist-02`展示长期`_validation-persist` TXT，首次由人工发布，再使用`cert issue --resume example-cert --yes`确认。记录长期保留，完成后不提示清理；`cert renew`及daemon只对前任已确认的相同记录自动就绪，换钥时保留仍适用的旧hash，改变或新增的值继续返回待办。它不写入DNS，也不自动兼容旧草案格式。要求CA支持精确版本；当前真实CA状态和参数限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)及[CLI契约](../../docs/cli-contract.md#持久dns验证草案)。

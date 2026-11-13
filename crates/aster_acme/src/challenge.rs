@@ -1,12 +1,21 @@
 //! Challenge selection and validated method-specific response materials.
 
-use aster_acme_protocol::order::WireChallengeKind;
+use aster_acme_protocol::{
+    directory::DirectoryMeta,
+    order::{ChallengeObject, WireChallengeKind},
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::identifier::{DnsIdentifier, DnsName, IdentifierError};
+use crate::identifier::{DnsIdentifier, IdentifierError};
+
+pub mod dns01;
+pub mod dns_persist;
+pub mod http01;
+pub mod tls_alpn01;
+
 /// Known executable challenge methods; a solver must also be registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -17,6 +26,9 @@ pub enum ChallengeKind {
     /// DNS-01 TXT response.
     #[serde(rename = "dns-01")]
     Dns01,
+    /// Persistent DNS TXT response (draft-ietf-acme-dns-persist-02).
+    #[serde(rename = "dns-persist-01")]
+    DnsPersist01,
     /// TLS-ALPN-01 response (contract only until a solver is supplied).
     #[serde(rename = "tls-alpn-01")]
     TlsAlpn01,
@@ -28,6 +40,7 @@ impl ChallengeKind {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Dns01 => "DNS-01",
+            Self::DnsPersist01 => "DNS-PERSIST-01",
             Self::Http01 => "HTTP-01",
             Self::TlsAlpn01 => "TLS-ALPN-01",
         }
@@ -37,9 +50,74 @@ impl ChallengeKind {
     #[must_use]
     pub fn supports_wildcards(self) -> bool {
         match self {
-            Self::Dns01 => true,
+            Self::Dns01 | Self::DnsPersist01 => true,
             Self::Http01 | Self::TlsAlpn01 => false,
         }
+    }
+}
+
+/// Whether a publication is withdrawn at an issuance terminal state or retained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationLifetime {
+    /// Challenge-scoped material eligible for terminal cleanup.
+    Temporary,
+    /// Long-lived authorization retained for future issuance.
+    Persistent,
+}
+
+/// Protocol proof required before handing material to a publication solver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PublicationAccountProof {
+    NotRequired,
+    ActiveAccount,
+}
+
+impl ChallengeKind {
+    /// Validate required method metadata before a fresh order is submitted.
+    pub(crate) fn validate_directory(self, meta: &DirectoryMeta) -> Result<(), ChallengeError> {
+        match self {
+            Self::DnsPersist01 => {
+                dns_persist::account_uri::validate_prefix(meta)?;
+            }
+            Self::Dns01 | Self::Http01 | Self::TlsAlpn01 => {}
+        }
+        Ok(())
+    }
+
+    /// Publication lifetime belongs to the protocol method, independently of a solver.
+    #[must_use]
+    pub const fn publication_lifetime(self) -> PublicationLifetime {
+        match self {
+            Self::DnsPersist01 => PublicationLifetime::Persistent,
+            Self::Dns01 | Self::Http01 | Self::TlsAlpn01 => PublicationLifetime::Temporary,
+        }
+    }
+
+    pub(crate) const fn publication_account_proof(self) -> PublicationAccountProof {
+        match self {
+            Self::DnsPersist01 => PublicationAccountProof::ActiveAccount,
+            Self::Dns01 | Self::Http01 | Self::TlsAlpn01 => PublicationAccountProof::NotRequired,
+        }
+    }
+
+    /// Compare method-specific identity while allowing lifecycle fields to advance.
+    pub(crate) fn matches_response(
+        self,
+        expected: &ChallengeObject,
+        observed: &ChallengeObject,
+    ) -> bool {
+        expected.url == observed.url
+            && known_method(&expected.kind) == Some(self)
+            && known_method(&observed.kind) == Some(self)
+            && match self {
+                Self::DnsPersist01 => {
+                    observed.parameters.get("issuerDomainNames")
+                        == expected.parameters.get("issuerDomainNames")
+                }
+                Self::Dns01 | Self::Http01 | Self::TlsAlpn01 => {
+                    observed.parameters.get("token") == expected.parameters.get("token")
+                }
+            }
     }
 }
 
@@ -71,9 +149,12 @@ pub enum ChallengeError {
     /// RFC 7638 SHA-256 JWK thumbprints must decode to 32 bytes.
     #[error("invalid SHA-256 JWK thumbprint")]
     InvalidThumbprint,
-    /// Wildcards only support DNS-01 among the methods defined here.
-    #[error("wildcard identifiers require DNS-01")]
+    /// Wildcards require a supported DNS validation method.
+    #[error("wildcard identifiers require DNS-01 or DNS-PERSIST-01")]
     WildcardMethod,
+    /// The selected persistent challenge or its directory metadata is malformed.
+    #[error("invalid dns-persist-01 parameters: {0}")]
+    InvalidDnsPersist(&'static str),
     /// Derived DNS record name is invalid.
     #[error(transparent)]
     Identifier(#[from] IdentifierError),
@@ -177,6 +258,12 @@ impl KeyAuthorization {
         Ok(Self(format!("{}.{jwk_thumbprint}", token.as_str())))
     }
 
+    /// SHA-256 binding shared by DNS-01 and TLS-ALPN-01.
+    #[must_use]
+    pub fn sha256_digest(&self) -> [u8; 32] {
+        Sha256::digest(self.0.as_bytes()).into()
+    }
+
     /// Token and thumbprint joined by a dot.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -187,74 +274,25 @@ impl KeyAuthorization {
 /// Method-specific response materials. No account private key is passed to a solver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChallengeMaterial {
-    /// Publish the expected TXT value at this owner name.
-    Dns01 {
-        /// Owner name (including `_acme-challenge`).
-        record_name: DnsName,
-        /// Base64url-encoded SHA-256 key authorization digest.
-        txt_value: String,
-    },
-    /// Publish an exact token response for this hostname.
-    Http01 {
-        /// Non-wildcard certificate identifier.
-        identifier: DnsIdentifier,
-        /// Validated path segment.
-        token: ChallengeToken,
-        /// Response body.
-        key_authorization: KeyAuthorization,
-    },
-    /// Present an ALPN validation certificate for this hostname.
-    TlsAlpn01 {
-        /// Non-wildcard certificate identifier.
-        identifier: DnsIdentifier,
-        /// Digest for the critical acmeIdentifier extension.
-        authorization_digest: [u8; 32],
-    },
+    /// Temporary DNS TXT publication.
+    Dns01(dns01::Dns01Record),
+    /// Long-lived DNS authorization, retained across renewal.
+    DnsPersist01(dns_persist::DnsPersistRecord),
+    /// Exact HTTP token response.
+    Http01(http01::Http01Response),
+    /// Inputs for a dedicated ALPN validation certificate.
+    TlsAlpn01(tls_alpn01::TlsAlpn01Response),
 }
 
 impl ChallengeMaterial {
-    /// Derive material from a CA token and the active account's JWK thumbprint.
-    ///
-    /// # Errors
-    /// Rejects invalid thumbprints, unsupported wildcard methods, and oversized TXT owners.
-    pub fn derive(
-        kind: ChallengeKind,
-        identifier: &DnsIdentifier,
-        token: &ChallengeToken,
-        jwk_thumbprint: &str,
-    ) -> Result<Self, ChallengeError> {
-        if identifier.is_wildcard() && !kind.supports_wildcards() {
-            return Err(ChallengeError::WildcardMethod);
-        }
-        let key_authorization = KeyAuthorization::new(token, jwk_thumbprint)?;
-        let digest: [u8; 32] = Sha256::digest(key_authorization.as_str().as_bytes()).into();
-        Ok(match kind {
-            ChallengeKind::Dns01 => Self::Dns01 {
-                record_name: DnsName::new(&format!(
-                    "_acme-challenge.{}",
-                    identifier.name().as_str()
-                ))?,
-                txt_value: URL_SAFE_NO_PAD.encode(digest),
-            },
-            ChallengeKind::Http01 => Self::Http01 {
-                identifier: identifier.clone(),
-                token: token.clone(),
-                key_authorization,
-            },
-            ChallengeKind::TlsAlpn01 => Self::TlsAlpn01 {
-                identifier: identifier.clone(),
-                authorization_digest: digest,
-            },
-        })
-    }
-
     /// Method represented by this payload.
     #[must_use]
-    pub fn kind(&self) -> ChallengeKind {
+    pub const fn kind(&self) -> ChallengeKind {
         match self {
-            Self::Dns01 { .. } => ChallengeKind::Dns01,
-            Self::Http01 { .. } => ChallengeKind::Http01,
-            Self::TlsAlpn01 { .. } => ChallengeKind::TlsAlpn01,
+            Self::Dns01(_) => ChallengeKind::Dns01,
+            Self::DnsPersist01(_) => ChallengeKind::DnsPersist01,
+            Self::Http01(_) => ChallengeKind::Http01,
+            Self::TlsAlpn01(_) => ChallengeKind::TlsAlpn01,
         }
     }
 }
@@ -264,7 +302,11 @@ pub(crate) fn known_method(kind: &WireChallengeKind) -> Option<ChallengeKind> {
     match kind {
         WireChallengeKind::Http01 => Some(ChallengeKind::Http01),
         WireChallengeKind::Dns01 => Some(ChallengeKind::Dns01),
+        WireChallengeKind::DnsPersist01 => Some(ChallengeKind::DnsPersist01),
         WireChallengeKind::TlsAlpn01 => Some(ChallengeKind::TlsAlpn01),
         WireChallengeKind::Unknown(_) => None,
     }
 }
+
+#[cfg(test)]
+mod tests;

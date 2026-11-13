@@ -32,4 +32,7 @@ MIT OR Apache-2.0.
 
 ProblemKind 用 Forge wire_enum 表达 RFC8555 §6.7 的24种标准问题，未知 URI 进入 Unknown(String)，序列化仍为 URI；不保留散落的旧字符串常量。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；`daemon run-once`执行一次维护，`daemon run`以前台常驻方式按配置间隔循环，默认60秒，同一data-dir由跨进程租约限制为单实例。两种模式刷新ARI建议、自动续期到期的webroot/standalone/tls_alpn证书并执行已配置部署；manual验证会跳过。本地 DNS 采用建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；`daemon run-once`执行一次维护，`daemon run`以前台常驻方式按配置间隔循环，默认60秒，同一data-dir由跨进程租约限制为单实例。两种模式刷新ARI建议、自动续期到期的webroot/standalone/tls_alpn/dns_persist证书并执行已配置部署；manual验证会跳过。本地 DNS 采用建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，外置锁 inode 保留。
+
+
+`WireChallengeKind::DnsPersist01`与`DnsPersistParameters`对应`draft-ietf-acme-dns-persist-02`。选中方法时才解码camelCase的`issuerDomainNames`，旧字段与未知扩展仍留在`ChallengeObject.parameters`，不会迫使同一授权的DNS-01执行要求新字段。`DirectoryMeta.issuer_domain_names`/`account_hash_prefix`允许缺省或不合规类型降为不可用，CAA metadata不合规时同样不可用于集合比较；是否可以预配置、issuer集合与hash prefix的语义校验归`aster_acme`，不在wire层执行DNS或账户查询。

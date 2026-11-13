@@ -23,6 +23,10 @@ pub(crate) enum ValidationMethod {
     #[value(name = "manual_dns")]
     #[serde(rename = "manual_dns")]
     ManualDns,
+    /// Provision persistent DNS TXT records once, then reuse them for renewals (draft-02).
+    #[value(name = "dns_persist")]
+    #[serde(rename = "dns_persist")]
+    DnsPersist,
     /// Publish HTTP challenge files yourself using your existing HTTP server.
     #[value(name = "manual_http")]
     #[serde(rename = "manual_http")]
@@ -42,12 +46,16 @@ pub(crate) enum ValidationMethod {
 }
 impl ValidationMethod {
     pub(super) const fn automatic(self) -> bool {
-        matches!(self, Self::Webroot | Self::Standalone | Self::TlsAlpn)
+        matches!(
+            self,
+            Self::DnsPersist | Self::Webroot | Self::Standalone | Self::TlsAlpn
+        )
     }
 
     pub(super) const fn kind(self) -> ChallengeKind {
         match self {
             Self::ManualDns => ChallengeKind::Dns01,
+            Self::DnsPersist => ChallengeKind::DnsPersist01,
             Self::ManualHttp | Self::Webroot | Self::Standalone => ChallengeKind::Http01,
             Self::TlsAlpn => ChallengeKind::TlsAlpn01,
         }
@@ -55,6 +63,7 @@ impl ValidationMethod {
     pub(super) const fn id(self) -> &'static str {
         match self {
             Self::ManualDns => "manual_dns",
+            Self::DnsPersist => "dns_persist",
             Self::ManualHttp => "manual_http",
             Self::Webroot => "webroot",
             Self::Standalone => "standalone",
@@ -148,13 +157,16 @@ pub(super) fn configuration(
         (ValidationMethod::Webroot, None) => Err(IssueError::InvalidInput(
             "webroot validation requires --webroot <PATH>",
         )),
-        (ValidationMethod::ManualDns | ValidationMethod::ManualHttp, None) => {
-            serde_json::to_value(ManualConfig {}).map_err(|_| {
-                IssueError::InvalidInput("cannot encode manual validation configuration")
-            })
-        }
         (
             ValidationMethod::ManualDns
+            | ValidationMethod::DnsPersist
+            | ValidationMethod::ManualHttp,
+            None,
+        ) => serde_json::to_value(ManualConfig {})
+            .map_err(|_| IssueError::InvalidInput("cannot encode manual validation configuration")),
+        (
+            ValidationMethod::ManualDns
+            | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp
             | ValidationMethod::Standalone
             | ValidationMethod::TlsAlpn,
@@ -198,12 +210,18 @@ pub(super) fn adapter(
                 progress,
             )))
         }
-        ValidationMethod::ManualDns | ValidationMethod::ManualHttp => {
+        ValidationMethod::ManualDns
+        | ValidationMethod::DnsPersist
+        | ValidationMethod::ManualHttp => {
             let _: ManualConfig =
                 serde_json::from_value(record.solver_config.clone()).map_err(|_| {
                     IssueError::InvalidInput("invalid saved manual validation configuration")
                 })?;
             Ok(Box::new(manual::Manual {
+                reusable: record
+                    .renewal_of
+                    .as_ref()
+                    .map_or_else(Vec::new, |previous| previous.retained_validation.clone()),
                 prompt: std::sync::Mutex::new(None),
                 method: record.challenge,
                 saved: record

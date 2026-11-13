@@ -699,6 +699,7 @@ async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_tra
     use crate::commands::cert::validation::ValidationMethod;
     for method in [
         ValidationMethod::ManualDns,
+        ValidationMethod::DnsPersist,
         ValidationMethod::ManualHttp,
         ValidationMethod::Webroot,
         ValidationMethod::Standalone,

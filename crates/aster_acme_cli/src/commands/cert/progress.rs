@@ -107,7 +107,7 @@ impl IssueObserver for Progress {
             ),
             IssueEvent::PublicationRequired { count, method } => (
                 MessageKind::Info,
-                format!("Prepared {count} {} requirement(s)", match method { aster_acme::challenge::ChallengeKind::Dns01 => "DNS TXT", aster_acme::challenge::ChallengeKind::Http01 => "HTTP file", aster_acme::challenge::ChallengeKind::TlsAlpn01 => "TLS-ALPN" }),
+                format!("Prepared {count} {} requirement(s)", match method { aster_acme::challenge::ChallengeKind::Dns01 => "DNS TXT", aster_acme::challenge::ChallengeKind::DnsPersist01 => "persistent DNS TXT", aster_acme::challenge::ChallengeKind::Http01 => "HTTP file", aster_acme::challenge::ChallengeKind::TlsAlpn01 => "TLS-ALPN" }),
             ),
             IssueEvent::PublicationReady { method } => (
                 MessageKind::Info,
@@ -260,6 +260,7 @@ mod tests {
         })).unwrap();
         assert!(protocol_messages(&directory, &record)[1].contains("Issuance strategy: RFC 8555"));
         record.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+            retained_validation: Vec::new(),
             operation_id: "old".into(),
             certificate_id: Some("a.b".into()),
         });
