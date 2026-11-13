@@ -76,6 +76,43 @@ fn json_suppresses_progress_and_context_and_error_is_one_structured_document() {
     );
 }
 
+#[test]
+fn json_stream_writes_flushed_lines_without_finalizing_the_session() {
+    let (output, stdout, stderr) = session(true);
+    output
+        .stream_json(&serde_json::json!({"event":"started","interval":60}))
+        .unwrap();
+    output
+        .stream_json(&serde_json::json!({"event":"cycle","cycle":1}))
+        .unwrap();
+    let lines = stdout.text().lines().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&lines[0]).unwrap()["event"],
+        "started"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&lines[1]).unwrap()["cycle"],
+        1
+    );
+    assert_eq!(stderr.text(), "");
+    output
+        .finish("{\"event\":\"stopped\"}", FinalChannel::Result)
+        .unwrap();
+    assert_eq!(stdout.text().lines().count(), 3);
+}
+
+#[test]
+fn timestamped_progress_uses_the_shared_log_format() {
+    let (output, _, stderr) = session(false);
+    output.progress_at(
+        MessageKind::Success,
+        "certificate renewed",
+        time::OffsetDateTime::UNIX_EPOCH,
+    );
+    assert!(stderr.text().starts_with("[1970-01-01 00:00:00 UTC] [OK]"));
+}
+
 struct Failing;
 impl Write for Failing {
     fn write(&mut self, _: &[u8]) -> io::Result<usize> {

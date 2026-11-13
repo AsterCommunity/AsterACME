@@ -41,6 +41,7 @@ pub struct CliIssueStore {
     root: PathBuf,
     timeout: Duration,
 }
+
 impl CliIssueStore {
     /// Open a catalog without writing files; execution creates private directories under lease.
     #[must_use]

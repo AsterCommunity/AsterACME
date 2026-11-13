@@ -52,6 +52,7 @@ impl Args {
             Command::Version { json } => *json,
             Command::Daemon { command } => match command {
                 crate::commands::daemon::DaemonCommand::RunOnce(args) => args.local.json,
+                crate::commands::daemon::DaemonCommand::Run { options, .. } => options.local.json,
             },
             Command::Account { command } => command.json(),
         }

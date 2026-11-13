@@ -27,13 +27,13 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers and resident scheduling are not implemented.
+**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers are not implemented.
 
 ## Capabilities
 
 - Named CA accounts: registration, recovery, contacts, key rotation, and deactivation.
 - Single-domain, multi-SAN, and wildcard certificates; independent account and certificate key choices.
-- Saved issuance recovery, ARI refresh, foreground single/batch renewal, and cron-driven automatic renewal for supported validation methods.
+- Saved issuance recovery, ARI refresh, foreground single/batch renewal, and unattended maintenance for supported validation methods.
 - Multiple deployment targets per certificate, automatic deployment after renewal, and bounded reload commands with stdout/stderr output.
 - Interactive input, structured JSON, offline inspection, and optional debug diagnostics.
 
@@ -69,9 +69,11 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`daemon run-once` refreshes due ARI suggestions, renews due certificates using `webroot`, `standalone`, or `tls_alpn`, and runs configured deployments. Manual validation methods are skipped. Use cron to invoke it periodically.
+`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, or `tls_alpn`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
 
-`renew` runs when due; add `--now` to renew early. Use `daemon run-once` with cron for unattended renewals using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
+The resident daemon holds an exclusive lock for its data directory. Set `daemon_interval = 60` in `config.toml` or override it with `daemon run --interval 60`. Human logs use the same timestamped levels as issuance; `--json` streams one JSON object per line.
+
+`renew` runs when due; add `--now` to renew early. Use resident `daemon run` or cron with `daemon run-once` for unattended maintenance using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
 
 ## Deploy
 

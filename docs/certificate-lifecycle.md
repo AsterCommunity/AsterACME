@@ -1,6 +1,6 @@
 # 证书续期计划与吊销
 
-已实现 RFC 9773 的 RenewalInfo、持久化计划、cert renew 单次续期，以及 RFC 8555 §7.6 的账户签名吊销。`daemon run-once` 提供一次 ARI 刷新、符合准入条件的自动续期和已配置部署周期，由外部 cron 触发；不安装系统任务或启动常驻调度。
+已实现 RFC 9773 的 RenewalInfo、持久化计划、cert renew 单次续期，以及 RFC 8555 §7.6 的账户签名吊销。`daemon run-once`提供一次维护周期；`daemon run`以前台常驻方式重复该周期，不安装或修改系统服务。每个data-dir只允许一个常驻daemon，具体开机启动、重启和日志收集交给系统服务管理器。
 
 ## 托管证书与签发版本
 
@@ -48,9 +48,9 @@ ARI刷新只扫描当前 in_use、已完成、未吊销、未过期且有ARI标�
 */15 * * * * /usr/local/bin/aster-acme daemon run-once --data-dir /srv/aster-acme
 ```
 
-cron触发频率只决定何时检查保存的期限，不会绕过CA的Retry-After。
+cron触发频率只决定何时检查保存的期限，不会绕过CA的Retry-After。也可使用`daemon run`常驻运行；配置`daemon_interval`或`--interval`决定周期完成后的等待时间，默认60秒。
 
-`daemon help`、`daemon help run-once`与`--help`由clap原生生成，包含cron示例。维护表格与证书/部署/批量续期列表共用`common::table::listing`，统一表头与状态样式；同一ARI窗口保留已有`renew_at`，成功刷新不意味着续期时间必然改变。空周期只输出一条摘要，不打印空表、无工作阶段日志或重复逐项日志；有工作时才报告ARI阶段开始，逐项结果由最终报告统一列出。续期中的签发阶段仍保留实时CA/验证进度。
+`daemon help`、`daemon help run-once`与`--help`由clap原生生成，包含cron和常驻示例。维护表格与证书/部署/批量续期列表共用`common::table::listing`，统一表头与状态样式；同一ARI窗口保留已有`renew_at`，成功刷新不意味着续期时间必然改变。run-once输出一份完整报告；常驻daemon逐周期输出与签发一致的时间戳、级别日志，JSON逐行记录`started`、`cycle`、`stopped`事件。续期中的签发阶段仍保留实时CA/验证进度。
 
 ## 吊销
 
@@ -133,7 +133,7 @@ renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择
 
 ## 外置锁与删除
 
-对象锁集中在 <data-dir>/.locks/accounts/<name>.lock 和 .locks/certificates/<name>.lock；该锁区不属于对象数据，释放后保留 inode，避免等候者与重建者取得不同锁。accounts/<name>、certs/<name> 不再创建内部 account.lock/cert.lock；完整删除无用户内容时清除对象目录。用户额外文件保留原位；异常清理标记仍需检查。配置文件读改写锁继续由 toml_file 管理。未发布阶段直接改变布局，不迁移既有旧对象。
+对象锁集中在 <data-dir>/.locks/accounts/<name>.lock、.locks/certificates/<name>.lock和.locks/daemon/instance.lock；最后一项只允许一个常驻daemon拥有同一状态根。该锁区不属于对象数据，释放后保留 inode，避免等候者与重建者取得不同锁。accounts/<name>、certs/<name> 不再创建内部 account.lock/cert.lock；完整删除无用户内容时清除对象目录。用户额外文件保留原位；异常清理标记仍需检查。配置文件读改写锁继续由 toml_file 管理。未发布阶段直接改变布局，不迁移既有旧对象。
 
 全库状态一致性检查：账户 remove 只标 ca_request_performed=false，不冒称 CA 未停用；账户 list 查询计数为 requested/refreshed/failed，不把部分失败的本地快照冒称全远端。通配符授权显示 *.域名。原有 core 账户、订单/授权/challenge 动作、吊销 pending/confirmed 与存储先意图后副作用的边界继续保留；一般输入/权限检查仍为普通条件。
 

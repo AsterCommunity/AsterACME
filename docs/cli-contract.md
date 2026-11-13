@@ -85,6 +85,7 @@
 ## 参数组及互斥
 
 - `--data-dir PATH`：唯一状态根覆盖；也可设置 `ASTER_ACME_DATA_DIR`。命令行参数优先于环境变量，未设置时使用平台默认目录；配置固定为状态根中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
+- 常驻 `daemon run` 的周期默认60秒，可设置 `[config].daemon_interval` 或传入 `--interval SECONDS` 覆盖（1–86400秒；CLI优先于配置）。值在启动时加载，修改配置后重启daemon生效。
 - `--ca` 与 `--ca-directory` 互斥；内置只有公开生产提供商 letsencrypt/zerossl/google。已有账户始终绑定原 CA，显式不同 CA 拒绝，不因选项换成新账户。
 - `--user-agent` 与 `--request-timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；--operation-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。
@@ -126,7 +127,7 @@
 
 0 表示命令成功执行；cert issue 的 action_required 同样为 0，脚本必须检查 status，不能将其误认为 completed。一般错误为 1，Clap 解析错误沿用 2，交互取消为 130。远端查询失败不标为 verified。
 
-续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。`daemon run-once` 非交互刷新到期ARI建议，并独立执行准入的到期续期及已配置部署，可由cron触发；仅`webroot`、`standalone`、`tls_alpn`自动准入，人工方法报告为跳过。参数、预算、报告和退出码见生命周期的单次维护周期。未提供子命令时由clap拒绝，不启动常驻任务。
+续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。`daemon run-once`执行一个非交互维护周期，`daemon run`在前台持续运行；仅`webroot`、`standalone`、`tls_alpn`自动准入，人工方法报告为跳过。常驻周期默认间隔60秒，可由`config.daemon_interval`或`--interval`覆盖（1–86400秒）。同一data-dir只允许一个常驻daemon，Unix支持Ctrl-C/SIGTERM协作退出；Windows使用Ctrl-C。人类日志沿用签发的带时间戳级别格式，常驻`--json`为JSON Lines，`run-once --json`仍为单份JSON。`run-once`仍可由cron触发。
 
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
 

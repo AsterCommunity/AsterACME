@@ -1,5 +1,6 @@
-//! Host adapter for a finite, noninteractive maintenance cycle.
+//! Host adapter for finite and resident, noninteractive maintenance cycles.
 pub(crate) mod render;
+mod resident;
 use crate::{
     commands::account::args::AccountArgs,
     commands::cert::args::RunArgs,
@@ -20,12 +21,18 @@ use aster_acme_cli_storage::issuance::CliIssueStore;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-const SCHEDULING_HELP: &str = "Scheduling (cron example, every 15 minutes):
+const SCHEDULING_HELP: &str = "Resident scheduling:
+  aster-acme daemon run --data-dir /absolute/path/to/state
+  Default delay after each cycle: 60 seconds; --interval overrides config daemon_interval.
+  Run in the foreground under your service manager; Ctrl-C or Unix SIGTERM stops gracefully.
+  Resident --json emits JSON Lines; run-once --json emits one JSON document.
+
+Scheduling (cron example, every 15 minutes):
   Run crontab -e and add:
   */15 * * * * /absolute/path/to/aster-acme daemon run-once --data-dir /absolute/path/to/state
 
 Use absolute paths and the same --data-dir as issue/renew. Quote paths containing spaces.
-Refreshes ARI advice, renews due webroot/standalone/tls_alpn certificates, retries due known deployment failures, and runs configured deployments. Manual validation is skipped. Uncertain ACME submissions and reloads are never replayed automatically. The command does not install a cron job.";
+Refreshes ARI advice, renews due webroot/standalone/tls_alpn certificates, retries due known deployment failures, and runs configured deployments. Manual validation is skipped. Uncertain ACME submissions and reloads are never replayed automatically. Commands do not install cron jobs or system services.";
 
 #[derive(clap::Subcommand)]
 #[command(after_help = SCHEDULING_HELP)]
@@ -33,9 +40,18 @@ pub(crate) enum DaemonCommand {
     /// Refresh ARI, renew eligible certificates, and retry due known deployment failures once.
     #[command(after_help = SCHEDULING_HELP)]
     RunOnce(RunOnceArgs),
+    /// Run maintenance continuously in the foreground until interrupted.
+    #[command(after_help = SCHEDULING_HELP)]
+    Run {
+        #[command(flatten)]
+        options: RunOnceArgs,
+        /// Delay after each completed cycle in seconds (1–86400); config `daemon_interval`, default 60.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=86400))]
+        interval: Option<u64>,
+    },
 }
 
-#[derive(clap::Args)]
+#[derive(Clone, clap::Args)]
 pub(crate) struct RunOnceArgs {
     #[command(flatten)]
     pub(crate) local: LocalArgs,
@@ -81,18 +97,50 @@ pub(crate) struct DaemonReport {
     pub(crate) data_dir: std::path::PathBuf,
 }
 
+pub(crate) enum DaemonExecution {
+    Cycle(DaemonReport),
+    Stopped(DaemonStopped),
+}
+
+pub(crate) struct DaemonStopped {
+    pub(crate) cycles: u64,
+    pub(crate) failed_cycles: u64,
+    pub(crate) data_dir: std::path::PathBuf,
+}
+
 pub(crate) async fn execute(
     command: DaemonCommand,
     cli: &CommandContext,
-) -> CliResult<DaemonReport> {
-    let DaemonCommand::RunOnce(args) = command;
+) -> CliResult<DaemonExecution> {
+    match command {
+        DaemonCommand::RunOnce(args) => Ok(DaemonExecution::Cycle(execute_once(args, cli).await?)),
+        DaemonCommand::Run { options, interval } => Ok(DaemonExecution::Stopped(
+            resident::run(options, interval, cli).await?,
+        )),
+    }
+}
+
+async fn execute_once(args: RunOnceArgs, cli: &CommandContext) -> CliResult<DaemonReport> {
     let settings = CliSettings::load(&AccountArgs {
         data_dir: args.local.data_dir.clone(),
         json: args.local.json,
         ..AccountArgs::default()
     })
     .await?;
-    let options = args.options(&settings);
+    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
+    let cancellation = CancellationToken::new();
+    let _signal = InterruptGuard::daemon(cancellation.clone());
+    execute_cycle(&args, &settings, &store, cli, &cancellation).await
+}
+
+async fn execute_cycle(
+    args: &RunOnceArgs,
+    settings: &CliSettings,
+    store: &CliIssueStore,
+    cli: &CommandContext,
+    cancellation: &CancellationToken,
+) -> CliResult<DaemonReport> {
+    let options = args.options(settings);
     let renewal_run = RunArgs {
         poll_interval: args.poll_interval,
         max_polls: args.max_polls,
@@ -101,21 +149,18 @@ pub(crate) async fn execute(
         http: args.http.clone(),
         local: args.local.clone(),
     };
-    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let cancellation = CancellationToken::new();
-    let _signal = InterruptGuard::new(cancellation.clone());
     let tasks = CliAutomaticTasks {
         settings: settings.clone(),
-        store: &store,
+        store,
         run: &renewal_run,
         timeout: options.certificate_timeout,
         cli,
     };
     let cycle = maintenance::run_cycle(
-        &store,
+        store,
         &cli.http,
         &options,
-        &cancellation,
+        cancellation,
         Some(&AriProgress(cli.output.clone())),
         &tasks,
     )
@@ -131,7 +176,7 @@ pub(crate) async fn execute(
             maintenance::Stage::NotRun => Vec::new(),
         },
         deployment_cancelled: cancellation.is_cancelled(),
-        data_dir: settings.data_dir,
+        data_dir: settings.data_dir.clone(),
     })
 }
 

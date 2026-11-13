@@ -25,7 +25,7 @@
 ## 配置、文件和安全
 
 - 统一 `--data-dir`；配置固定为根config.toml，无独立--config或配置内data_dir。根version=1，config.toml使用toml_edit定点修改保留用户注释，未知版本/损坏拒绝自动重置。
-- accounts/<name>保存account.toml与account-key.pk8；certs/<name>保存cert.toml和各操作世代。锁集中在根.locks，锁载体存在不代表持锁，不通过删除锁文件释放锁。
+- accounts/<name>保存account.toml与account-key.pk8；certs/<name>保存cert.toml和各操作世代。账户、证书及常驻daemon的进程锁集中在根.locks，锁载体存在不代表持锁，不通过删除锁文件释放锁。
 - 只有注册可创建账户身份；普通查看/恢复缺密钥时失败关闭。未知用户文件不参与托管删除，不递归清理未证明归属的内容。
 - Unix内部密钥/元数据使用私有权限；Windows继承权限并校验reparse/hard-link。Windows替换支持进程重启恢复，不承诺掉电rename目录项持久性。
 - 私钥、EAB、provider凭据不进入日志、错误或公开输出。外部reload输出按用户要求展示，不自动脱敏，也不持久化为账户/部署元数据。

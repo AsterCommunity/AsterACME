@@ -80,6 +80,35 @@ impl OutputSession {
         self.details(level, message, &[]);
     }
 
+    /// Replay a saved event with its original timestamp through the shared log sink.
+    pub(crate) fn progress_at(&self, level: MessageKind, message: &str, at: time::OffsetDateTime) {
+        if !self.is_json() {
+            self.context(&log::render(
+                level,
+                message,
+                &[],
+                at,
+                self.diagnostic_format.color,
+            ));
+        }
+    }
+
+    /// Resident commands must stop after a broken sink instead of running forever
+    /// with diagnostics silently discarded. Keep the error available to finalization.
+    pub(crate) fn check_health(&self) -> io::Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("output session lock poisoned"))?;
+        if state.finished {
+            return Err(io::Error::other("output session already finalized"));
+        }
+        match &state.error {
+            Some(error) => Err(io::Error::new(error.kind(), "output session write failed")),
+            None => Ok(()),
+        }
+    }
+
     pub(crate) fn details(&self, level: MessageKind, message: &str, details: &[String]) {
         if self.is_json() {
             return;
@@ -121,6 +150,31 @@ impl OutputSession {
                 Err(error) => state.error = Some(error),
             }
         }
+    }
+
+    /// Write one JSON Lines event without finalizing a long-running command.
+    pub(crate) fn stream_json(&self, event: &impl serde::Serialize) -> io::Result<()> {
+        if !self.is_json() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "JSON stream event requires JSON output mode",
+            ));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("output session lock poisoned"))?;
+        if state.finished {
+            return Err(io::Error::other("output session already finalized"));
+        }
+        // Serialize before writing, so a serialization failure never leaves half
+        // a JSON value in an otherwise valid JSON Lines stream.
+        let text = serde_json::to_string(event).map_err(io::Error::other)?;
+        let result = writeln!(state.stdout, "{text}").and_then(|()| state.stdout.flush());
+        if let Err(error) = &result {
+            state.error = Some(io::Error::new(error.kind(), "JSON stream output failed"));
+        }
+        result
     }
 
     /// A hook may run while this very thread owns the output lock. Never wait

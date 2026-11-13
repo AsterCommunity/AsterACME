@@ -32,7 +32,7 @@ CLI app / dispatch
 
 已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
 
-`daemon run-once`调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。验证实现准入及进程执行属于宿主能力，续期退避和部署重试准入属于库策略。Storage负责文件布局、跨进程租约及持锁快照重验；账户锁、证书租约和expected_in_use重验阻止并发重复世代。自动DNS provider与常驻调度尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
+`daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。自动DNS provider尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 
 ## 详细设计入口
 

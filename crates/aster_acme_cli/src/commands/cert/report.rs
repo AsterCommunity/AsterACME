@@ -271,6 +271,10 @@ impl RenewalBatch {
         self.entries.is_empty()
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     pub(crate) fn was_cancelled(&self) -> bool {
         self.cancelled
             || self.entries.iter().any(|entry| {

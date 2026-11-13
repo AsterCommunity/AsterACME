@@ -18,6 +18,7 @@
     )
 )]
 pub mod account;
+pub mod daemon;
 pub mod inventory;
 pub mod issuance;
 pub mod state_file;

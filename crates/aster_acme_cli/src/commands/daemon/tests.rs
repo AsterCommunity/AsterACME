@@ -31,9 +31,18 @@ fn parse(extra: &[&str]) -> daemon::RunOnceArgs {
 }
 
 #[test]
-fn only_explicit_finite_invocations_and_bounded_limits_are_accepted() {
+fn daemon_commands_and_bounded_limits_are_accepted() {
     assert!(Args::try_parse_from(["aster-acme", "daemon"]).is_err());
     parse(&[]);
+    let resident =
+        Args::try_parse_from(["aster-acme", "daemon", "run", "--interval", "90"]).unwrap();
+    let Command::Daemon {
+        command: daemon::DaemonCommand::Run { interval, .. },
+    } = resident.command
+    else {
+        panic!("expected resident daemon")
+    };
+    assert_eq!(interval, Some(90));
     for flag in [
         "--request-timeout",
         "--operation-timeout",
@@ -59,6 +68,14 @@ fn only_explicit_finite_invocations_and_bounded_limits_are_accepted() {
     for extra in ["--all", "--now", "--yes", "--renew", "--install"] {
         assert!(Args::try_parse_from(["aster-acme", "daemon", "run-once", extra]).is_err());
     }
+    for invalid in ["0", "86401", "NaN"] {
+        assert!(
+            Args::try_parse_from(["aster-acme", "daemon", "run", "--interval", invalid]).is_err()
+        );
+    }
+    assert!(
+        Args::try_parse_from(["aster-acme", "daemon", "run-once", "--interval", "30"]).is_err()
+    );
 }
 
 #[test]
@@ -169,9 +186,13 @@ async fn empty_inventory_is_noninteractive_and_needs_no_account_or_http() {
     let temp = tempfile::tempdir().unwrap();
     let args = parse(&["--json", "--data-dir", temp.path().to_str().unwrap()]);
     let cli = CommandContext::new(true);
-    let report = daemon::execute(daemon::DaemonCommand::RunOnce(args), &cli)
-        .await
-        .unwrap();
+    let daemon::DaemonExecution::Cycle(report) =
+        daemon::execute(daemon::DaemonCommand::RunOnce(args), &cli)
+            .await
+            .unwrap()
+    else {
+        panic!("run-once must return a completed cycle")
+    };
     assert!(report.ari.entries.is_empty());
     assert_eq!(daemon::exit_status(&report), ExitStatus::Success);
     assert!(!temp.path().join("accounts").exists());
@@ -212,6 +233,13 @@ fn native_daemon_help_paths_include_cron_and_never_require_execution_inputs() {
         assert!(help.contains("*/15 * * * * /absolute/path/to/aster-acme daemon run-once --data-dir /absolute/path/to/state"));
         assert!(!help.contains("--run-once"));
     }
+    let resident = root
+        .clone()
+        .try_get_matches_from(["aster-acme", "daemon", "run", "--help"])
+        .unwrap_err();
+    assert_eq!(resident.kind(), clap::error::ErrorKind::DisplayHelp);
+    assert!(resident.to_string().contains("--interval"));
+    assert!(resident.to_string().contains("ASTER_ACME_DATA_DIR"));
     assert!(Args::try_parse_from(["aster-acme", "daemon", "--run-once"]).is_err());
 }
 

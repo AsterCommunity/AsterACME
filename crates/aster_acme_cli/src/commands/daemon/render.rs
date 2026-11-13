@@ -8,6 +8,156 @@ use crate::common::{
 };
 use aster_acme::maintenance::Outcome;
 
+pub(crate) fn started(
+    output_session: &crate::common::session::OutputSession,
+    interval: std::time::Duration,
+    data_dir: &std::path::Path,
+) -> CliResult<()> {
+    let at = time::OffsetDateTime::now_utc();
+    if output_session.is_json() {
+        output_session.stream_json(&serde_json::json!({
+            "event": "started",
+            "at": rfc3339(at)?,
+            "interval_seconds": interval.as_secs(),
+            "data_dir": data_dir,
+        }))?;
+    } else {
+        output_session.progress_at(
+            MessageKind::Info,
+            &format!(
+                "Daemon started; maintenance interval {}s",
+                interval.as_secs()
+            ),
+            at,
+        );
+    }
+    Ok(())
+}
+
+/// Stream one cycle with the same timestamp and severity layout as issuance logs.
+pub(crate) fn cycle(
+    output_session: &crate::common::session::OutputSession,
+    cycle: u64,
+    result: &CliResult<super::DaemonReport>,
+) -> CliResult<bool> {
+    let at = time::OffsetDateTime::now_utc();
+    match result {
+        Ok(report) => {
+            let failed = super::exit_status(report) == crate::common::session::ExitStatus::Failed;
+            if output_session.is_json() {
+                let rendered = render(report, Format::plain(true))?;
+                let value: serde_json::Value = serde_json::from_str(&rendered)?;
+                output_session.stream_json(&serde_json::json!({
+                    "event": "cycle",
+                    "at": rfc3339(at)?,
+                    "cycle": cycle,
+                    "status": if failed { "failed" } else if report.ari.cancelled { "cancelled" } else { "completed" },
+                    "report": value,
+                }))?;
+            } else {
+                let logs = crate::commands::cert::render::maintenance_log_events(
+                    &report.ari,
+                    &report.renewals,
+                    &report.deployment_retries,
+                );
+                for event in &logs {
+                    output_session.progress_at(event.kind, &event.message, event.at);
+                }
+                let deployment_count = report
+                    .deployment_retries
+                    .iter()
+                    .map(|item| item.entries.len())
+                    .sum::<usize>();
+                let counts = format!(
+                    "ARI {}, renewals {}, deployment retries {}",
+                    report.ari.entries.len(),
+                    report.renewals.len(),
+                    deployment_count,
+                );
+                let (kind, status) = if failed {
+                    (MessageKind::Warning, "failed")
+                } else if report.ari.cancelled
+                    || report.renewals.was_cancelled()
+                    || report.deployment_cancelled
+                {
+                    (MessageKind::Warning, "cancelled")
+                } else {
+                    (MessageKind::Info, "completed")
+                };
+                output_session.progress_at(
+                    kind,
+                    &format!("Maintenance cycle {cycle} {status}: {counts}"),
+                    at,
+                );
+            }
+            Ok(failed)
+        }
+        Err(error) => {
+            let (message, _) = diagnostic(error.as_ref());
+            if output_session.is_json() {
+                output_session.stream_json(&serde_json::json!({
+                    "event": "cycle",
+                    "at": rfc3339(at)?,
+                    "cycle": cycle,
+                    "status": "failed",
+                    "error": message,
+                }))?;
+            } else {
+                output_session.progress_at(
+                    MessageKind::Error,
+                    &format!("Maintenance cycle {cycle} failed: {message}"),
+                    at,
+                );
+            }
+            Ok(true)
+        }
+    }
+}
+
+pub(crate) fn stopped(
+    output_session: &crate::common::session::OutputSession,
+    report: &super::DaemonStopped,
+) -> CliResult<String> {
+    let at = time::OffsetDateTime::now_utc();
+    if output_session.is_json() {
+        output_session.stream_json(&serde_json::json!({
+            "event": "stopped",
+            "at": rfc3339(at)?,
+            "cycles": report.cycles,
+            "failed_cycles": report.failed_cycles,
+        }))?;
+    } else {
+        output_session.progress_at(
+            MessageKind::Info,
+            &format!(
+                "Daemon stopped after {} cycle(s); {} failed.",
+                report.cycles, report.failed_cycles
+            ),
+            at,
+        );
+    }
+    Ok(String::new())
+}
+
+fn rfc3339(at: time::OffsetDateTime) -> CliResult<String> {
+    Ok(at.format(&time::format_description::well_known::Rfc3339)?)
+}
+
+pub(crate) fn render_stopped(report: &super::DaemonStopped, format: Format) -> CliResult<String> {
+    if format.json {
+        return Ok(serde_json::to_string(&serde_json::json!({
+            "event": "stopped",
+            "cycles": report.cycles,
+            "data_dir": report.data_dir,
+        }))?);
+    }
+    Ok(format!(
+        "{} Daemon stopped after {} maintenance cycle(s).",
+        MessageKind::Info.badge(format.color),
+        report.cycles
+    ))
+}
+
 pub(crate) fn status(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Refreshed => "refreshed",
