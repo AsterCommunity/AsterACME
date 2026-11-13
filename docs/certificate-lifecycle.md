@@ -1,6 +1,6 @@
 # 证书续期计划与吊销
 
-已实现 RFC 9773 的 RenewalInfo、持久化计划、cert renew 单次续期，以及 RFC 8555 §7.6 的账户签名吊销。`daemon run-once`提供一次维护周期；`daemon run`以前台常驻方式重复该周期，不安装或修改系统服务。每个data-dir只允许一个常驻daemon，具体开机启动、重启和日志收集交给系统服务管理器。
+已实现 RFC 9773 的 RenewalInfo、持久化计划、cert renew 单次续期，以及 RFC 8555 §7.6 的账户／证书私钥签名吊销。`daemon run-once`提供一次维护周期；`daemon run`以前台常驻方式重复该周期，不安装或修改系统服务。每个data-dir只允许一个常驻daemon，具体开机启动、重启和日志收集交给系统服务管理器。
 
 ## 托管证书与签发版本
 
@@ -55,6 +55,7 @@ cron触发频率只决定何时检查保存的期限，不会绕过CA的Retry-Af
 ## 吊销
 
 ```sh
+aster-acme cert revoke web --sign-with certificate-key --reason key-compromise --yes
 aster-acme cert revoke example.com
 aster-acme cert revoke example.com --reason key-compromise --yes
 aster-acme cert revoke --operation <FULL-ID> --yes --json
@@ -63,14 +64,20 @@ aster-acme cert revoke --operation <FULL-ID> --yes --json
 - `[NAME]` 与 `-n/--name` 等价且互斥；无名称时可交互选择。多版本时必须交互选定版本或提供完整 `--operation`，不猜最新/in_use。
 - 未确认的操作默认否确认；脚本必须 `-y/--yes`。它不暗含强制或绕过身份/产物检查。目标、账户和文件先检查，确认前不发现 directory 或提交 HTTP。
 - directory 提供 `revokeCert`，不拼固定路径。提交 struct→JSON，certificate 为叶子 DER 的无填充 base64url，不发送 PEM、fullchain 或证书私钥。
-- 当前仅使用绑定的活动签发账户密钥，JWS 使用 kid/nonce。证书私钥 jwk 签名和其他账户授权模式尚未提供。
+- `--sign-with account`为默认，使用绑定的活动签发账户密钥，JWS 使用kid/nonce；`--sign-with certificate-key`只加载选中世代的证书私钥，向revokeCert发送匹配叶子公钥的jwk，不带kid，不读取/创建账户。
+- 证书密钥来自当前选定的托管世代`private-key.pk8`；无需原账户私钥、账户目录或CSR。库可通过`RevocationTarget`和`dyn RevocationSession`注入外部证书及存储，CLI本轮不增加任意文件导入入口。CA directory由托管记录或嵌入调用方显式提供，不从证书猜端点。
+- `JwsSigner`与`SoftwareSigningKey`是账户和证书共用的密码学边界，证书公钥通过`Jwk::from_spki`与签名器比较；不构造虚假账户或重复JWS实现。账户路径无需证书私钥；两条路径均不使用签发执行会话，不校验固定CSR、不强制证书仍在有效期内，CA最终决定是否接受吊销。
 - `--reason` 覆盖 RFC 5280 全部已分配代码：unspecified (0)、key-compromise (1)、ca-compromise (2)、affiliation-changed (3)、superseded (4)、cessation-of-operation (5)、certificate-hold (6)、remove-from-crl (8)、privilege-withdrawn (9)、aa-compromise (10)。7 未定义，解析时拒绝。缺省省略 reason；CA 可用 badRevocationReason 拒绝，不设客户端 CA 政策白名单。remove-from-crl 是增量 CRL 的移除条目，不代表 ACME 支持恢复证书；本客户端无论提交何种原因都不会将 confirmed revoked 改回有效。
-- 先保存 pending，再提交请求。只有 HTTP 200 或 HTTP 400 的 alreadyRevoked problem 确认成功，空成功 body 合法。网络、5xx、未知响应或确认写入失败保留未确认状态。
+- nonce和签名准备完成后、真正发送前保存pending，固定精确叶子DER的SHA-256、directory、原因、实际签名方式及公钥指纹；会话从确认前固定目标并在每次写入时复核，证书文件变化不得更换吊销目标。只有 HTTP 200 或 HTTP 400 的 alreadyRevoked problem 确认成功，空成功 body 合法。网络、5xx、未知响应或确认写入失败保留未确认状态。
 - 不自动重放超时或 5xx；transport 仅对 badNonce 有限重签。操作员显式再次执行 revoke 时，可使用同一证书和原原因重新请求，以 200/alreadyRevoked 确认。pending 不允许换原因；省略时沿用原原因。
-- 首次请求的明确 4xx problem 拒绝可恢复为未请求；之后的拒绝不能抹除更早 pending 的不确定性。已确认重复调用直接返回本地结果。
+- 首次请求的明确 4xx problem 拒绝可恢复为未请求；之后的拒绝不能抹除更早 pending 的不确定性。已确认重复调用校验保存的目标绑定后返回本地结果，不读取签名器或发现CA。
 - 文件和 in_use 链接保留，不会重新生成密钥、删除证书、撤回已部署副本或重载服务。吊销状态与 order.status=valid、签发 phase=completed 独立。pending/confirmed 不再作为续期候选或继续 issue --resume。
 
-`RevocationService` 归 aster_acme，显式状态决策归 core；协议请求与端点归 protocol，叶子读取和 journal 事务归存储适配器。CLI 只选择、确认及渲染。复用账户→证书锁顺序，避免与换钥、删除和其他签发执行交叉。
+`RevocationService`拥有单一提交/响应分类，`revocation::authority::RevocationAuthority`只拥有认证策略；core保存显式重试/已确认/原因冲突的决策，protocol拥有请求与端点。`storage::revocation::RevocationSession`只有target、revocation和save_revocation三个操作，不依赖IssueSession或CSR。CLI storage的`open_revocation`持有证书租约，阻塞读写保留IO许可和租约；账户模式沿用账户→证书锁顺序，证书密钥模式只取证书锁。
+
+`--operation-timeout`包含确认、发现与提交，总预算默认沿用config.operation_timeout或600秒。取消与超时在未发送时保留原检查点，发送后保留pending；`RevocationInput`/`RevocationInterrupted`提供吊销专用诊断，不误导用户issue --resume。先前pending不会被后次签名身份切换或拒绝抹除；显式重试可切换account/certificate-key，仍固定同一DER、CA及原因。远端成功但本地确认保存失败继续保留pending，下次显式请求由200/alreadyRevoked确认。
+
+预发布journal版本仍为1，但已有pending/confirmed记录缺少新的目标/身份字段会拒绝执行，不迁移、不从旧状态猜测证明。
 
 ## Nonce 边界
 

@@ -1,7 +1,7 @@
 //! Durable rollover journal, with a lease retained by every blocking write.
 use crate::account::{
-    AccountKey, AccountRecord, AccountSigner, AcmeUrl, Arc, CliAccountStore, FileLease,
-    MAX_KEY_FILE, Path, PathBuf, StorageError, async_trait, atomic_write, fs, read_private,
+    AccountRecord, AcmeUrl, Arc, CliAccountStore, FileLease, JwsSigner, MAX_KEY_FILE, Path,
+    PathBuf, SoftwareSigningKey, StorageError, async_trait, atomic_write, fs, read_private,
     read_record, store_error, verify_identity, write_record,
 };
 use aster_acme::storage::account::{AccountRotation, AccountRotationStore, AccountStoreError};
@@ -11,7 +11,7 @@ struct Rotation {
     slot: PathBuf,
     lease: Arc<FileLease>,
     record: AccountRecord,
-    old: Arc<dyn AccountSigner>,
+    old: Arc<dyn JwsSigner>,
     io: Arc<std::sync::Mutex<()>>,
 }
 
@@ -37,17 +37,18 @@ impl Rotation {
     }
 }
 
-fn load_key(path: &Path) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
+fn load_key(path: &Path) -> Result<Arc<dyn JwsSigner>, AccountStoreError> {
     let bytes =
         zeroize::Zeroizing::new(read_private(path, MAX_KEY_FILE).map_err(|_| {
             store_error("rotation key is missing or unsafe; retain all account files")
         })?);
     Ok(Arc::new(
-        AccountKey::from_pkcs8(&bytes).map_err(|_| store_error("rotation key is corrupt"))?,
+        SoftwareSigningKey::from_pkcs8(&bytes)
+            .map_err(|_| store_error("rotation key is corrupt"))?,
     ))
 }
 
-fn thumbprint(key: &dyn AccountSigner) -> Result<String, AccountStoreError> {
+fn thumbprint(key: &dyn JwsSigner) -> Result<String, AccountStoreError> {
     key.jwk()
         .and_then(|key| key.thumbprint())
         .map_err(|_| store_error("cannot identify rotation key"))
@@ -133,14 +134,14 @@ impl AccountRotation for Rotation {
     fn record(&self) -> AccountRecord {
         self.record.clone()
     }
-    fn old_signer(&self) -> Arc<dyn AccountSigner> {
+    fn old_signer(&self) -> Arc<dyn JwsSigner> {
         self.old.clone()
     }
 
     async fn stage(
         &self,
         algorithm: Option<aster_acme::crypto::key_algorithm::KeyAlgorithm>,
-    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
+    ) -> Result<Arc<dyn JwsSigner>, AccountStoreError> {
         let slot = self.slot.clone();
         let lease = self.lease.clone();
         let io = self.io.clone();
@@ -165,7 +166,7 @@ impl AccountRotation for Rotation {
                     Ok(key)
                 }
                 Err(StorageError::NotFound) if !pending => {
-                    let key = AccountKey::generate(algorithm.unwrap_or(fallback))
+                    let key = SoftwareSigningKey::generate(algorithm.unwrap_or(fallback))
                         .map_err(|_| store_error("cannot generate rotation key"))?;
                     atomic_write(
                         &path,
@@ -173,7 +174,7 @@ impl AccountRotation for Rotation {
                             .map_err(|_| store_error("cannot encode rotation key"))?,
                     )
                     .map_err(|_| store_error("cannot stage rotation key"))?;
-                    Ok(Arc::new(key) as Arc<dyn AccountSigner>)
+                    Ok(Arc::new(key) as Arc<dyn JwsSigner>)
                 }
                 Err(_) => Err(store_error("staged rotation key is missing or unsafe")),
             }
@@ -220,8 +221,8 @@ impl AccountRotation for Rotation {
                 read_private(&next, MAX_KEY_FILE)
                     .map_err(|_| store_error("cannot read staged rotation key"))?,
             );
-            let new =
-                AccountKey::from_pkcs8(&bytes).map_err(|_| store_error("invalid staged key"))?;
+            let new = SoftwareSigningKey::from_pkcs8(&bytes)
+                .map_err(|_| store_error("invalid staged key"))?;
             let new_thumbprint = thumbprint(&new)?;
             if new_thumbprint != rotation.new_thumbprint {
                 return Err(store_error("staged key does not match rotation journal"));

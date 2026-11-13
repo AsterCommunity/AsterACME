@@ -584,13 +584,7 @@ pub(crate) async fn execute(
             http,
             local,
         } => show(target, history, verify, http, local, cli).await,
-        CertCommand::Revoke {
-            target,
-            reason,
-            yes,
-            http,
-            local,
-        } => revoke(target, reason, yes, http, local, cli).await,
+        CertCommand::Revoke(args) => crate::commands::cert::revocation::execute(args, cli).await,
     }
 }
 
@@ -623,15 +617,7 @@ async fn show(
                 ..options
             })
             .await?;
-        record = remote_operation(
-            context,
-            &http,
-            &record,
-            &store,
-            RemoteOperation::Inspect,
-            cli,
-        )
-        .await?;
+        record = inspect_remote(context, &http, &record, &store, cli).await?;
     }
     let view = if history || target.operation.is_some() {
         render::DetailView::Version
@@ -645,45 +631,7 @@ async fn show(
     })
 }
 
-async fn revoke(
-    target: super::args::SavedTargetArgs,
-    reason: Option<aster_acme_protocol::revocation::RevocationReason>,
-    yes: bool,
-    http: HttpArgs,
-    local: LocalArgs,
-    cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
-    let options = options(&local, &http, None);
-    let settings = CliSettings::load(&options).await?;
-    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let record =
-        selected_record(&store, &target, cli, selection::RequestSelection::Completed).await?;
-    // A confirmed local outcome needs neither an account key nor HTTP.
-    let record = match record.revocation.state {
-        aster_acme_core::revocation::RevocationState::Confirmed => record,
-        aster_acme_core::revocation::RevocationState::NotRequested
-        | aster_acme_core::revocation::RevocationState::Pending => {
-            let context = settings
-                .account(&AccountArgs {
-                    name: Some(record.account_name.clone()),
-                    ..options
-                })
-                .await?;
-            remote_operation(
-                context,
-                &http,
-                &record,
-                &store,
-                RemoteOperation::Revoke { reason, yes },
-                cli,
-            )
-            .await?
-        }
-    };
-    Ok(super::report::CertificateReport::Revoked(Box::new(record)))
-}
-
-async fn selected_record(
+pub(super) async fn selected_record(
     store: &CliIssueStore,
     target: &super::args::SavedTargetArgs,
     cli: &crate::common::context::CommandContext,
@@ -725,20 +673,11 @@ async fn selected_record(
     selection::choose(records, &name, target.operation.as_deref(), &cli.output)
 }
 
-enum RemoteOperation {
-    Inspect,
-    Revoke {
-        reason: Option<aster_acme_protocol::revocation::RevocationReason>,
-        yes: bool,
-    },
-}
-
-async fn remote_operation(
+async fn inspect_remote(
     context: CliContext,
     http: &HttpArgs,
     record: &IssueRecord,
     store: &CliIssueStore,
-    operation: RemoteOperation,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<IssueRecord> {
     let signer = context
@@ -760,51 +699,6 @@ async fn remote_operation(
         .await?
         .ok_or("Account metadata missing.")?;
     let mut session = store.open(&record.name, &record.operation_id).await?;
-    match &operation {
-        RemoteOperation::Inspect => {}
-        RemoteOperation::Revoke { reason, yes } => {
-            use aster_acme_core::revocation::{RevocationAction, revocation_action};
-            let in_use = session.record().await?;
-            match revocation_action(
-                matches!(
-                    in_use.phase,
-                    aster_acme_core::workflow::IssuancePhase::Completed
-                ),
-                in_use.revocation.state,
-                in_use.revocation.reason == reason.or(in_use.revocation.reason),
-            ) {
-                RevocationAction::NotIssued => {
-                    return Err("Only an issued certificate can be revoked.".into());
-                }
-                RevocationAction::ReasonConflict => {
-                    return Err("An unconfirmed revocation must retain its original reason.".into());
-                }
-                RevocationAction::AlreadyConfirmed => return Ok(in_use),
-                RevocationAction::Submit => {}
-            }
-            let reason = reason
-                .or(in_use.revocation.reason)
-                .map_or_else(|| "not specified".into(), |reason| reason.to_string());
-            terminal::confirm_action(
-                &format!(
-                    "Permanently revoke certificate\n  Name: {}\n  Request: {}\n  Domains: {}\n  CA: {}\n  Reason: {}\n\nThis cannot be undone. Local certificate files will be retained.\nA deployed copy must be replaced separately.",
-                    in_use.name.as_str(),
-                    in_use.operation_id,
-                    in_use
-                        .identifiers
-                        .iter()
-                        .map(DnsIdentifier::value)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    in_use.directory.as_str(),
-                    reason
-                ),
-                "Revoke this certificate?",
-                *yes,
-                &cli.output,
-            )?;
-        }
-    }
     let transport = context.transport_options(&AccountArgs {
         user_agent: http.user_agent.clone(),
         request_timeout: http.request_timeout,
@@ -812,16 +706,9 @@ async fn remote_operation(
     })?;
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let identity = IssueIdentity { account, signer };
-    match operation {
-        RemoteOperation::Inspect => Ok(IssueService::new(client, identity)?
-            .inspect(session.as_mut())
-            .await?),
-        RemoteOperation::Revoke { reason, .. } => Ok(
-            aster_acme::revocation::RevocationService::new(client, identity)
-                .revoke(session.as_mut(), reason)
-                .await?,
-        ),
-    }
+    Ok(IssueService::new(client, identity)?
+        .inspect(session.as_mut())
+        .await?)
 }
 
 fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {

@@ -41,7 +41,10 @@ impl BeforeOrder for OrderCaa<'_> {
             .map(aster_acme::identifier::DnsIdentifier::value)
             .collect::<Vec<_>>();
         if directory.meta.caa_identities.is_empty() {
-            return Ok(unavailable(names.len()));
+            return Ok(unavailable(
+                names.len(),
+                "CA directory does not advertise caaIdentities",
+            ));
         }
         let system;
         let lookup = if let Some(lookup) = self.lookup {
@@ -49,7 +52,7 @@ impl BeforeOrder for OrderCaa<'_> {
         } else {
             system = match SystemLookup::new() {
                 Ok(lookup) => lookup,
-                Err(_) => return Ok(unavailable(names.len())),
+                Err(error) => return Ok(unavailable(names.len(), &error.to_string())),
             };
             &system
         };
@@ -66,12 +69,14 @@ impl BeforeOrder for OrderCaa<'_> {
         self.runner.run(&checker, &names, execution).await
     }
 }
-fn unavailable(count: usize) -> StageReport<Report> {
+fn unavailable(count: usize, reason: &str) -> StageReport<Report> {
     StageReport {
         observations: (0..count)
             .map(|index| Observation {
                 index,
-                result: Err(Failure::Unavailable),
+                result: Err(Failure::Unavailable {
+                    reason: reason.to_owned(),
+                }),
             })
             .collect(),
     }

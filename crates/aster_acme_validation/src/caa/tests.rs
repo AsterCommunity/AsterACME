@@ -1,5 +1,6 @@
 //! Injected recursive answers exercise tree climbing without external DNS.
 use crate::caa::*;
+use hickory_resolver::Resolver;
 use std::{collections::HashMap, sync::Mutex};
 struct Fake {
     values: HashMap<String, Vec<Property>>,

@@ -1,5 +1,5 @@
 //! HTTP and protocol error/retry boundary tests.
-use crate::crypto::key::AccountKey;
+use crate::crypto::key::SoftwareSigningKey;
 use crate::crypto::key_algorithm::KeyAlgorithm;
 use crate::transport::*;
 use aster_acme_protocol::jws::FlattenedJws;
@@ -60,7 +60,7 @@ async fn centralized_user_agent_is_sent_for_discovery_nonce_and_signed_requests(
             )
             .mount(&server)
             .await;
-        let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+        let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
         client
             .signed(&client.directory.new_account, &key, None, b"{}")
             .await
@@ -151,7 +151,7 @@ async fn bad_nonce_retries_use_error_nonce_and_resign_exact_payload() {
         .with_priority(10)
         .mount(&server)
         .await;
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let result = client
         .signed(
             &client.directory.new_account,
@@ -204,7 +204,7 @@ async fn nonce_retry_is_bounded_and_missing_or_invalid_nonce_is_rejected() {
         let error = client
             .signed(
                 &client.directory.new_account,
-                &AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+                &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
                 None,
                 b"{}",
             )
@@ -240,7 +240,7 @@ async fn timeout_does_not_retry_mutations() {
     let result = client
         .signed(
             &client.directory.new_account,
-            &AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+            &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
             None,
             b"{}",
         )
@@ -285,7 +285,7 @@ async fn rate_limits_unknown_problems_and_non_json_errors_are_not_retried() {
         let error = client
             .signed(
                 &client.directory.new_account,
-                &AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+                &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
                 None,
                 b"{}",
             )
@@ -341,7 +341,7 @@ async fn oversized_body_and_redirect_are_rejected() {
         let result = client
             .signed(
                 &client.directory.new_account,
-                &AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+                &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
                 None,
                 b"{}",
             )
@@ -408,7 +408,7 @@ async fn concurrent_requests_consume_distinct_nonces_and_send_valid_signatures()
         .mount(&server)
         .await;
     let client = Arc::new(client);
-    let key = Arc::new(AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
+    let key = Arc::new(SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
     let mut handles = Vec::new();
     for _ in 0..8 {
         let client = client.clone();
@@ -500,7 +500,7 @@ async fn successful_post_without_usable_nonce_keeps_location_and_fetches_fresh_n
             .expect(2)
             .mount(&server)
             .await;
-        let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+        let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
         for _ in 0..2 {
             let response = client
                 .signed(&client.directory.new_account, &key, None, b"{}")

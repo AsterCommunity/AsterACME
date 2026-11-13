@@ -51,8 +51,16 @@ async fn directory_identity_is_required_and_request_inputs_reach_the_evaluator()
     let report = checker.check(&directory, &saved, &execution).await.unwrap();
     assert!(matches!(
         report.observations[0].result,
-        Err(Failure::Unavailable)
+        Err(Failure::Unavailable { .. })
     ));
+    assert_eq!(
+        report.observations[0]
+            .result
+            .as_ref()
+            .unwrap_err()
+            .to_string(),
+        "precheck configuration unavailable: CA directory does not advertise caaIdentities"
+    );
     assert_eq!(lookup.calls.load(Ordering::SeqCst), 0);
     directory.meta.caa_identities = vec!["alternate.example".into(), "ca.example".into()];
     let report = checker.check(&directory, &saved, &execution).await.unwrap();
@@ -71,4 +79,23 @@ async fn directory_identity_is_required_and_request_inputs_reach_the_evaluator()
         checker.check(&directory, &saved, &execution).await,
         Err(Error::Interrupted)
     ));
+}
+
+#[test]
+fn resolver_initialization_cause_survives_every_unavailable_report_entry() {
+    let error = crate::resolver::InitializationError::SystemConfiguration(
+        "failed to parse nameserver address: invalid IP address syntax".into(),
+    );
+    let report = unavailable(3, &error.to_string());
+    assert_eq!(report.observations.len(), 3);
+    for (index, item) in report.observations.iter().enumerate() {
+        assert_eq!(item.index, index);
+        assert_eq!(
+            item.result.as_ref().unwrap_err(),
+            &Failure::Unavailable {
+                reason: error.to_string()
+            }
+        );
+    }
+    assert_eq!(unavailable(0, &error.to_string()).observations.len(), 0);
 }

@@ -1,6 +1,6 @@
 //! Real CLI solver + file journals + loopback CA, without public DNS/CA side effects.
 use crate::commands::cert::validation::tests::flow::*;
-use aster_acme::crypto::{AccountSigner as _, key::AccountKey, key_algorithm::KeyAlgorithm};
+use aster_acme::crypto::{JwsSigner as _, key::SoftwareSigningKey, key_algorithm::KeyAlgorithm};
 
 #[tokio::test]
 async fn dns_persist_initial_setup_restart_and_unattended_renewal_keep_exact_txt_after_rollover() {
@@ -143,7 +143,7 @@ async fn persistent_completion_reports_retention_and_no_cleanup_permission_in_te
 }
 
 async fn rotate_account_identity(fixture: &mut Fixture) {
-    let key = Arc::new(AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
+    let key = Arc::new(SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
     fixture.account.key_thumbprint = key.jwk().unwrap().thumbprint().unwrap();
     let client = HttpPool::default()
         .discover(

@@ -43,20 +43,7 @@ pub(crate) enum CertCommand {
         local: LocalArgs,
     },
     /// Permanently revoke one issued certificate at its CA; local files are retained.
-    Revoke {
-        #[command(flatten)]
-        target: SavedTargetArgs,
-        /// Permanent revocation reason; omitted by default, or retained from an unconfirmed request.
-        #[arg(long, value_parser = revocation_reason_parser())]
-        reason: Option<RevocationReason>,
-        /// Confirm revocation without an interactive prompt.
-        #[arg(short = 'y', long)]
-        yes: bool,
-        #[command(flatten)]
-        http: HttpArgs,
-        #[command(flatten)]
-        local: LocalArgs,
-    },
+    Revoke(RevokeArgs),
     /// Remove one local request, or explicitly select history/all; does not revoke certificates.
     Remove {
         #[command(flatten)]
@@ -79,6 +66,43 @@ pub(crate) enum CertCommand {
         #[command(flatten)]
         local: LocalArgs,
     },
+}
+
+/// Explicit revocation parameters; certificate-key authority never loads an account.
+#[derive(Args)]
+pub(crate) struct RevokeArgs {
+    #[command(flatten)]
+    pub target: SavedTargetArgs,
+    /// Signature authority; never inferred from missing or rejected account credentials.
+    #[arg(long="sign-with",value_parser=revocation_signing_parser(),default_value="account")]
+    pub sign_with: aster_acme::revocation::RevocationSigningMethod,
+    /// Revocation reason; omitted by default or retained from an unconfirmed request.
+    #[arg(long,value_parser=revocation_reason_parser())]
+    pub reason: Option<RevocationReason>,
+    /// Confirm revocation without a prompt.
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+    /// Overall operation budget in seconds; includes discovery and confirmation.
+    #[arg(long,value_parser=clap::value_parser!(u64).range(1..=86400))]
+    pub operation_timeout: Option<u64>,
+    #[command(flatten)]
+    pub http: HttpArgs,
+    #[command(flatten)]
+    pub local: LocalArgs,
+}
+
+fn revocation_signing_parser()
+-> impl clap::builder::TypedValueParser<Value = aster_acme::revocation::RevocationSigningMethod> {
+    use aster_acme::revocation::RevocationSigningMethod;
+    clap::builder::PossibleValuesParser::new(
+        RevocationSigningMethod::ALL.map(RevocationSigningMethod::name),
+    )
+    .try_map(|value: String| {
+        RevocationSigningMethod::ALL
+            .into_iter()
+            .find(|method| method.name() == value)
+            .ok_or_else(|| "unknown revocation signing method".to_owned())
+    })
 }
 
 /// One saved generation, shared by read-only inspection and revocation.
@@ -219,11 +243,11 @@ impl CertCommand {
         match self {
             Self::Issue(args) => args.run.local.json,
             Self::Renew(args) => args.run.local.json,
-            Self::List { local, .. }
-            | Self::Show { local, .. }
-            | Self::Revoke { local, .. }
-            | Self::Remove { local, .. } => local.json,
+            Self::List { local, .. } | Self::Show { local, .. } | Self::Remove { local, .. } => {
+                local.json
+            }
             Self::Deploy(args) => args.local().json,
+            Self::Revoke(args) => args.local.json,
         }
     }
 }
@@ -327,11 +351,11 @@ mod tests {
             };
             assert!(matches!(
                 command,
-                CertCommand::Revoke {
+                CertCommand::Revoke(RevokeArgs {
                     yes: true,
                     reason: Some(RevocationReason::KeyCompromise),
                     ..
-                }
+                })
             ));
         }
         for args in [
@@ -484,7 +508,7 @@ mod tests {
             let Command::Cert { command } = args.command else {
                 panic!("certificate command expected")
             };
-            let CertCommand::Revoke { reason: actual, .. } = command else {
+            let CertCommand::Revoke(RevokeArgs { reason: actual, .. }) = command else {
                 panic!("revoke expected")
             };
             assert_eq!(actual, Some(reason));

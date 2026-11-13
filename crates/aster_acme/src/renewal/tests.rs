@@ -56,11 +56,7 @@ impl IssueSession for Session {
         *self.record.lock().await = record.clone();
         Ok(())
     }
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError> {
-        Err(IssueError::InvalidInput(
-            "ARI must not load certificate artifacts",
-        ))
-    }
+
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         Err(IssueError::InvalidInput("ARI must not read CSR"))
     }

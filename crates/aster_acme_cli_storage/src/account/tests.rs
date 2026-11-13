@@ -279,7 +279,7 @@ async fn named_account_is_one_directory_and_missing_identity_or_key_is_an_error(
     assert_eq!(fs::read(slot.join("account.toml")).unwrap(), record);
     atomic_write(
         &slot.join("account-key.pk8"),
-        &AccountKey::generate(KeyAlgorithm::EcdsaP256)
+        &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256)
             .unwrap()
             .to_pkcs8()
             .unwrap(),

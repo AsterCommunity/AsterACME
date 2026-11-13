@@ -76,7 +76,7 @@
 | cert issue | -n、重复 -d、-a、-c manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
-| cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
+| cert revoke | [NAME] / -n、--operation、--sign-with account/certificate-key、可选 --reason、-y、HTTP、--operation-timeout；不删除本地文件 |
 | cert remove | [NAME] / -n、--operation 或 --history/--revoked/--failed/--all、-y；纯本地，无 HTTP 参数 |
 | version | 仅 --json，不读取配置或初始化状态 |
 
@@ -270,3 +270,17 @@ CAA建议性检查：issue/renew在首次newOrder前按directory的meta.caaIdent
 `cert remove NAME --failed`清理该名称下明确失败且不可恢复的未签发申请；终端省略NAME时只从失败候选中选择，非交互必须给出名称。creation明确4xx拒绝（排除408/429）、固定CSR被拒、order/authorization终态和订单过期可匹配；已签发、in_use、可恢复以及远端结果未知的申请保留。筛选由IssueRecord规则与storage查询提供，执行持锁重验；需确认或--yes，不访问CA，也不自动删除DNS/webroot材料或部署副本。
 
 人工验证确认复用其他命令相同的inquire::Confirm：默认否，y/yes和n/no、退格编辑、可见输入，由控件恢复终端模式。Esc/Ctrl-C即时结束；当前inquire没有外部中断接口，整体期限或程序取消在用户结束输入后复核，不再执行后续CA操作。
+
+
+## 吊销签名身份
+
+```sh
+# 默认使用保存的签发账户
+aster-acme cert revoke web --reason superseded --yes
+# 使用所选世代的证书私钥；不需要原ACME账户
+aster-acme cert revoke web --sign-with certificate-key --reason key-compromise --yes
+# 历史版本沿用精确世代选择
+aster-acme cert revoke web --operation OPERATION_ID --sign-with certificate-key --yes
+```
+
+`--sign-with`默认account，证书密钥模式不会因为失败而自动切回账户。确认显示实际证书名称/operation、CA、原因、签名方式和DER指纹；脚本/JSON仍需--yes，终端默认否。`--operation-timeout`覆盖config.operation_timeout或600秒缺省，`--request-timeout`只限制单次HTTP。两种模式都保留本地文件及部署副本，不自动reload。证书密钥模式使用托管世代的private-key.pk8，不接受任意文件输入；不读取账户目录、CSR或材料manifest。成功JSON在operation.revocation保留signer及certificate_sha256，pending/错误不会显示成功。完整语义见[生命周期](certificate-lifecycle.md#吊销)。

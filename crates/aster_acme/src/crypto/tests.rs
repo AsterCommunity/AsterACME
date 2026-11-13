@@ -1,14 +1,15 @@
 //! Signature, identity and encoding boundaries.
-use crate::crypto::key::AccountKey;
+use crate::crypto::key::SoftwareSigningKey;
 use crate::crypto::*;
 use aws_lc_rs::signature::ECDSA_P256_SHA256_FIXED;
 use aws_lc_rs::signature::UnparsedPublicKey;
+use rcgen::PublicKeyData as _;
 use sha2::Digest as _;
 
 #[test]
 fn key_change_inner_signature_binds_new_key_old_key_and_exact_account_url() {
-    let old = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
-    let new = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let old = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let new = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let account = AcmeUrl::new("https://ca.example/user/%41?x=%2f").unwrap();
     let endpoint = "https://ca.example/rollover/%2f?x=%41";
     let inner = sign_key_change(&new, &old.jwk().unwrap(), &account, endpoint).unwrap();
@@ -38,8 +39,8 @@ fn key_change_inner_signature_binds_new_key_old_key_and_exact_account_url() {
 
 #[test]
 fn key_pkcs8_roundtrip_and_signatures_verify_with_raw_rs_format() {
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
-    let restored = AccountKey::from_pkcs8(&key.to_pkcs8().unwrap()).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let restored = SoftwareSigningKey::from_pkcs8(&key.to_pkcs8().unwrap()).unwrap();
     assert_eq!(key.jwk().unwrap(), restored.jwk().unwrap());
     let signature = restored.sign(b"message").unwrap();
     assert_eq!(signature.len(), 64);
@@ -47,13 +48,13 @@ fn key_pkcs8_roundtrip_and_signatures_verify_with_raw_rs_format() {
     verifier.verify(b"message", &signature).unwrap();
     assert!(verifier.verify(b"changed", &signature).is_err());
     for invalid in [b"".as_slice(), b"invalid", &[0; 32]] {
-        assert!(AccountKey::from_pkcs8(invalid).is_err());
+        assert!(SoftwareSigningKey::from_pkcs8(invalid).is_err());
     }
 }
 
 #[test]
 fn jwk_thumbprint_uses_only_sorted_required_members() {
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let jwk = key.jwk().unwrap();
     let public = serde_json::to_value(&jwk).unwrap();
     let canonical = format!(
@@ -71,7 +72,7 @@ fn jwk_thumbprint_uses_only_sorted_required_members() {
 
 #[test]
 fn jws_jwk_and_kid_are_exclusive_and_post_as_get_is_empty() {
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let jwk = key.jwk().unwrap();
     for identity in [
         RequestIdentity::Jwk { jwk: &jwk },
@@ -114,7 +115,7 @@ fn jws_jwk_and_kid_are_exclusive_and_post_as_get_is_empty() {
 
 #[test]
 fn eab_binds_exact_public_key_and_has_no_nonce() {
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let jwk = key.jwk().unwrap();
     let secret = [9_u8; 32];
     for encoded in [URL_SAFE_NO_PAD.encode(secret), URL_SAFE.encode(secret)] {
@@ -154,7 +155,7 @@ fn external_pkcs8_fixture_keeps_jwk_and_raw_es256_interoperability() {
     // Public test scalar 1, encoded and signed independently with Python cryptography.
     // This is deliberately a test-only key, never an account or certificate credential.
     let der=URL_SAFE_NO_PAD.decode("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGhRANCAARrF9Hy4SxCR_i85uVjpEDydwN9gS3rM6D0oTlF2JjClk_jQuL-Gn-bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1").unwrap();
-    let key = AccountKey::from_pkcs8(&der).unwrap();
+    let key = SoftwareSigningKey::from_pkcs8(&der).unwrap();
     let jwk = key.jwk().unwrap();
     let public = serde_json::to_value(&jwk).unwrap();
     assert_eq!(public["x"], "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY");
@@ -169,7 +170,7 @@ fn external_pkcs8_fixture_keeps_jwk_and_raw_es256_interoperability() {
         .unwrap();
     assert!(verifier.verify(b"tampered", &signature).is_err());
     assert_eq!(
-        AccountKey::from_pkcs8(&key.to_pkcs8().unwrap())
+        SoftwareSigningKey::from_pkcs8(&key.to_pkcs8().unwrap())
             .unwrap()
             .jwk()
             .unwrap(),
@@ -180,7 +181,7 @@ fn external_pkcs8_fixture_keeps_jwk_and_raw_es256_interoperability() {
     }
 }
 
-fn verify_account_jws(key: &AccountKey, jws: &FlattenedJws) {
+fn verify_account_jws(key: &SoftwareSigningKey, jws: &FlattenedJws) {
     use aws_lc_rs::signature;
     let header: serde_json::Value =
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&jws.protected).unwrap()).unwrap();
@@ -260,11 +261,21 @@ fn verify_account_jws(key: &AccountKey, jws: &FlattenedJws) {
 #[test]
 fn all_account_algorithms_roundtrip_and_emit_verifiable_jwk_kid_and_eab_requests() {
     for algorithm in KeyAlgorithm::ALL {
-        let key = AccountKey::generate(algorithm).unwrap();
+        let key = SoftwareSigningKey::generate(algorithm).unwrap();
         let encoded = key.to_pkcs8().unwrap();
-        let restored = AccountKey::from_pkcs8(&encoded).unwrap();
+        let restored = SoftwareSigningKey::from_pkcs8(&encoded).unwrap();
         assert_eq!(restored.algorithm(), algorithm);
         assert_eq!(restored.jwk().unwrap(), key.jwk().unwrap());
+        let public = rcgen::KeyPair::try_from(key.to_pkcs8().unwrap().as_slice())
+            .unwrap()
+            .subject_public_key_info();
+        assert_eq!(Jwk::from_spki(&public).unwrap(), key.jwk().unwrap());
+        let mut trailing = public.clone();
+        trailing.push(0);
+        assert!(Jwk::from_spki(&trailing).is_err());
+        for end in [0, 1, public.len() / 2, public.len() - 1] {
+            assert!(Jwk::from_spki(&public[..end]).is_err());
+        }
         let jwk = key.jwk().unwrap();
         let canonical = serde_json::to_vec(&jwk).unwrap();
         let sorted: std::collections::BTreeMap<String, serde_json::Value> =
@@ -318,7 +329,7 @@ fn cross_algorithm_rollover_signs_inner_with_new_key_and_outer_with_old_key() {
         KeyAlgorithm::EcdsaP384,
         KeyAlgorithm::EcdsaP521,
     ];
-    let keys = algorithms.map(|algorithm| AccountKey::generate(algorithm).unwrap());
+    let keys = algorithms.map(|algorithm| SoftwareSigningKey::generate(algorithm).unwrap());
     let account = AcmeUrl::new("https://ca.example/account/%2f").unwrap();
     let endpoint = "https://ca.example/change-key?exact=%41";
     for index in 0..keys.len() {
@@ -381,13 +392,13 @@ fn malformed_public_keys_and_unsupported_or_truncated_private_keys_are_rejected(
         KeyAlgorithm::Ed25519,
         KeyAlgorithm::Rsa2048,
     ] {
-        let key = AccountKey::generate(algorithm).unwrap();
+        let key = SoftwareSigningKey::generate(algorithm).unwrap();
         let bytes = key.to_pkcs8().unwrap();
         let mut trailing = bytes.to_vec();
         trailing.extend_from_slice(b"extra");
-        assert!(AccountKey::from_pkcs8(&trailing).is_err());
+        assert!(SoftwareSigningKey::from_pkcs8(&trailing).is_err());
         for end in [0, 1, bytes.len() / 2, bytes.len() - 1] {
-            assert!(AccountKey::from_pkcs8(&bytes[..end]).is_err());
+            assert!(SoftwareSigningKey::from_pkcs8(&bytes[..end]).is_err());
         }
     }
 }
@@ -411,10 +422,10 @@ fn independently_generated_keys_signatures_and_unsupported_algorithms_obey_jose_
     for fixture in fixtures {
         let bytes = URL_SAFE_NO_PAD.decode(fixture.pkcs8).unwrap();
         let Some(algorithm) = fixture.algorithm else {
-            assert!(AccountKey::from_pkcs8(&bytes).is_err());
+            assert!(SoftwareSigningKey::from_pkcs8(&bytes).is_err());
             continue;
         };
-        let key = AccountKey::from_pkcs8(&bytes).unwrap();
+        let key = SoftwareSigningKey::from_pkcs8(&bytes).unwrap();
         assert_eq!(key.algorithm(), algorithm);
         assert_eq!(
             serde_json::to_value(key.jwk().unwrap()).unwrap(),

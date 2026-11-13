@@ -21,7 +21,9 @@ fn every_observation_is_rendered_without_changing_issuance_state() {
     observer.starting();
     for result in [
         Err(Failure::LookupFailed),
-        Err(Failure::Unavailable),
+        Err(Failure::Unavailable {
+            reason: "CA directory does not advertise caaIdentities".into(),
+        }),
         Err(Failure::TimedOut),
         Err(Failure::NotChecked),
         Err(Failure::UnsupportedInput),
@@ -38,7 +40,7 @@ fn every_observation_is_rendered_without_changing_issuance_state() {
     }
     let text = diagnostics.text();
     assert!(text.contains("CAA example.com:"));
-    assert!(text.contains("no caaIdentities") || text.contains("missing caaIdentities"));
+    assert!(text.contains("does not advertise caaIdentities"));
     assert!(text.contains("CAA precheck timed out"));
     assert!(text.contains("no CAA record matches"));
     assert_eq!(serde_json::to_value(saved).unwrap(), before);
@@ -73,7 +75,9 @@ fn only_matching_or_unrestricted_caa_results_use_info() {
         );
     }
     for failure in [
-        Failure::Unavailable,
+        Failure::Unavailable {
+            reason: "CA directory does not advertise caaIdentities".into(),
+        },
         Failure::LookupFailed,
         Failure::UnsupportedInput,
         Failure::TimedOut,
@@ -93,5 +97,31 @@ fn only_matching_or_unrestricted_caa_results_use_info() {
             diagnostics.text()
         );
         assert!(!diagnostics.text().contains("[INFO]"));
+    }
+}
+
+#[test]
+fn unavailable_caa_reports_actual_initialization_cause_separately_from_ca_metadata() {
+    let saved = record();
+    for json in [false, true] {
+        let (output, stdout, diagnostics) = crate::common::session::tests::session(json);
+        let progress = Progress::new(output);
+        Display::new(&saved, &progress).observed(&Report::<aster_acme_validation::caa::Report> {
+            observations: vec![Entry { index: 1, result: Err(Failure::Unavailable {
+                reason: "cannot load system DNS configuration: failed to parse nameserver address: invalid IP address syntax\n\u{1b}[31m".into(),
+            }) }],
+        });
+        assert_eq!(stdout.text(), "");
+        let text = diagnostics.text();
+        if json {
+            assert_eq!(text, "");
+        } else {
+            assert!(text.contains("CAA *.example.com: precheck unavailable"));
+            assert!(text.contains("failed to parse nameserver address: invalid IP address syntax"));
+            assert!(text.contains("CA will perform its own CAA check"));
+            assert!(!text.contains("caaIdentities"));
+            assert!(!text.contains("syntax\n"));
+            assert!(!text.contains('\u{1b}'));
+        }
     }
 }

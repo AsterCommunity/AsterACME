@@ -1,11 +1,11 @@
 //! System-DNS CAA observations (RFC 8659 §3). No issuance gate or DNS mutation.
-use crate::dns::empty_answer;
+use crate::{
+    dns::empty_answer,
+    resolver::{self, InitializationError},
+};
 use aster_acme_core::caa::{Observation, Property, Request, evaluate};
 use async_trait::async_trait;
-use hickory_resolver::{
-    Resolver,
-    proto::rr::{RData, RecordType},
-};
+use hickory_resolver::proto::rr::{RData, RecordType};
 
 pub mod order;
 
@@ -31,7 +31,9 @@ impl aster_acme::precheck::Check for Caa<'_> {
         _: &aster_acme::solver::ExecutionContext,
     ) -> Result<Report, aster_acme::precheck::Failure> {
         if self.request.issuers.is_empty() {
-            return Err(aster_acme::precheck::Failure::Unavailable);
+            return Err(aster_acme::precheck::Failure::Unavailable {
+                reason: "CA directory does not advertise caaIdentities".into(),
+            });
         }
         check(self.lookup, input, &self.request)
             .await
@@ -70,14 +72,9 @@ pub struct SystemLookup(hickory_resolver::TokioResolver);
 impl SystemLookup {
     /// Initialize a system resolver without contacting DNS.
     /// # Errors
-    /// Reports unavailable resolver configuration.
-    pub fn new() -> Result<Self, LookupError> {
-        Ok(Self(
-            Resolver::builder_tokio()
-                .map_err(|_| LookupError)?
-                .build()
-                .map_err(|_| LookupError)?,
-        ))
+    /// Preserves the failed initialization stage and underlying resolver cause.
+    pub fn new() -> Result<Self, InitializationError> {
+        Ok(Self(resolver::system()?))
     }
 }
 #[async_trait]

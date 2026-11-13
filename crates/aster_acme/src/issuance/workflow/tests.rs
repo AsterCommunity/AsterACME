@@ -2,7 +2,7 @@
 use crate::{
     account::AccountRecord,
     challenge::ChallengeKind,
-    crypto::{AccountSigner, key::AccountKey, key_algorithm::KeyAlgorithm},
+    crypto::{JwsSigner, key::SoftwareSigningKey, key_algorithm::KeyAlgorithm},
     issuance::{
         IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
         ValidationRequirement,
@@ -39,9 +39,7 @@ impl IssueSession for Session {
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         panic!("manual publication must precede finalize")
     }
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError> {
-        panic!("not issued")
-    }
+
     async fn complete(&self, _: &IssueRecord, _: &[u8]) -> Result<IssueRecord, IssueError> {
         panic!("not issued")
     }
@@ -128,7 +126,7 @@ impl Fixture {
             .mount(&server)
             .await;
         Mock::given(method("POST")).and(path("/auth")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[{"type":"dns-01","url":url("/challenge"),"status":"pending","token":"opaque-token-with-enough-entropy"}]}))).mount(&server).await;
-        let signer = Arc::new(AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
+        let signer = Arc::new(SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
         let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
         let account: AccountRecord = serde_json::from_value(serde_json::json!({"key_algorithm":"ecdsa-p256","account_id":"a".repeat(43),"directory_url":url("/directory"),"key_thumbprint":thumbprint,"account_url":url("/account/1"),"contacts":[],"server_contacts":null,"last_status":"valid","deactivation":"not_requested","key_rotation":null,"accepted_terms_url":null,"state":"registered"})).unwrap();
         let record: IssueRecord = serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":account.account_id,"directory":url("/directory"),"account_url":url("/account/1"),"account_thumbprint":thumbprint,"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap();

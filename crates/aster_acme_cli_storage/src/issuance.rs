@@ -24,6 +24,7 @@ mod generation;
 mod publication;
 mod query;
 mod retry;
+pub mod revocation;
 mod session;
 use crate::issuance::generation::Initialization;
 pub use deployment::{
@@ -123,6 +124,7 @@ impl CertificateSelection {
     }
 }
 
+#[derive(Clone)]
 struct Session {
     slot: PathBuf,
     generation: PathBuf,
@@ -383,8 +385,10 @@ impl IssueStore for CliIssueStore {
         name: &CertificateName,
         operation_id: &str,
     ) -> Result<Box<dyn IssueSession>, IssueError> {
-        self.open_session(name, operation_id, OpenMode::Execution)
-            .await
+        Ok(Box::new(
+            self.open_session(name, operation_id, OpenMode::Execution)
+                .await?,
+        ))
     }
 
     async fn open_observation(
@@ -392,8 +396,10 @@ impl IssueStore for CliIssueStore {
         name: &CertificateName,
         operation_id: &str,
     ) -> Result<Box<dyn IssueSession>, IssueError> {
-        self.open_session(name, operation_id, OpenMode::Observation)
-            .await
+        Ok(Box::new(
+            self.open_session(name, operation_id, OpenMode::Observation)
+                .await?,
+        ))
     }
 
     async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
@@ -415,7 +421,7 @@ impl CliIssueStore {
         name: &CertificateName,
         operation_id: &str,
         mode: OpenMode,
-    ) -> Result<Box<dyn IssueSession>, IssueError> {
+    ) -> Result<Session, IssueError> {
         if !valid_operation_id(operation_id) {
             return Err(failure("invalid operation ID"));
         }
@@ -458,13 +464,13 @@ impl CliIssueStore {
                 );
                 certificate::validate(&chain, &key, &record.identifiers)?;
             }
-            Ok(Box::new(Session {
+            Ok(Session {
                 slot,
                 generation,
                 lease,
                 initial: record,
                 io: Arc::new(tokio::sync::Mutex::new(())),
-            }) as Box<dyn IssueSession>)
+            })
         })
         .await
         .map_err(|_| failure("issuance open worker failed"))?

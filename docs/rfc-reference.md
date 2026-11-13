@@ -2,7 +2,7 @@
 
 本项目提供 Rust ACME 客户端及证书生命周期自动化。本文是规范索引、当前覆盖范围和设计检查表；列入索引不表示已实现，也不以摘要替代 RFC 原文中的 MUST、SHOULD 和 MAY。
 
-规范目录核对日期：2026-11-10；DNS Persist 专项核对日期：2026-11-14。协议解释以 RFC 原文、勘误和后续更新为准；CA 的实际支持范围另行验证。
+规范目录核对日期：2026-11-10；DNS Persist与吊销专项核对日期：2026-11-14。协议解释以 RFC 原文、勘误和后续更新为准；CA 的实际支持范围另行验证。
 
 ## 1. 核心规范与阅读顺序
 
@@ -133,7 +133,7 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 - 按 CA 记录 EAB、ARI、challenge、标识符类型和草案扩展的实际支持情况。
 - 分开报告本地测试、staging 签发、真实 DNS 清理及部署结果；任何单项成功均不代表全部完成。
 
-当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户 kid 签名、DER 叶子、reason 和 alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 已由 cert renew 接入；只向广告 renewalInfo 的 CA 提交。
+当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户kid或证书私钥jwk签名、DER叶子、reason和alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 已由 cert renew 接入；只向广告 renewalInfo 的 CA 提交。
 
 密钥扩展依据 RFC 8555 §6.2（账户 JWS）与 §7.4（证书 CSR）分离；CSR 算法没有 ACME 固定枚举，客户端生成能力与 CA 接受范围不同。Let’s Encrypt 当前官方范围见 https://letsencrypt.org/docs/integration-guide/ 。吊销原因按 RFC 8555 §7.6 / RFC 5280 §5.3.1 编码，badRevocationReason 由 CA 返回。
 
@@ -177,8 +177,23 @@ CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取
 | DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | DNS provider自动写入、zone/委托路由、创建对账及所有权清理仍排期；DNS Persist尚无真实CA签发验收 |
 | 标识符/证书材料 | DNS/IDN、SAN、通配符、多种密钥、CSR/私钥固定、SAN/公钥/有效期/相邻链签名检查 | IP标识符、外部CSR及候选证书链选择未实现；相邻签名检查不是系统信任路径验证 |
 | 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | DNS-01无人值守续期仍依赖排期中的provider；人工方式不自动猜测已发布 |
-| 吊销 | 账户签名、原因代码、alreadyRevoked及不确定结果保存 | 未提供证书私钥直接签名吊销路径 |
+| 吊销 | 账户kid／证书私钥jwk签名、原因代码、alreadyRevoked及精确目标/不确定结果保存 | CLI目前管理已托管证书；库支持外部target/session，任意文件导入和其他已获全部标识符授权的账户选择入口尚未提供 |
 | 文件和部署 | 私有状态、跨进程租约、多世代与in_use、多目标发布、自动部署/reload与结果记录 | 不承诺整组原子替换或服务健康；真实断电及服务更新需另验 |
 | 扩展与运维成熟度 | 本表已列RFC8737、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | Profiles、STAR、IP、S/MIME等未普遍实现；Pebble、公网CA和各原生平台验收分别报告 |
 
 按“常规域名证书客户端”的功能目标作工程估算，当前约 **85%–90%**：主协议、账户、签发/恢复、续期/常驻维护、吊销和部署链路已经形成，最明显的主流缺口是DNS provider自动化；候选链选择等属于后续补齐。这个区间没有按RFC章节或测试数量机械计分，也不意味着整个ACME扩展家族已完成相同比例。生产可用性应逐项看真实CA、真实DNS与部署证据，不另造一个看似精确的“生产完成百分比”。
+
+
+## 9. 证书私钥吊销原文核对（2026-11-14）
+
+直接阅读[RFC8555原文](https://www.rfc-editor.org/rfc/rfc8555.txt)§6.2、§6.4、§6.5、§7.6后实现：
+
+| 原文要求 | 当前实现 |
+| --- | --- |
+| §6.2：certificate-key revokeCert必须包含jwk；jwk/kid互斥 | `RevocationAuthority::CertificateKey`要求签名器JWK等于叶子SPKI对应公钥，transport选择jwk；账户路径选择kid，共用flattened JWS实现 |
+| §7.6：DER certificate、可选数字reason；证书私钥也可授权吊销 | 最小RevocationSession只提供证书/CA和检查点；证书密钥模式无账户依赖，不提交CSR、PEM或私钥。证书是否过期/受系统信任不作为本地吊销授权前提 |
+| §7.6：CA必须接受签发账户、持有所有identifier授权的账户，以及匹配证书私钥作为吊销授权 | 托管CLI明确支持原签发账户和证书密钥两种；库外部target可不限制已知issuer，CA仍判定账户授权。客户端不宣称已经支持其他账户的授权发现与CLI选择 |
+| §6.4、§6.5：精确server URL、nonce、badNonce响应中的替换nonce | 复用现有transport，不拼revokeCert路径，不跟随重定向，badNonce有界重签且保持同一DER/reason |
+| §7.6：HTTP200成功；HTTP400+alreadyRevoked确认既有吊销 | 统一状态机提交前固定DER指纹/directory/reason/签名身份；明确未发送保留原状态，首次明确4xx Problem可退回未请求，5xx/非结构化错误/超时保留pending，后次拒绝不抹除先前未知结果 |
+
+账户/证书密钥是明确选择，不因缺账户文件或CA拒绝而自动回退；CLI使用`cert revoke NAME --sign-with certificate-key`。本轮只使用本地证书与loopback CA验收，未对任何公网证书执行吊销。完整存储与恢复边界见[生命周期](certificate-lifecycle.md#吊销)。

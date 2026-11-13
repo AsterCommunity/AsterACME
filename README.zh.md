@@ -78,6 +78,14 @@ aster-acme cert renew --all
 
 `renew` 默认到期才执行，`--now` 可提前续期。无人值守维护可使用常驻 `daemon run` 或由 cron 定期调用 `daemon run-once`，仅支持无需人工确认的验证方式。其他验证方式和脚本确认规则见 [CLI 契约](docs/cli-contract.md)。
 
+## 证书私钥吊销
+
+```sh
+aster-acme cert revoke example-cert --sign-with certificate-key --reason key-compromise --yes
+```
+
+使用所选托管世代的证书私钥，不依赖原ACME账户或CSR；默认`--sign-with account`继续使用签发账户。两种方式均保留本地文件和部署副本，不自动换钥或reload。详见[吊销契约](docs/certificate-lifecycle.md#吊销)。
+
 ## 部署
 
 先让服务读取一个已存在的目标目录，再为证书添加部署绑定：

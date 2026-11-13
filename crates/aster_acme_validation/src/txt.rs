@@ -1,11 +1,12 @@
 //! Optional TXT precheck adapter with one resolver shared across the stage.
+use crate::resolver::{self, InitializationError};
 use aster_acme::{
     issuance::ValidationRequirement,
     precheck::{Check, Failure},
     solver::ExecutionContext,
 };
 use async_trait::async_trait;
-use hickory_resolver::{Resolver, TokioResolver};
+use hickory_resolver::TokioResolver;
 
 /// No publication, mutation or CA validation is performed.
 pub struct Txt {
@@ -20,13 +21,10 @@ impl Txt {
 
     /// Load the operator's recursive resolver configuration; no DNS query yet.
     /// # Errors
-    /// Returns unavailable when system configuration cannot be loaded.
-    pub fn system() -> Result<Self, Failure> {
+    /// Preserves the failed initialization stage and underlying resolver cause.
+    pub fn system() -> Result<Self, InitializationError> {
         Ok(Self {
-            resolver: Resolver::builder_tokio()
-                .map_err(|_| Failure::Unavailable)?
-                .build()
-                .map_err(|_| Failure::Unavailable)?,
+            resolver: resolver::system()?,
         })
     }
 }
@@ -57,6 +55,7 @@ mod tests {
     use crate::txt::*;
     use aster_acme::precheck::Runner;
     use hickory_resolver::{
+        Resolver,
         config::{NameServerConfig, ResolverConfig},
         net::runtime::TokioRuntimeProvider,
         proto::{

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    crypto::{AccountSigner, CryptoError, ExternalAccountCredentials},
+    crypto::{CryptoError, ExternalAccountCredentials, JwsSigner},
     transport::{AcmeClient, TransportError, json_payload},
 };
 use aster_acme_core::{
@@ -343,8 +343,8 @@ impl AccountService {
         &self,
         session: Arc<dyn AccountRotation>,
         mut record: AccountRecord,
-        old: Arc<dyn AccountSigner>,
-        new: Arc<dyn AccountSigner>,
+        old: Arc<dyn JwsSigner>,
+        new: Arc<dyn JwsSigner>,
     ) -> Result<AccountRecord, AccountError> {
         let cancelled = tokio_util::sync::CancellationToken::new();
         let _cancel_on_drop = cancelled.clone().drop_guard();
@@ -378,8 +378,8 @@ impl AccountService {
         &self,
         session: &dyn AccountRotation,
         record: &mut AccountRecord,
-        old: &dyn AccountSigner,
-        new: &dyn AccountSigner,
+        old: &dyn JwsSigner,
+        new: &dyn JwsSigner,
         cancelled: &tokio_util::sync::CancellationToken,
     ) -> Result<(), AccountError> {
         let account_url = record
@@ -471,7 +471,7 @@ impl AccountService {
     /// Rejects invalid contacts, inactive identities, storage failures, or CA errors.
     pub async fn update_contacts(
         &self,
-        signer: &dyn AccountSigner,
+        signer: &dyn JwsSigner,
         contacts: Vec<String>,
     ) -> Result<AcmeAccount, AccountError> {
         validate_contacts(&contacts)?;
@@ -533,7 +533,7 @@ impl AccountService {
     /// Reports invalid contacts, consent/EAB requirements, storage, crypto, or ACME failures.
     pub async fn register_or_recover(
         &self,
-        signer: &dyn AccountSigner,
+        signer: &dyn JwsSigner,
         options: RegistrationOptions,
     ) -> Result<AcmeAccount, AccountError> {
         let directory = self.client.directory_url().clone();
@@ -632,7 +632,7 @@ impl AccountService {
     ///
     /// # Errors
     /// Missing remote account, unavailable storage or invalid server responses are errors.
-    pub async fn recover(&self, signer: &dyn AccountSigner) -> Result<AcmeAccount, AccountError> {
+    pub async fn recover(&self, signer: &dyn JwsSigner) -> Result<AcmeAccount, AccountError> {
         let directory = self.client.directory_url().clone();
         let thumbprint = signer.jwk()?.thumbprint()?;
         let lease = self.store.lock_account(&directory, &thumbprint).await?;
@@ -691,7 +691,7 @@ impl AccountService {
     ///
     /// # Errors
     /// Reports storage, missing account, or network/protocol errors; never creates accounts.
-    pub async fn inspect(&self, signer: &dyn AccountSigner) -> Result<AcmeAccount, AccountError> {
+    pub async fn inspect(&self, signer: &dyn JwsSigner) -> Result<AcmeAccount, AccountError> {
         let directory = self.client.directory_url();
         let thumbprint = signer.jwk()?.thumbprint()?;
         {
@@ -743,10 +743,7 @@ impl AccountService {
     /// # Errors
     /// Reports missing/mismatched identity, uncertain intent, non-active status, storage,
     /// cryptography or CA failures. Only HTTP 200 with deactivated status confirms success.
-    pub async fn deactivate(
-        &self,
-        signer: &dyn AccountSigner,
-    ) -> Result<AcmeAccount, AccountError> {
+    pub async fn deactivate(&self, signer: &dyn JwsSigner) -> Result<AcmeAccount, AccountError> {
         let directory = self.client.directory_url();
         let thumbprint = signer.jwk()?.thumbprint()?;
         let lease = self.store.lock_account(directory, &thumbprint).await?;
@@ -906,7 +903,7 @@ impl AccountService {
 
     async fn new_account(
         &self,
-        signer: &dyn AccountSigner,
+        signer: &dyn JwsSigner,
         record: &AccountRecord,
         options: &RegistrationOptions,
         only_return_existing: bool,

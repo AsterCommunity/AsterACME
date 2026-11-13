@@ -3,6 +3,7 @@ mod failed_removal;
 mod maintenance;
 mod query;
 mod retry;
+mod revocation;
 mod rfc_errors;
 mod workflow;
 use crate::issuance::*;
@@ -1493,109 +1494,6 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
     let text = fs::read_to_string(generation.join("operation.toml")).unwrap();
     assert!(text.contains("[operation.renewal]"));
     assert!(text.contains("source = \"ari\""));
-}
-
-#[tokio::test]
-async fn confirmed_revocation_is_durable_preserves_in_use_and_suppresses_renewal_queries() {
-    use aster_acme::revocation::RevocationService;
-    use aster_acme_core::revocation::RevocationState;
-    use aster_acme_protocol::revocation::RevocationReason;
-    let fixture = fixture().await;
-    let record = completed_generation(&fixture).await;
-    let mut session = fixture
-        .store
-        .open(&record.name, &record.operation_id)
-        .await
-        .unwrap();
-    let slot = fixture.store.slot(&record.name);
-    let generation = slot.join(record.generation_name());
-    let chain = fs::read_to_string(generation.join("fullchain.pem")).unwrap();
-    let key_before = fs::read(generation.join("private-key.pk8")).unwrap();
-    Mock::given(method("GET")).and(path("/directory"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
-            "revokeCert":format!("{}/vendor/revoke",fixture.server.uri()),"renewalInfo":format!("{}/ari",fixture.server.uri())
-        }))).with_priority(1).mount(&fixture.server).await;
-    Mock::given(method("POST"))
-        .and(path("/vendor/revoke"))
-        .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "revoked"))
-        .expect(1)
-        .mount(&fixture.server)
-        .await;
-    let client = Arc::new(
-        aster_acme::transport::HttpPool::default()
-            .discover(
-                record.directory.clone(),
-                TransportOptions {
-                    allow_loopback_http: true,
-                    ..TransportOptions::default()
-                },
-            )
-            .await
-            .unwrap(),
-    );
-    let accounts = crate::account::CliAccountStore::open(
-        fixture.temp.path(),
-        "default",
-        Duration::from_secs(1),
-    )
-    .unwrap();
-    let signer = accounts
-        .signer(&record.directory, "default", KeyAccess::Existing)
-        .await
-        .unwrap();
-    let service = RevocationService::new(
-        client.clone(),
-        IssueIdentity {
-            account: fixture.account.clone(),
-            signer,
-        },
-    );
-    service
-        .revoke(session.as_mut(), Some(RevocationReason::Superseded))
-        .await
-        .unwrap();
-    drop(session);
-    let mut reopened = fixture
-        .store
-        .open(&record.name, &record.operation_id)
-        .await
-        .unwrap();
-    let durable = reopened.record().await.unwrap();
-    assert_eq!(durable.revocation.state, RevocationState::Confirmed);
-    let reason = Some(RevocationReason::Superseded);
-    assert_eq!(durable.revocation.reason, reason);
-    assert!(durable.revocation.confirmed_at.is_some());
-    service.revoke(reopened.as_mut(), None).await.unwrap();
-    aster_acme::renewal::RenewalService::new(client)
-        .refresh(reopened.as_mut(), &execution().context)
-        .await
-        .unwrap();
-    assert_eq!(
-        fs::read_to_string(generation.join("fullchain.pem")).unwrap(),
-        chain
-    );
-    assert_eq!(
-        fs::read(generation.join("private-key.pk8")).unwrap(),
-        key_before
-    );
-    assert_eq!(
-        selected_view(&slot),
-        PathBuf::from(record.generation_name())
-    );
-    let calls = fixture.server.received_requests().await.unwrap();
-    assert!(
-        calls
-            .iter()
-            .all(|request| !request.url.path().starts_with("/ari/"))
-    );
-    assert!(
-        fixture
-            .service
-            .run(reopened.as_mut(), &Dns(true), &execution())
-            .await
-            .is_err()
-    );
 }
 
 #[tokio::test]

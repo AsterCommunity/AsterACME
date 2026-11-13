@@ -6,7 +6,6 @@ use aster_acme::{
     solver::ExecutionContext,
 };
 use async_trait::async_trait;
-use hickory_resolver::Resolver;
 
 /// System recursive resolver visibility check. It publishes/deletes no DNS resources.
 /// Successful local resolution is readiness evidence, never proof of CA authorization.
@@ -23,10 +22,8 @@ impl ChallengeSolver for DnsVisibility {
         execution: &ExecutionContext,
     ) -> Result<bool, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
-        let resolver = Resolver::builder_tokio()
-            .map_err(|_| IssueError::InvalidInput("cannot load system DNS configuration"))?
-            .build()
-            .map_err(|_| IssueError::InvalidInput("cannot initialize DNS resolver"))?;
+        let resolver = crate::resolver::system()
+            .map_err(|error| IssueError::Publication(error.to_string()))?;
         for requirement in records {
             let ValidationRequirement::Dns01 { name, value } = requirement else {
                 return Err(IssueError::InvalidInput(

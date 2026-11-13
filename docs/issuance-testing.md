@@ -233,3 +233,27 @@ python3 scripts/check-doc-links.py
 ```
 
 账户换钥场景在本地更换匹配的账户记录/签名器，验证持久TXT复用；真实CA的旧钥保留、实际DNS记录及公网CA签发仍需另验。此次只读查询Let's Encrypt生产/staging directory用于确认元数据差异，未创建公网订单、发布DNS、吊销证书或改动外部服务；未以本机结果声称Linux/Windows原生验收或远端CI通过。
+
+
+## 账户与证书密钥吊销验收（2026-11-14）
+
+基线为`27ed6d2`之后的本轮工作区，macOS原生Rust 1.99.1。直接阅读RFC8555原文§6.2/§6.4/§6.5/§7.6，具体映射见[RFC核对](rfc-reference.md#9-证书私钥吊销原文核对2026-11-14)。没有公网吊销操作。
+
+库专项使用独立RevocationSession和loopback CA，验证账户kid/证书jwk互斥、nonce/精确URL/叶子DER/reason、独立验签、EC P256/P384/P521、Ed25519/RSA实例、公钥/账户/目标错配、坏/截断/超限证书、缺端点/nonce、签名失败、意图保存失败、取消前后、badNonce重签、明确拒绝/429、5xx/非Problem/意外2xx、调用方丢弃、确认保存失败以及切换签名身份后保留原pending。共享密码学测试对全部八种KeyAlgorithm验证SPKI→JWK及截断/尾随DER拒绝。
+
+CLI/文件集成回归使用生产preparation事务和真实journal：删除整个账户目录仍可certificate-key吊销且不重建账户；账户签名缺证书私钥/CSR/manifest时仍可吊销过期证书；证书密钥模式同样不依赖CSR/manifest且接受过期目标；确认缺失、缺钥、错配钥、恶意链接、文件替换、租约争用和已确认重复调用均覆盖。持久化pending重开后保持目标和原因，以alreadyRevoked确认；人类/JSON展示实际签名身份和目标指纹，文件及in_use保留，ARI/续期资格正确停用。
+
+首次CLI专项发现账户签名器在已持账户租约内重新取锁，已按现有模式改为先取得签名器，再持锁重验账户并进入证书租约；修正后专项通过。纯模拟CA响应覆盖优先级测试也已修正，未将fixture问题作为产品行为修复条目。当前schema对旧pending/confirmed缺目标绑定的记录不自动迁移或猜测。
+
+验收命令：`cargo test --workspace --locked`、严格Clippy、独立feature矩阵、rustdoc、fmt、导入/依赖/TLS/文档链接策略及脚本单测。远端CI、原生Linux/Windows、真实CA吊销与硬件签名器仍单独验收；嵌入式外部证书会话与任意文件CLI导入范围不同。
+
+最终本地结果：全workspace测试713项通过、0失败、10个专用fixture按配置忽略（包括由父测试显式调用的跨进程fixture）；严格Clippy、八组独立feature构建及关闭预检依赖图检查、rustdoc、fmt、11项Python单测和各策略检查通过。PTY另实际跑完10个原生inquire/取消/期限/终端恢复场景；`cargo run -p aster_acme_cli -- cert revoke --help`确认两种`--sign-with`及整体期限参数与实际解析一致。外部自动化workflow与并行改动保留，不作为本功能Rust验证范围的交付结论。
+
+
+## DNS预检初始化诊断（2026-11-14）
+
+在上述吊销实现及并行自动化工作区基础上，针对用户实际日志中的CAA/TXT初始化失败补齐诊断。调查时读取macOS动态DNS配置并独立复现Hickory 0.26.3对带`%en0`的DNS地址返回`failed to parse nameserver address: invalid IP address syntax`；本轮不对上游兼容问题做vendor、patch、过滤地址或回退DNS。
+
+回归测试注入相同配置错误，验证共享初始化入口保留底层source且不继续build，构造阶段错误与配置读取分开；CAA报告每个SAN保留相同原因，未广告caaIdentities是独立原因；Runner保留配置错误并继续其他输入。CLI验证警告包含阶段/具体原因，普通失败仍允许CA验证，取消/整体期限返回中断，人类输出转义换行/ANSI，JSON模式不输出人类诊断。原有TXT与CAA loopback查询测试保持通过；无公网订单、DNS写入或吊销操作。
+
+最终本地验证：全workspace测试721项通过、0失败、10个专用fixture按原配置忽略；严格Clippy、独立feature矩阵、rustdoc、fmt、文档/import/dependency/TLS策略和11项Python单测通过。未升级Hickory，根Cargo.toml/Cargo.lock未变；未重新申请或吊销公网证书。

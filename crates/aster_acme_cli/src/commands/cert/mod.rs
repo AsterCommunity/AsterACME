@@ -10,6 +10,7 @@ mod removal;
 pub(crate) mod render;
 pub(crate) mod renewal;
 pub(crate) mod report;
+mod revocation;
 mod selection;
 mod similar;
 mod validation;

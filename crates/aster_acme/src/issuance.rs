@@ -1,8 +1,7 @@
 //! Persisted issuance contracts. Protocol effects belong to the service, files to adapters.
 use crate::storage::account::AccountStoreError;
 use crate::{
-    account::AccountRecord, crypto::AccountSigner, identifier::DnsIdentifier,
-    solver::ExecutionContext,
+    account::AccountRecord, crypto::JwsSigner, identifier::DnsIdentifier, solver::ExecutionContext,
 };
 use aster_acme_core::workflow::{IssuancePhase, SubmissionState};
 use aster_acme_protocol::{
@@ -763,6 +762,14 @@ pub enum IssueError {
     /// A managed certificate already owns this name; only automatic names may be retried.
     #[error("a managed certificate named '{0}' already exists")]
     NameAlreadyExists(CertificateName),
+    /// Invalid revocation material, authority or checkpoint; has no issuance recovery action.
+    #[error("{0}")]
+    RevocationInput(&'static str),
+    /// Revocation cancellation/deadline; its checkpoint determines whether submission was uncertain.
+    #[error(
+        "revocation interrupted; inspect its saved state before explicitly retrying the same certificate and reason"
+    )]
+    RevocationInterrupted,
     /// Remote order creation may already have happened; never create another automatically.
     #[error(
         "order creation outcome is uncertain; no saved Location URL is available; inspect this operation before creating a new request"
@@ -841,7 +848,7 @@ pub struct IssueIdentity {
     /// Account's latest persisted registration metadata.
     pub account: AccountRecord,
     /// Signing boundary; may be backed by an HSM or remote service.
-    pub signer: Arc<dyn AccountSigner>,
+    pub signer: Arc<dyn JwsSigner>,
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ CLI app / dispatch
 
 ## 当前能力
 
-已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
+已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户／证书私钥签名吊销和多目标文件部署/reload。
 
 `daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。自动DNS provider尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 
@@ -53,3 +53,6 @@ CLI app / dispatch
 开发者文档组织规则和验证入口统一见[文档索引](README.md)，不在本文追加每轮修改日记或复制测试结果。
 
 预检所有权：aster_acme的precheck feature提供Runner/Check/Report，precheck-http提供HTTP实现；validation的precheck-caa和precheck-dns按需引入Hickory。CLI只负责预检时机和渲染，protocol只描述directory字段。禁用CLI预检不会改变ACME正式验证。
+
+
+吊销使用独立`storage::revocation::RevocationSession`，只提供固定target与checkpoint；`RevocationAuthority`分开账户/证书公钥匹配策略，共用一个提交状态机。`crypto::JwsSigner`与`SoftwareSigningKey`不绑定账户业务，transport继续拥有jwk/kid、精确URL、nonce及badNonce；存储不执行CA请求，CLI确认和锁的编排不复制响应分类。托管CLI不要求证书有效期、CSR或另一种身份的密钥，外部证书可由嵌入者实现同一会话契约。

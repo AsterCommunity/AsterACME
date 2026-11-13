@@ -10,9 +10,27 @@ impl Check for Fake {
             0 => Ok(true),
             1 => Ok(false),
             2 => Err(Failure::LookupFailed),
+            4 => Err(Failure::Unavailable {
+                reason: "system DNS configuration could not be parsed".into(),
+            }),
             _ => std::future::pending().await,
         }
     }
+}
+
+#[tokio::test]
+async fn configuration_failure_details_are_retained_without_stopping_later_inputs() {
+    let report = Runner::default()
+        .run(&Fake, &[4, 0], &context())
+        .await
+        .unwrap();
+    assert_eq!(
+        report.observations[0].result,
+        Err(Failure::Unavailable {
+            reason: "system DNS configuration could not be parsed".into(),
+        })
+    );
+    assert_eq!(report.observations[1].result, Ok(true));
 }
 fn context() -> ExecutionContext {
     ExecutionContext {
@@ -29,7 +47,7 @@ async fn failed_and_negative_observations_do_not_stop_remaining_inputs() {
     let results = report
         .observations
         .iter()
-        .map(|item| item.result)
+        .map(|item| item.result.clone())
         .collect::<Vec<_>>();
     assert_eq!(
         results,

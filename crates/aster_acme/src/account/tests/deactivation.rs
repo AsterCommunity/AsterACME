@@ -11,11 +11,11 @@ pub(super) async fn fixture(
     wiremock::MockServer,
     AccountService,
     Arc<MemoryStore>,
-    AccountKey,
+    SoftwareSigningKey,
 ) {
     let (server, client) = server(options).await;
     let directory = client.directory_url().clone();
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let thumbprint = key.jwk().unwrap().thumbprint().unwrap();
     let store = Arc::new(MemoryStore::default());
     *store.record.lock().await = Some(AccountRecord {

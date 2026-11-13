@@ -1,4 +1,4 @@
-//! Account signing, RFC 7638 thumbprints and RFC 8555 flattened JWS.
+//! Shared JWS signing, RFC 7638 thumbprints and RFC 8555 flattened JWS.
 
 use aster_acme_protocol::jws::{
     EabHeader, FlattenedJws, KeyChangeHeader, ProtectedHeader, RequestIdentity,
@@ -30,7 +30,7 @@ pub enum CryptoError {
     #[error("invalid or unsupported key algorithm or PKCS#8 encoding")]
     InvalidKey,
     /// Signature operation failed.
-    #[error("account signing failed")]
+    #[error("JWS signing failed")]
     Signing,
     /// A public JSON structure could not be encoded.
     #[error("JWS JSON encoding failed")]
@@ -40,8 +40,8 @@ pub enum CryptoError {
     InvalidEab,
 }
 
-/// Object-safe account signing boundary, including hardware/remote key implementations.
-pub trait AccountSigner: Send + Sync {
+/// Object-safe JWS signing boundary, including hardware/remote key implementations.
+pub trait JwsSigner: Send + Sync {
     /// Actual key choice, which selects the JOSE signature algorithm.
     fn algorithm(&self) -> KeyAlgorithm;
     /// Public JWK matching the signing key.
@@ -57,7 +57,7 @@ pub trait AccountSigner: Send + Sync {
 }
 
 pub(crate) fn sign_request(
-    signer: &dyn AccountSigner,
+    signer: &dyn JwsSigner,
     identity: RequestIdentity<'_, Jwk>,
     nonce: &str,
     url: &str,
@@ -83,7 +83,7 @@ pub(crate) fn sign_request(
 
 /// Sign the nonce-free inner JWS required by RFC 8555 §7.3.5.
 pub(crate) fn sign_key_change(
-    new_signer: &dyn AccountSigner,
+    new_signer: &dyn JwsSigner,
     old_key: &Jwk,
     account: &AcmeUrl,
     endpoint: &str,

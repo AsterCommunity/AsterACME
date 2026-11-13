@@ -177,10 +177,10 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
         Command::Cert { command } => match command {
             CertCommand::Issue(args) => &args.run.local.data_dir,
             CertCommand::Renew(args) => &args.run.local.data_dir,
+            CertCommand::Revoke(args) => &args.local.data_dir,
             CertCommand::Deploy(args) => &args.local().data_dir,
             CertCommand::List { local, .. }
             | CertCommand::Show { local, .. }
-            | CertCommand::Revoke { local, .. }
             | CertCommand::Remove { local, .. } => &local.data_dir,
         },
     };

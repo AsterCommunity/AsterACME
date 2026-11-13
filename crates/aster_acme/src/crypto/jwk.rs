@@ -44,6 +44,45 @@ pub struct OkpJwk {
 }
 
 impl Jwk {
+    /// Decode a supported certificate `SubjectPublicKeyInfo` without applying
+    /// certificate validity, trust-chain or issuance-identifier policy.
+    ///
+    /// # Errors
+    /// Rejects malformed/trailing DER, unsupported algorithms and invalid public keys.
+    pub fn from_spki(der: &[u8]) -> Result<Self, CryptoError> {
+        let (rest, spki) = x509_parser::x509::SubjectPublicKeyInfo::from_der(der)
+            .map_err(|_| CryptoError::InvalidKey)?;
+        if !rest.is_empty() || spki.subject_public_key.unused_bits != 0 {
+            return Err(CryptoError::InvalidKey);
+        }
+        let bytes = spki.subject_public_key.data.as_ref();
+        match spki.algorithm.algorithm.to_id_string().as_str() {
+            "1.2.840.113549.1.1.1" => Self::from_rsa_der(bytes),
+            "1.2.840.10045.2.1" => {
+                let curve = spki
+                    .algorithm
+                    .parameters
+                    .as_ref()
+                    .ok_or(CryptoError::InvalidKey)?
+                    .as_oid()
+                    .map_err(|_| CryptoError::InvalidKey)?;
+                let algorithm = match curve.to_id_string().as_str() {
+                    "1.2.840.10045.3.1.7" => KeyAlgorithm::EcdsaP256,
+                    "1.3.132.0.34" => KeyAlgorithm::EcdsaP384,
+                    "1.3.132.0.35" => KeyAlgorithm::EcdsaP521,
+                    _ => return Err(CryptoError::InvalidKey),
+                };
+                Self::from_sec1(algorithm, bytes)
+            }
+            _ if spki.algorithm.algorithm == x509_parser::oid_registry::OID_SIG_ED25519
+                && spki.algorithm.parameters.is_none() =>
+            {
+                Self::from_ed25519(bytes)
+            }
+            _ => Err(CryptoError::InvalidKey),
+        }
+    }
+
     /// Read and validate an uncompressed SEC1 point for the selected curve.
     ///
     /// # Errors

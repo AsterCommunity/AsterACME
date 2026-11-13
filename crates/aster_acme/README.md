@@ -1,10 +1,10 @@
 # aster_acme
 
-面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；`maintenance::run_cycle`按序协调ARI刷新、到期续期和部署重试，由宿主注入续期与reload执行器；常驻调度由CLI宿主提供，ACME服务库不启动后台任务；自动 DNS 发布尚未实现。
+面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户／证书密钥签名吊销；cert renew 单次执行已实现；`maintenance::run_cycle`按序协调ARI刷新、到期续期和部署重试，由宿主注入续期与reload执行器；常驻调度由CLI宿主提供，ACME服务库不启动后台任务；自动 DNS 发布尚未实现。
 
 - `account`：账户服务、注册恢复、不可恢复停用、条款/EAB。
 - `storage::{account,issuance}`：对象安全的账户/签名器/轮换与证书会话契约；`storage::query` 提供类型化查询及纯版本投影，库不依赖文件系统。
-- `crypto`：`dyn AccountSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
+- `crypto`：`dyn JwsSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
 - `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。
 - `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization、DNS/HTTP/TLS材料；`challenge::dns_persist`实现草案-02长期TXT及预配置材料计算。
@@ -43,7 +43,7 @@ cargo test -p aster_acme --locked
 
 ## 账户服务边界
 
-通过 `AccountService::new(Arc<AcmeClient>, Arc<dyn AccountStore>)` 注入存储；签名器为 `dyn AccountSigner`，具名密钥查询接口返回 `Arc<dyn AccountSigner>`。嵌入式服务可以提供数据库和外部签名器，不依赖 CLI 或文件系统。
+通过 `AccountService::new(Arc<AcmeClient>, Arc<dyn AccountStore>)` 注入存储；签名器为 `dyn JwsSigner`，具名密钥查询接口返回 `Arc<dyn JwsSigner>`。嵌入式服务可以提供数据库和外部签名器，不依赖 CLI 或文件系统。
 
 流程先保存注册意图，使用同一密钥查找已有账户，仅在明确 accountDoesNotExist 后创建；网络超时/取消保持 pending 供后续对账。已有注册元数据不代表服务端仍 valid，每次查看会读取真实远端状态。条款由调用者显式同意，服务保存当前 directory 公布的实际 URL，URL 变化后要求重新接受；HS256 EAB 的新账户响应必须反映原绑定才确认成功。
 
@@ -126,3 +126,13 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 默认features为空。启用 `precheck` 获得 `precheck::Runner`、可注入的 `Check` 与结构化 `Report`；`precheck-http` 额外提供 `precheck::http::Http`。默认每阶段5秒，可用 `Runner::new(Duration)` 设置嵌入者预算；取消或整体执行期限到达返回中断。普通失败是报告项，本地超时保留已完成项并标记未检查项，不拒绝签发。
 
 `Runner::run(&checker, &inputs, &execution)` 是显式调用；`IssueService::run` 不自动执行预检。HTTP检查器复用调用方HttpPool；CAA/TXT检查器由aster_acme_validation的对应feature提供，避免协议库依赖DNS解析器或CLI。
+
+
+## 吊销与通用签名器
+
+`crypto::JwsSigner`/`crypto::key::SoftwareSigningKey`共用于账户与证书密钥JWS，不保留AccountSigner/AccountKey旧名。`RevocationService::new(client, authority)`接受`revocation::authority::RevocationAuthority::{Account,CertificateKey}`，`revoke(&mut dyn RevocationSession, reason, &ExecutionContext)`只依赖精确证书target和可持久化检查点；不要求IssueSession、CSR或证书私钥导出。嵌入者可提供硬件/远程签名器和外部证书会话。
+
+CertificateKey提交前比较签名器JWK与叶子SPKI，不以签发时的有效期/信任路径规则拒绝吊销。Account模式校验实际账户密钥/身份；外部target可无已知issuer约束，CA最终验证授权，托管CLI仍绑定原签发账户。nonce和签名准备后、发送前保存目标DER SHA-256、directory、原因及签名身份；取消/期限内未发送可恢复原检查点，发送后未知保留pending，显式重试不得改变目标/原因。完整RFC核对见[RFC参考](../../docs/rfc-reference.md#9-证书私钥吊销原文核对2026-11-14)。
+
+
+预检的`Failure::Unavailable { reason }`携带检查器提供的初始化/缺失配置原因；报告保留该文字供嵌入者处理，CLI负责安全展示。`Failure`因此实现Clone而非Copy；取消、阶段预算和CA最终决定的语义保持一致，库默认仍不启用预检。

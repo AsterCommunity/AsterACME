@@ -12,7 +12,7 @@ readme = "README.md"
 
 [features]
 default = []
-dns01 = ["dep:hickory-resolver"]
+dns01 = ["dep:hickory-resolver", "dep:thiserror"]
 precheck-caa = ["dep:aster_acme_protocol", "dep:hickory-resolver", "dep:aster_acme_core", "dep:thiserror", "aster_acme/precheck"]
 precheck-dns = ["dns01", "aster_acme/precheck"]
 

@@ -17,8 +17,6 @@ pub enum RevocationState {
 /// Action for an explicit revoke invocation, never an automatic background retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevocationAction {
-    /// Only certificates with a completed local artifact set may be revoked.
-    NotIssued,
     /// Send a durable request; a pending request must retain its exact original reason.
     Submit,
     /// No request is needed for an already confirmed certificate.
@@ -30,18 +28,11 @@ pub enum RevocationAction {
 /// Repeating an explicit revoke is safe for the same certificate and reason: the CA
 /// either revokes it or reports alreadyRevoked. Network failures are not auto-replayed.
 #[must_use]
-pub fn revocation_action(
-    issued: bool,
-    state: RevocationState,
-    same_reason: bool,
-) -> RevocationAction {
-    match (issued, state, same_reason) {
-        (false, _, _) => RevocationAction::NotIssued,
-        (true, RevocationState::Confirmed, _) => RevocationAction::AlreadyConfirmed,
-        (true, RevocationState::Pending, false) => RevocationAction::ReasonConflict,
-        (true, RevocationState::NotRequested | RevocationState::Pending, _) => {
-            RevocationAction::Submit
-        }
+pub fn revocation_action(state: RevocationState, same_reason: bool) -> RevocationAction {
+    match (state, same_reason) {
+        (RevocationState::Confirmed, _) => RevocationAction::AlreadyConfirmed,
+        (RevocationState::Pending, false) => RevocationAction::ReasonConflict,
+        (RevocationState::NotRequested | RevocationState::Pending, _) => RevocationAction::Submit,
     }
 }
 
@@ -51,30 +42,20 @@ mod tests {
 
     #[test]
     fn explicit_revocation_decisions_preserve_uncertain_request_identity() {
-        for state in [
-            RevocationState::NotRequested,
-            RevocationState::Pending,
-            RevocationState::Confirmed,
-        ] {
-            assert_eq!(
-                revocation_action(false, state, true),
-                RevocationAction::NotIssued
-            );
-        }
         assert_eq!(
-            revocation_action(true, RevocationState::NotRequested, false),
+            revocation_action(RevocationState::NotRequested, false),
             RevocationAction::Submit
         );
         assert_eq!(
-            revocation_action(true, RevocationState::Pending, true),
+            revocation_action(RevocationState::Pending, true),
             RevocationAction::Submit
         );
         assert_eq!(
-            revocation_action(true, RevocationState::Pending, false),
+            revocation_action(RevocationState::Pending, false),
             RevocationAction::ReasonConflict
         );
         assert_eq!(
-            revocation_action(true, RevocationState::Confirmed, false),
+            revocation_action(RevocationState::Confirmed, false),
             RevocationAction::AlreadyConfirmed
         );
     }

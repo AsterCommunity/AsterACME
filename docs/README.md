@@ -25,6 +25,7 @@
 | design/runtime.md | 输出会话、HTTP池及panic |
 | rfc-reference.md | 权威来源、扩展实现与缺口 |
 | testing.md | 按风险选择检查和执行命令 |
+| github-automation.md | GitHub 标签体系、自动化 workflow 入口及权限边界 |
 | *-testing.md | 有日期及平台范围的测试证据 |
 
 ## 维护规则

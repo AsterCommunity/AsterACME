@@ -35,9 +35,25 @@ impl aster_acme::precheck::order::Observer<aster_acme_validation::caa::Report> f
             );
             match &item.result {
                 Ok(report) => render(report, self.progress),
-                Err(Failure::TimedOut | Failure::NotChecked) => self.progress.output.progress(MessageKind::Warning, &format!("CAA {name}: CAA precheck timed out; result unknown, continuing to CA")),
-                Err(Failure::Unavailable) => self.progress.output.progress(MessageKind::Warning, &format!("CAA {name}: inconclusive (missing caaIdentities or unavailable local resolver); CA will perform its own CAA check")),
-                Err(Failure::LookupFailed | Failure::UnsupportedInput) => self.progress.output.progress(MessageKind::Warning, &format!("CAA {name}: DNS lookup failed; result unknown, continuing to CA")),
+                Err(Failure::TimedOut | Failure::NotChecked) => self.progress.output.progress(
+                    MessageKind::Warning,
+                    &format!(
+                        "CAA {name}: CAA precheck timed out; result unknown, continuing to CA"
+                    ),
+                ),
+                Err(Failure::Unavailable { reason }) => self.progress.output.progress(
+                    MessageKind::Warning,
+                    &format!(
+                        "CAA {name}: precheck unavailable: {}; CA will perform its own CAA check",
+                        crate::common::output::safe(reason)
+                    ),
+                ),
+                Err(Failure::LookupFailed | Failure::UnsupportedInput) => {
+                    self.progress.output.progress(
+                        MessageKind::Warning,
+                        &format!("CAA {name}: DNS lookup failed; result unknown, continuing to CA"),
+                    );
+                }
             }
         }
     }

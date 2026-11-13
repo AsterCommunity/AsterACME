@@ -1,5 +1,5 @@
 //! Object-safe account metadata, signer and key-rotation persistence contracts.
-use crate::{account::AccountRecord, crypto::AccountSigner};
+use crate::{account::AccountRecord, crypto::JwsSigner};
 use aster_acme_protocol::url::AcmeUrl;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -71,7 +71,7 @@ pub trait AccountKeyStore: Send + Sync {
         directory: &AcmeUrl,
         name: &str,
         access: KeyAccess,
-    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
+    ) -> Result<Arc<dyn JwsSigner>, AccountStoreError>;
 }
 
 /// Object-safe durable key rollover adapter. Sessions own the account operation lease.
@@ -95,7 +95,7 @@ pub trait AccountRotation: Send + Sync {
     fn record(&self) -> AccountRecord;
 
     /// Original signer, retained until local commit finishes.
-    fn old_signer(&self) -> Arc<dyn AccountSigner>;
+    fn old_signer(&self) -> Arc<dyn JwsSigner>;
 
     /// Durably stage or reload the same proposed key. Never silently replace it.
     /// None uses the original algorithm for new material, or the actual saved staged
@@ -106,7 +106,7 @@ pub trait AccountRotation: Send + Sync {
     async fn stage(
         &self,
         algorithm: Option<crate::crypto::key_algorithm::KeyAlgorithm>,
-    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError>;
+    ) -> Result<Arc<dyn JwsSigner>, AccountStoreError>;
 
     /// Save progress while retaining both keys and the operation lease.
     ///

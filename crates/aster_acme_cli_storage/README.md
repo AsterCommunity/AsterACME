@@ -138,3 +138,10 @@ Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副�
 Windows持久化边界：替换前同步临时文件，成功表示进程级替换完成并支持进程重启恢复；目录同步当前只验证目录可访问，不保证断电后rename目录项落盘。Unix文件及父目录同步有更强保证；不要把Windows进程崩溃恢复等同掉电事务。
 
 账户写入接口显式持锁：`AccountStore::lock_account` 返回 `Arc<dyn AccountLease>`，`AccountStore::save(record, &lease)` 把同一租约克隆进阻塞写任务；不使用隐藏store状态寻找当前锁，也不在协议写入内重获锁。`CliAccountStore::save(record)` 是独立本地编辑入口，会自行新获取租约。轮换会话内部串行化stage/save/commit，确认快照变化拒绝操作；删除要求调用方传入确认过的AccountRecord身份。
+
+
+## 独立吊销会话
+
+`CliIssueStore::open_revocation(name, operation_id)`返回持有证书执行租约的`ManagedRevocationSession`。其`RevocationSession`实现只加载已签发叶子及journal，不要求CSR、material.sha256、证书当前有效或原账户存在。`certificate_signer()`仅在明确选择certificate-key时以受限读取加载保存的PKCS#8，校验保存算法后返回`Arc<dyn JwsSigner>`；账户模式不读取这份私钥。
+
+会话固定打开时的叶子DER，在每次checkpoint写入时重新核对文件指纹和不可变托管身份；确认后文件替换拒绝提交，已confirmed检查点不可覆盖。阻塞读写持有IO许可及证书租约直到结束。完整签发执行的`IssueStore::open`仍检查CSR/私钥/证书有效性，两者不混用；确认结果由certificate_record读取最新快照，CA请求只在服务库执行。

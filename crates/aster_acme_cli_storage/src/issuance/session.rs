@@ -109,21 +109,6 @@ impl IssueSession for Session {
         .map_err(|_| failure("CSR worker failed"))?
     }
 
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError> {
-        let generation = self.generation.clone();
-        let lease = self.lease.clone();
-        let permit = self.io.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _lease = lease;
-            let chain = read_private(&generation.join("fullchain.pem"), 1024 * 1024)
-                .map_err(|_| failure("issued certificate missing or unsafe"))?;
-            certificate::leaf_der(&chain)
-        })
-        .await
-        .map_err(|_| failure("certificate read worker failed"))?
-    }
-
     async fn complete(
         &self,
         record: &IssueRecord,

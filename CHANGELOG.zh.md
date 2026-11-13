@@ -13,13 +13,14 @@
 - **账户管理**：具名 CA 账户的注册、按密钥找回、联系人更新、换钥、停用及本地删除。支持 Let's Encrypt、ZeroSSL、Google、自定义 directory、明确条款同意、EAB，以及账户／证书独立密钥选择。
 - **证书签发**：单域名、SAN、通配符申请，支持人工 DNS-01、人工／webroot／standalone HTTP-01 与 standalone TLS-ALPN-01。持久化固定密钥、CSR、挑战材料和 CA 提交证据，恢复时不静默另建订单。
 - **签发 journal 格式**：NewOrder意图字段改为 `new_order_intent_saved`，授权中的发布材料改为 `validation_requirement`，叶子证书到期时间从续期计划读取并移除重复字段。预发布格式继续使用journal version 1，不读取或迁移旧字段布局。
-- **续期与吊销**：前台单次／批量续期、保存定义复用、ARI 窗口随机选时与 Retry-After，以及按有效期随机提前的回退计划（不足十天按一半，其余按三分之二）。查询失败保留计划，支持过期前任续期，过期后停止 ARI 查询；账户签名吊销独立保存结果，不与本地删除混淆。
+- **续期与吊销**：前台单次／批量续期、保存定义复用、ARI 窗口随机选时与 Retry-After，以及按有效期随机提前的回退计划（不足十天按一半，其余按三分之二）。查询失败保留计划，支持过期前任续期，过期后停止 ARI 查询；吊销显式选择`--sign-with account|certificate-key`，证书密钥模式无需原账户，账户模式无需证书私钥或CSR；过期证书仍可交由CA决定。发送边界保存精确DER指纹、CA、原因和实际签名身份，区分明确未发送与结果未知，保留本地文件。吊销使用独立session契约；公共签名API正名为`JwsSigner`和`SoftwareSigningKey`，无旧名转发兼容层。
 - **周期证书维护**：`daemon run-once`执行一次周期；`daemon run`以前台常驻方式按可配置间隔（默认60秒）循环。每个data-dir使用独占跨进程租约，人类输出使用带时间戳的级别日志，JSON逐行输出事件；周期串行不重叠，Ctrl-C/SIGTERM协作退出并保留已启动工作的结果。两种模式均刷新到期ARI建议、续期符合准入条件的`webroot`、`standalone`、`tls_alpn`及已配置`dns_persist`证书，并重试已配置部署。续期失败按1分钟、10分钟、100分钟、之后每天退避，遵守CA `Retry-After`且保留旧`in_use`证书；newOrder结果不确定时阻止自动新建订单。部署失败独立保存重试期限，到期后只重试已知发布／reload失败，不重新续期；执行租约内重新核验绑定快照、generation和期限，reload结果不确定时禁止自动重放。续期准备失败与操作期限耗尽纳入退避，用户取消和锁竞争不增加失败次数；旧快照不能覆盖新重试状态。管理员可通过`cert renew --now`或`--all --now`提前重试本地退避；人工验证明确跳过，cron仍可调用run-once。
 - **部署**：每张证书可绑定多个标准 PEM 目录或独立产物路径，支持 Unix 文件／私钥权限、签发／续期后自动部署及离线 list/show/update/remove。全部选定文件暂存并同步后逐一替换，Unix 在打开的父目录句柄下完成发布与清理，全部发布成功才 reload。手动／自动取消均等待已启动发布，部署前校验证书与私钥身份；reload 结果未知时跨配置和版本保留状态且不重放，取消显式重试不解除该屏障；区分进程启动前中断，取消后仍保留部署报告。执行次数、期限、进程清理及 stdout/stderr 收集均有界；单目标失败继续其他目标，保留已签发证书。
 - **命令行**：`cert remove NAME --failed`清理明确失败且不可恢复的未签发申请，保留已签发、可恢复和结果未知的记录。交互式输入、按命令限定参数、离线库存、缺钥时的账户元数据查看、显式 CA 核验、统一 UTC 进度与表格、JSON 报告、构建信息和安全 debug 阶段日志。独立配置请求超时、操作期限、轮询间隔与轮数上限，展示轮询计数及 Retry-After 来源。状态根依次由 `--data-dir`、`ASTER_ACME_DATA_DIR` 或平台默认目录确定。
-- **CAA 预检**：issue/renew 在新订单前按 CA 广告身份、父域 CAA、通配符及账户／验证方式约束给出建议。不匹配、未知扩展、DNS 失败和超时不阻断 CA 验证。CAA／TXT／HTTP 以feature按需启用，由可嵌入Runner显式执行，共用默认5秒阶段预算与取消策略，结构化报告保留部分观察。库默认关闭预检，CLI默认启用。
+- **CAA 预检**：issue/renew 在新订单前按 CA 广告身份、父域 CAA、通配符及账户／验证方式约束给出建议。不匹配、未知扩展、DNS 失败和超时不阻断 CA 验证。CAA／TXT／HTTP 以feature按需启用，由可嵌入Runner显式执行，共用默认5秒阶段预算与取消策略，结构化报告保留部分观察，并在CAA/TXT诊断中保留系统解析器初始化阶段和底层原因，区分CA身份缺失与本地初始化失败。不修改系统DNS或Hickory，不增加回退解析器。库默认关闭预检，CLI默认启用。
 - **协议诊断**：类型化 ACME 资源与 IANA 全部 32 种错误类型，附 RFC／草案出处；保留未知扩展、标识符子问题、ARI explanationURL 精确映射、跨到期时刻窗口截断及拒绝／不确定证据，每周在线核对 IANA 注册表。
 - **嵌入与文档**：对象安全的 signer/store/solver/observer 契约、按方法划分的具名材料模块、集中方法准入与发布策略、类型化长期验证快照，项目及 CLI 契约、任务路由、模块设计、RFC 索引，以及分开的本地／staging 验证记录。
+- **仓库治理自动化**：采用组织共享、固定 SHA 的 `AsterCommunity/aster-automation` Action 与仓库自有的 `.github/aster-automation.json`：按变更文件确定性维护路径标签（`Rust`、`Python`、`Documentation`、`Dependencies`、`Scope: Core|Protocol|Client|Crypto|Challenges|Storage|CLI|Deployment`、`Risk: High`），维护关联 Issue 生命周期（`Priority:*`、`Status:*`、`Wait For PR`、`Merged`），聚合 `PR Gate` 与 CI 生命周期标签并原地更新诊断评论，为默认分支及定时任务失败维护带 fingerprint 的故障 Issue（含 flaky 与基础设施分类），每小时 reconcile 并同步标签定义，issue 模板预置新报告标签，维护 release readiness dashboard。自动化配置或 workflow 变更由 `Repository Automation` 校验配置 schema 与仓库静态契约。
 
 ### 变更
 

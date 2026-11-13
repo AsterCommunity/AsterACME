@@ -24,11 +24,6 @@ pub trait IssueSession: Send + Sync {
     /// # Errors
     /// Missing, unsafe or corrupt CSR is an error.
     async fn csr(&self) -> Result<Vec<u8>, IssueError>;
-    /// Read the issued leaf as DER; no private key is exposed to revocation orchestration.
-    ///
-    /// # Errors
-    /// Rejects missing, corrupt or unsafe certificate artifacts.
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError>;
     /// Persist a validated chain then atomically select this generation. Populate the
     /// returned record's `renewal` with `RenewalPlan::from_certificate` before promotion
     /// so every adapter durably establishes a fallback independently of ARI availability.

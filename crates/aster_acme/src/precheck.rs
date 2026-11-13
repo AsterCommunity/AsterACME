@@ -14,11 +14,15 @@ pub mod http;
 pub mod order;
 
 /// Ordinary observation failure, not an ACME or issuance failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Failure {
     /// Resolver or other checker configuration is unavailable.
-    #[error("precheck configuration unavailable")]
-    Unavailable,
+    #[error("precheck configuration unavailable: {reason}")]
+    Unavailable {
+        /// Checker-owned cause, including initialization stage when known.
+        /// Render as untrusted text; never include credentials or full configurations.
+        reason: String,
+    },
     /// Lookup/request failed; absence of evidence is not a matching result.
     #[error("precheck lookup failed")]
     LookupFailed,

@@ -629,6 +629,9 @@ fn revocation_lines(record: &IssueRecord, color: bool) -> Vec<String> {
         RevocationSource::from(record.revocation.state).label(),
         color,
     ));
+    if let Some(signer) = &record.revocation.signer {
+        lines.push(field("Revocation signer:", signer.method().name(), color));
+    }
     if let Some(at) = record.revocation.confirmed_at {
         lines.push(field("Revoked at:", &timestamp(Some(at)), color));
     }
@@ -1694,6 +1697,9 @@ pub(super) fn revoked(record: &IssueRecord, format: Format) -> CliResult<String>
         crate::common::output::MessageKind::Success.badge(color),
         output::safe(record.name.as_str())
     )];
+    if let Some(signer) = &record.revocation.signer {
+        lines.push(field("Sign with:", signer.method().name(), color));
+    }
     lines.extend(renewal_lines(
         record,
         time::OffsetDateTime::now_utc(),

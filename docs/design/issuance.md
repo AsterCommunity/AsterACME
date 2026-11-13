@@ -34,6 +34,10 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 库 `aster_acme::precheck::Runner` 为显式调用的检查器提供每阶段默认5秒预算、取消和整体deadline，返回带输入索引的结构化Report；本地超时保留完成项，并标记TimedOut/NotChecked。检查器由应用注入：HTTP归aster_acme的precheck-http，CAA/TXT归validation的precheck-caa/precheck-dns。CLI `cert/precheck/{caa,dns,validation}` 仅负责调用时机和展示；solver负责发布材料，CAA不会成为签发状态或执行资格。普通不匹配、解析错误和本地超时只提示，CA最终检查；JSON仍只输出既有业务报告，不夹杂人类预检日志。
 
+系统DNS初始化由`validation::resolver::system`统一处理，`InitializationError`区分读取系统配置与构造解析器，并通过Error::source保留Hickory原始错误。`Txt::system`和`SystemLookup::new`直接返回该类型；通用`Failure::Unavailable { reason }`把原因带入CAA报告，不再将缺少CA身份与解析器失败混为一谈。CLI按原有输出边界转义后显示具体原因，JSON仍不输出人类预检日志；`Failure`携带String后使用Clone而非Copy。
+
+仅保留诊断，不vendor、patch或重写Hickory：不移除IPv6接口标识、不跳过失败的nameserver、不添加公共DNS回退，也不修改系统配置。macOS带`%en0`的地址若被当前Hickory拒绝，预检会明确报告`cannot load system DNS configuration: ... invalid IP address syntax`，仍由CA独立验证。
+
 库默认不启用预检，IssueService::run不自动调用预检；CLI默认启用自己的precheck feature，关闭后仍可正常签发。CLI在统一`precheck::with_validation`装饰器中对solver已就绪的DNS-01/DNS-PERSIST-01材料执行TXT建议检查、对HTTP-01执行HTTP检查，发布solver本身不隐式做网络预检。嵌入者可自行选择检查器并通过Runner::new覆盖默认预算。
 
 issue与renew共用Foreground：directory发现后、首次newOrder前检查全部DNS标识符。恢复已有订单或已提交的创建不重复查CAA；directory未广告caaIdentities时输出无法判断，不根据CA URL猜测身份。CAA阶段所有SAN共享5秒，保留已完成观察，超时后的未检查项为未知。

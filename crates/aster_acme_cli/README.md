@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；`daemon run-once`运行一个周期，`daemon run`以前台常驻方式每60秒重复维护，可由配置或`--interval`调整；两种模式自动续期到期的webroot/standalone/tls_alpn/dns_persist证书并执行已配置部署，manual验证会跳过。自动DNS provider尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户／证书私钥签名吊销已实现；`daemon run-once`运行一个周期，`daemon run`以前台常驻方式每60秒重复维护，可由配置或`--interval`调整；两种模式自动续期到期的webroot/standalone/tls_alpn/dns_persist证书并执行已配置部署，manual验证会跳过。自动DNS provider尚未实现。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -289,3 +289,8 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 ## DNS Persist（实验性草案）
 
 `cert issue -c dns_persist -n example-cert -a default -d example.com`按`draft-ietf-acme-dns-persist-02`展示长期`_validation-persist` TXT，首次由人工发布，再使用`cert issue --resume example-cert --yes`确认。记录长期保留，完成后不提示清理；`cert renew`及daemon只对前任已确认的相同记录自动就绪，换钥时保留仍适用的旧hash，改变或新增的值继续返回待办。它不写入DNS，也不自动兼容旧草案格式。要求CA支持精确版本；当前真实CA状态和参数限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)及[CLI契约](../../docs/cli-contract.md#持久dns验证草案)。
+
+
+## 显式吊销签名方式
+
+`cert revoke NAME --sign-with certificate-key --reason key-compromise --yes`使用保存的该世代PKCS#8密钥，无需原ACME账户或CSR。默认`--sign-with account`保持账户路径，`--operation ID`继续精确选历史版本；方法缺凭据时失败，不自动回退另一身份。确认、单请求/整体期限、错误/JSON和签名身份展示遵循[CLI契约](../../docs/cli-contract.md#吊销签名身份)。服务端吊销、账户停用、本地删除和部署替换分别处理。

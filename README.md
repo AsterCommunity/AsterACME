@@ -78,6 +78,14 @@ The resident daemon holds an exclusive lock for its data directory. Set `daemon_
 
 `renew` runs when due; add `--now` to renew early. Use resident `daemon run` or cron with `daemon run-once` for unattended maintenance using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
 
+## Certificate-key revocation
+
+```sh
+aster-acme cert revoke example-cert --sign-with certificate-key --reason key-compromise --yes
+```
+
+Use the selected managed generation's certificate private key without the original ACME account or CSR. The default `--sign-with account` uses the issuing account. Both modes retain local and deployed files and do not rotate keys or reload services. See the [revocation contract](docs/certificate-lifecycle.md#吊销).
+
 ## Deploy
 
 Configure your service to read from an existing target directory, then bind it to the certificate:

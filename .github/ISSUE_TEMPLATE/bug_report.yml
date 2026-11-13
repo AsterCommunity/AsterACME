@@ -1,0 +1,133 @@
+name: Bug Report
+description: Report a reproducible problem in AsterACME
+title: "[Bug]: "
+labels: ["Bug", "Wait For More Info"]
+assignees:
+  - AptS-1547
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please remove ACME account keys, certificate private keys, account URLs, tokens, and any real domain names you want to keep private from logs, state files, and configuration snippets.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem and the observable impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AsterACME version
+      placeholder: e.g. `aster-acme --version` output, package version, or commit SHA
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - Pre-built binary
+        - Built from source / cargo
+        - Embedded library usage
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ca
+    attributes:
+      label: ACME directory provider involved
+      options:
+        - Let's Encrypt
+        - ZeroSSL
+        - Google Trust Services
+        - Other CA or staging environment
+        - Not CA-related
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area involved
+      options:
+        - Account registration / recovery / key rotation
+        - Order issuance and challenge validation
+        - DNS-01 / DNS Persist (draft)
+        - HTTP-01 (webroot / standalone)
+        - TLS-ALPN-01 (standalone)
+        - Renewal / ARI / daemon maintenance
+        - Deployment and reload
+        - Revocation
+        - State files / storage
+        - CLI interaction / output
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS / distro:
+        - Target service and reload mechanism (if deployment-related):
+        - Reverse proxy / DNS provider notes:
+        - Scheduler (cron / systemd timer) if daemon-related:
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages / logs
+      description: Include the ACME problem type and relevant command output if available. Remove secrets and private keys before posting.
+      render: shell
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration or state-file excerpt
+      description: Include only the parts related to the bug and replace sensitive values with placeholders.
+      render: toml
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I have checked the documentation and CLI contract
+          required: true
+        - label: I have removed account keys, certificate private keys, and other secrets from this report
+          required: true

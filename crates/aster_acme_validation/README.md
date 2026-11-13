@@ -30,3 +30,10 @@ CAA可注入 `Lookup`（或使用SystemLookup）；TXT可用 `Txt::new(resolver)
 
 
 `txt::Txt`同时接受DNS-01及实验性DNS-PERSIST-01材料，分别查询`_acme-challenge`和`_validation-persist`的逻辑TXT值；只拼接同一RR的字符片段，不拼接不同RR。观察不修改或删除长期记录，也不把本地可见性当作CA授权。DNS Persist规范版本与部署限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。
+
+
+## 系统解析器初始化诊断
+
+`resolver::system`统一构建系统解析器；`InitializationError::{SystemConfiguration,Build}`保留阶段、底层错误文字和`Error::source()`。`Txt::system()`和`SystemLookup::new()`返回此类型，独立DNS可见性solver也使用同一入口。初始化不执行查询，未增加DNS回退、地址重写或Hickory源码修改。
+
+CAA在通用预检报告的`Failure::Unavailable { reason }`里保留初始化原因；CA未广告`caaIdentities`则给出独立原因。CLI转义后展示实际文字，普通失败继续CA验证，取消/整体期限仍停止。Hickory 0.26.3的macOS系统地址解析不接受带接口标识的IPv6地址时，当前行为是如实诊断后跳过建议性预检，该兼容问题未在本项目中修补。
