@@ -1,5 +1,7 @@
 //! RFC 9773 renewal planning. No background task or certificate issuance is started here.
 
+pub mod refresh;
+
 use crate::storage::issuance::IssueSession;
 use crate::{
     issuance::{IssueError, IssueRecord},
@@ -16,6 +18,44 @@ use x509_parser::{extensions::ParsedExtension, pem::parse_x509_pem, prelude::Fro
 
 use crate::renewal_calculation::fallback_renew_at;
 
+/// Whether a saved generation is eligible for renewal at this instant.
+/// The transaction repeats the current-generation/revocation checks under its lease.
+#[must_use]
+pub fn renewal_due(record: &IssueRecord, now: OffsetDateTime) -> bool {
+    record.is_in_use
+        && !record.unfinished()
+        && record.revocation.state == aster_acme_core::revocation::RevocationState::NotRequested
+        && record.renewal_retry.as_ref().is_none_or(|retry| {
+            retry.blocked_reason.is_none()
+                && retry
+                    .retry_at
+                    .into_iter()
+                    .chain(retry.ca_retry_at)
+                    .max()
+                    .is_some_and(|at| now >= at)
+        })
+        && record
+            .renewal
+            .as_ref()
+            .is_some_and(|plan| now >= plan.renew_at)
+}
+
+/// Whether a saved current certificate needs an ARI suggestion refresh now.
+/// This is independent of `renew_at`: refreshing advice never issues a certificate.
+#[must_use]
+pub fn refresh_due(record: &IssueRecord, now: OffsetDateTime) -> bool {
+    record.is_in_use
+        && !record.unfinished()
+        && record.revocation.state == aster_acme_core::revocation::RevocationState::NotRequested
+        && record.renewal.as_ref().is_some_and(|plan| {
+            now < plan.not_after
+                && matches!(
+                    renewal_action(plan.certificate_id.is_some(), plan.next_check_at, now),
+                    RenewalAction::Query
+                )
+        })
+}
+
 /// Provenance of a saved renewal time, independent of last-query success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,7 +67,7 @@ pub enum RenewalSource {
 }
 
 /// Durable per-certificate schedule; timestamps preserve RFC 3339 precision on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenewalPlan {
     /// RFC 9773 AKI/serial identifier, absent when the leaf has no AKI keyIdentifier.
     pub certificate_id: Option<String>,
@@ -56,7 +96,26 @@ pub struct RenewalPlan {
     pub last_query_failed: bool,
 }
 
+// Distinguish directory observations from an actual ARI GET. Only a GET
+// updates last_checked_at; both paths share the conservative retry interval.
+#[derive(Clone, Copy)]
+enum RefreshAttempt {
+    Query,
+    Discovery { failed: bool },
+}
+
 impl RenewalPlan {
+    fn defer(&mut self, now: OffsetDateTime, attempt: RefreshAttempt) {
+        self.next_check_at = Some(now + time::Duration::hours(6));
+        match attempt {
+            RefreshAttempt::Query => {
+                self.last_checked_at = Some(now);
+                self.last_query_failed = true;
+            }
+            RefreshAttempt::Discovery { failed } => self.last_query_failed = failed,
+        }
+    }
+
     /// Derive fallback and ARI identity from an already validated leaf certificate.
     ///
     /// # Errors
@@ -209,36 +268,35 @@ impl RenewalService {
         execution: &ExecutionContext,
     ) -> Result<IssueRecord, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
-        let mut record = session.record().await?;
+        let record = session.record().await?;
         if record.directory != *self.client.directory_url() {
             return Err(IssueError::InvalidInput("renewal directory mismatch"));
         }
-        if !record.is_in_use
-            || record.unfinished()
-            || !matches!(
-                record.revocation.state,
-                aster_acme_core::revocation::RevocationState::NotRequested
-            )
-        {
+        if !refresh_due(&record, OffsetDateTime::now_utc()) {
             return Ok(record);
         }
-        let Some(plan) = &mut record.renewal else {
-            return Ok(record);
-        };
-        let now = OffsetDateTime::now_utc();
-        if now >= plan.not_after {
+        if self.client.directory().renewal_info.is_none() {
             return Ok(record);
         }
+        self.refresh_due_record(session, record, execution).await
+    }
+
+    // Both pre-discovered callers and RefreshCycle enter this path only after
+    // checking eligibility under their session's lease. Keep GET intent and
+    // response persistence in one place; no second journal read is necessary.
+    async fn refresh_due_record(
+        &self,
+        session: &mut dyn IssueSession,
+        mut record: IssueRecord,
+        execution: &ExecutionContext,
+    ) -> Result<IssueRecord, IssueError> {
+        execution.check().map_err(|_| IssueError::Interrupted)?;
         let endpoint = self.client.directory().renewal_info.as_ref();
-        match renewal_action(
-            endpoint.is_some() && plan.certificate_id.is_some(),
-            plan.next_check_at.map(OffsetDateTime::unix_timestamp),
-            now.unix_timestamp(),
-        ) {
-            RenewalAction::Unavailable | RenewalAction::Wait => return Ok(record),
-            RenewalAction::Query => {}
-        }
         let endpoint = endpoint.ok_or(IssueError::InvalidInput("missing ARI endpoint"))?;
+        let plan = record
+            .renewal
+            .as_mut()
+            .ok_or(IssueError::InvalidInput("missing renewal plan"))?;
         let id = plan
             .certificate_id
             .as_deref()
@@ -248,9 +306,7 @@ impl RenewalService {
         let url = information_url(endpoint, id).map_err(TransportError::from)?;
         // Persist the retry deadline before I/O so cancellation/restart cannot create
         // a request storm. A successful query replaces it with the server's hint.
-        plan.last_checked_at = Some(now);
-        plan.next_check_at = Some(now + time::Duration::hours(6));
-        plan.last_query_failed = true;
+        plan.defer(OffsetDateTime::now_utc(), RefreshAttempt::Query);
         session.save(&record).await?;
         let response = self.query(&url, execution).await;
         let plan = record
@@ -260,6 +316,7 @@ impl RenewalService {
         match response {
             Ok(response) => {
                 let info = serde_json::from_slice::<RenewalInfo>(&response.body);
+                let before = plan.clone();
                 if let Ok(info) = info
                     && plan.apply(info).is_ok()
                 {
@@ -269,12 +326,16 @@ impl RenewalService {
                         plan.next_check_at = Some(next_check(&retry, OffsetDateTime::now_utc()));
                         plan.last_query_failed = false;
                     }
+                    // A valid response is the only new durable information.
+                    // Failures already have their retry intent saved before GET.
+                    if *plan != before {
+                        session.save(&record).await?;
+                    }
                 }
             }
             Err(IssueError::Interrupted) => return Err(IssueError::Interrupted),
             Err(_) => {}
         }
-        session.save(&record).await?;
         Ok(record)
     }
 

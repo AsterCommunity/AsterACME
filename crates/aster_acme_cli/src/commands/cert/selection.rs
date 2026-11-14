@@ -6,10 +6,10 @@ use aster_acme::issuance::{CertificateName, IssueRecord};
 /// unfinished siblings under the same managed name or performing a CA query.
 pub(super) fn check_explicit_resume(
     records: &[IssueRecord],
-    explicit: &super::args::ResumeTarget,
+    explicit: &crate::commands::cert::args::ResumeTarget,
     operation: Option<&str>,
 ) -> CliResult<()> {
-    if let super::args::ResumeTarget::Named(name) = explicit {
+    if let crate::commands::cert::args::ResumeTarget::Named(name) = explicit {
         let matches = |record: &&IssueRecord| {
             record.name.as_str() == name && operation.is_none_or(|id| id == record.operation_id)
         };
@@ -110,9 +110,9 @@ fn certificate_label(record: &IssueRecord, label: CertificateLabel) -> String {
     };
     crate::common::selection::ChoiceLabel {
         name: record.name.as_str(),
-        summary: Some(&super::render::domain_summary(record)),
+        summary: Some(&crate::commands::cert::render::domain_summary(record)),
         at: Some(record.created_at),
-        status: Some(super::render::request_status(
+        status: Some(crate::commands::cert::render::request_status(
             record,
             time::OffsetDateTime::now_utc(),
         )),
@@ -153,10 +153,10 @@ pub(super) fn choose(
 
 fn choice_label(record: &IssueRecord) -> String {
     crate::common::selection::ChoiceLabel {
-        name: &super::render::domain_summary(record),
+        name: &crate::commands::cert::render::domain_summary(record),
         summary: None,
         at: Some(record.created_at),
-        status: Some(super::render::request_status(
+        status: Some(crate::commands::cert::render::request_status(
             record,
             time::OffsetDateTime::now_utc(),
         )),

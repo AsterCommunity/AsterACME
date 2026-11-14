@@ -4,5 +4,8 @@
 *.pk8
 .DS_Store
 
+# Coverage output
+/coverage/
+
 # Python policy-test bytecode
 __pycache__/

@@ -7,7 +7,7 @@ mod update;
 use crate::account::*;
 use crate::storage::account::AccountLease;
 use crate::{
-    crypto::key::AccountKey,
+    crypto::key::SoftwareSigningKey,
     transport::tests::{local_options, server},
 };
 use async_trait::async_trait;
@@ -84,7 +84,7 @@ async fn account_requests_follow_custom_directory_and_location_urls() {
         .await
         .unwrap();
     let service = AccountService::new(Arc::new(client), Arc::new(MemoryStore::default()));
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     assert_eq!(
         service.recover(&key).await.unwrap().account_url,
         account_url
@@ -113,7 +113,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
         let (server, client) = server(local_options()).await;
         let store = Arc::new(MemoryStore::default());
         let service = AccountService::new(Arc::new(client), store.clone());
-        let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+        let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
         let directory = service.client.directory_url().clone();
         let thumbprint = key.jwk().unwrap().thumbprint().unwrap();
         // Model the named file adapter's durable initialization before registration begins.
@@ -198,7 +198,7 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
     let store = Arc::new(MemoryStore::default());
     let directory = client.directory_url().clone();
     let mut service = AccountService::new(Arc::new(client), store.clone());
-    let thumbprint = AccountKey::generate(KeyAlgorithm::EcdsaP256)
+    let thumbprint = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256)
         .unwrap()
         .jwk()
         .unwrap()
@@ -305,6 +305,7 @@ impl AccountStore for MemoryStore {
         if self.fail_save.load(Ordering::SeqCst) {
             return Err(AccountStoreError {
                 message: "injected disk failure".into(),
+                kind: crate::storage::account::AccountStoreErrorKind::Other,
             });
         }
         *self.record.lock().await = Some(record.clone());
@@ -317,7 +318,7 @@ async fn registration_is_recovered_after_lost_response_and_reuses_the_same_ident
     let (server, client) = server(local_options()).await;
     let store = Arc::new(MemoryStore::default());
     let service = AccountService::new(Arc::new(client), store.clone());
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     // A missing account lookup must never create one; subsequent create returns the account.
     Mock::given(method("POST"))
         .and(path("/account"))
@@ -421,7 +422,7 @@ async fn consent_eab_and_contacts_fail_before_post_or_persisted_registration() {
     let terms = AcmeUrl::new("https://ca.example/terms").unwrap();
     client.directory.meta.terms_of_service = Some(terms.clone());
     let store = Arc::new(MemoryStore::default());
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     let service = AccountService::new(Arc::new(client), store.clone());
     assert!(matches!(
         service
@@ -456,7 +457,7 @@ async fn eab_requirement_is_explicit_and_only_return_existing_does_not_send_eab(
     let (server, mut client) = server(local_options()).await;
     client.directory.meta.external_account_required = true;
     let service = AccountService::new(Arc::new(client), Arc::new(MemoryStore::default()));
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     assert!(matches!(
         service
             .register_or_recover(&key, RegistrationOptions::default())
@@ -486,7 +487,7 @@ async fn failed_intent_persistence_prevents_any_remote_mutation() {
     assert!(matches!(
         service
             .register_or_recover(
-                &AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+                &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
                 RegistrationOptions::default()
             )
             .await,
@@ -522,7 +523,7 @@ async fn timeout_and_bad_response_preserve_original_key_and_pending_intent() {
             .mount(&server)
             .await;
         let store = Arc::new(MemoryStore::default());
-        let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+        let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
         let thumb = key.jwk().unwrap().thumbprint().unwrap();
         let service = AccountService::new(Arc::new(client), store.clone());
         assert!(
@@ -609,7 +610,7 @@ async fn eab_registration_requires_confirmation_and_exact_payload() {
         };
         let result = service
             .register_or_recover(
-                &AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+                &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
                 options,
             )
             .await;
@@ -633,7 +634,7 @@ async fn cancellation_leaves_intent_and_no_retry_and_corrupt_identity_never_post
     let (server, client) = server(local_options()).await;
     let store = Arc::new(MemoryStore::default());
     let service = AccountService::new(Arc::new(client), store.clone());
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(1)))
         .mount(&server)

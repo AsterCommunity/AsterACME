@@ -12,7 +12,7 @@ use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 use aster_acme::storage::query::AccountQuery;
 use aster_acme::{
     account::{AccountError, AccountService, RegistrationOptions},
-    crypto::{AccountSigner, ExternalAccountCredentials},
+    crypto::{ExternalAccountCredentials, JwsSigner},
 };
 use std::sync::Arc;
 
@@ -39,15 +39,21 @@ impl Operation {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Account command dispatch keeps operation admission and shared context setup together"
+)]
 pub(crate) async fn execute(
     command: AccountCommand,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let (mut options, operation) = match command {
         AccountCommand::UpdateContact(args) => {
-            return super::mutation::update_contacts(args, cli).await;
+            return crate::commands::account::mutation::update_contacts(args, cli).await;
         }
-        AccountCommand::RotateKey(args) => return super::mutation::rotate_key(args, cli).await,
+        AccountCommand::RotateKey(args) => {
+            return crate::commands::account::mutation::rotate_key(args, cli).await;
+        }
         AccountCommand::List(args) => return list(args, cli).await,
         AccountCommand::Remove(options) => (AccountArgs::from(options), Operation::Remove),
         AccountCommand::Deactivate(options) => (AccountArgs::from(options), Operation::Deactivate),
@@ -60,16 +66,16 @@ pub(crate) async fn execute(
     };
     let settings = CliSettings::load(&options).await?;
     let mode = match operation {
-        Operation::Register => super::selection::Mode::Register,
+        Operation::Register => crate::commands::account::selection::Mode::Register,
         Operation::Recover | Operation::Remove | Operation::Show { .. } => {
-            super::selection::Mode::Existing
+            crate::commands::account::selection::Mode::Existing
         }
-        Operation::Deactivate => super::selection::Mode::Operation(
+        Operation::Deactivate => crate::commands::account::selection::Mode::Operation(
             aster_acme_core::account::AccountOperation::Deactivate,
         ),
-        Operation::Switch => super::selection::Mode::Registered,
+        Operation::Switch => crate::commands::account::selection::Mode::Registered,
     };
-    super::selection::complete(&mut options, &settings, mode, cli).await?;
+    crate::commands::account::selection::complete(&mut options, &settings, mode, cli).await?;
     if matches!(operation, Operation::Switch) && options.name.is_none() {
         return Err(
             "Specify account switch <NAME> or --name <NAME>, or use an interactive terminal to select an account."
@@ -147,7 +153,7 @@ pub(crate) async fn execute(
 /// Verification is sequential and bounded per request. Each failure is a row result,
 /// so one unavailable CA does not discard the rest of the local account inventory.
 async fn list(
-    args: super::args::ListArgs,
+    args: crate::commands::account::args::ListArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let options = AccountArgs {
@@ -204,7 +210,7 @@ async fn list(
                     Some(crate::common::error::diagnostic(error.as_ref()).0),
                 ),
             };
-            results.push(super::report::AccountVerification {
+            results.push(crate::commands::account::report::AccountVerification {
                 name: account.name.clone(),
                 status,
                 error,
@@ -269,7 +275,7 @@ async fn remove(
 /// its intent under the operation lock. No unknown account URL is recovered implicitly.
 async fn deactivate(
     context: CliContext,
-    signer: Arc<dyn AccountSigner>,
+    signer: Arc<dyn JwsSigner>,
     options: AccountArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
@@ -390,7 +396,7 @@ async fn offline(context: &CliContext) -> CliResult<AccountReport> {
 /// Read a consistent local snapshot; no discovery, recovery, or metadata refresh occurs.
 async fn local(
     context: &CliContext,
-    signer: &dyn AccountSigner,
+    signer: &dyn JwsSigner,
     name: String,
     verified: bool,
 ) -> CliResult<AccountReport> {
@@ -416,7 +422,7 @@ async fn local(
 
 async fn remote(
     context: CliContext,
-    signer: Arc<dyn AccountSigner>,
+    signer: Arc<dyn JwsSigner>,
     name: String,
     options: AccountArgs,
     operation: Operation,
@@ -454,10 +460,10 @@ async fn remote(
         {
             registration.contacts.clone_from(&saved.contacts);
         }
-        persist_contacts |= super::interaction::contact(
+        persist_contacts |= crate::commands::account::interaction::contact(
             registration,
             interactive,
-            &mut super::interaction::TerminalPrompts(&cli.output),
+            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
         )?;
     }
     save_registration_intent(
@@ -470,14 +476,14 @@ async fn remote(
     .await?;
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     if let Some(registration) = &mut registration {
-        super::interaction::terms(
+        crate::commands::account::interaction::terms(
             registration,
             client.directory().meta.terms_of_service.as_ref(),
             saved
                 .as_ref()
                 .and_then(|record| record.accepted_terms_url.as_ref()),
             interactive,
-            &mut super::interaction::TerminalPrompts(&cli.output),
+            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
         )?;
     }
     let service = AccountService::new(client, context.store);
@@ -502,9 +508,9 @@ async fn remote(
                 .map_err(|error| {
                     format!("Account registered, but saving its default selection failed: {error}")
                 })?;
-            super::report::RemoteAction::Register
+            crate::commands::account::report::RemoteAction::Register
         }
-        Operation::Recover => super::report::RemoteAction::Recover,
+        Operation::Recover => crate::commands::account::report::RemoteAction::Recover,
         Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
             return Err("Unexpected remote action.".into());
         }
@@ -521,7 +527,7 @@ async fn remote(
 /// This does not claim the CA has accepted a contact or changed an existing account.
 async fn save_registration_intent(
     context: &CliContext,
-    signer: &dyn AccountSigner,
+    signer: &dyn JwsSigner,
     registration: Option<&RegistrationOptions>,
     persist_contacts: bool,
     user_agent: Option<String>,
@@ -581,7 +587,7 @@ pub(super) fn registration_options(
         _ => return Err("EAB requires both --eab-kid and --eab-key-file.".into()),
     };
     Ok(RegistrationOptions {
-        contacts: super::contact::normalize(if options.contact.is_empty() {
+        contacts: crate::commands::account::contact::normalize(if options.contact.is_empty() {
             default_contacts
         } else {
             options.contact

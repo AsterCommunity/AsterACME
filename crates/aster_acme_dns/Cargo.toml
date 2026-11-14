@@ -1,0 +1,21 @@
+[package]
+name = "aster_acme_dns"
+version = "0.1.0-alpha.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DNS challenge publication contracts and routing policy for AsterACME."
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

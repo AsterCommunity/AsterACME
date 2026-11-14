@@ -15,7 +15,7 @@ pub(crate) enum CertificateReport {
     Show {
         record: Box<IssueRecord>,
         verified: bool,
-        view: super::render::DetailView,
+        view: crate::commands::cert::render::DetailView,
     },
     Revoked(Box<IssueRecord>),
     Removed {
@@ -46,6 +46,16 @@ pub(crate) struct DeploymentReport {
     pub(crate) attempted: bool,
 }
 
+impl DeploymentReport {
+    pub(crate) fn has_failures(&self) -> bool {
+        self.entries.iter().any(|entry| !entry.is_deployed())
+            || self
+                .events
+                .iter()
+                .any(|event| event.kind == crate::common::output::MessageKind::Error)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct DeploymentEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,6 +69,8 @@ pub(crate) struct DeploymentEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DeploymentExecution {
+    /// False when live state changed and automatic admission skipped execution.
+    pub(super) attempted: bool,
     pub(super) binding: aster_acme_cli_storage::issuance::DeploymentBinding,
     pub(super) events: Vec<DeploymentEvent>,
 }
@@ -80,10 +92,7 @@ impl CertificateReport {
                         .events
                         .iter()
                         .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                        || report.entries.iter().any(|entry| {
-                            entry.phase
-                                != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-                        })) =>
+                        || report.entries.iter().any(|entry| !entry.is_deployed())) =>
             {
                 ExitStatus::Failed
             }
@@ -98,9 +107,7 @@ impl CertificateReport {
             } if deployment_events
                 .iter()
                 .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                || deployments.iter().any(|entry| {
-                    entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-                }) =>
+                || deployments.iter().any(|entry| !entry.is_deployed()) =>
             {
                 ExitStatus::Failed
             }
@@ -149,6 +156,7 @@ pub(super) enum RenewalResult {
 pub(super) enum SkipReason {
     NoInUseCertificate,
     BatchCancelled,
+    ManualValidation,
 }
 
 impl SkipReason {
@@ -156,6 +164,9 @@ impl SkipReason {
         match self {
             Self::NoInUseCertificate => "no in-use certificate; complete an initial issuance first",
             Self::BatchCancelled => "not attempted after batch cancellation",
+            Self::ManualValidation => {
+                "saved validation method requires user action; automatic renewal skipped"
+            }
         }
     }
 }
@@ -231,7 +242,30 @@ pub(crate) struct RenewalBatch {
 }
 
 impl RenewalBatch {
-    pub(super) fn was_cancelled(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+            cancelled: false,
+        }
+    }
+
+    pub(crate) fn cancelled() -> Self {
+        Self {
+            entries: Vec::new(),
+            cancelled: true,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn was_cancelled(&self) -> bool {
         self.cancelled
             || self.entries.iter().any(|entry| {
                 matches!(
@@ -255,6 +289,10 @@ impl RenewalBatch {
         }
     }
 
+    pub(crate) fn has_failures(&self) -> bool {
+        self.summary().failed > 0
+    }
+
     pub(super) fn summary(&self) -> RenewalSummary {
         let mut summary = RenewalSummary::default();
         for entry in &self.entries {
@@ -266,9 +304,7 @@ impl RenewalBatch {
                 }) if deployment_events
                     .iter()
                     .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                    || deployments.iter().any(|entry| {
-                        entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-                    }) =>
+                    || deployments.iter().any(|entry| !entry.is_deployed()) =>
                 {
                     summary.failed += 1;
                 }

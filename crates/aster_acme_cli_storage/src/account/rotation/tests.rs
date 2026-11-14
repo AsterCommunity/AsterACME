@@ -878,7 +878,13 @@ async fn cancellation_while_fetching_nonce_leaves_prepared_rotation_retryable_wi
         saved.key_rotation.as_ref().unwrap().phase,
         KeyRotationPhase::Prepared
     );
-    let retry = fixture.store.rotation(&saved.directory_url).await.unwrap();
+    // The detached request owns the session lease until its 400ms transport
+    // deadline is classified. Windows CI runs this workspace test beside other
+    // CPU-heavy tests, so let the ordinary lock wait span that scheduler delay.
+    let retry_store = Arc::new(
+        CliAccountStore::open(fixture.temp.path(), "work", Duration::from_secs(10)).unwrap(),
+    );
+    let retry = retry_store.rotation(&saved.directory_url).await.unwrap();
     assert_eq!(
         retry
             .record()

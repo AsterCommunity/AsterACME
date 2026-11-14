@@ -1,6 +1,6 @@
 # aster_acme_cli
 
-账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户签名吊销已实现；自动 DNS、自动续期调度和 daemon 尚未实现。
+账户注册、列表、找回、本地查看、显式远端验证、停用及本地移除 CLI。默认使用 Let's Encrypt 公开生产服务。manual DNS/HTTP、webroot、HTTP standalone 与 TLS-ALPN-01 签发及恢复已实现；ARI 续期计划和账户／证书私钥签名吊销已实现；`daemon run-once`运行一个周期，`daemon run`以前台常驻方式每60秒重复维护，可由配置或`--interval`调整；两种模式自动续期到期的webroot/standalone/tls_alpn/dns_persist/dns_external证书并执行已配置部署，manual验证会跳过。外部DNS provider已通过ADPP接入，内置厂商实现与真实DNS/CA验收另计。
 
 ```sh
 cargo run -p aster_acme_cli -- account register \
@@ -210,14 +210,14 @@ aster-acme cert show example.com --operation <ID> --verify
 
 手动DNS模式展示全部TXT，同名多值共存；确认发布后做最多5秒的建议性DNS预检，缺失/解析错误/超时均警告后继续CA。首次JSON/脚本返回action_required，部署后显式resume --yes；完成后给出手动清理指令，不自动修改DNS。
 
---request-timeout 是单次 HTTP 限制，--operation-timeout 是本次前台执行预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。当前支持 manual_dns/manual_http/webroot/standalone/tls_alpn，前台续期、吊销、绑定多目标部署与有界服务 reload 已实现；自动 DNS 和后台 daemon 未实现。
+--request-timeout 是单次 HTTP 限制，--operation-timeout 是每张证书每个执行阶段的预算（默认 600 秒），与 CA 的 expires 无关。轮询遵守 Retry-After，没有时默认 5 秒，有取消与总 deadline；不启动后台服务。中断保留状态，用名称恢复，域名相同不意味着自动继续上一单。`daemon run-once`由cron触发ARI刷新和到期自动续期；自动方式限webroot/standalone/tls_alpn/dns_persist/dns_external，manual验证会显式跳过，续期完成后运行已配置部署。前台常驻维护由`daemon run`提供，默认60秒周期，外部DNS provider已通过ADPP接入，内置厂商实现与真实DNS/CA验收另计。
 
 每个 crate 独立显式维护 package.version；依赖版本/feature/source 继续仅在根 workspace.dependencies 配置。版本命令展示 CLI 自身版本，非整个 workspace 的统一版本。
 
 
 ## 统一展示和产物
 
-当前根命令为 account、cert、version；证书命令为 cert issue/list/show/revoke/remove，不提供旧 order 别名。只用 `-c manual_dns` 选择验证方案，删除 --solver 和 -c dns-01。无域名的 cert issue 在终端询问，脚本要求 -d/--resume；无名称的 cert show 在终端先选证书，多次申请再选主域名/时间/状态，--operation 可直接定位申请。相同显示标签通过独立行索引选中，不靠文本匹配。
+当前根命令为 account、cert、daemon、provider、version；证书命令为 cert issue/list/show/revoke/remove，不提供旧 order 别名。只用 `-c manual_dns` 选择验证方案，删除 --solver 和 -c dns-01。无域名的 cert issue 在终端询问，脚本要求 -d/--resume；无名称的 cert show 在终端先选证书，多次申请再选主域名/时间/状态，--operation 可直接定位申请。相同显示标签通过独立行索引选中，不靠文本匹配。
 
 common/output 统一字段、颜色、Tips 和转义；common/time 统一所有人类 UTC 时间（秒级），common/log 统一阶段日志/级别对齐，common/table 统一 Unicode 列宽。颜色遵守 TTY/NO_COLOR，JSON 无 ANSI/阶段日志。cert list 使用紧凑表格，蓝色 Tips: 指向 cert show；account/cert show 详情使用同样的标签宽度。account show 的离线/verify 使用同一完整快照模板；成功查询后末行 Remote status: verified with CA，离线 not verified。cert show 的 source/verified 与实际请求一致，不再输出固定的 unless --verify 文案。
 
@@ -233,15 +233,15 @@ common/output 统一字段、颜色、Tips 和转义；common/time 统一所有�
 
 cert issue/renew使用通用-y/--yes确认操作，人工新材料先返回待办，恢复再确认已发布；不猜输入/目标、不接受条款。DNS预检是建议，不再暴露跳过参数。公共存储/HTTP参数按命令作用域组合。
 
-续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI提供计划、显式刷新及由cron调用的`daemon run-once`；吊销保留本地文件，与订单状态独立。
 
 cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容，根目录 .locks 保持稳定锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
 
-托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 已提供单次执行，后台调度仍未实现。
+托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 已提供单次执行，前台常驻维护由`daemon run`提供。
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；常驻`daemon run`复用同一维护周期，默认60秒间隔，可由`config.daemon_interval`或`--interval`覆盖；`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn/dns_persist/dns_external证书并执行已配置部署；manual验证会跳过。本地 DNS 采用最多5秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
@@ -284,3 +284,15 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 `cert deploy update CERT_NAME -n DEPLOY_NAME` 只保存给出的配置；`--clear-reload`清除命令，目标路径参数整体替换目的集合，原文件保留。Unix支持 `--file-mode 0644 --key-mode 0640`，分别控制证书/CA/fullchain和私钥，缺省0600；Windows继承权限并拒绝显式Unix mode。模式保存在绑定、后续续期沿用；修改不立即部署。
 
 部署逐目标继续执行并汇总失败。库存/锁/打开失败也退出非零，执行错误不覆盖历史成功观察。Reload使用process-wrap管理Unix进程组/Windows Job Object，取消/超时清理拥有的进程树；stdout/stderr并行读取，每路每次收集64KiB后继续排空。手动命令实时显示，自动部署在统一部署报告展示；JSON仅一个结果并带events/deployment_events。输出不自动脱敏也不写入绑定文件。Storage先完成全部选定文件的暂存、设权和同步，再逐文件替换，只有全部成功后CLI才reload；准备失败不改现有文件，提交失败不启动reload并保留失败检查点。部署直接发布普通文件，保持目录路径，不使用部署链接或目录交换，不提供整组原子切换。
+
+
+## DNS Persist（实验性草案）
+
+实验性DNS-PERSIST-01支持首次人工配置与已确认记录复用。协议版本见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)，操作与限制见[CLI契约](../../docs/cli-contract.md#持久dns验证草案)。
+
+
+## 显式吊销签名方式
+
+证书吊销支持账户或证书私钥签名。权限、确认与恢复见[CLI契约](../../docs/cli-contract.md)和[证书生命周期](../../docs/certificate-lifecycle.md#吊销)。
+
+外部DNS自动发布使用 `-c dns_external --provider NAME`，Profile保存在`providers/<name>.toml`。发布计划、回执与传播等待分别推进；独立清理命令为`provider cleanup NAME`。详细配置、安全边界与恢复说明见[DNS Provider](../../docs/dns-providers.md)。

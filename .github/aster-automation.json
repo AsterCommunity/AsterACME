@@ -1,0 +1,258 @@
+{
+  "$schema": "https://raw.githubusercontent.com/AsterCommunity/aster-automation/main/schema.json",
+  "version": 1,
+  "gate": {
+    "name": "PR Gate",
+    "commentMarker": "<!-- asteracme-ci-diagnostics -->",
+    "incidentMarkerPrefix": "asteracme-ci-incident",
+    "runningLabel": "CI: Running",
+    "passedLabel": "CI: Passed"
+  },
+  "readiness": {
+    "name": "PR Readiness",
+    "commentMarker": "<!-- asteracme-pr-readiness -->",
+    "requiredChecks": ["codecov/patch"],
+    "requireResolvedThreads": true,
+    "requireApproval": false,
+    "highRiskLabel": "Risk: High"
+  },
+  "labels": {
+    "definitions": {
+      "Bug": {
+        "color": "d73a4a",
+        "description": "Something isn't working"
+      },
+      "Documentation": {
+        "color": "0075ca",
+        "description": "Improvements or additions to documentation"
+      },
+      "Duplicate": {
+        "color": "cfd3d7",
+        "description": "This issue or pull request already exists"
+      },
+      "Enhancement": {
+        "color": "a2eeef",
+        "description": "New feature or request"
+      },
+      "Good First Issue": {
+        "color": "7057ff",
+        "description": "Good for newcomers"
+      },
+      "Help Wanted": {
+        "color": "008672",
+        "description": "Extra attention is needed"
+      },
+      "Invalid": {
+        "color": "e4e669",
+        "description": "This doesn't seem right"
+      },
+      "Question": {
+        "color": "d876e3",
+        "description": "Further information is requested"
+      },
+      "Wontfix": {
+        "color": "848484",
+        "description": "This will not be worked on"
+      },
+      "Dependencies": {
+        "color": "6f42c1",
+        "description": "Pull requests that update a dependency file"
+      },
+      "Wait For More Info": {
+        "color": "bf6302",
+        "description": "Waiting for more information from reporter"
+      },
+      "Priority: High": {
+        "color": "e11d48",
+        "description": "High priority issue"
+      },
+      "Priority: Medium": {
+        "color": "f97316",
+        "description": "Medium priority issue"
+      },
+      "Priority: Low": {
+        "color": "22c55e",
+        "description": "Low priority issue"
+      },
+      "Wait For PR": {
+        "color": "9333ea",
+        "description": "Issue has a pending pull request"
+      },
+      "Merged": {
+        "color": "7acc32",
+        "description": "Pull request has been merged"
+      },
+      "Status: Blocked": {
+        "color": "CF222E",
+        "description": "An open dependency prevents meaningful completion; use GitHub blocked-by relationships"
+      },
+      "Status: In Progress": {
+        "color": "0969DA",
+        "description": "Active implementation exists and should have a branch, PR, or progress evidence"
+      },
+      "Status: Ready": {
+        "color": "2DA44E",
+        "description": "Triaged and ready to start in its assigned milestone"
+      },
+      "Status: Deferred": {
+        "color": "6E7781",
+        "description": "Triaged outside the active release train; revisit before moving into a release milestone"
+      },
+      "Status: Needs Decision": {
+        "color": "BF8700",
+        "description": "A product, evidence, or design decision is required before implementation commitment"
+      },
+      "Tracking: Epic": {
+        "color": "8250DF",
+        "description": "Parent or tracking issue whose completion is represented by linked sub-issues or phases"
+      },
+      "CI: Failure": {
+        "color": "D73A4A",
+        "description": "Tracks a reproducible default-branch or scheduled CI failure"
+      },
+      "CI: Infrastructure": {
+        "color": "5319E7",
+        "description": "CI failure appears to originate from runner or external infrastructure"
+      },
+      "CI: Flaky": {
+        "color": "D4C5F9",
+        "description": "The same CI failure fingerprint has recurred across runs"
+      },
+      "CI: Running": {
+        "color": "FBCA04",
+        "description": "A pull request has required CI workflows that have not reached a terminal state"
+      },
+      "CI: Passed": {
+        "color": "0E8A16",
+        "description": "All required CI workflows passed for the current pull request head"
+      },
+      "Risk: High": {
+        "color": "B60205",
+        "description": "Changes a high-risk key, security, protocol, or deployment boundary"
+      },
+      "Rust": {
+        "color": "dea584",
+        "description": "Pull requests that update Rust code"
+      },
+      "Python": {
+        "color": "3572A5",
+        "description": "Pull requests that update Python check scripts"
+      },
+      "Scope: Core": {
+        "color": "0E8A16",
+        "description": "Pure state decisions for accounts, orders, authorizations, challenges, renewals, and revocations"
+      },
+      "Scope: Protocol": {
+        "color": "0E8A16",
+        "description": "ACME wire models, directory, problem documents, JWS structures, and registry checks"
+      },
+      "Scope: Client": {
+        "color": "0E8A16",
+        "description": "ACME orchestration, JWS signing, transport, certificate validation, and maintenance policy"
+      },
+      "Scope: Crypto": {
+        "color": "0E8A16",
+        "description": "Key handling, JWK, key algorithms, and certificate/key material boundaries"
+      },
+      "Scope: Challenges": {
+        "color": "0E8A16",
+        "description": "Challenge methods, validation implementations, and advisory prechecks"
+      },
+      "Scope: Storage": {
+        "color": "0E8A16",
+        "description": "Account and certificate state files, queries, leases, recovery, and deployment publication"
+      },
+      "Scope: CLI": {
+        "color": "0E8A16",
+        "description": "Command surface, interaction, rendering, daemon commands, and reload execution"
+      },
+      "Scope: Deployment": {
+        "color": "0E8A16",
+        "description": "Certificate installation, file publication, and service reload behavior"
+      }
+    },
+    "applicability": {
+      "CI: Failure": ["issue"],
+      "CI: Infrastructure": ["issue"],
+      "CI: Flaky": ["issue"],
+      "CI: Running": ["pull_request"],
+      "CI: Passed": ["pull_request"]
+    },
+    "rules": [
+      { "label": "Rust", "paths": ["crates/**", "**/*.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] },
+      { "label": "Python", "paths": ["scripts/**", "**/*.py"] },
+      { "label": "Documentation", "paths": ["docs/**", "README.md", "README.zh.md", "CHANGELOG.md", "CHANGELOG.zh.md", "crates/**/README.md"] },
+      { "label": "Dependencies", "paths": ["**/Cargo.toml", "**/Cargo.lock", "rust-toolchain.toml", ".github/dependabot.yml"] },
+      { "label": "Scope: Core", "paths": ["crates/aster_acme_core/**"] },
+      { "label": "Scope: Protocol", "paths": ["crates/aster_acme_protocol/**", "scripts/check-iana-acme-errors.py", "scripts/tests/test_iana_acme_errors.py", "docs/rfc-reference.md"] },
+      { "label": "Scope: Client", "paths": ["crates/aster_acme/**"] },
+      { "label": "Scope: Crypto", "paths": ["crates/aster_acme/src/crypto/**"] },
+      { "label": "Scope: Challenges", "paths": ["crates/aster_acme_validation/**", "crates/aster_acme/src/challenge/**", "crates/aster_acme/src/precheck/**", "crates/aster_acme_cli/src/commands/cert/validation/**", "crates/aster_acme_cli/src/commands/cert/precheck/**"] },
+      { "label": "Scope: Storage", "paths": ["crates/aster_acme_cli_storage/**"] },
+      { "label": "Scope: CLI", "paths": ["crates/aster_acme_cli/**"] },
+      { "label": "Scope: Deployment", "paths": ["**/deployment/**", "**/deployment*", "**/reload*", "**/publication/**"] },
+      {
+        "label": "Risk: High",
+        "paths": [
+          "crates/aster_acme/src/crypto.rs",
+          "crates/aster_acme/src/crypto/**",
+          "crates/aster_acme/src/transport.rs",
+          "crates/aster_acme/src/transport/**",
+          "crates/aster_acme/src/storage.rs",
+          "crates/aster_acme/src/storage/**",
+          "**/revocation/**",
+          "**/revocation*",
+          "**/rotation*",
+          "**/deployment/**",
+          "**/deployment*",
+          "**/reload*",
+          ".github/workflows/**"
+        ]
+      }
+    ]
+  },
+  "workflows": [
+    { "name": "Repository Automation", "paths": [".github/workflows/**", ".github/aster-automation.json"] },
+    { "name": "CI", "paths": ["**"] },
+    {
+      "name": "IANA ACME Registry",
+      "paths": [
+        ".github/workflows/iana-acme-registry.yml",
+        "crates/aster_acme_protocol/src/problem.rs",
+        "scripts/check-iana-acme-errors.py",
+        "scripts/tests/test_iana_acme_errors.py"
+      ]
+    }
+  ],
+  "linkedIssues": {
+    "priorityPrefix": "Priority: ",
+    "statusPrefix": "Status: ",
+    "waitLabel": "Wait For PR",
+    "readyLabel": "Status: Ready",
+    "inProgressLabel": "Status: In Progress",
+    "mergedLabel": "Merged",
+    "mergedPullLabelsToRemove": ["Status: In Progress", "Status: Needs Decision"],
+    "trackingPattern": "^Tracking-Issue:\\s*#(\\d+)\\s*$"
+  },
+  "incidents": {
+    "failureLabel": "CI: Failure",
+    "infrastructureLabel": "CI: Infrastructure",
+    "recoverySuccesses": 2,
+    "flakyLabel": "CI: Flaky",
+    "flakyOccurrences": 3
+  },
+  "dashboard": {
+    "marker": "<!-- asteracme-milestone-dashboard -->",
+    "title": "Release readiness dashboard",
+    "milestones": ["Not arranged"]
+  },
+  "diagnosticHints": [
+    { "pattern": "format|clippy|lint", "message": "格式或静态检查失败；先运行 cargo fmt --all --check 和 cargo clippy --workspace --all-targets 定位。" },
+    { "pattern": "check-workspace-deps|check-rust-imports|check-tls-backend|check-dependency-features|check-precheck-features", "message": "仓库自检脚本失败；对照 scripts/ 下对应检查输出，确认依赖 features、import 边界或 TLS backend 是否漂移。" },
+    { "pattern": "iana|registry|problem\\.rs", "message": "IANA ACME registry 校验失败；运行 scripts/check-iana-acme-errors.py 并同步 docs/rfc-reference.md。" },
+    { "pattern": "doc-links|check-doc-links", "message": "文档链接检查失败；运行 python3 scripts/check-doc-links.py 修复本地相对链接。" },
+    { "pattern": "codecov|coverage|llvm-cov", "message": "覆盖率检查失败；查看 Codecov patch 状态和 coverage summary，补齐新路径测试。" },
+    { "pattern": "unittest|scripts/tests", "message": "Python 脚本测试失败；运行 python3 -m unittest discover -s scripts/tests 复现。" },
+    { "pattern": "windows|macos|ubuntu|runner|timeout|rate limit|network|disk", "message": "日志包含 runner 或外部基础设施信号，先区分环境故障与代码回归再重跑。" }
+  ]
+}

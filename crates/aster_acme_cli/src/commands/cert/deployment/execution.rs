@@ -22,17 +22,6 @@ impl Execution {
             Ok(())
         }
     }
-    pub(super) async fn interrupted(&self) {
-        tokio::select! {
-            () = self.cancellation.cancelled() => {},
-            () = async {
-                match self.deadline {
-                    Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
-                    None => std::future::pending().await,
-                }
-            } => {},
-        }
-    }
 }
 impl From<&aster_acme::solver::ExecutionContext> for Execution {
     fn from(context: &aster_acme::solver::ExecutionContext) -> Self {

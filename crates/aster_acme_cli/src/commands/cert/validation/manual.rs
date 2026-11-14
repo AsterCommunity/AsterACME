@@ -1,12 +1,18 @@
 //! Manual implementations share confirmation semantics but keep method-specific instructions.
 use crate::commands::cert::validation::{
-    Arc, ChallengeKind, ChallengeSolver, IssueError, PRECHECK_TIMEOUT, Progress,
+    Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
 };
 use crate::common::output::MessageKind;
-use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
+use aster_acme::{
+    issuance::ValidationRequirement,
+    solver::{ChallengePublication, ExecutionContext, ReadyResult},
+};
 use async_trait::async_trait;
 
+mod confirmation;
+
 pub(super) struct Manual {
+    pub(super) reusable: Vec<ValidationRequirement>,
     pub(super) method: ChallengeKind,
     pub(super) saved: bool,
     pub(super) interactive: bool,
@@ -42,10 +48,14 @@ impl ChallengeSolver for Manual {
     }
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<ReadyResult, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
         if requirements
             .iter()
             .any(|requirement| requirement.kind() != self.method)
@@ -56,16 +66,27 @@ impl ChallengeSolver for Manual {
         }
         // Fresh scripted material must first be exposed to the caller. --yes only
         // confirms an operation; it does not mean newly issued files/TXT already exist.
-        match (self.saved, self.interactive, self.yes) {
-            (false, _, true) | (_, false, false) => return Ok(false),
+        let reused = !requirements.is_empty()
+            && requirements.iter().all(|requirement| {
+                requirement.kind().publication_lifetime()
+                    == aster_acme::challenge::PublicationLifetime::Persistent
+                    && self.reusable.contains(requirement)
+            });
+        match (reused, self.saved, self.interactive, self.yes) {
+            (false, false, _, true) | (false, _, false, false) => {
+                return Ok(ReadyResult::default());
+            }
             _ => {}
         }
-        if self.interactive && !self.yes {
+        if !reused && self.interactive && !self.yes {
             let progress = self.progress.clone();
-            let details = super::super::render::requirement_lines(requirements);
+            let details = crate::commands::cert::render::requirement_lines(&requirements);
             let message = match self.method {
                 ChallengeKind::Dns01 => {
                     "Action required: add all TXT values; keep unrelated values"
+                }
+                ChallengeKind::DnsPersist01 => {
+                    "Action required: add these persistent TXT records; retain them for renewal. They authorize this account until removed"
                 }
                 ChallengeKind::Http01 => {
                     "Action required: serve every HTTP file exactly as shown, reachable on public port 80"
@@ -77,7 +98,9 @@ impl ChallengeSolver for Manual {
                 }
             };
             let question = match self.method {
-                ChallengeKind::Dns01 => "Have you published these TXT values?",
+                ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 => {
+                    "Have you published these TXT values?"
+                }
                 ChallengeKind::Http01 => "Are these HTTP challenge files publicly available?",
                 ChallengeKind::TlsAlpn01 => {
                     return Err(IssueError::InvalidInput(
@@ -112,23 +135,15 @@ impl ChallengeSolver for Manual {
                 .map_err(|_| IssueError::Publication("confirmation reader stopped".into()))??;
             self.shutdown().await;
             if !confirmed {
-                return Ok(false);
+                return Ok(ReadyResult::default());
             }
         }
         match self.method {
-            ChallengeKind::Dns01 => {
-                dns_precheck(
-                    aster_acme_validation::dns01::visibility::DnsVisibility
-                        .ready(requirements, execution),
-                    execution,
-                    &self.progress,
-                )
-                .await?;
-                Ok(true)
-            }
-            ChallengeKind::Http01 => {
-                self.progress.output.progress(MessageKind::Info, "HTTP publication confirmed by caller; the CA will verify public access on port 80");
-                Ok(true)
+            ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 | ChallengeKind::Http01 => {
+                Ok(ReadyResult {
+                    ready: true,
+                    ..ReadyResult::default()
+                })
             }
             ChallengeKind::TlsAlpn01 => Err(IssueError::InvalidInput(
                 "manual TLS-ALPN is not implemented",
@@ -137,108 +152,23 @@ impl ChallengeSolver for Manual {
     }
 }
 
-// Every blocking read is preceded by a short bounded poll; shutdown can always
-// join this worker. The raw-mode guard restores the terminal before sending an answer.
 fn confirm(
     question: &str,
     execution: &ExecutionContext,
     stop: &tokio_util::sync::CancellationToken,
     progress: &Progress,
 ) -> Result<bool, IssueError> {
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-    struct RawMode;
-    impl Drop for RawMode {
-        fn drop(&mut self) {
-            let _ = crossterm::terminal::disable_raw_mode();
-        }
-    }
-    crossterm::terminal::enable_raw_mode()
-        .map_err(|_| IssueError::Publication("cannot initialize confirmation terminal".into()))?;
-    let _raw = RawMode;
     progress.output.interaction_started();
-    progress.output.context(&format!("> {question} [y/N]"));
-    let mut answer = false;
-    loop {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
-        if stop.is_cancelled() {
-            return Err(IssueError::Interrupted);
-        }
-        if !event::poll(std::time::Duration::from_millis(25))
-            .map_err(|_| IssueError::Publication("cannot poll confirmation terminal".into()))?
-        {
-            continue;
-        }
-        let Event::Key(key) = event::read()
-            .map_err(|_| IssueError::Publication("cannot read confirmation terminal".into()))?
-        else {
-            continue;
-        };
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        match key.code {
-            KeyCode::Esc => {
-                execution.cancellation.cancel();
-                return Err(IssueError::Interrupted);
-            }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                execution.cancellation.cancel();
-                return Err(IssueError::Interrupted);
-            }
-            KeyCode::Char('y' | 'Y') => answer = true,
-            KeyCode::Char('n' | 'N') | KeyCode::Backspace => answer = false,
-            KeyCode::Enter => return Ok(answer),
-            _ => {}
-        }
-    }
-}
-
-/// Local resolver observations are advisory, bounded independently of the ACME
-/// request budget. A broken resolver must not reject domain control on behalf of a CA.
-/// User cancellation/overall expiry still stops the operation.
-pub(super) async fn dns_precheck(
-    check: impl std::future::Future<Output = Result<bool, IssueError>>,
-    execution: &ExecutionContext,
-    progress: &Progress,
-) -> Result<(), IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
-    progress.output.progress(
-        MessageKind::Info,
-        &format!(
-            "Checking local DNS visibility (advisory, up to {} seconds)",
-            PRECHECK_TIMEOUT.as_secs()
-        ),
-    );
-    let result = tokio::select! {
-        biased;
-        () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
-        result = tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline.min(std::time::Instant::now() + PRECHECK_TIMEOUT)), check) => result,
-    };
-    execution.check().map_err(|_| IssueError::Interrupted)?;
-    match result {
-        Ok(Ok(true)) => progress.output.progress(
-            MessageKind::Success,
-            "Required TXT values are visible through the local DNS resolver",
-        ),
-        Ok(Ok(false)) => progress.output.progress(
-            MessageKind::Warning,
-            "TXT values are not visible locally yet; continuing to CA validation",
-        ),
-        Ok(Err(_)) => progress.output.progress(
-            MessageKind::Warning,
-            "Local DNS resolver is unavailable; continuing to CA validation",
-        ),
-        Err(_) => progress.output.progress(
-            MessageKind::Warning,
-            "Local DNS precheck timed out; continuing to CA validation",
-        ),
-    }
-    Ok(())
+    progress.output.check_health().map_err(|error| {
+        IssueError::Publication(format!("confirmation terminal failed: {error}"))
+    })?;
+    confirmation::confirm(question, execution, stop)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::commands::cert::validation::manual::*;
+    use crate::commands::cert::validation::tests::publications;
 
     #[tokio::test]
     #[ignore = "PTY fixture for confirmation cancellation/deadline and raw-mode restoration"]
@@ -248,9 +178,10 @@ mod tests {
         let execution = ExecutionContext {
             cancellation: cancellation.clone(),
             deadline: std::time::Instant::now()
-                + std::time::Duration::from_millis(if mode == "timeout" { 400 } else { 10_000 }),
+                + std::time::Duration::from_millis(if mode == "timeout" { 600 } else { 10_000 }),
         };
         let solver = Manual {
+            reusable: Vec::new(),
             method: ChallengeKind::Http01,
             saved: true,
             interactive: true,
@@ -265,18 +196,42 @@ mod tests {
             path: "/.well-known/acme-challenge/token".into(),
             content: "token.thumbprint".into(),
         }];
-        let result = tokio::time::timeout_at(
-            tokio::time::Instant::from_std(execution.deadline),
-            solver.ready(&requirements, &execution),
+        let cancel_task = if mode == "cancel" {
+            Some(tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                cancellation.cancel();
+            }))
+        } else {
+            None
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(if mode == "shutdown" { 600 } else { 5_000 }),
+            solver.ready(&publications(&requirements), &execution),
         )
         .await;
         solver.shutdown().await;
+        if let Some(task) = cancel_task {
+            task.await.unwrap();
+        }
         assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
-        assert!(result.is_err() || result.unwrap().is_err());
-        assert_eq!(cancellation.is_cancelled(), mode == "escape");
+        match mode.as_str() {
+            "yes" | "yes-word" | "replace" | "uppercase" | "insert" | "invalid" | "limit"
+            | "paste" => {
+                assert!(result.unwrap().unwrap().ready);
+            }
+            "no" | "no-word" | "default" | "erase" | "delete" => {
+                assert!(!result.unwrap().unwrap().ready);
+            }
+            "shutdown" => assert!(result.is_err()),
+            _ => assert!(matches!(result.unwrap(), Err(IssueError::Interrupted))),
+        }
+        assert_eq!(
+            execution.cancellation.is_cancelled(),
+            matches!(mode.as_str(), "escape" | "ctrl-c" | "cancel")
+        );
         println!(
             "CONFIRM_RESTORED mode={mode} cancelled={}",
-            cancellation.is_cancelled()
+            execution.cancellation.is_cancelled()
         );
     }
 }

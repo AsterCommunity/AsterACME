@@ -8,7 +8,10 @@ use crate::commands::cert::validation::{
     Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
 };
 use crate::common::output::MessageKind;
-use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
+use aster_acme::{
+    issuance::ValidationRequirement,
+    solver::{ChallengePublication, CleanupResult, ExecutionContext, ReadyResult},
+};
 use aster_acme_cli_storage::state_file;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -68,12 +71,15 @@ impl ChallengeSolver for Webroot {
     }
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<ReadyResult, IssueError> {
         let root = self.root.clone();
         let operation = self.operation.clone();
-        let requirements = requirements.to_vec();
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
         let execution = execution.clone();
         let progress = self.progress.clone();
         self.workers.run(move || {
@@ -91,17 +97,26 @@ impl ChallengeSolver for Webroot {
             Ok::<_, IssueError>(())
         })
         .await?;
-        self.progress.output.progress(MessageKind::Info, "HTTP challenge files prepared in webroot; your server must expose them on public port 80");
-        Ok(true)
+        Ok(ReadyResult {
+            ready: true,
+            ..ReadyResult::default()
+        })
     }
     async fn cleanup(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<CleanupResult, IssueError> {
         let root = self.root.clone();
         let operation = self.operation.clone();
-        let requirements = requirements.to_vec();
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
+        let completed = publications
+            .iter()
+            .map(|publication| publication.publication_id.clone())
+            .collect();
         let execution = execution.clone();
         let progress = self.progress.clone();
         self.workers
@@ -121,7 +136,11 @@ impl ChallengeSolver for Webroot {
             MessageKind::Info,
             "HTTP challenge cleanup finished; preexisting or replaced user files were retained",
         );
-        Ok(true)
+        Ok(CleanupResult {
+            completed,
+            failure: None,
+            retry_at: None,
+        })
     }
 }
 

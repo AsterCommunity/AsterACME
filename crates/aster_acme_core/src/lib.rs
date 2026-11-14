@@ -22,5 +22,6 @@ pub mod renewal;
 pub mod revocation;
 pub mod workflow;
 
+pub mod caa;
 #[cfg(test)]
 mod tests;

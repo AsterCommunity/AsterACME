@@ -6,7 +6,8 @@ use crate::commands::cert::{
     },
     deployment::interaction::*,
 };
-use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentPhase, DeploymentTarget};
+use aster_acme::deployment::DeploymentPhase;
+use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
 use clap::Parser as _;
 use std::collections::VecDeque;
 
@@ -91,8 +92,11 @@ fn invalid_directories_and_reload_quoting_retry_but_explicit_duplicate_names_fai
         timeout_seconds: 30,
         max_retries: 3,
         generation: None,
+        pending_generation: None,
         phase: DeploymentPhase::Configured,
         attempts: 0,
+        retry_failures: 0,
+        retry_at: None,
         last_error: None,
     };
     let mut prompts = Inputs {
@@ -199,8 +203,11 @@ fn suggested_name_avoids_existing_default_and_can_be_changed_or_retried() {
         timeout_seconds: 30,
         max_retries: 3,
         generation: None,
+        pending_generation: None,
         phase: DeploymentPhase::Configured,
         attempts: 0,
+        retry_failures: 0,
+        retry_at: None,
         last_error: None,
     };
     for (answers, expected, errors) in [

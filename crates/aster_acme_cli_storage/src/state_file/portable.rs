@@ -21,7 +21,7 @@ const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 #[cfg(windows)]
 const REPARSE_POINT: u32 = 0x400;
 
-pub(super) const VIEW_KIND: super::ViewKind = super::ViewKind::Copy;
+pub(super) const VIEW_KIND: crate::state_file::ViewKind = crate::state_file::ViewKind::Copy;
 pub(super) struct Directory {
     path: PathBuf,
 }
@@ -32,13 +32,13 @@ impl Directory {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
-        super::ensure_directory(path)?;
+        crate::state_file::ensure_directory(path)?;
         Ok(Self {
             path: path.to_path_buf(),
         })
     }
     fn file(&self, name: &str, create: bool) -> io::Result<File> {
-        super::ensure_directory(&self.path)?;
+        crate::state_file::ensure_directory(&self.path)?;
         let path = self.path.join(name);
         match fs::symlink_metadata(&path) {
             Ok(metadata) if !metadata.is_file() || linked(&metadata) => {
@@ -75,7 +75,7 @@ impl Directory {
         Ok(bytes)
     }
     pub(super) fn atomic_write(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
-        super::ensure_directory(&self.path)?;
+        crate::state_file::ensure_directory(&self.path)?;
         // Existing linked/special destinations are never replaced as managed files.
         match self.file(name, false) {
             Ok(_) => {}
@@ -155,10 +155,10 @@ pub(super) fn linked(metadata: &Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 pub(super) fn prepare_directory(path: &Path) -> io::Result<()> {
-    super::ensure_directory(path)
+    crate::state_file::ensure_directory(path)
 }
 pub(super) fn sync_directory(path: &Path) -> io::Result<()> {
-    super::ensure_directory(path)
+    crate::state_file::ensure_directory(path)
 }
 pub(super) fn create_view_link(_target: &Path, _path: &Path) -> io::Result<()> {
     Err(io::Error::other(
@@ -191,5 +191,5 @@ pub(super) fn expose_public_file(file: &File) -> io::Result<()> {
     check_private(&file.metadata()?)
 }
 pub(super) fn expose_public_directory(path: &Path) -> io::Result<()> {
-    super::ensure_directory(path)
+    crate::state_file::ensure_directory(path)
 }

@@ -96,7 +96,7 @@ impl<'a> Identity<'a> {
 pub(super) struct Remote<'a> {
     #[serde(flatten)]
     identity: Identity<'a>,
-    action: super::report::RemoteAction,
+    action: crate::commands::account::report::RemoteAction,
     recovered: bool,
     reused: bool,
 }
@@ -112,7 +112,7 @@ pub(super) struct Deactivated<'a> {
 pub(super) struct List<'a> {
     ca_query: AccountListQuery,
     default_account: &'a str,
-    verification: Option<&'a [super::report::AccountVerification]>,
+    verification: Option<&'a [crate::commands::account::report::AccountVerification]>,
     accounts: Vec<ListEntry<'a>>,
 }
 
@@ -125,7 +125,9 @@ struct AccountListQuery {
 }
 
 impl AccountListQuery {
-    fn from_results(results: Option<&[super::report::AccountVerification]>) -> Self {
+    fn from_results(
+        results: Option<&[crate::commands::account::report::AccountVerification]>,
+    ) -> Self {
         let (refreshed, failed) =
             results
                 .unwrap_or_default()

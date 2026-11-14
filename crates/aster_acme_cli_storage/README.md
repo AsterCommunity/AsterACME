@@ -10,6 +10,9 @@ CLI 的账户文件存储适配，实现 `dyn AccountStore` 和 `dyn AccountKeyS
 <data-dir>/
   config.toml              # 根 version=1 与 [config]，用户设置
   config.toml.lock         # 配置初始化和读改写共用的锁
+  .locks/
+    daemon/
+      instance.lock        # 同一 data-dir 的常驻 daemon 独占租约
   accounts/
     personal/
       account.toml         # 根 version=1 与 [account]，程序维护
@@ -79,7 +82,7 @@ certs/<certificate-name>/
   cert.toml                         # version + [cert]，name/in_use
   in_use -> <UTC-time>-<random8>/
   <UTC-time>-<random8>/
-    operation.toml                  # version + [operation]，时间/账户/CA/状态/receipt
+    operation.toml                  # journal version=1 + [operation]，时间/账户/CA/状态/receipt
     private-key.pk8                 # 证书私钥，不是账户私钥
     request.der                     # 固定 PKCS#10 CSR
     material.sha256                 # 固定 key/CSR 的完整性绑定
@@ -91,19 +94,19 @@ certs/<certificate-name>/
 
 证书默认名是主域名加随机后缀，碰撞重试；显式已有名称拒绝；显式名称仍需满足单目录组件规则。每次申请有独立 ID 和 UTC created_at，同名可有多个未完成申请；in_use 只指向已经校验并落盘的版本，失败不覆盖旧版。operation 保存 CA expires、原始 Location、授权/通知阶段、全部手动 TXT 和待清理标记，不含凭据。
 
-锁顺序为账户→证书。后台阻塞写任务保留 Arc 租约，调用 future 取消也不会提前解锁。初始化先写可列举的 journal，再写私钥/CSR/哈希，缺失材料拒绝恢复、不静默生成新身份。落盘按 完整产物集合→Downloading journal→原子 in_use 链接→cert.toml 选择→Completed journal 完成；任一中间失败可重新下载同一订单证书，不重新签发。普通读取不加载私钥，执行恢复会验证材料/路径/权限/版本/数量上限；未知版本和损坏不迁移。保留旧世代，目前不自动清理历史证书。
+锁顺序为账户→证书。后台阻塞写任务保留 Arc 租约，调用 future 取消也不会提前解锁。初始化先写可列举的 journal，再写私钥/CSR/哈希，缺失材料拒绝恢复、不静默生成新身份。落盘按 完整产物集合→Downloading journal→原子 in_use 链接→cert.toml 选择→Completed journal 完成；任一中间失败可重新下载同一订单证书，不重新签发。普通读取不加载私钥，执行恢复会验证材料/路径/权限/版本/数量上限；未知版本和损坏不迁移。预发布字段布局不保留兼容读取；本地测试记录需手动按当前schema更新。保留旧世代，目前不自动清理历史证书。
 
 目录扫描仅以 cert.toml/operation.toml 识别托管对象，忽略 .DS_Store、笔记、额外目录和未识别链接；已识别托管文件仍严格检查类型、身份、schema、权限和尺寸。in_use 是唯一显式托管的相对 symlink，只可指向同级且身份匹配的世代；不覆盖用户同名普通文件或指向外部的链接。版本名为 UTC 秒级创建时间 + 8 位随机后缀，完整 operation ID 留在 journal，不保留旧目录布局读取。
 
-续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI提供计划、显式刷新及由cron调用的`daemon run-once`；常驻CLI daemon通过独立的data-dir租约保证单实例。吊销保留本地文件，与订单状态独立。
 
 cert remove 默认选一次申请，--history 清理非当前已签发版本，--revoked 匹配已确认吊销，--all 删除整个名称；默认否确认、脚本 --yes，不访问 CA 或账户；保留用户额外内容，根目录 .locks 保持稳定锁 inode。清理中断通过 .removing 标记阻止复用残留，见生命周期契约。account/cert show 用 CA query 指明本次实际查询范围，已确认吊销依据单列为 saved CA response。
 
-托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 已提供单次执行，后台调度仍未实现。
+托管身份、稳定定义、默认 in_use 展示与历史版本的最终契约见生命周期文档。IssueStore::create 只新建身份，IssueStore::renew 为已有定义准备新版本；cert renew 提供单次执行，常驻维护由CLI宿主执行并持有单实例租约。
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；`daemon run-once`执行一个周期，`daemon run`以前台常驻方式按配置间隔循环，默认60秒，同一data-dir由跨进程租约限制为单实例。两者刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn/dns_persist/dns_external证书并执行已配置部署；manual验证会跳过。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 账户元数据必需保存 key_algorithm；AccountKeyStore 使用 KeyAccess::Existing/Create(Option<KeyAlgorithm>)，真实 PKCS#8、指纹及保存类型必须一致。轮换缺省继承原类型；暂存钥存在时恢复其实际类型，显式不同选择拒绝。只有确认换钥提交才原子更新主钥和算法字段，常规 save 不能修改算法；无旧 schema 默认值或迁移。
 
@@ -135,3 +138,10 @@ Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副�
 Windows持久化边界：替换前同步临时文件，成功表示进程级替换完成并支持进程重启恢复；目录同步当前只验证目录可访问，不保证断电后rename目录项落盘。Unix文件及父目录同步有更强保证；不要把Windows进程崩溃恢复等同掉电事务。
 
 账户写入接口显式持锁：`AccountStore::lock_account` 返回 `Arc<dyn AccountLease>`，`AccountStore::save(record, &lease)` 把同一租约克隆进阻塞写任务；不使用隐藏store状态寻找当前锁，也不在协议写入内重获锁。`CliAccountStore::save(record)` 是独立本地编辑入口，会自行新获取租约。轮换会话内部串行化stage/save/commit，确认快照变化拒绝操作；删除要求调用方传入确认过的AccountRecord身份。
+
+
+## 独立吊销会话
+
+`CliIssueStore::open_revocation(name, operation_id)`返回持有证书执行租约的`ManagedRevocationSession`。其`RevocationSession`实现只加载已签发叶子及journal，不要求CSR、material.sha256、证书当前有效或原账户存在。`certificate_signer()`仅在明确选择certificate-key时以受限读取加载保存的PKCS#8，校验保存算法后返回`Arc<dyn JwsSigner>`；账户模式不读取这份私钥。
+
+会话固定打开时的叶子DER，在每次checkpoint写入时重新核对文件指纹和不可变托管身份；确认后文件替换拒绝提交，已confirmed检查点不可覆盖。阻塞读写持有IO许可及证书租约直到结束。完整签发执行的`IssueStore::open`仍检查CSR/私钥/证书有效性，两者不混用；确认结果由certificate_record读取最新快照，CA请求只在服务库执行。

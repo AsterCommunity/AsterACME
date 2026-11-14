@@ -2,7 +2,7 @@
 use crate::account::rotation::tests::{post_count, setup};
 use aster_acme::{
     account::AccountRecord,
-    crypto::{AccountSigner, key_algorithm::KeyAlgorithm},
+    crypto::{JwsSigner, key_algorithm::KeyAlgorithm},
     storage::account::{AccountRotation, AccountRotationStore, AccountStoreError},
 };
 use aster_acme_core::account::KeyRotationPhase;
@@ -46,13 +46,13 @@ impl AccountRotation for PausingRotation {
     fn record(&self) -> AccountRecord {
         self.inner.record()
     }
-    fn old_signer(&self) -> Arc<dyn AccountSigner> {
+    fn old_signer(&self) -> Arc<dyn JwsSigner> {
         self.inner.old_signer()
     }
     async fn stage(
         &self,
         algorithm: Option<KeyAlgorithm>,
-    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
+    ) -> Result<Arc<dyn JwsSigner>, AccountStoreError> {
         self.inner.stage(algorithm).await
     }
     async fn save(&self, record: &AccountRecord) -> Result<(), AccountStoreError> {

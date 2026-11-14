@@ -23,16 +23,19 @@ mod deployment;
 mod generation;
 mod publication;
 mod query;
+mod retry;
+pub mod revocation;
 mod session;
 use crate::issuance::generation::Initialization;
 pub use deployment::{
     DeploymentArtifacts, DeploymentBinding, DeploymentDefinition, DeploymentPatch,
-    DeploymentPermissions, DeploymentPhase, DeploymentSession, DeploymentTarget,
+    DeploymentPermissions, DeploymentSession, DeploymentTarget,
     validate_id as validate_deployment_id,
 };
 pub mod removal;
 
 const MAX_JOURNAL: u64 = 1024 * 1024;
+const JOURNAL_VERSION: u32 = 1;
 
 /// Local certificate catalog. Names and operation IDs are validated before joining paths.
 #[derive(Clone)]
@@ -40,6 +43,7 @@ pub struct CliIssueStore {
     root: PathBuf,
     timeout: Duration,
 }
+
 impl CliIssueStore {
     /// Open a catalog without writing files; execution creates private directories under lease.
     #[must_use]
@@ -60,20 +64,21 @@ impl CliIssueStore {
         let timeout = self.timeout;
         let slot = self.slot(name);
         let lease = tokio::task::spawn_blocking(move || {
-            let lease = toml_file::lock(&path, timeout)?;
+            let lease = toml_file::lock(&path, timeout).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::TimedOut {
+                    IssueError::LeaseUnavailable("certificate", error.to_string())
+                } else {
+                    failure(&format!("certificate lock failed: {error}"))
+                }
+            })?;
             if slot.join("cert.toml").is_file() {
-                removal::ensure_idle(&slot).map_err(std::io::Error::other)?;
-                publication::recover_selection(&slot).map_err(std::io::Error::other)?;
+                removal::ensure_idle(&slot)?;
+                publication::recover_selection(&slot)?;
             }
-            Ok::<_, std::io::Error>(lease)
+            Ok::<_, IssueError>(lease)
         })
         .await
-        .map_err(|_| failure("certificate lock worker failed"))?
-        .map_err(|error| {
-            failure(&format!(
-                "certificate lock, view recovery or timeout failed: {error}"
-            ))
-        })?;
+        .map_err(|_| failure("certificate lock worker failed"))??;
         Ok(Arc::new(lease))
     }
 }
@@ -119,6 +124,7 @@ impl CertificateSelection {
     }
 }
 
+#[derive(Clone)]
 struct Session {
     slot: PathBuf,
     generation: PathBuf,
@@ -187,7 +193,7 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
         std::str::from_utf8(&bytes).map_err(|_| failure("invalid journal encoding"))?,
     )
     .map_err(|_| failure("issuance journal is corrupt"))?;
-    if stored.version != 1
+    if stored.version != JOURNAL_VERSION
         || !valid_operation_id(&stored.operation.operation_id)
         || stored.operation.identifiers.is_empty()
         || stored.operation.identifiers.len() > 100
@@ -200,7 +206,7 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
 
 fn write_journal(path: &Path, record: &IssueRecord) -> Result<(), IssueError> {
     let text = toml::to_string_pretty(&Journal {
-        version: 1,
+        version: JOURNAL_VERSION,
         operation: record,
     })
     .map_err(|_| failure("cannot encode issuance journal"))?;
@@ -379,6 +385,43 @@ impl IssueStore for CliIssueStore {
         name: &CertificateName,
         operation_id: &str,
     ) -> Result<Box<dyn IssueSession>, IssueError> {
+        Ok(Box::new(
+            self.open_session(name, operation_id, OpenMode::Execution)
+                .await?,
+        ))
+    }
+
+    async fn open_observation(
+        &self,
+        name: &CertificateName,
+        operation_id: &str,
+    ) -> Result<Box<dyn IssueSession>, IssueError> {
+        Ok(Box::new(
+            self.open_session(name, operation_id, OpenMode::Observation)
+                .await?,
+        ))
+    }
+
+    async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
+        let root = self.root.join("certs");
+        tokio::task::spawn_blocking(move || query::read(&root, &query))
+            .await
+            .map_err(|_| failure("issuance query worker failed"))?
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OpenMode {
+    Execution,
+    Observation,
+}
+impl CliIssueStore {
+    async fn open_session(
+        &self,
+        name: &CertificateName,
+        operation_id: &str,
+        mode: OpenMode,
+    ) -> Result<Session, IssueError> {
         if !valid_operation_id(operation_id) {
             return Err(failure("invalid operation ID"));
         }
@@ -407,8 +450,12 @@ impl IssueStore for CliIssueStore {
             {
                 return Err(failure("issuance path and identity mismatch"));
             }
-            check_material(&generation, &record)?;
-            if matches!(record.phase, IssuancePhase::Completed) {
+            if matches!(mode, OpenMode::Execution) {
+                check_material(&generation, &record)?;
+            }
+            if matches!(mode, OpenMode::Execution)
+                && matches!(record.phase, IssuancePhase::Completed)
+            {
                 let chain = read_private(&generation.join("fullchain.pem"), 1024 * 1024)
                     .map_err(|_| failure("completed certificate artifact is missing or unsafe"))?;
                 let key = zeroize::Zeroizing::new(
@@ -417,25 +464,61 @@ impl IssueStore for CliIssueStore {
                 );
                 certificate::validate(&chain, &key, &record.identifiers)?;
             }
-            Ok(Box::new(Session {
+            Ok(Session {
                 slot,
                 generation,
                 lease,
                 initial: record,
                 io: Arc::new(tokio::sync::Mutex::new(())),
-            }) as Box<dyn IssueSession>)
+            })
         })
         .await
         .map_err(|_| failure("issuance open worker failed"))?
-    }
-
-    async fn query(&self, query: IssueQuery) -> Result<Vec<IssueRecord>, IssueError> {
-        let root = self.root.join("certs");
-        tokio::task::spawn_blocking(move || query::read(&root, &query))
-            .await
-            .map_err(|_| failure("issuance query worker failed"))?
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Inspect immutable certificate definitions while the provider registry is exclusively locked.
+///
+/// # Errors
+/// Returns an error when the inventory is unsafe, unreadable or malformed.
+pub fn provider_referenced(root: &Path, provider: &str) -> std::io::Result<bool> {
+    let directory = root.join("certs");
+    if !directory.exists() {
+        return Ok(false);
+    }
+    crate::state_file::ensure_directory(&directory)?;
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if CertificateName::new(name).is_err() {
+            continue;
+        }
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let slot = entry.path();
+        let path = slot.join("cert.toml");
+        if !path.try_exists()? {
+            continue;
+        }
+        let config = selection(&slot)
+            .map_err(|_| std::io::Error::other("cannot verify certificate provider references"))?;
+        if config.cert.solver_id == "dns_external"
+            && config
+                .cert
+                .solver_config
+                .get("provider_instance_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(provider)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

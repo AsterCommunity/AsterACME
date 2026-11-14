@@ -1,5 +1,5 @@
-//! Software account signing keys. No Debug/Clone exposes private material.
-use crate::crypto::{AccountSigner, CryptoError, jwk::Jwk, key_algorithm::KeyAlgorithm};
+//! Software JWS signing keys. No Debug/Clone exposes private material.
+use crate::crypto::{CryptoError, JwsSigner, jwk::Jwk, key_algorithm::KeyAlgorithm};
 use aws_lc_rs::{
     encoding::AsDer as _,
     rand::SystemRandom,
@@ -7,8 +7,8 @@ use aws_lc_rs::{
 };
 use zeroize::Zeroizing;
 
-/// Account key with its validated actual algorithm; never inferred from a file name.
-pub struct AccountKey {
+/// Software signing key with its validated actual algorithm; never inferred from a file name.
+pub struct SoftwareSigningKey {
     algorithm: KeyAlgorithm,
     key: SigningKey,
 }
@@ -18,7 +18,7 @@ enum SigningKey {
     Ed25519(Ed25519KeyPair),
 }
 
-impl AccountKey {
+impl SoftwareSigningKey {
     /// Generate a selected key with the shared AWS-LC backend and fallible randomness.
     ///
     /// # Errors
@@ -87,7 +87,7 @@ impl AccountKey {
     }
 }
 
-impl AccountSigner for AccountKey {
+impl JwsSigner for SoftwareSigningKey {
     fn algorithm(&self) -> KeyAlgorithm {
         self.algorithm
     }

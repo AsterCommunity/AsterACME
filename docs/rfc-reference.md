@@ -1,8 +1,8 @@
 # ACME 协议规范与实现参考
 
-本项目计划使用 Rust 实现 ACME 客户端及证书生命周期自动化。本文是规范索引和设计检查表，不表示所列能力已经实现，也不以摘要替代 RFC 原文中的 MUST、SHOULD 和 MAY。
+本项目提供 Rust ACME 客户端及证书生命周期自动化。本文是规范索引、当前覆盖范围和设计检查表；列入索引不表示已实现，也不以摘要替代 RFC 原文中的 MUST、SHOULD 和 MAY。
 
-规范目录核对日期：2026-11-10。协议解释以 RFC 原文、勘误和后续更新为准；CA 的实际支持范围另行验证。
+规范目录核对日期：2026-11-10；DNS Persist与吊销专项核对日期：2026-11-14。协议解释以 RFC 原文、勘误和后续更新为准；CA 的实际支持范围另行验证。
 
 ## 1. 核心规范与阅读顺序
 
@@ -76,6 +76,25 @@ RFC 8555 引用的是当时的 HTTP 和 problem details 规范。新基础规范
 - [ACME DNS Labeled With ACME Account ID Challenge](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-account-label/)：按账户区分 DNS challenge 名称。
 - [ACME Scoped DNS Challenges](https://datatracker.ietf.org/doc/draft-ietf-acme-scoped-dns-challenges/)：限定范围的 DNS challenge。
 
+### DNS Persist 草案实现（2026-11-14）
+
+当前依据 [draft-ietf-acme-dns-persist-02](https://www.ietf.org/archive/id/draft-ietf-acme-dns-persist-02.txt)（2026-09-20，2027-03-24 到期）实现实验性 `dns-persist-01`。它还不是 RFC，也不能由“CA 返回了同名 challenge”推断草案版本兼容。
+
+| 章节 | 当前客户端行为 |
+| --- | --- |
+| §3.1–3.2 | 选中 challenge 时解码 `issuerDomainNames`，要求1–10个小写 A-label、无尾点、每名不超过253字节；有效 directory baseline 必须是 challenge 集合的子集，CAA identities 可用时 challenge 集合必须包含于其中。非合规 baseline 只使预配置不可用，不影响无关验证方式或合法交互 challenge |
+| §4.1 | TXT owner 为 `_validation-persist.<base-domain>`；`accounturi` 使用 directory 的 `accountHashPrefix` 加 `sha-256/` 和无填充 base64url 摘要。摘要输入是单字节域名长度、规范域名、43字节账户 JWK SHA-256 thumbprint、精确 ASCII account URL，按顺序拼接；不使用 challenge token，也不公开明文 account URL；缺失或非法prefix在newOrder前拒绝 |
+| §4、§4.5 | 展示或交给 solver 发布前，向精确 account URL 发送当前账户签名的 POST-as-GET（空 payload，不是 `{}`），要求 HTTP 200 且账户 `valid`，不跟随重定向；随后复用既有持久化 ack/finalize 流程 |
+| §5 | 通配符使用去掉 `*.` 的 base-domain，并显式附加 `policy=wildcard`；普通域名不隐式扩大授权范围。每个 SAN 使用自己的 owner，不实现客户端祖先记录搜索或扩大子域范围 |
+| §7.2、§7.10 | 记录长期保留，不进入临时 cleanup 或“可删除”提示。续期在租约内携带前一代确认过的记录；issuer/prefix/owner/scope 仍适用时保持原值，账户换钥不把新 hash 冒充已发布值。CA 不再接受的记录需要重新发布，CA 最终决定授权 |
+| §9.1 | 逻辑 TXT 值和 presentation 分开；超过255字节时展示为同一 RR 的多个引号字符串，不拆成多个 TXT RR；检查最终 RDATA 大小，预检只拼接同一个 RR 内的片段 |
+
+CLI 使用 `cert issue -c dns_persist`，首次人工发布并确认，后续 `renew`/daemon 仅自动复用确认过且未改变的记录。需要新值时返回 `action_required`；不自动修改 DNS。库提供 `DnsPersistRecord::provision` 计算预配置材料，调用方仍须完成账户控制权证明；CLI 本轮不增加独立预配置命令。可选 `persistUntil`、跨域 `*` hash opt-out、自定义 hash 算法及 DNS provider 写入不在当前范围。
+
+草案示例部分把算法标识写成 `sha-436`，与 §4.1 规定及示例实际 SHA-256 digest 不一致；本实现依据规范性条款使用注册名 `sha-256`，并以 §10.2 的字节输入和摘要作为测试向量，不复制这个示例笔误。
+
+旧 `issuer-domain-names` 拼写继续作为 wire 扩展保留，与 DNS-01 共存时不影响执行；选中它执行 DNS Persist 时明确拒绝，不静默降级到旧版明文账户记录。2026-11-14 只读 GET [Let's Encrypt production directory](https://acme-v02.api.letsencrypt.org/directory) 与 [staging directory](https://acme-staging-v02.api.letsencrypt.org/directory)，两者均未广告 `issuerDomainNames`/`accountHashPrefix`。此前 staging 返回旧拼写的记录见[历史验收](issuance-testing.md)；该现象不证明兼容 -02。本次未创建公网订单或签发 DNS Persist 证书，验收限本地 mock/loopback。
+
 完整追踪入口：[IETF ACME 工作组文档](https://datatracker.ietf.org/wg/acme/documents/)、[ACME IANA 注册表纯文本](https://www.iana.org/assignments/acme/acme.txt)、[ACME IANA 注册表 HTML](https://www.iana.org/assignments/acme/acme.xhtml)、[ACME IANA 注册表 XML](https://www.iana.org/assignments/acme/acme.xml)、[RFC 8555 勘误](https://www.rfc-editor.org/errata/rfc8555)。人工审查优先使用 TXT，工具解析使用 XML。
 
 ## 5. 客户端设计检查表
@@ -93,13 +112,15 @@ RFC 8555 引用的是当时的 HTTP 和 problem details 规范。新基础规范
 ### DNS-01 自动化
 
 - `_acme-challenge` TXT 内容来自 key authorization 的 SHA-256 摘要及 base64url 编码，遵守 RFC 8555 §8.4。
-- 处理 zone 发现及 DNS 委托；不要假定最后两个域名标签就是 zone，也不要盲目写入未经配置允许的 CNAME 目标。
+- 处理 zone 发现及 DNS 委托；不要假定最后两个域名标签就是 zone。CNAME须检查语法、环与深度；默认允许任意合法发布目标，配置了非空allowed_zones时按完整DNS标签限制最终TXT owner。
 - 同名 TXT 值允许并存，裸域名与通配符可能同时使用同一 challenge 名称。
 - 记录创建结果和所有权；清理仅删除本次创建的记录，不能清空整个 TXT RRset，也不能删除预先存在的共享记录。
 - 检查预期 TXT 值而非答案一致率；考虑权威 DNS、递归缓存、负缓存、超时和取消。
 - 本地传播检查通过不代表 CA 验证成功；以授权与订单状态作为签发进度依据。
 
 ## 6. DNS provider 复用来源
+
+外部命令接口草案：[RFC 0001：AsterACME DNS Provider Protocol (ADPP)](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)。该RFC已接受；实现、测试和真实DNS/CA互操作证据仍分别记录。
 
 参考 [AptS-1547/dns-orchestrator](https://github.com/AptS-1547/dns-orchestrator) 中独立的 `dns-orchestrator-provider` crate。调查时本地 manifest 为 0.1.2、MIT，支持 Cloudflare、阿里云、DNSPod 和华为云，并提供记录查询、创建、删除等接口。
 
@@ -114,7 +135,7 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 - 按 CA 记录 EAB、ARI、challenge、标识符类型和草案扩展的实际支持情况。
 - 分开报告本地测试、staging 签发、真实 DNS 清理及部署结果；任何单项成功均不代表全部完成。
 
-当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户 kid 签名、DER 叶子、reason 和 alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 已由 cert renew 接入；只向广告 renewalInfo 的 CA 提交。
+当前 ARI 与吊销实现对照：RFC 9773 §4.1–4.3（标识、窗口、重查和错误退避）、RFC 8555 §7.6（账户kid或证书私钥jwk签名、DER叶子、reason和alreadyRevoked）；具体边界见 [生命周期契约](certificate-lifecycle.md)。RFC 9773 §5 的 replaces 已由 cert renew 接入；只向广告 renewalInfo 的 CA 提交。
 
 密钥扩展依据 RFC 8555 §6.2（账户 JWS）与 §7.4（证书 CSR）分离；CSR 算法没有 ACME 固定枚举，客户端生成能力与 CA 接受范围不同。Let’s Encrypt 当前官方范围见 https://letsencrypt.org/docs/integration-guide/ 。吊销原因按 RFC 8555 §7.6 / RFC 5280 §5.3.1 编码，badRevocationReason 由 CA 返回。
 
@@ -141,3 +162,40 @@ DNSO 已不作为直接依赖。按需迁入 provider 源码并保留原 MIT 版
 | CAA、签名/公钥、联系人、EAB、用户操作、compound等 | 原type/detail/instance/子问题及现有专项提示；不为每种problem虚构一个CA资源状态，也不设置通用自动重放 |
 
 newOrder收到明确错误后，当前策略要求用户检查原因并显式新建，不实现同操作重发或自动等待429后重下单。未发布的finalize_rejection改为带HTTP证据的结构；旧JSON/TOML字段形状不兼容、不迁移。本次不操作用户已有失败记录，也不从旧日志猜测补写证据。
+
+CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取caaIdentities（任一身份可匹配）；RFC8659 §3首个非空CAA集合与别名解析、§4.1 critical位、§4.2/4.3 issue/issuewild；RFC8657 §3/4账户与验证方式参数。CA扩展支持、DNSSEC及CA多视角检查不由客户端替代，结果始终建议性。系统解析器配置和DNS视角可能与CA不同，CAA并未添加强制拒绝或DNS写入能力。
+
+
+## 8. 当前客户端覆盖范围（2026-11-14）
+
+范围限定为常规DNS域名的Web TLS证书客户端，不把全部ACME RFC扩展当作单一产品待办，也不把本地实现完成率当作生产验收率。
+
+| 能力域 | 当前代码能力 | 主要剩余项/证据限制 |
+| --- | --- | --- |
+| RFC8555传输与发现 | Directory/资源URL、JWS/JWK/kid、nonce、POST-as-GET、badNonce、有界超时和Problem | 互操作持续回归；本地测试不等同所有CA兼容 |
+| 账户 | 注册、找回、EAB、联系人更新、查看、停用及跨算法换钥 | HSM/外部签名器具体适配由嵌入者提供 |
+| 订单/授权/签发 | newOrder、挑战选择/材料/ack/轮询、固定CSR finalize、下载及终态错误；取消与不确定提交可恢复 | 可选预授权/newAuthz、授权停用没有独立产品入口 |
+| HTTP/TLS验证 | HTTP-01人工/webroot/standalone，TLS-ALPN-01 standalone | 各部署环境的公网80/443与真实CA验收仍独立 |
+| DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | ADPP external provider、受限CNAME路由、创建对账和所有权清理已接入；内置厂商adapter、各provider真实DNS/CA验收及DNS Persist真实CA签发验收仍待补齐 |
+| 标识符/证书材料 | DNS/IDN、SAN、通配符、多种密钥、CSR/私钥固定、SAN/公钥/有效期/相邻链签名检查 | IP标识符、外部CSR及候选证书链选择未实现；相邻签名检查不是系统信任路径验证 |
+| 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | dns_external可无人值守续期；真实provider凭据/权限/传播验收仍独立，人工方式不猜测已发布 |
+| 吊销 | 账户kid／证书私钥jwk签名、原因代码、alreadyRevoked及精确目标/不确定结果保存 | CLI目前管理已托管证书；库支持外部target/session，任意文件导入和其他已获全部标识符授权的账户选择入口尚未提供 |
+| 文件和部署 | 私有状态、跨进程租约、多世代与in_use、多目标发布、自动部署/reload与结果记录 | 不承诺整组原子替换或服务健康；真实断电及服务更新需另验 |
+| 扩展与运维成熟度 | 本表已列RFC8737、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | Profiles、STAR、IP、S/MIME等未普遍实现；Pebble、公网CA和各原生平台验收分别报告 |
+
+按“常规域名证书客户端”的功能目标作工程估算，当前约 **85%–90%**：主协议、账户、签发/恢复、续期/常驻维护、吊销和部署链路已经形成，ADPP external DNS已补充自动发布入口；内置DNS厂商adapter、候选链选择等仍待补齐。这个区间没有按RFC章节或测试数量机械计分，也不意味着整个ACME扩展家族已完成相同比例。生产可用性应逐项看真实CA、真实DNS与部署证据，不另造一个看似精确的“生产完成百分比”。
+
+
+## 9. 证书私钥吊销原文核对（2026-11-14）
+
+直接阅读[RFC8555原文](https://www.rfc-editor.org/rfc/rfc8555.txt)§6.2、§6.4、§6.5、§7.6后实现：
+
+| 原文要求 | 当前实现 |
+| --- | --- |
+| §6.2：certificate-key revokeCert必须包含jwk；jwk/kid互斥 | `RevocationAuthority::CertificateKey`要求签名器JWK等于叶子SPKI对应公钥，transport选择jwk；账户路径选择kid，共用flattened JWS实现 |
+| §7.6：DER certificate、可选数字reason；证书私钥也可授权吊销 | 最小RevocationSession只提供证书/CA和检查点；证书密钥模式无账户依赖，不提交CSR、PEM或私钥。证书是否过期/受系统信任不作为本地吊销授权前提 |
+| §7.6：CA必须接受签发账户、持有所有identifier授权的账户，以及匹配证书私钥作为吊销授权 | 托管CLI明确支持原签发账户和证书密钥两种；库外部target可不限制已知issuer，CA仍判定账户授权。客户端不宣称已经支持其他账户的授权发现与CLI选择 |
+| §6.4、§6.5：精确server URL、nonce、badNonce响应中的替换nonce | 复用现有transport，不拼revokeCert路径，不跟随重定向，badNonce有界重签且保持同一DER/reason |
+| §7.6：HTTP200成功；HTTP400+alreadyRevoked确认既有吊销 | 统一状态机提交前固定DER指纹/directory/reason/签名身份；明确未发送保留原状态，首次明确4xx Problem可退回未请求，5xx/非结构化错误/超时保留pending，后次拒绝不抹除先前未知结果 |
+
+账户/证书密钥是明确选择，不因缺账户文件或CA拒绝而自动回退；CLI使用`cert revoke NAME --sign-with certificate-key`。本轮只使用本地证书与loopback CA验收，未对任何公网证书执行吊销。完整存储与恢复边界见[生命周期](certificate-lifecycle.md#吊销)。

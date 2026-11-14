@@ -17,17 +17,7 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
             0,
         )
         .await;
-    let initial_generation = fixture
-        .store
-        .query(IssueQuery {
-            name: Some(fixture.name.clone()),
-            in_use: Some(true),
-            ..IssueQuery::default()
-        })
-        .await
-        .unwrap()
-        .remove(0)
-        .generation_name();
+    let initial_generation = fixture.generation().await;
     let initial_folder = fixture
         .temp
         .path()
@@ -40,9 +30,16 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
         )
         .unwrap();
     }
-    let original = run_one(&fixture.store, &fixture.name, "verify", true, None, None)
-        .await
-        .unwrap();
+    let original = run_one(
+        &fixture.store,
+        &fixture.name,
+        "verify",
+        aster_acme::deployment::DeploymentIntent::Explicit,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(original.binding.phase, DeploymentPhase::Deployed);
     let previous_files = ["cert.pem", "fullchain.pem", "ca.pem", "private-key.pem"]
         .map(|name| std::fs::read(target.join(name)).unwrap());
@@ -92,7 +89,22 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
     std::fs::remove_dir(target.join("private-key.pem")).unwrap();
     let (recovered, _) =
         after_issuance(&fixture.store, &fixture.name, &next_generation, &context).await;
-    assert_eq!(recovered[0].phase, DeploymentPhase::Deployed);
+    assert_eq!(recovered[0].phase, DeploymentPhase::PublishFailed);
+    assert!(
+        !observed.exists(),
+        "automatic deployment must honor its saved backoff"
+    );
+    let recovered = run_one(
+        &fixture.store,
+        &fixture.name,
+        "verify",
+        aster_acme::deployment::DeploymentIntent::Explicit,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(recovered.binding.phase, DeploymentPhase::Deployed);
     assert_eq!(std::fs::read(observed).unwrap(), b"complete set");
 }
 
@@ -329,7 +341,7 @@ async fn inventory_errors_and_old_deployed_states_make_single_and_batch_reports_
         &fixture.store,
         &fixture.name,
         &bindings[0],
-        true,
+        aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
     )
@@ -712,6 +724,7 @@ async fn automatic_deployment_inherits_cancellation_and_deadline_without_publica
 #[tokio::test]
 async fn automatic_cancellation_after_child_start_reaps_descendants_and_saves_uncertainty() {
     let fixture = Fixture::new().await;
+    let generation = fixture.generation().await;
     let heartbeat = fixture.temp.path().join("reload-heartbeat");
     fixture
         .add(
@@ -739,7 +752,7 @@ async fn automatic_cancellation_after_child_start_reaps_descendants_and_saves_un
     let mut running = Box::pin(after_issuance(
         &fixture.store,
         &fixture.name,
-        "generation",
+        &generation,
         &context,
     ));
     tokio::select! {

@@ -18,7 +18,7 @@ async fn first_confirmation_is_stable_success_updates_and_failures_do_not_touch_
     let store = Arc::new(MemoryStore::default());
     let clock = Arc::new(Clock(AtomicI64::new(10)));
     let service = AccountService::new(Arc::new(client), store.clone()).with_clock(clock.clone());
-    let key = AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
     Mock::given(method("POST"))
         .and(path("/account"))
         .respond_with(

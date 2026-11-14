@@ -47,8 +47,14 @@ mod tests {
     #[test]
     fn every_command_supports_standard_flag_help_and_help_paths() {
         let root = configure(crate::app::Args::command());
-        let mut paths = vec![vec![], vec!["account"], vec!["cert"], vec!["version"]];
-        for group in ["account", "cert"] {
+        let mut paths = vec![
+            vec![],
+            vec!["account"],
+            vec!["cert"],
+            vec!["version"],
+            vec!["daemon"],
+        ];
+        for group in ["account", "cert", "daemon"] {
             paths.extend(
                 root.find_subcommand(group)
                     .unwrap()

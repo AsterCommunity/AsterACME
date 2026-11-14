@@ -1,0 +1,65 @@
+name: Feature Request
+description: Suggest a new feature
+title: "[Feature]: "
+labels: ["Enhancement", "Wait For More Info"]
+assignees:
+  - AptS-1547
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this feature solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - ACME protocol / RFC extension (STAR, S/MIME, IP certificates, profiles, ...)
+        - Challenge validation methods
+        - Order issuance
+        - Renewal / ARI / maintenance cycles
+        - Deployment and reload
+        - Revocation
+        - Account management
+        - State storage
+        - CLI usability
+        - Embedding / library API
+        - Performance
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willingness
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to help implement this feature
+        - label: I can help test and provide feedback
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues for similar requests
+          required: true
+        - label: I have checked the RFC reference for existing extension plans
+          required: true

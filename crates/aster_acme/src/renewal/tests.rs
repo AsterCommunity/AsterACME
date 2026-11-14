@@ -38,23 +38,25 @@ fn info(start: i64, end: i64) -> RenewalInfo {
 struct Session {
     record: Mutex<IssueRecord>,
     saves: AtomicUsize,
+    reads: AtomicUsize,
+    fail_save_at: AtomicUsize,
 }
 
 #[async_trait]
 impl IssueSession for Session {
     async fn record(&self) -> Result<IssueRecord, IssueError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(self.record.lock().await.clone())
     }
     async fn save(&self, record: &IssueRecord) -> Result<(), IssueError> {
+        let attempt = self.saves.fetch_add(1, Ordering::SeqCst) + 1;
+        if attempt == self.fail_save_at.load(Ordering::SeqCst) {
+            return Err(IssueError::InvalidInput("injected save failure"));
+        }
         *self.record.lock().await = record.clone();
-        self.saves.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError> {
-        Err(IssueError::InvalidInput(
-            "ARI must not load certificate artifacts",
-        ))
-    }
+
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         Err(IssueError::InvalidInput("ARI must not read CSR"))
     }
@@ -62,6 +64,14 @@ impl IssueSession for Session {
         Err(IssueError::InvalidInput(
             "ARI must not promote certificates",
         ))
+    }
+    async fn record_renewal_failure(
+        &self,
+        _: time::OffsetDateTime,
+        _: Option<time::OffsetDateTime>,
+        _: Option<String>,
+    ) -> Result<crate::issuance::RenewalRetryState, IssueError> {
+        Err(IssueError::InvalidInput("ARI must not schedule renewals"))
     }
 }
 
@@ -89,7 +99,7 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
         "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
         "directory":directory,"account_url":"https://ca.example/account","identifiers":["example.com"],
-        "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted","authorizations":[]
+        "phase":"completed","new_order_intent_saved":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted","authorizations":[]
     })).unwrap();
     let mut current_plan = plan();
     let shift = OffsetDateTime::now_utc() - at(60 * 86400);
@@ -104,6 +114,8 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
         Session {
             record: Mutex::new(record),
             saves: AtomicUsize::new(0),
+            reads: AtomicUsize::new(0),
+            fail_save_at: AtomicUsize::new(usize::MAX),
         },
     )
 }
@@ -201,6 +213,7 @@ async fn unsigned_get_persists_window_and_respects_saved_query_deadline() {
         .mount(&server)
         .await;
     let record = service.refresh(&mut session, &execution(5)).await.unwrap();
+    assert_eq!(session.saves.load(Ordering::SeqCst), 2);
     let p = record.renewal.unwrap();
     assert_eq!(p.source, RenewalSource::Ari);
     assert!(!p.last_query_failed);
@@ -213,6 +226,7 @@ async fn unsigned_get_persists_window_and_respects_saved_query_deadline() {
         .unwrap();
     assert_eq!(p.renew_at, second.renew_at);
     assert_eq!(p.next_check_at, second.next_check_at);
+    assert_eq!(session.saves.load(Ordering::SeqCst), 2);
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2);
     let request = &requests[1];
@@ -281,6 +295,11 @@ async fn bad_responses_preserve_existing_ari_and_set_six_hour_retry() {
             .unwrap()
             .renewal
             .unwrap();
+        assert_eq!(session.saves.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            session.record().await.unwrap().renewal.as_ref(),
+            Some(&after)
+        );
         assert_eq!(before.renew_at, after.renew_at);
         assert_eq!(after.source, RenewalSource::Ari);
         assert!(after.last_query_failed);
@@ -523,4 +542,198 @@ fn ari_window_spanning_expiry_samples_only_its_usable_prefix_and_keeps_ca_window
     let saved = p.renew_at;
     p.apply(info(89 * 86400, 91 * 86400)).unwrap();
     assert_eq!(saved, p.renew_at);
+}
+
+#[tokio::test]
+async fn refresh_cycle_reads_once_and_persists_only_intent_and_changed_advice() {
+    use crate::renewal::refresh::{RefreshCycle, RefreshStatus};
+    for (endpoint, valid, expected_writes, status) in [
+        (true, true, 2, RefreshStatus::Refreshed),
+        (true, false, 1, RefreshStatus::RetryScheduled),
+        (false, false, 1, RefreshStatus::Unavailable),
+    ] {
+        let (server, _, mut session) = fixture(endpoint, Duration::from_secs(5)).await;
+        let response = if valid {
+            ResponseTemplate::new(200)
+                .insert_header("Retry-After", "60")
+                .set_body_json(info(10, 20))
+        } else {
+            ResponseTemplate::new(400)
+        };
+        Mock::given(method("GET"))
+            .and(path("/custom/renewal/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+            .respond_with(response)
+            .expect(u64::from(endpoint))
+            .mount(&server)
+            .await;
+        let pool = crate::transport::HttpPool::default();
+        let mut cycle = RefreshCycle::new(
+            &pool,
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        );
+        let refreshed = cycle.refresh(&mut session, &execution(5)).await.unwrap();
+        assert_eq!(refreshed.status, status);
+        assert_eq!(session.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(session.saves.load(Ordering::SeqCst), expected_writes);
+        assert_eq!(
+            refreshed.record.renewal,
+            session.record.lock().await.renewal
+        );
+        let skipped = cycle.refresh(&mut session, &execution(5)).await.unwrap();
+        assert_eq!(skipped.status, RefreshStatus::Skipped);
+        assert_eq!(session.saves.load(Ordering::SeqCst), expected_writes);
+    }
+}
+
+#[tokio::test]
+async fn identical_advice_without_retry_hint_does_not_repeat_saved_intent() {
+    let (server, service, mut session) = fixture(true, Duration::from_secs(5)).await;
+    session
+        .record
+        .lock()
+        .await
+        .renewal
+        .as_mut()
+        .unwrap()
+        .apply(info(10, 20))
+        .unwrap();
+    let before = session
+        .record
+        .lock()
+        .await
+        .renewal
+        .as_ref()
+        .unwrap()
+        .renew_at;
+    Mock::given(method("GET"))
+        .and(path("/custom/renewal/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(info(10, 20)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let record = service.refresh(&mut session, &execution(5)).await.unwrap();
+    assert_eq!(session.saves.load(Ordering::SeqCst), 1);
+    assert_eq!(record.renewal, session.record.lock().await.renewal);
+    assert_eq!(record.renewal.unwrap().renew_at, before);
+}
+
+#[tokio::test]
+async fn persistence_failures_never_send_without_intent_or_claim_unsaved_advice() {
+    for fail_at in [1, 2] {
+        let (server, service, mut session) = fixture(true, Duration::from_secs(5)).await;
+        let before = session.record.lock().await.renewal.clone().unwrap();
+        session.fail_save_at.store(fail_at, Ordering::SeqCst);
+        Mock::given(method("GET"))
+            .and(path("/custom/renewal/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Retry-After", "60")
+                    .set_body_json(info(10, 20)),
+            )
+            .expect(u64::from(fail_at != 1))
+            .mount(&server)
+            .await;
+        assert!(service.refresh(&mut session, &execution(5)).await.is_err());
+        let saved = session.record.lock().await.renewal.clone().unwrap();
+        assert_eq!(saved.renew_at, before.renew_at);
+        assert_eq!(saved.suggested_window, before.suggested_window);
+        if fail_at == 1 {
+            assert_eq!(saved, before);
+        } else {
+            assert!(saved.last_query_failed);
+            assert!(saved.next_check_at.is_some());
+        }
+    }
+}
+
+#[tokio::test]
+async fn expiry_during_discovery_prevents_ari_query_and_writes() {
+    use crate::renewal::refresh::{RefreshCycle, RefreshStatus};
+    let (server, _, mut session) = fixture(true, Duration::from_secs(5)).await;
+    let now = OffsetDateTime::now_utc();
+    session
+        .record
+        .lock()
+        .await
+        .renewal
+        .as_mut()
+        .unwrap()
+        .not_after = now + time::Duration::seconds(1);
+    Mock::given(method("GET")).and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(1200)).set_body_json(serde_json::json!({
+            "newNonce":format!("{}/unused",server.uri()), "newAccount":format!("{}/unused",server.uri()),
+            "renewalInfo":format!("{}/custom/renewal",server.uri())
+        }))).with_priority(1).mount(&server).await;
+    let pool = crate::transport::HttpPool::default();
+    let mut cycle = RefreshCycle::new(
+        &pool,
+        TransportOptions {
+            allow_loopback_http: true,
+            ..TransportOptions::default()
+        },
+    );
+    let result = cycle.refresh(&mut session, &execution(5)).await.unwrap();
+    assert_eq!(result.status, RefreshStatus::Skipped);
+    assert_eq!(session.saves.load(Ordering::SeqCst), 0);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.url.path() == "/directory")
+    );
+}
+
+#[test]
+fn renewal_due_requires_current_complete_unrevoked_and_instant_boundary() {
+    let mut record: IssueRecord = serde_json::from_value(serde_json::json!({
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+        "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
+        "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"completed","new_order_intent_saved":true,"authorizations":[],"finalize_submitted":"submitted"
+    })).unwrap();
+    let now = OffsetDateTime::now_utc();
+    record.is_in_use = true;
+    let mut due = plan();
+    due.not_before = now - time::Duration::days(90);
+    due.not_after = now + time::Duration::days(1);
+    due.renew_at = now;
+    record.renewal = Some(due);
+    assert!(renewal_due(&record, now));
+    assert!(!renewal_due(&record, now - time::Duration::nanoseconds(1)));
+    let retry_at = now + time::Duration::seconds(60);
+    record.renewal_retry = Some(crate::issuance::RenewalRetryState {
+        failures: 1,
+        retry_at: Some(retry_at),
+        ca_retry_at: Some(retry_at + time::Duration::seconds(60)),
+        blocked_reason: None,
+    });
+    assert!(!renewal_due(
+        &record,
+        retry_at - time::Duration::nanoseconds(1)
+    ));
+    assert!(!renewal_due(&record, retry_at));
+    assert!(renewal_due(&record, retry_at + time::Duration::seconds(60)));
+    record.renewal_retry.as_mut().unwrap().blocked_reason = Some("uncertain order".into());
+    assert!(!renewal_due(&record, retry_at + time::Duration::days(30)));
+    record.renewal_retry = None;
+    record.is_in_use = false;
+    assert!(!renewal_due(&record, now));
+    record.is_in_use = true;
+    record.phase = aster_acme_core::workflow::IssuancePhase::Authorizing;
+    assert!(!renewal_due(&record, now));
+    record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+    for state in [
+        aster_acme_core::revocation::RevocationState::Pending,
+        aster_acme_core::revocation::RevocationState::Confirmed,
+    ] {
+        record.revocation.state = state;
+        assert!(!renewal_due(&record, now));
+    }
+    record.revocation.state = aster_acme_core::revocation::RevocationState::NotRequested;
+    record.renewal = None;
+    assert!(!renewal_due(&record, now));
 }

@@ -53,7 +53,7 @@ async fn started_reload_wait_failure_is_uncertain_and_never_authorizes_automatic
         &fixture.store,
         &fixture.name,
         "unobserved",
-        true,
+        aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
     )
@@ -149,7 +149,7 @@ async fn manual_cancel_before_start_does_not_publish_or_reload() {
             &fixture.store,
             &fixture.name,
             "cancel-before",
-            true,
+            aster_acme::deployment::DeploymentIntent::Explicit,
             None,
             Some(&execution)
         )
@@ -161,6 +161,207 @@ async fn manual_cancel_before_start_does_not_publish_or_reload() {
         fixture.status("cancel-before").await.phase,
         DeploymentPhase::Configured
     );
+}
+
+#[tokio::test]
+async fn cancelled_publication_intent_restores_old_generation_and_complete_retry_checkpoint() {
+    for phase in [
+        DeploymentPhase::Configured,
+        DeploymentPhase::Deployed,
+        DeploymentPhase::ReloadFailed,
+    ] {
+        let fixture = Fixture::new().await;
+        let target = fixture.add("rollback", Vec::new(), 0).await;
+        let mut session = fixture
+            .store
+            .open_deployment(&fixture.name, "rollback")
+            .await
+            .unwrap();
+        if phase != DeploymentPhase::Configured {
+            session.publish().await.unwrap();
+            session.save_state(phase, 2, None).await.unwrap();
+            if phase == DeploymentPhase::ReloadFailed {
+                session
+                    .record_failure(
+                        phase,
+                        2,
+                        "old-generation reload failed".into(),
+                        time::OffsetDateTime::now_utc(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let previous = session.definition().clone();
+        let published = std::fs::read(target.join("fullchain.pem")).ok();
+        drop(session);
+        let renewed = fixture.complete(true).await;
+        let mut session = fixture
+            .store
+            .open_deployment(&fixture.name, "rollback")
+            .await
+            .unwrap();
+        assert_ne!(
+            previous.generation.as_deref(),
+            Some(session.artifacts().generation.as_str())
+        );
+        let execution = Execution {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: None,
+        };
+        // prepare_publication records Publishing before rechecking cancellation,
+        // reproducing a signal arriving during the intent write without timing races.
+        execution.cancellation.cancel();
+        assert!(
+            prepare_publication(&mut session, Some(&execution))
+                .await
+                .is_err()
+        );
+        assert_eq!(session.definition(), &previous, "{phase:?}");
+        assert_eq!(std::fs::read(target.join("fullchain.pem")).ok(), published);
+        drop(session);
+        assert_eq!(fixture.status("rollback").await, previous);
+        let deployed = fixture.automatic(&fixture.store).await;
+        assert_eq!(deployed[0].phase, DeploymentPhase::Deployed);
+        assert_eq!(
+            deployed[0].generation.as_deref(),
+            Some(renewed.generation_name().as_str())
+        );
+        let generation = fixture
+            .temp
+            .path()
+            .join("certs/web")
+            .join(renewed.generation_name());
+        assert_eq!(
+            std::fs::read(target.join("fullchain.pem")).unwrap(),
+            std::fs::read(generation.join("fullchain.pem")).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancelled_new_generation_is_queued_for_daemon_deployment() {
+    let fixture = Fixture::new().await;
+    let target = fixture.add("queued", Vec::new(), 0).await;
+    let previous = fixture.automatic(&fixture.store).await.remove(0);
+    assert_eq!(previous.phase, DeploymentPhase::Deployed);
+    let old_generation = previous.generation.clone().unwrap();
+    let renewed = fixture.complete(true).await;
+    let generation = renewed.generation_name();
+    assert_ne!(generation, old_generation);
+
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+    let (entries, _) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        &generation,
+        &aster_acme::solver::ExecutionContext {
+            cancellation: cancellation.clone(),
+            deadline: std::time::Instant::now() + Duration::from_secs(30),
+        },
+    )
+    .await;
+    assert_eq!(
+        entries[0].generation.as_deref(),
+        Some(old_generation.as_str())
+    );
+    assert_eq!(entries[0].phase, DeploymentPhase::Deployed);
+    assert_eq!(
+        entries[0].pending_generation.as_deref(),
+        Some(generation.as_str())
+    );
+    assert_eq!(
+        std::fs::read(target.join("fullchain.pem")).unwrap(),
+        std::fs::read(
+            fixture
+                .temp
+                .path()
+                .join("certs/web")
+                .join(old_generation)
+                .join("fullchain.pem")
+        )
+        .unwrap()
+    );
+
+    let previous = entries[0].clone();
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, "queued")
+        .await
+        .unwrap();
+    let publication_execution = Execution {
+        cancellation: tokio_util::sync::CancellationToken::new(),
+        deadline: None,
+    };
+    publication_execution.cancellation.cancel();
+    assert!(
+        prepare_publication(&mut session, Some(&publication_execution))
+            .await
+            .is_err()
+    );
+    assert_eq!(session.definition(), &previous);
+    drop(session);
+    assert_eq!(fixture.status("queued").await, previous);
+
+    let retried = retry_due(
+        &fixture.store,
+        Duration::from_secs(30),
+        &tokio_util::sync::CancellationToken::new(),
+        &crate::common::context::CommandContext::new(true),
+        fixture
+            .store
+            .query(aster_acme::storage::query::IssueQuery {
+                view: aster_acme::storage::query::IssueView::Managed,
+                in_use: Some(true),
+                ..aster_acme::storage::query::IssueQuery::default()
+            })
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(retried.len(), 1);
+    let saved = fixture.status("queued").await;
+    assert_eq!(saved.generation.as_deref(), Some(generation.as_str()));
+    assert_eq!(saved.pending_generation, None);
+    assert_eq!(saved.phase, DeploymentPhase::Deployed);
+    let generation_path = fixture.temp.path().join("certs/web").join(generation);
+    assert_eq!(
+        std::fs::read(target.join("fullchain.pem")).unwrap(),
+        std::fs::read(generation_path.join("fullchain.pem")).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_restore_rejects_changed_binding_configuration() {
+    let fixture = Fixture::new().await;
+    fixture.add("checkpoint", Vec::new(), 0).await;
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, "checkpoint")
+        .await
+        .unwrap();
+    let pending_generation = session.artifacts().generation.clone();
+    session
+        .save_pending_generation(&pending_generation)
+        .await
+        .unwrap();
+    let snapshot = session.definition().clone();
+    session
+        .save_state(DeploymentPhase::Publishing, 0, None)
+        .await
+        .unwrap();
+    let publishing = session.definition().clone();
+    let mut wrong = snapshot.clone();
+    wrong.id = "other".into();
+    assert!(session.restore_checkpoint(&wrong).await.is_err());
+    wrong = snapshot.clone();
+    wrong.timeout_seconds += 1;
+    assert!(session.restore_checkpoint(&wrong).await.is_err());
+    assert_eq!(session.definition(), &publishing);
+    session.restore_checkpoint(&snapshot).await.unwrap();
+    drop(session);
+    assert_eq!(fixture.status("checkpoint").await, snapshot);
 }
 
 #[tokio::test]
@@ -497,10 +698,66 @@ async fn explicit_retry_retains_uncertainty_through_publication_and_cancellation
             drop(session);
             let automatic = fixture.automatic(&fixture.store).await;
             assert_eq!(automatic[0], previous);
-            let explicit = run_one(&fixture.store, &fixture.name, "retry", true, None, None)
-                .await
-                .unwrap();
+            let explicit = run_one(
+                &fixture.store,
+                &fixture.name,
+                "retry",
+                aster_acme::deployment::DeploymentIntent::Explicit,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(explicit.binding.phase, DeploymentPhase::Deployed);
         }
     }
+}
+
+#[tokio::test]
+async fn reload_failure_during_backoff_is_checkpointed_before_deadline_return() {
+    let fixture = Fixture::new().await;
+    fixture.add("backoff", child_command("failure"), 3).await;
+    let mut failed = fixture
+        .store
+        .open_deployment(&fixture.name, "backoff")
+        .await
+        .unwrap();
+    failed
+        .save_state(
+            DeploymentPhase::ReloadFailed,
+            1,
+            Some("previous failure".into()),
+        )
+        .await
+        .unwrap();
+    failed
+        .record_failure(
+            DeploymentPhase::ReloadFailed,
+            1,
+            "previous failure".into(),
+            time::OffsetDateTime::now_utc() - time::Duration::minutes(30),
+        )
+        .await
+        .unwrap();
+    let retry_snapshot = failed.definition().clone();
+    drop(failed);
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, "backoff")
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    record_reload_failure(&mut session, &mut events, None)
+        .await
+        .unwrap();
+    drop(session);
+    let saved = fixture.status("backoff").await;
+    assert_eq!(saved.phase, DeploymentPhase::ReloadFailed);
+    assert_eq!(saved.attempts, retry_snapshot.attempts);
+    assert_eq!(saved.retry_failures, retry_snapshot.retry_failures + 1);
+    assert!(
+        saved
+            .retry_at
+            .is_some_and(|retry_at| retry_at > time::OffsetDateTime::now_utc())
+    );
 }

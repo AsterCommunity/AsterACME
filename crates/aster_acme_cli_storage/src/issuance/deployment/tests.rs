@@ -1,5 +1,6 @@
 //! Deployment regression and resource lifecycle tests.
 use crate::issuance::deployment::*;
+use aster_acme::deployment::DeploymentPhase;
 use std::fs;
 
 fn binding(target: DeploymentTarget) -> DeploymentBinding {
@@ -11,10 +12,65 @@ fn binding(target: DeploymentTarget) -> DeploymentBinding {
         timeout_seconds: 30,
         max_retries: 3,
         generation: None,
+        pending_generation: None,
         phase: DeploymentPhase::Configured,
         attempts: 0,
+        retry_failures: 0,
+        retry_at: None,
         last_error: None,
     }
+}
+
+#[test]
+fn retry_due_has_exact_time_generation_and_phase_boundaries() {
+    let now = time::OffsetDateTime::UNIX_EPOCH + time::Duration::nanoseconds(1);
+    let mut value = binding(DeploymentTarget::Directory {
+        path: std::env::temp_dir(),
+    });
+    value.generation = Some("current".into());
+    for phase in [
+        DeploymentPhase::Configured,
+        DeploymentPhase::Publishing,
+        DeploymentPhase::PublishFailed,
+        DeploymentPhase::PublicationComplete,
+        DeploymentPhase::Reloading,
+        DeploymentPhase::ReloadFailed,
+        DeploymentPhase::ReloadUncertain,
+        DeploymentPhase::Deployed,
+    ] {
+        value.phase = phase;
+        value.retry_at = Some(now);
+        let retryable = matches!(
+            phase,
+            DeploymentPhase::Publishing
+                | DeploymentPhase::PublishFailed
+                | DeploymentPhase::PublicationComplete
+                | DeploymentPhase::ReloadFailed
+        );
+        assert_eq!(value.retry_due("current", now), retryable, "{phase:?}");
+        assert!(!value.retry_due("current", now - time::Duration::nanoseconds(1)));
+        assert!(!value.retry_due("previous", now));
+        value.retry_at = None;
+        assert_eq!(value.retry_due("current", now), retryable);
+    }
+}
+
+#[test]
+fn pending_generation_is_retryable_without_claiming_the_previous_generation_was_deployed() {
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let mut value = binding(DeploymentTarget::Directory {
+        path: std::env::temp_dir(),
+    });
+    value.generation = Some("generation-a".into());
+    value.pending_generation = Some("generation-b".into());
+    value.phase = DeploymentPhase::Deployed;
+    assert!(value.retry_due("generation-b", now));
+    assert!(!value.retry_due("generation-a", now));
+    value.phase = DeploymentPhase::ReloadUncertain;
+    assert!(!value.retry_due("generation-b", now));
+    value.phase = DeploymentPhase::Deployed;
+    value.retry_at = Some(now + time::Duration::seconds(1));
+    assert!(!value.retry_due("generation-b", now));
 }
 
 #[test]

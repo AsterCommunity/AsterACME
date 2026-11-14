@@ -8,10 +8,14 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 | --- | --- | --- |
 | `aster_acme_core` | 账户、订单、授权、challenge、续期和吊销的纯状态决策 | HTTP、文件、运行时、交互 |
 | `aster_acme_protocol` | 具名wire模型、directory与Provider、精确URL、Problem、JWS结构 | HTTP执行、签名、CLI输出DTO |
-| `aster_acme` | ACME编排、JWS签名、transport、证书校验、材料推导、对象安全存储/solver契约 | 文件布局、终端、部署进程 |
+| `aster_acme` | ACME编排、JWS签名、transport、证书校验、材料推导、对象安全存储/solver契约、维护周期编排与重试准入策略 | 文件布局、终端、部署进程 |
+| `aster_acme_dns` | DNS发布记录/回执、provider端口、CNAME/传播策略 | 具体resolver、进程、凭据解释和CA推进 |
+| `aster_acme_dns_adpp` | ADPP wire、外部provider适配、响应校验和错误分类 | 终端、文件布局、ACME推进 |
+| `aster_acme_dns_resolver` | Hickory系统查询adapter，保留初始化/查询原因 | vendor/修补依赖、公共DNS回退、DNS写入 |
+| `aster_acme_process` | 进程组/Job Object、stdin、有界输出、取消/期限和退出观察 | reload/ADPP业务重试与错误策略 |
 | `aster_acme_validation` | 验证方法实现，目前DNS可见性检查 | ACME协议推进、CLI选择 |
 | `aster_acme_cli_storage` | 账户/证书文件、查询、租约、恢复、部署文件发布 | CLI配置schema、CA请求、reload进程 |
-| `aster_acme_cli` | 参数/配置、交互、solver适配、批量调度、报告、reload | 重新实现协议状态机或查询规则 |
+| `aster_acme_cli` | 参数/配置、交互、solver适配、维护任务执行器、报告、reload | 重新实现协议状态机、维护候选筛选或重试准入 |
 
 依赖由外向内。Forge提供产品无关机制；不要因为潜在复用就迁移ACME领域语义。具体文件/锁留在CLI storage，嵌入者可替换为数据库或远程签名器。
 
@@ -19,7 +23,7 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 
 ```text
 CLI app / dispatch
-  → commands/<account|cert>/{args,execute,report,render}
+  → commands/<account|cert|daemon>/{args,execute,report,render}
   → AccountService / IssueService / RenewalService / RevocationService
   → core动作 + protocol模型 + transport / signer / store / solver
 ```
@@ -28,11 +32,15 @@ CLI app / dispatch
 
 账户写入显式接收当前 `Arc<dyn AccountLease>`，后台写任务克隆并持有到结束；独立本地编辑由文件适配器新获取租约。换钥与签发会话分别串行化自身IO，不通过全局状态推断租约归属。
 
+## Challenge边界
+
+`challenge::{dns01,dns_persist,http01,tls_alpn01}`分别拥有响应材料及派生约束，`ChallengeMaterial`只聚合具名类型。方法元数据准入、发布生命周期、账户证明要求和响应身份由`ChallengeKind`集中穷尽分发；纯`issuance::authorization`准备材料与检查点，`IssueService`负责持久化顺序和协议副作用。`create`保持方法无关；存储和CLI续期通过通用`retained_validation`快照携带长期材料，材料所有者判断发布范围，通用层不解析TXT。具体流程见[签发设计](design/issuance.md)。
+
 ## 当前能力
 
-已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户签名吊销和多目标文件部署/reload。
+已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户／证书私钥签名吊销和多目标文件部署/reload。
 
-自动DNS provider与daemon调度尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
+`daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。外部DNS provider经`dns_external`接入，Profile与操作见[DNS Provider](dns-providers.md)；内置厂商adapter尚未提供，真实DNS/CA验收另行进行；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 
 ## 详细设计入口
 
@@ -47,3 +55,8 @@ CLI app / dispatch
 | 规范出处与尚未实现的扩展 | [RFC索引](rfc-reference.md) |
 
 开发者文档组织规则和验证入口统一见[文档索引](README.md)，不在本文追加每轮修改日记或复制测试结果。
+
+预检所有权：aster_acme的precheck feature提供Runner/Check/Report，precheck-http提供HTTP实现；validation的precheck-caa和precheck-dns按需引入Hickory。CLI只负责预检时机和渲染，protocol只描述directory字段。禁用CLI预检不会改变ACME正式验证。
+
+
+吊销使用独立`storage::revocation::RevocationSession`，只提供固定target与checkpoint；`RevocationAuthority`分开账户/证书公钥匹配策略，共用一个提交状态机。`crypto::JwsSigner`与`SoftwareSigningKey`不绑定账户业务，transport继续拥有jwk/kid、精确URL、nonce及badNonce；存储不执行CA请求，CLI确认和锁的编排不复制响应分类。托管CLI不要求证书有效期、CSR或另一种身份的密钥，外部证书可由嵌入者实现同一会话契约。

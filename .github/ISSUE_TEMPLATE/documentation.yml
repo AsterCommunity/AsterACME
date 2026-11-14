@@ -1,0 +1,50 @@
+name: Documentation
+description: Report missing, outdated, or confusing documentation
+title: "[Docs]: "
+labels: ["Documentation", "Wait For More Info"]
+assignees:
+  - AptS-1547
+body:
+  - type: textarea
+    id: page
+    attributes:
+      label: Page or section
+      description: Link the page, heading, or file path that needs work.
+      placeholder: e.g. docs/cli-contract.md, README.zh.md, or a crate README
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: Explain what was confusing, outdated, incomplete, or hard to find.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Suggested improvement
+      description: If you know what the docs should say, describe it here.
+
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Who is affected?
+      options:
+        - CLI users
+        - Library embedders
+        - Operators deploying certificates
+        - Contributors
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues for similar documentation requests
+          required: true

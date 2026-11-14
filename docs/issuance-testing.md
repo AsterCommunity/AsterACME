@@ -4,7 +4,7 @@
 
 实现对照 RFC 8555 原文 §7.1.3（订单与 expires）、§7.1.4–7.1.5（授权/challenge）、§7.4（newOrder、finalize 与 CSR）、§7.4.2（PEM 链下载）、§7.5.1（通知与轮询）、§8.4（TXT 摘要），并复用 §6 的精确 URL、kid/JWS、nonce、POST-as-GET 和错误策略。证书/CSR 采用 PKCS#8、PKCS#10 和 X.509/SAN。
 
-当前实现manual_dns/manual_http/webroot/standalone/tls_alpn。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性固定限5秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
+当前实现manual_dns/dns_persist/manual_http/webroot/standalone/tls_alpn；DNS Persist仅按固定草案版本实验性支持，详见本页专项记录。CLI负责人工/文件/TLS发布，ACME负责方法和材料及CA状态推进；DNS预检建议性固定限5秒，不覆盖取消/整体期限，人工首次脚本仍返回待办。普通测试只使用数字 loopback HTTP/TLS 显式测试策略，不改生产默认 CA，也不安装任何测试根。
 
 TLS-ALPN专项覆盖：默认443及自定义监听地址、每域名单独证书、单DNS SAN、critical `id-pe-acmeIdentifier` DER摘要、SNI/`acme-tls/1`门控、重复/混合材料拒绝、恢复重建及终态释放。普通Rustls客户端拒绝未知critical扩展是预期行为，ACME验证器应按RFC8737读取该扩展。
 
@@ -22,7 +22,7 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；周期调度、自动DNS和外部CSR尚未实现。
+未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；自动DNS provider和外部CSR尚未实现；周期调度的当前契约见[生命周期](certificate-lifecycle.md)。
 
 部署专项使用临时目录、真实证书产物与 Rust 测试子进程，覆盖当前版本发布、同版本幂等跳过、续期后新版本/密钥发布及绑定保留、多目标失败继续、非零退出有界重试、启动失败、超时/取消检查点和不自动重放、发布失败后显式恢复、租约与续期/移除互斥、移除绑定保留发布文件。渲染测试覆盖空列表、全部状态配色与可见宽度对齐、控制字符转义、单次及批量 JSON/退出码和命令参数不回显；存储测试覆盖目录/精确路径、非法参数和链接拒绝。PTY 另验证无名称选择（Enter）和取消（Escape）；这些均不代表真实 nginx/systemd 或 Windows 服务 reload 验收。
 
@@ -125,7 +125,7 @@ webroot文件边界检查既有同内容借用、不同内容不覆盖、独占�
 
 DNS建议性预检覆盖有/无TXT、系统解析器错误、独立短超时均可继续；取消和总deadline仍停止。删除skip/force参数并有解析拒绝测试，--yes不选择目标、不替代首次人工待办。日志测试覆盖托管名称、创建时验证实现/方法、STATUS与ORDER STATUS有色/无色独立对齐。
 
---debug实际二进制验证：已有unconfirmed创建在CA directory发现前失败，输出安全creation_submitted/has_order_url检查点；可恢复请求的传输失败输出请求类别、耗时和错误分类。RUST_LOG=trace加--json仍只有一个错误JSON，key/CSR/journal字节不变，无crash.log副作用。诊断日志不包含私钥、CSR/JWS正文、HTTP正文或nonce值，不能补回以前已丢失的Location。
+--debug实际二进制验证：已有unconfirmed创建在CA directory发现前失败，输出安全new_order_intent_saved/has_order_url检查点；可恢复请求的传输失败输出请求类别、耗时和错误分类。RUST_LOG=trace加--json仍只有一个错误JSON，key/CSR/journal字节不变，无crash.log副作用。诊断日志不包含私钥、CSR/JWS正文、HTTP正文或nonce值，不能补回以前已丢失的Location。
 
 本轮未对公网CA或真实用户DNS/账户执行修改；用户提供的staging终端结果与上述本地证据分开记录。未增加旧schema读取、参数别名或自动迁移。
 
@@ -193,3 +193,82 @@ Webroot清理用实际移入私有目录的对象核验身份，替换文件保�
 当前最终验证：cargo test --workspace --locked -- --test-threads=2，共529项通过、4个专用fixture默认忽略；严格all-targets Clippy、Windows GNU all-targets交叉检查、rustdoc与fmt通过。Python3.13关闭UTF-8模式并把默认编码警告升级为错误时，10项脚本测试通过；文档25页本地链接及import/workspace依赖/TLS/features策略通过。未对真实CA、容器、服务或Windows原生环境验收，未提交/推送或声称CodeRabbit重新通过。
 
 根AGENTS只保留入口与硬约束，具体契约/架构/设计/测试分开；文档发现入口见[文档索引](README.md)与[任务路由](task-routing.md)。新增本地链接校验接入CI，已有带日期验收记录保持历史证据身份，不作为当前契约来源。
+
+## 单次ARI维护周期（2026-11-13）
+
+基于cf0f968之后本轮未提交工作树，新增15项真实存储/loopback测试和4项CLI测试。覆盖到期精确边界、存储侧筛选、未来检查与过期/历史/吊销排除、同CA发现复用、无签名GET、账户离线和证书key/CSR不可用时的元数据更新；相同窗口不重抽、原产物/世代不变、重复运行无请求、缺失Retry-After、非法响应、发现失败与不支持ARI的重查计划。并发及陈旧快照分别验证延后检查、吊销和选用世代变更；锁争用/逐项超时继续其他证书，中途取消保留持久化意图，项间取消保留已完成结果。CLI测试检查显式--run-once、参数边界/配置覆盖/缺省回退、退出码和单份JSON。
+
+`cargo test --workspace --all-features --locked -- --test-threads=2`共619项通过、5项专用用例按原配置忽略；严格原生和Windows GNU目标all-targets/all-features Clippy通过。独立预检feature矩阵、rustdoc、fmt、文档/import/dependency/TLS策略及11项Python脚本测试通过。实际CLI临时空库存JSON输出和帮助页通过。以上为macOS本机与loopback证据，Windows仅交叉检查，未运行公网CA、原生Windows或实际cron；未安装定时任务。
+
+本轮服务边界集中与命令调整：维护层只调度，ARI发现/缓存/延期归`renewal::refresh::RefreshCycle`，GET/重试/保存复用`RenewalService`。另增4项服务边界测试、2项CLI帮助/样式测试及1项共享表格测试：验证成功只读一次、失败不重复写、相同建议无新信息只保存意图、保存失败的副作用顺序，以及发现期间过期不再GET。`daemon run-once`、原生`daemon help [run-once]`与cron帮助已实际执行，证书/部署/批量续期/维护共用表格样式。
+
+自动续期阶段新增准入：storage以类型化查询筛选当前、到期、完成且未吊销证书；CLI只准入webroot/standalone/tls_alpn，并将manual DNS/HTTP作为显式跳过。复用现有renew事务和签发后的部署hook。测试包含五种验证实现的准入矩阵和storage续期精确边界。跨进程测试启动两个独立Rust test子进程模拟daemon候选选择与前台renew，共用同一根目录和账户/证书外置锁；断言仅产生一个固定续期operation、两方拿到相同ID且旧in_use保留。此测试验证存储事务并发契约，不代表两个完整公网签发流程的端到端CA验收。
+
+输出一致性回归：空 daemon 周期只返回一条`No ARI refreshes or automatic renewals were due.`，不显示阶段日志或表格；`cert renew --all`空库存不生成表头。daemon ARI逐项状态只由最终表格呈现，只有存在ARI候选时显示一个阶段开始消息；签发/部署长事务保留实时进度。
+
+最终全仓单元测试626项通过、5项按原配置忽略；本轮调整后的续期/core相关22项及过期发现用例复跑通过。全仓命令末尾doctest首次出现依赖加载E0463；停止交错构建后串行`cargo test --workspace --all-features --doc --locked`通过。严格原生/Windows GNU all-targets/all-features Clippy、rustdoc、fmt、文档/依赖/import/TLS策略及11项Python测试通过；没有公网CA、原生Windows或实际cron验收。
+
+
+## DNS Persist 草案-02本地验收（2026-11-14）
+
+基线为`91c0ad9`上的本次工作区改动，平台为macOS原生Rust 1.99.1。规范、CA部署差异及未实现的可选参数统一见[RFC参考](rfc-reference.md#dns-persist-草案实现2026-11-14)，本节仅记录验收边界。
+
+纯材料/方法能力/快照回归与真实CLI solver + 文件journal + loopback CA集成回归，覆盖：§10.2实际SHA-256字节向量、域名/精确账户URL绑定、不公开明文URL、通配符policy、issuer范围/规范化/数量、无token、旧字段拒绝、缺失/非法hash prefix在newOrder前失败、多字符串TXT及RDATA上限；首次`--yes`仍返回待办、恢复固定CSR/私钥且不另建订单、签名空payload账户证明、账户重定向/错误/非valid状态拒绝、ack字段变化不重放；长期记录不进cleanup、换钥后无人值守复用、prefix变化重新要求人工确认、账户URL变更拒绝复用，以及CA跳过新challenge时快照保留和裸域/通配符scope分别更新。
+
+整洁度重构后的回归覆盖四种具名材料的独立构造、IDN/域名长度/通配符/错误thumbprint，方法能力和ack身份穷尽矩阵；授权准备显式传入时间，四种方法均测试到期前1纳秒、相等和到期后1纳秒；issuer数量10/11、issuer名253/254字节、DNS owner带前缀253/254字节、TXT字符串254/255/256字节及总RDATA精确上限。临时材料与长期材料使用同一个计数solver，断言restore/cleanup调用和完成提示按生命周期区分；混入临时材料、错配方法、重复快照、改变scope或取消都不能跳过确认或产生重复ack。
+
+TXT检查另用注入的loopback DNS resolver验证DNS-PERSIST-01输入与单RR片段拼接，未执行公网传播或DNS写入。发布solver不隐式启动DNS预检，CLI通过统一建议性装饰器注入；关闭预检的feature组合仍可执行DNS Persist。
+
+验证命令：
+
+```sh
+cargo test --workspace --locked
+cargo test -p aster_acme_cli --locked dns_persist
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all --check
+cargo doc --workspace --no-deps --locked
+python3 scripts/check-precheck-features.py
+python3 scripts/test-confirmation-terminal.py
+python3 scripts/check-doc-links.py
+```
+
+账户换钥场景在本地更换匹配的账户记录/签名器，验证持久TXT复用；真实CA的旧钥保留、实际DNS记录及公网CA签发仍需另验。此次只读查询Let's Encrypt生产/staging directory用于确认元数据差异，未创建公网订单、发布DNS、吊销证书或改动外部服务；未以本机结果声称Linux/Windows原生验收或远端CI通过。
+
+
+## 账户与证书密钥吊销验收（2026-11-14）
+
+基线为`27ed6d2`之后的本轮工作区，macOS原生Rust 1.99.1。直接阅读RFC8555原文§6.2/§6.4/§6.5/§7.6，具体映射见[RFC核对](rfc-reference.md#9-证书私钥吊销原文核对2026-11-14)。没有公网吊销操作。
+
+库专项使用独立RevocationSession和loopback CA，验证账户kid/证书jwk互斥、nonce/精确URL/叶子DER/reason、独立验签、EC P256/P384/P521、Ed25519/RSA实例、公钥/账户/目标错配、坏/截断/超限证书、缺端点/nonce、签名失败、意图保存失败、取消前后、badNonce重签、明确拒绝/429、5xx/非Problem/意外2xx、调用方丢弃、确认保存失败以及切换签名身份后保留原pending。共享密码学测试对全部八种KeyAlgorithm验证SPKI→JWK及截断/尾随DER拒绝。
+
+CLI/文件集成回归使用生产preparation事务和真实journal：删除整个账户目录仍可certificate-key吊销且不重建账户；账户签名缺证书私钥/CSR/manifest时仍可吊销过期证书；证书密钥模式同样不依赖CSR/manifest且接受过期目标；确认缺失、缺钥、错配钥、恶意链接、文件替换、租约争用和已确认重复调用均覆盖。持久化pending重开后保持目标和原因，以alreadyRevoked确认；人类/JSON展示实际签名身份和目标指纹，文件及in_use保留，ARI/续期资格正确停用。
+
+首次CLI专项发现账户签名器在已持账户租约内重新取锁，已按现有模式改为先取得签名器，再持锁重验账户并进入证书租约；修正后专项通过。纯模拟CA响应覆盖优先级测试也已修正，未将fixture问题作为产品行为修复条目。当前schema对旧pending/confirmed缺目标绑定的记录不自动迁移或猜测。
+
+验收命令：`cargo test --workspace --locked`、严格Clippy、独立feature矩阵、rustdoc、fmt、导入/依赖/TLS/文档链接策略及脚本单测。远端CI、原生Linux/Windows、真实CA吊销与硬件签名器仍单独验收；嵌入式外部证书会话与任意文件CLI导入范围不同。
+
+最终本地结果：全workspace测试713项通过、0失败、10个专用fixture按配置忽略（包括由父测试显式调用的跨进程fixture）；严格Clippy、八组独立feature构建及关闭预检依赖图检查、rustdoc、fmt、11项Python单测和各策略检查通过。PTY另实际跑完10个原生inquire/取消/期限/终端恢复场景；`cargo run -p aster_acme_cli -- cert revoke --help`确认两种`--sign-with`及整体期限参数与实际解析一致。外部自动化workflow与并行改动保留，不作为本功能Rust验证范围的交付结论。
+
+
+## DNS预检初始化诊断（2026-11-14）
+
+在上述吊销实现及并行自动化工作区基础上，针对用户实际日志中的CAA/TXT初始化失败补齐诊断。调查时读取macOS动态DNS配置并独立复现Hickory 0.26.3对带`%en0`的DNS地址返回`failed to parse nameserver address: invalid IP address syntax`；本轮不对上游兼容问题做vendor、patch、过滤地址或回退DNS。
+
+回归测试注入相同配置错误，验证共享初始化入口保留底层source且不继续build，构造阶段错误与配置读取分开；CAA报告每个SAN保留相同原因，未广告caaIdentities是独立原因；Runner保留配置错误并继续其他输入。CLI验证警告包含阶段/具体原因，普通失败仍允许CA验证，取消/整体期限返回中断，人类输出转义换行/ANSI，JSON模式不输出人类诊断。原有TXT与CAA loopback查询测试保持通过；无公网订单、DNS写入或吊销操作。
+
+最终本地验证：全workspace测试721项通过、0失败、10个专用fixture按原配置忽略；严格Clippy、独立feature矩阵、rustdoc、fmt、文档/import/dependency/TLS策略和11项Python单测通过。未升级Hickory，根Cargo.toml/Cargo.lock未变；未重新申请或吊销公网证书。
+
+
+## ADPP 外部 DNS 自动发布本地验收（2026-11-14）
+
+范围：基于 `244c40b` 的本轮未提交工作区，macOS / Darwin 27.0.0 arm64。本记录证明本地实现与受控mock/loopback行为，不代表该HEAD本身已经包含改动，也不是公网DNS/CA或其他原生平台验收。
+
+- `cargo test --workspace --locked`：主单元测试套件合计 **766 passed、0 failed、10 ignored**。统计排除主测试内部再次启动的子fixture结果，避免重复计数。另有两个harness-free真实子进程契约可执行测试通过，分别覆盖ADPP与公共进程runner。
+- 新增覆盖：冻结CNAME路由、恰好8跳/超深/循环/zone标签边界、传播取消与期限、同owner多TXT与分片；ADPP关联ID/action/逐记录集合、必填字段/重复键/错误码/回执长度与TTL/批次数上界、部分失败和自定义值直接回显脱敏；并校验RFC全部7个JSON示例与wire类型一致。
+- 真实本地进程覆盖：不继承ENV、并行排空stdout/stderr、超量输出、非UTF-8字节捕获、完整stdin与断管、启动失败、启动前/启动后取消、期限、非零退出。现有reload回归继续验证本地Unix进程组、继承pipe的后代终止与流式UTF-8处理；Windows Job Object沿用原机制，但本轮没有Windows原生运行证据。
+- loopback CA覆盖：路由保存失败时零DNS写入；回执保存失败时零ack；provider响应丢失后重用同一publication ID及路由，零重复newOrder/DNS创建；取消传播前保存回执；精确预存TXT保留；清理失败保留已签发证书，离线重试无CA调用；provider限流下限跨resume保留。
+- 可选zone策略与maintenance补充：省略或空allowed_zones默认允许全部合法发布域，非空列表限制最终TXT owner，`--clear-zones`可清除；覆盖跨域CNAME默认放行、显式限制仍拒绝、Profile缺省字段及CLI添加/清除限制。daemon准入回归纳入dns_external，续期后统一部署入口实际发布新一代fullchain/私钥的测试通过。
+- Profile与CLI覆盖：独立私有TOML、敏感Debug与人类/JSON视图、原子失败不抹掉custom、坏版本/名称/zone/路径/尺寸/权限/链接拒绝、registry共享租约与引用事务拒删，以及`registry` Profile名称不与锁载体冲突。`provider --help`已用真实CLI入口核对六个子命令。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked`通过。独立feature矩阵通过；关闭预检的库不引入Hickory，CLI external DNS独立使用resolver。workspace/import/TLS/生产feature策略、12项Python测试、workflow concurrency/path契约、本地文档链接及`git diff HEAD --check`通过。
+
+没有读取或写入真实DNS凭据、修改系统DNS、调用公网provider API、新建staging订单或执行证书吊销。未执行Linux/Windows原生测试，未vendor、patch或升级Hickory。真实provider/域名/CA staging的发布、续期、预存TXT保留、故障恢复和清理仍需分别验收；RFC维持Accepted，不将本地实现状态冒充Implemented验收。

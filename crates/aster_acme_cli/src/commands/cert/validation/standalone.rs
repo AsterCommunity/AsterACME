@@ -5,7 +5,9 @@ use crate::commands::cert::validation::{
 };
 use crate::common::output::MessageKind;
 use aster_acme::{
-    challenge::ChallengeToken, issuance::ValidationRequirement, solver::ExecutionContext,
+    challenge::ChallengeToken,
+    issuance::ValidationRequirement,
+    solver::{ChallengePublication, CleanupResult, ExecutionContext, ReadyResult, RestoreResult},
 };
 use async_trait::async_trait;
 use http_body_util::Full;
@@ -101,28 +103,47 @@ impl ChallengeSolver for Standalone {
 
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
-        self.publish(requirements, execution).await?;
-        Ok(true)
+    ) -> Result<ReadyResult, IssueError> {
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
+        self.publish(&requirements, execution).await?;
+        Ok(ReadyResult {
+            ready: true,
+            ..ReadyResult::default()
+        })
     }
 
     async fn restore(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<(), IssueError> {
-        self.publish(requirements, execution).await
+    ) -> Result<RestoreResult, IssueError> {
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
+        self.publish(&requirements, execution).await?;
+        Ok(RestoreResult::default())
     }
 
     async fn cleanup(
         &self,
-        _: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         _: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<CleanupResult, IssueError> {
         self.shutdown().await;
-        Ok(true)
+        Ok(CleanupResult {
+            completed: publications
+                .iter()
+                .map(|publication| publication.publication_id.clone())
+                .collect(),
+            failure: None,
+            retry_at: None,
+        })
     }
 
     async fn shutdown(&self) {

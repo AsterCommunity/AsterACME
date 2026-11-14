@@ -1,12 +1,11 @@
 //! Hickory-based DNS TXT visibility checks without publication or deletion.
 
-use aster_acme::solver::ChallengeSolver;
+use aster_acme::solver::{ChallengePublication, ChallengeSolver, ReadyResult};
 use aster_acme::{
     issuance::{IssueError, ValidationRequirement},
     solver::ExecutionContext,
 };
 use async_trait::async_trait;
-use hickory_resolver::Resolver;
 
 /// System recursive resolver visibility check. It publishes/deletes no DNS resources.
 /// Successful local resolution is readiness evidence, never proof of CA authorization.
@@ -19,15 +18,14 @@ impl ChallengeSolver for DnsVisibility {
     }
     async fn ready(
         &self,
-        records: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<ReadyResult, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
-        let resolver = Resolver::builder_tokio()
-            .map_err(|_| IssueError::InvalidInput("cannot load system DNS configuration"))?
-            .build()
-            .map_err(|_| IssueError::InvalidInput("cannot initialize DNS resolver"))?;
-        for requirement in records {
+        let resolver = crate::resolver::system()
+            .map_err(|error| IssueError::Publication(error.to_string()))?;
+        for publication in publications {
+            let requirement = &publication.requirement;
             let ValidationRequirement::Dns01 { name, value } = requirement else {
                 return Err(IssueError::InvalidInput(
                     "DNS visibility received another validation method",
@@ -38,27 +36,34 @@ impl ChallengeSolver for DnsVisibility {
                 ()=execution.cancellation.cancelled()=>return Err(IssueError::Interrupted),
                 result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::Interrupted)?,
             };
-            match lookup {
-                Ok(lookup) => {
-                    if !txt_value_present(lookup.answers(), value) {
-                        return Ok(false);
-                    }
-                }
-                Err(error) if error.is_no_records_found() || error.is_nx_domain() => {
-                    return Ok(false);
-                }
-                Err(_) => {
-                    return Err(IssueError::InvalidInput("local DNS TXT lookup failed"));
-                }
+            if !observe_lookup(lookup, value)? {
+                return Ok(ReadyResult::default());
             }
         }
-        Ok(true)
+        Ok(ReadyResult {
+            ready: true,
+            ..ReadyResult::default()
+        })
+    }
+}
+
+pub(crate) fn observe_lookup(
+    lookup: Result<hickory_resolver::lookup::Lookup, hickory_resolver::net::NetError>,
+    expected: &str,
+) -> Result<bool, IssueError> {
+    match lookup {
+        Ok(lookup) => Ok(txt_value_present(lookup.answers(), expected)),
+        Err(error) if crate::dns::empty_answer(&error) => Ok(false),
+        Err(_) => Err(IssueError::InvalidInput("local DNS TXT lookup failed")),
     }
 }
 
 // A TXT RR can contain several character strings; concatenate within that RR only.
 // Distinct RRs at one owner must not be concatenated or treated as replacements.
-fn txt_value_present(records: &[hickory_resolver::proto::rr::Record], expected: &str) -> bool {
+pub(crate) fn txt_value_present(
+    records: &[hickory_resolver::proto::rr::Record],
+    expected: &str,
+) -> bool {
     records.iter().any(|record| match &record.data {
         hickory_resolver::proto::rr::RData::TXT(txt) => txt
             .txt_data

@@ -1,5 +1,6 @@
 //! Real loopback sockets exercise parsing, publication, bounds and release semantics.
 use crate::commands::cert::validation::standalone::*;
+use crate::commands::cert::validation::tests::publications;
 use crate::commands::cert::validation::tests::{execution, progress};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,10 +20,10 @@ async fn start() -> (Standalone, SocketAddr) {
     let solver = Standalone::new(([127, 0, 0, 1], 0).into(), progress());
     solver
         .ready(
-            &[
+            &publications(&[
                 material("example.com", TOKEN),
                 material("other.example", OTHER),
-            ],
+            ]),
             &execution(),
         )
         .await
@@ -143,11 +144,17 @@ async fn rejects_other_methods_proxy_requests_bodies_and_ambiguous_hosts() {
 async fn idempotent_publication_can_add_material_but_never_replace_it() {
     let (solver, address) = start().await;
     solver
-        .ready(&[material("example.com", TOKEN)], &execution())
+        .ready(
+            &publications(&[material("example.com", TOKEN)]),
+            &execution(),
+        )
         .await
         .unwrap();
     solver
-        .ready(&[material("example.com", OTHER)], &execution())
+        .ready(
+            &publications(&[material("example.com", OTHER)]),
+            &execution(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -158,14 +165,26 @@ async fn idempotent_publication_can_add_material_but_never_replace_it() {
     if let ValidationRequirement::Http01 { content, .. } = &mut changed {
         content.push('x');
     }
-    assert!(solver.ready(&[changed], &execution()).await.is_err());
+    assert!(
+        solver
+            .ready(&publications(&[changed]), &execution())
+            .await
+            .is_err()
+    );
     let response = request(
         address,
         &format!("GET /.well-known/acme-challenge/{TOKEN} HTTP/1.1\r\nHost: example.com\r\n\r\n"),
     )
     .await;
     assert!(response.ends_with(&format!("{TOKEN}.account_thumbprint")));
-    assert!(solver.cleanup(&[], &execution()).await.unwrap());
+    assert!(
+        solver
+            .cleanup(&publications(&[]), &execution())
+            .await
+            .unwrap()
+            .failure
+            .is_none()
+    );
     solver.shutdown().await;
     assert_released(address).await;
 }
@@ -176,7 +195,10 @@ async fn occupied_port_fails_without_displacing_existing_server() {
     let address = occupied.local_addr().unwrap();
     let solver = Standalone::new(address, progress());
     let error = solver
-        .ready(&[material("example.com", TOKEN)], &execution())
+        .ready(
+            &publications(&[material("example.com", TOKEN)]),
+            &execution(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(error, IssueError::Publication(_)));
@@ -201,7 +223,7 @@ async fn cancelled_expired_contexts_do_not_bind_and_active_services_stop() {
         let solver = Standalone::new(([127, 0, 0, 1], 0).into(), progress());
         assert!(matches!(
             solver
-                .ready(&[material("example.com", TOKEN)], &context)
+                .ready(&publications(&[material("example.com", TOKEN)]), &context)
                 .await,
             Err(IssueError::Interrupted)
         ));
@@ -214,7 +236,7 @@ async fn cancelled_expired_contexts_do_not_bind_and_active_services_stop() {
         };
         let solver = Standalone::new(([127, 0, 0, 1], 0).into(), progress());
         solver
-            .ready(&[material("example.com", TOKEN)], &context)
+            .ready(&publications(&[material("example.com", TOKEN)]), &context)
             .await
             .unwrap();
         let address = solver.listener.lock().await.as_ref().unwrap().address;
@@ -280,9 +302,13 @@ async fn oversized_headers_are_rejected_without_stopping_listener() {
     assert!(response.is_empty() || response.starts_with("HTTP/1.1 431"));
     assert!(
         solver
-            .ready(&[material("example.com", TOKEN)], &execution())
+            .ready(
+                &publications(&[material("example.com", TOKEN)]),
+                &execution()
+            )
             .await
             .unwrap()
+            .ready
     );
     solver.shutdown().await;
 }
@@ -348,7 +374,10 @@ async fn ipv6_listener_uses_same_lifecycle_when_loopback_is_available() {
         return;
     }
     solver
-        .ready(&[material("example.com", TOKEN)], &execution())
+        .ready(
+            &publications(&[material("example.com", TOKEN)]),
+            &execution(),
+        )
         .await
         .unwrap();
     let address = solver.listener.lock().await.as_ref().unwrap().address;

@@ -56,6 +56,8 @@ pub(crate) fn durable_private_dir(path: &Path) -> Result<(), AccountStoreError> 
 pub(crate) enum ObjectKind {
     Account,
     Certificate,
+    Provider,
+    Daemon,
 }
 
 pub(crate) fn object_lock(
@@ -66,6 +68,8 @@ pub(crate) fn object_lock(
     let category = match kind {
         ObjectKind::Account => "accounts",
         ObjectKind::Certificate => "certificates",
+        ObjectKind::Provider => "providers",
+        ObjectKind::Daemon => "daemon",
     };
     for directory in [
         root.to_path_buf(),

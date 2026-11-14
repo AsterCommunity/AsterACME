@@ -1,6 +1,7 @@
 //! Resolve configuration and local storage once; HTTP is initialized only by remote commands.
 use aster_acme_protocol::url::AcmeUrl;
 
+use crate::common::args::HttpArgs;
 use crate::{
     commands::account::args::AccountArgs,
     common::error::CliResult,
@@ -13,13 +14,13 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 /// Command lifetime dependencies: one output session and one reusable HTTP pool.
 #[derive(Clone)]
 pub(crate) struct CommandContext {
-    pub(crate) output: super::session::OutputSession,
+    pub(crate) output: crate::common::session::OutputSession,
     pub(crate) http: aster_acme::transport::HttpPool,
 }
 impl CommandContext {
     pub(crate) fn new(json: bool) -> Self {
         Self {
-            output: super::session::OutputSession::new(json),
+            output: crate::common::session::OutputSession::new(json),
             http: aster_acme::transport::HttpPool::default(),
         }
     }
@@ -102,7 +103,7 @@ impl CliContext {
     /// Registration is the only operation that may create a missing account identity.
     pub(crate) async fn require_account(&self) -> CliResult<aster_acme::account::AccountRecord> {
         self.store.metadata().await?.ok_or_else(|| {
-            Box::new(super::error::MissingLocalAccount {
+            Box::new(crate::common::error::MissingLocalAccount {
                 name: self.name.clone(),
             }) as Box<dyn std::error::Error>
         })
@@ -110,24 +111,40 @@ impl CliContext {
 
     /// Network-only settings are validated only when a command actually requests HTTP.
     pub(crate) fn transport_options(&self, options: &AccountArgs) -> CliResult<TransportOptions> {
-        let request_timeout = options
-            .request_timeout
-            .or(self.config.request_timeout)
-            .unwrap_or(30);
-        if !(1..=300).contains(&request_timeout) {
-            return Err("Timeout must be between 1 and 300 seconds.".into());
-        }
-        let transport = TransportOptions {
-            request_timeout: Duration::from_secs(request_timeout),
-            user_agent: options
-                .user_agent
-                .clone()
-                .or_else(|| self.account_user_agent.clone()),
-            ..TransportOptions::default()
-        };
-        transport.validate()?;
-        Ok(transport)
+        http_options(
+            &self.config,
+            &HttpArgs {
+                user_agent: options.user_agent.clone(),
+                request_timeout: options.request_timeout,
+            },
+            self.account_user_agent.as_deref(),
+        )
     }
+}
+
+/// Resolve shared HTTP policy without requiring an account context.
+pub(crate) fn http_options(
+    config: &Config,
+    http: &HttpArgs,
+    account_user_agent: Option<&str>,
+) -> CliResult<TransportOptions> {
+    let request_timeout = http
+        .request_timeout
+        .or(config.request_timeout)
+        .unwrap_or(30);
+    if !(1..=300).contains(&request_timeout) {
+        return Err("Timeout must be between 1 and 300 seconds.".into());
+    }
+    let transport = TransportOptions {
+        request_timeout: Duration::from_secs(request_timeout),
+        user_agent: http
+            .user_agent
+            .clone()
+            .or_else(|| account_user_agent.map(str::to_owned)),
+        ..TransportOptions::default()
+    };
+    transport.validate()?;
+    Ok(transport)
 }
 
 #[cfg(test)]

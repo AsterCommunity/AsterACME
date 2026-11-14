@@ -2,7 +2,7 @@
 use crate::storage::query::IssueQuery;
 use crate::{
     account::AccountRecord,
-    issuance::{CertificateName, IssueError, IssueRecord, IssueRequest},
+    issuance::{CertificateName, IssueError, IssueRecord, IssueRequest, RenewalRetryState},
 };
 use async_trait::async_trait;
 
@@ -24,11 +24,6 @@ pub trait IssueSession: Send + Sync {
     /// # Errors
     /// Missing, unsafe or corrupt CSR is an error.
     async fn csr(&self) -> Result<Vec<u8>, IssueError>;
-    /// Read the issued leaf as DER; no private key is exposed to revocation orchestration.
-    ///
-    /// # Errors
-    /// Rejects missing, corrupt or unsafe certificate artifacts.
-    async fn certificate_der(&self) -> Result<Vec<u8>, IssueError>;
     /// Persist a validated chain then atomically select this generation. Populate the
     /// returned record's `renewal` with `RenewalPlan::from_certificate` before promotion
     /// so every adapter durably establishes a fallback independently of ARI availability.
@@ -37,6 +32,19 @@ pub trait IssueSession: Send + Sync {
     /// Failure must retain the previous `in_use` generation and recoverable checkpoint.
     async fn complete(&self, record: &IssueRecord, chain: &[u8])
     -> Result<IssueRecord, IssueError>;
+    /// Persist a failed renewal's retry deadline on its still-selected predecessor.
+    /// The generation lease must remain held while this operation updates the predecessor.
+    /// `ca_retry_at` is an absolute lower bound supplied by an explicit CA response.
+    /// A `blocked_reason` records an outcome that must not start a new order automatically.
+    ///
+    /// # Errors
+    /// Rejects non-renewal sessions, stale predecessors and journal write failures.
+    async fn record_renewal_failure(
+        &self,
+        now: time::OffsetDateTime,
+        ca_retry_at: Option<time::OffsetDateTime>,
+        blocked_reason: Option<String>,
+    ) -> Result<RenewalRetryState, IssueError>;
 }
 
 /// Object-safe generation storage contract for files, databases and embedded services.
@@ -71,6 +79,17 @@ pub trait IssueStore: Send + Sync {
         name: &CertificateName,
         operation_id: &str,
     ) -> Result<Box<dyn IssueSession>, IssueError>;
+    /// Open a locked metadata observation session without loading signing/key material.
+    /// Execution sessions still use `open` and validate their fixed key/CSR artifacts.
+    /// # Errors
+    /// Rejects missing identity, inconsistent catalogs and unavailable leases.
+    /// Implementations must bound lease acquisition without abandoning started IO.
+    async fn open_observation(
+        &self,
+        name: &CertificateName,
+        operation_id: &str,
+    ) -> Result<Box<dyn IssueSession>, IssueError>;
+
     /// Query local snapshots only; never load private keys or contact a CA.
     /// Implementations should apply the filters before materializing unrelated records.
     ///

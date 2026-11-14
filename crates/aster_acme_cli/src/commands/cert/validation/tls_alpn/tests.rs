@@ -1,4 +1,5 @@
 //! Real TLS handshakes and RFC 8737 challenge certificate checks.
+use crate::commands::cert::validation::tests::publications;
 use crate::commands::cert::validation::tests::{execution, progress};
 use crate::commands::cert::validation::tls_alpn::*;
 use std::time::{Duration, Instant};
@@ -65,7 +66,12 @@ async fn rejects_mixed_methods_duplicate_names_and_non_dns_identifiers() {
         .is_err()
     );
     let solver = TlsAlpn::new(([127, 0, 0, 1], 0).into(), progress());
-    assert!(solver.ready(&[], &execution()).await.is_err());
+    assert!(
+        solver
+            .ready(&publications(&[]), &execution())
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -125,7 +131,10 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
     let solver = TlsAlpn::new(address, progress());
     assert!(matches!(
         solver
-            .ready(std::slice::from_ref(&requirement), &execution())
+            .ready(
+                &publications(std::slice::from_ref(&requirement)),
+                &execution()
+            )
             .await,
         Err(IssueError::Publication(_))
     ));
@@ -142,7 +151,10 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
     let solver = TlsAlpn::new(([127, 0, 0, 1], 0).into(), progress());
     assert!(matches!(
         solver
-            .ready(std::slice::from_ref(&requirement), &cancelled)
+            .ready(
+                &publications(std::slice::from_ref(&requirement)),
+                &cancelled
+            )
             .await,
         Err(IssueError::Interrupted)
     ));
@@ -153,7 +165,9 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
         ..execution()
     };
     assert!(matches!(
-        solver.restore(&[requirement], &expired).await,
+        solver
+            .restore(&publications(&[requirement]), &expired)
+            .await,
         Err(IssueError::Interrupted)
     ));
     assert!(solver.listener.lock().await.is_none());
@@ -174,7 +188,10 @@ async fn cancelling_an_active_tls_handshake_closes_listener_and_idle_connection(
     };
     let solver = TlsAlpn::new(([127, 0, 0, 1], 0).into(), progress());
     solver
-        .ready(std::slice::from_ref(&requirement), &execution)
+        .ready(
+            &publications(std::slice::from_ref(&requirement)),
+            &execution,
+        )
         .await
         .unwrap();
     let address = solver.listener.lock().await.as_ref().unwrap().address;
@@ -220,7 +237,10 @@ async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain
         },
     ];
     let solver = TlsAlpn::new(([127, 0, 0, 1], 0).into(), progress());
-    solver.ready(&requirements, &execution()).await.unwrap();
+    solver
+        .ready(&publications(&requirements), &execution())
+        .await
+        .unwrap();
     let address = solver.listener.lock().await.as_ref().unwrap().address;
 
     for (domain, digest) in [("first.example", [1; 32]), ("second.example", [2; 32])] {
@@ -233,7 +253,7 @@ async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain
         digest: [3; 32],
     };
     solver
-        .ready(&[first.clone(), third.clone()], &execution())
+        .ready(&publications(&[first.clone(), third.clone()]), &execution())
         .await
         .unwrap();
     assert_valid_tls_alpn_certificate(address, "third.example", [3; 32]).await;
@@ -241,7 +261,12 @@ async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain
         domain: "first.example".into(),
         digest: [8; 32],
     };
-    assert!(solver.ready(&[changed], &execution()).await.is_err());
+    assert!(
+        solver
+            .ready(&publications(&[changed]), &execution())
+            .await
+            .is_err()
+    );
     assert_valid_tls_alpn_certificate(address, "first.example", [1; 32]).await;
 
     assert_tls_client_rejected(address, "first.example", Some(b"http/1.1")).await;
@@ -254,9 +279,15 @@ async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain
     // A restarted invocation rebuilds ephemeral certificates from the same
     // persisted digest and binds the same saved socket without another CA ack.
     let resumed = TlsAlpn::new(address, progress());
-    resumed.restore(&requirements, &execution()).await.unwrap();
+    resumed
+        .restore(&publications(&requirements), &execution())
+        .await
+        .unwrap();
     assert_valid_tls_alpn_certificate(address, "first.example", [1; 32]).await;
-    resumed.cleanup(&requirements, &execution()).await.unwrap();
+    resumed
+        .cleanup(&publications(&requirements), &execution())
+        .await
+        .unwrap();
     assert!(tokio::net::TcpListener::bind(address).await.is_ok());
 }
 

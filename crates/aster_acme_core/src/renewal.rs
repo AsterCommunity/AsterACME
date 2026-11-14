@@ -1,4 +1,4 @@
-//! Pure renewal-information scheduling decisions; timestamps are Unix seconds.
+//! Pure renewal-information scheduling decisions; clocks and I/O remain caller-owned.
 
 /// Whether a caller should perform an ARI query, independently of certificate renewal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,8 +12,13 @@ pub enum RenewalAction {
 }
 
 /// Decide from persisted observations without performing I/O or consulting a clock.
+/// Both times must use the same ordered representation; callers retain their precision.
 #[must_use]
-pub fn renewal_action(available: bool, next_check: Option<i64>, now: i64) -> RenewalAction {
+pub fn renewal_action<T: Ord + Copy>(
+    available: bool,
+    next_check: Option<T>,
+    now: T,
+) -> RenewalAction {
     match (available, next_check) {
         (false, _) => RenewalAction::Unavailable,
         (true, Some(at)) if at > now => RenewalAction::Wait,
@@ -28,6 +33,18 @@ pub enum RenewalDecision {
     Start,
     Resume,
     RevocationUncertain,
+}
+
+/// Delay after a failed issuance attempt, capped at one retry per day.
+/// `failure_count` is one-based: the first failure schedules the first retry.
+#[must_use]
+pub const fn renewal_retry_delay_seconds(failure_count: u32) -> i64 {
+    match failure_count {
+        0 | 1 => 60,
+        2 => 10 * 60,
+        3 => 100 * 60,
+        _ => 24 * 60 * 60,
+    }
 }
 
 /// Resume a durable renewal before considering a new one; --now never bypasses an
@@ -107,5 +124,15 @@ mod tests {
             renewal_decision(false, RevocationState::Confirmed, 0, 100, true),
             RenewalDecision::Start
         );
+    }
+
+    #[test]
+    fn renewal_retry_schedule_grows_then_caps_at_one_day() {
+        assert_eq!(renewal_retry_delay_seconds(0), 60);
+        assert_eq!(renewal_retry_delay_seconds(1), 60);
+        assert_eq!(renewal_retry_delay_seconds(2), 600);
+        assert_eq!(renewal_retry_delay_seconds(3), 6000);
+        assert_eq!(renewal_retry_delay_seconds(4), 86400);
+        assert_eq!(renewal_retry_delay_seconds(u32::MAX), 86400);
     }
 }

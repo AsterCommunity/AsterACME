@@ -6,12 +6,15 @@ use crate::commands::cert::{
     report::{DeploymentEvent, DeploymentExecution, DeploymentReport},
 };
 use crate::common::{context::CliSettings, error::CliResult, output::MessageKind};
-use aster_acme::issuance::CertificateName;
 use aster_acme::storage::issuance::IssueStore as _;
 use aster_acme::storage::query::{IssueQuery, IssueView};
+use aster_acme::{
+    deployment::{DeploymentIntent, DeploymentPhase},
+    issuance::CertificateName,
+};
 use aster_acme_cli_storage::issuance::{
     CliIssueStore, DeploymentBinding, DeploymentDefinition, DeploymentPatch, DeploymentPermissions,
-    DeploymentPhase, DeploymentTarget,
+    DeploymentTarget,
 };
 use std::{
     path::{Path, PathBuf},
@@ -32,7 +35,7 @@ pub(super) async fn execute(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
     cancellation: tokio_util::sync::CancellationToken,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
     // Never drop the command future while publication owns a blocking task.
     // Cancellation is propagated to the shared execution boundaries instead.
@@ -47,7 +50,7 @@ async fn execute_inner(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
     execution: &Execution,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let options: AccountArgs = args.local().clone().into();
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir, Duration::from_secs(5));
@@ -72,26 +75,32 @@ async fn execute_inner(
                 binding_id(&bindings, "inspect", &cli.output)?
             };
             let binding = store.deployment(&name, &id).await?;
-            return Ok(super::report::CertificateReport::DeploymentDetails {
-                name: name.as_str().into(),
-                binding: Box::new(binding),
-            });
+            return Ok(
+                crate::commands::cert::report::CertificateReport::DeploymentDetails {
+                    name: name.as_str().into(),
+                    binding: Box::new(binding),
+                },
+            );
         }
         DeployCommand::Remove(args) => {
             let definitions = store.deployments(&name).await?;
             let id = remove_id(args.id, &definitions, &cli.output)?;
             store.remove_deployment(&name, &id).await?;
-            return Ok(super::report::CertificateReport::DeploymentRemoved {
-                name: name.as_str().into(),
-                id,
-            });
+            return Ok(
+                crate::commands::cert::report::CertificateReport::DeploymentRemoved {
+                    name: name.as_str().into(),
+                    id,
+                },
+            );
         }
         DeployCommand::Update(args) => {
             let binding = update(&store, &name, args, &cli.output).await?;
-            return Ok(super::report::CertificateReport::DeploymentUpdated {
-                name: name.as_str().into(),
-                binding: Box::new(binding),
-            });
+            return Ok(
+                crate::commands::cert::report::CertificateReport::DeploymentUpdated {
+                    name: name.as_str().into(),
+                    binding: Box::new(binding),
+                },
+            );
         }
         DeployCommand::Add(mut args) => {
             complete_add(&store, &name, &mut args, &cli.output).await?;
@@ -102,7 +111,7 @@ async fn execute_inner(
                 &store,
                 &name,
                 &configured,
-                true,
+                DeploymentIntent::Explicit,
                 Some(&progress),
                 Some(execution),
             )
@@ -126,19 +135,87 @@ async fn execute_inner(
                 &progress,
                 execution,
                 &mut execution_events,
+                None,
             )
             .await;
             (entries, true)
         }
     };
-    Ok(super::report::CertificateReport::Deployment(
-        DeploymentReport {
+    Ok(
+        crate::commands::cert::report::CertificateReport::Deployment(DeploymentReport {
             name: name.as_str().into(),
             entries,
             events: execution_events,
             attempted,
-        },
-    ))
+        }),
+    )
+}
+
+/// Retry due failures and durable intents to publish the current generation.
+/// Uncertain reloads stay behind the existing explicit-inspection barrier.
+pub(crate) async fn retry_due(
+    store: &CliIssueStore,
+    timeout: Duration,
+    cancellation: &tokio_util::sync::CancellationToken,
+    cli: &crate::common::context::CommandContext,
+    records: Vec<aster_acme::issuance::IssueRecord>,
+) -> Vec<DeploymentReport> {
+    let now = time::OffsetDateTime::now_utc();
+    let progress = Progress::new(cli.output.clone());
+    let mut reports = Vec::new();
+    for record in records {
+        if cancellation.is_cancelled() {
+            break;
+        }
+        let definitions = match store.deployments(&record.name).await {
+            Ok(definitions) => definitions,
+            Err(error) => {
+                reports.push(DeploymentReport {
+                    name: record.name.as_str().to_owned(),
+                    entries: Vec::new(),
+                    events: vec![event(
+                        MessageKind::Error,
+                        format!("Deployment retry state could not be read: {error}"),
+                    )],
+                    attempted: true,
+                });
+                continue;
+            }
+        };
+        let generation = record.generation_name();
+        let selected = definitions
+            .into_iter()
+            .filter(|binding| binding.retry_due(&generation, now))
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            continue;
+        }
+        let execution = Execution {
+            cancellation: cancellation.clone(),
+            deadline: std::time::Instant::now().checked_add(timeout),
+        };
+        let mut events = Vec::new();
+        let entries = run_selected(
+            store,
+            &record.name,
+            selected,
+            &progress,
+            &execution,
+            &mut events,
+            Some(&generation),
+        )
+        .await;
+        if entries.is_empty() && events.is_empty() {
+            continue;
+        }
+        reports.push(DeploymentReport {
+            name: record.name.as_str().to_owned(),
+            entries,
+            events,
+            attempted: true,
+        });
+    }
+    reports
 }
 
 async fn run_selected(
@@ -148,6 +225,7 @@ async fn run_selected(
     progress: &Progress,
     execution: &Execution,
     execution_events: &mut Vec<DeploymentEvent>,
+    retry_generation: Option<&str>,
 ) -> Vec<DeploymentBinding> {
     let mut entries = Vec::with_capacity(selected.len());
     let mut selected = selected.into_iter();
@@ -161,16 +239,25 @@ async fn run_selected(
             entries.extend(selected);
             break;
         }
+        let intent = match retry_generation {
+            Some(generation) => DeploymentIntent::Retry {
+                generation,
+                snapshot: &definition,
+            },
+            None => DeploymentIntent::Explicit,
+        };
         let execution = run_target(
             store,
             name,
             &definition,
-            true,
+            intent,
             Some(progress),
             Some(execution),
         )
         .await;
-        entries.push(execution.binding);
+        if execution.attempted {
+            entries.push(execution.binding);
+        }
         execution_events.extend(execution.events);
     }
 
@@ -355,15 +442,15 @@ async fn select_certificate(
         })
         .await?;
     if managing {
-        super::selection::certificate_name(
+        crate::commands::cert::selection::certificate_name(
             &candidates,
             explicit,
             None,
-            super::selection::CertificateLabel::Deployment,
+            crate::commands::cert::selection::CertificateLabel::Deployment,
             output,
         )
     } else {
-        super::selection::deployment_certificate_name(&candidates, explicit, output)
+        crate::commands::cert::selection::deployment_certificate_name(&candidates, explicit, output)
     }
 }
 
@@ -375,15 +462,6 @@ pub(super) async fn after_issuance(
     generation: &str,
     execution: &aster_acme::solver::ExecutionContext,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
-    if execution.check().is_err() {
-        return (
-            Vec::new(),
-            vec![event(
-                MessageKind::Error,
-                "Deployment not started: issuance execution was cancelled or its deadline expired; issued certificate retained. Run cert deploy explicitly.",
-            )],
-        );
-    }
     // Do not drop automatic_inner at the operation deadline: a started blocking
     // publication continues under its lease. The worker records the final publish
     // state, then checks the deadline before starting reload or another target.
@@ -411,6 +489,34 @@ async fn automatic_inner(
     };
     let mut result = Vec::with_capacity(definitions.len());
     let mut events = Vec::new();
+    let mut definitions = definitions;
+    for definition in &mut definitions {
+        if definition.generation.as_deref() == Some(generation)
+            || definition.pending_generation.as_deref() == Some(generation)
+            || definition.phase.reload_uncertain()
+        {
+            continue;
+        }
+        match store.open_deployment(name, &definition.id).await {
+            Ok(mut session) => match session.save_pending_generation(generation).await {
+                Ok(()) => *definition = session.definition().clone(),
+                Err(error) => events.push(event(
+                    MessageKind::Error,
+                    format!(
+                        "Deployment '{}' intent could not be saved: {error}",
+                        definition.id
+                    ),
+                )),
+            },
+            Err(error) => events.push(event(
+                MessageKind::Error,
+                format!(
+                    "Deployment '{}' intent could not be saved: {error}",
+                    definition.id
+                ),
+            )),
+        }
+    }
     let mut definitions = definitions.into_iter();
     while let Some(definition) = definitions.next() {
         if execution.check().is_err() {
@@ -428,7 +534,7 @@ async fn automatic_inner(
             store,
             name,
             &definition,
-            false,
+            DeploymentIntent::AfterIssuance { generation },
             None,
             Some(&execution),
         ))
@@ -443,14 +549,14 @@ async fn run_target(
     store: &CliIssueStore,
     name: &CertificateName,
     definition: &DeploymentBinding,
-    force: bool,
+    intent: DeploymentIntent<'_, DeploymentBinding>,
     progress: Option<&Progress>,
     execution: Option<&Execution>,
 ) -> DeploymentExecution {
     let id = definition.id.as_str();
-    match Box::pin(run_one(store, name, id, force, progress, execution)).await {
+    match Box::pin(run_one(store, name, id, intent, progress, execution)).await {
         Ok(mut execution) => {
-            if execution.binding.phase != DeploymentPhase::Deployed {
+            if execution.attempted && execution.binding.phase != DeploymentPhase::Deployed {
                 record_event(
                     &mut execution.events,
                     MessageKind::Error,
@@ -482,6 +588,7 @@ async fn run_target(
                 event.deployment = Some(id.to_owned());
             }
             DeploymentExecution {
+                attempted: true,
                 binding: definition.clone(),
                 events,
             }
@@ -493,43 +600,48 @@ async fn run_one(
     store: &CliIssueStore,
     name: &CertificateName,
     id: &str,
-    force: bool,
+    intent: DeploymentIntent<'_, DeploymentBinding>,
     progress: Option<&Progress>,
     execution: Option<&Execution>,
 ) -> CliResult<DeploymentExecution> {
-    if execution.is_some_and(|execution| execution.check().is_err()) {
+    if execution.is_some_and(|execution| execution.check().is_err())
+        && matches!(intent, DeploymentIntent::Explicit)
+    {
         return Err(
-            "issuance was cancelled or its execution deadline expired before deployment".into(),
+            "deployment was cancelled or its execution deadline expired before startup".into(),
         );
     }
     let mut session = store.open_deployment(name, id).await?;
-    if execution.is_some_and(|execution| execution.check().is_err()) {
-        return Err(
-            "issuance was cancelled or its execution deadline expired before publication".into(),
-        );
-    }
     let mut events = Vec::new();
-    let same_generation =
-        session.definition().generation.as_deref() == Some(session.artifacts().generation.as_str());
-    if !force && same_generation && session.definition().phase == DeploymentPhase::Deployed {
+    if !session.admits(intent, time::OffsetDateTime::now_utc()) {
         return Ok(DeploymentExecution {
-            binding: session.definition().clone(),
-            events: events.clone(),
-        });
-    }
-    if !force && session.definition().phase.reload_uncertain() {
-        record_event(
-            &mut events,
-            MessageKind::Warning,
-            "Previous reload outcome is uncertain; inspect the service and explicitly retry.",
-            progress,
-        );
-        return Ok(DeploymentExecution {
+            attempted: false,
             binding: session.definition().clone(),
             events: events.clone(),
         });
     }
     let current_generation = session.artifacts().generation.clone();
+    if let DeploymentIntent::AfterIssuance { generation } = intent
+        && session.definition().generation.as_deref() != Some(generation)
+        && session.definition().pending_generation.as_deref() != Some(generation)
+    {
+        session.save_pending_generation(generation).await?;
+    }
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        record_event(
+            &mut events,
+            MessageKind::Warning,
+            &format!(
+                "Deployment '{id}' for generation {current_generation} is queued for the next maintenance cycle"
+            ),
+            progress,
+        );
+        return Ok(DeploymentExecution {
+            attempted: false,
+            binding: session.definition().clone(),
+            events,
+        });
+    }
     record_event(
         &mut events,
         MessageKind::Info,
@@ -558,6 +670,7 @@ async fn prepare_publication(
 ) -> CliResult<()> {
     // An explicit retry does not itself resolve the previous reload. Keep
     // its durable barrier throughout publication, cancellation and crashes.
+    let previous = session.definition().clone();
     if !uncertain(session.definition()) {
         session
             .save_state(DeploymentPhase::Publishing, 0, None)
@@ -565,13 +678,7 @@ async fn prepare_publication(
     }
     if execution.is_some_and(|execution| execution.check().is_err()) {
         if !uncertain(session.definition()) {
-            session
-                .save_state(
-                    DeploymentPhase::Configured,
-                    0,
-                    Some("deployment cancelled before file publication".into()),
-                )
-                .await?;
+            session.restore_checkpoint(&previous).await?;
         }
         return Err("deployment cancelled before file publication".into());
     }
@@ -592,9 +699,23 @@ async fn publish_and_finish(
 ) -> CliResult<DeploymentExecution> {
     if let Err(error) = publish(session).await {
         if !uncertain(session.definition()) {
-            session
-                .save_state(DeploymentPhase::PublishFailed, 0, Some(error.to_string()))
+            let retry = session
+                .record_failure(
+                    DeploymentPhase::PublishFailed,
+                    0,
+                    error.to_string(),
+                    time::OffsetDateTime::now_utc(),
+                )
                 .await?;
+            record_event(
+                events,
+                MessageKind::Info,
+                &format!(
+                    "Automatic deployment retry scheduled at {}",
+                    crate::common::time::timestamp(retry.retry_at)
+                ),
+                progress,
+            );
         }
         record_event(
             events,
@@ -606,6 +727,7 @@ async fn publish_and_finish(
             progress,
         );
         return Ok(DeploymentExecution {
+            attempted: true,
             binding: session.definition().clone(),
             events: events.clone(),
         });
@@ -645,6 +767,7 @@ async fn finish_publication(
             progress,
         );
         return Ok(DeploymentExecution {
+            attempted: true,
             binding: session.definition().clone(),
             events: events.clone(),
         });
@@ -664,8 +787,12 @@ async fn finish_publication(
         session
             .save_state(DeploymentPhase::PublicationComplete, 0, Some(error.into()))
             .await?;
+        session
+            .schedule_retry(time::OffsetDateTime::now_utc())
+            .await?;
         record_event(events, MessageKind::Error, error, progress);
         return Ok(DeploymentExecution {
+            attempted: true,
             binding: session.definition().clone(),
             events: events.clone(),
         });
@@ -679,6 +806,7 @@ async fn finish_publication(
         record_event(events, MessageKind::Error, &error.to_string(), progress);
     }
     Ok(DeploymentExecution {
+        attempted: true,
         binding: session.definition().clone(),
         events: events.clone(),
     })
@@ -695,6 +823,9 @@ async fn reload_with_retries(
     let attempts_allowed = binding.max_retries.saturating_add(1);
     for attempt in 1..=attempts_allowed {
         if execution.is_some_and(|execution| execution.check().is_err()) {
+            if attempt > 1 && session.definition().phase == DeploymentPhase::ReloadFailed {
+                record_reload_failure(session, events, progress).await?;
+            }
             return Err(
                 "issuance was cancelled or its execution deadline expired before reload".into(),
             );
@@ -736,6 +867,37 @@ async fn reload_with_retries(
         ),
         progress,
     );
+    record_reload_failure(session, events, progress).await?;
+    Ok(())
+}
+
+async fn record_reload_failure(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    events: &mut Vec<DeploymentEvent>,
+    progress: Option<&Progress>,
+) -> CliResult<()> {
+    if session.definition().phase == DeploymentPhase::ReloadFailed {
+        let previous = session.definition().clone();
+        let retry = session
+            .record_failure(
+                DeploymentPhase::ReloadFailed,
+                previous.attempts,
+                previous
+                    .last_error
+                    .unwrap_or_else(|| "reload command exited unsuccessfully".into()),
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+        record_event(
+            events,
+            MessageKind::Info,
+            &format!(
+                "Automatic deployment retry scheduled at {}",
+                crate::common::time::timestamp(retry.retry_at)
+            ),
+            progress,
+        );
+    }
     Ok(())
 }
 
@@ -753,13 +915,7 @@ async fn settle_reload_attempt(
     if !result.started
         && (uncertain(previous) || execution.is_some_and(|execution| execution.check().is_err()))
     {
-        session
-            .save_state(
-                previous.phase,
-                previous.attempts,
-                previous.last_error.clone(),
-            )
-            .await?;
+        session.restore_checkpoint(previous).await?;
         return Err(
             "reload was not started; previous execution state retained; no process was terminated"
                 .into(),
