@@ -38,12 +38,12 @@ pub(crate) fn started(
 pub(crate) fn cycle(
     output_session: &crate::common::session::OutputSession,
     cycle: u64,
-    result: &CliResult<super::DaemonReport>,
+    result: &CliResult<crate::commands::daemon::DaemonReport>,
 ) -> CliResult<bool> {
     let at = time::OffsetDateTime::now_utc();
     match result {
         Ok(report) => {
-            let exit_status = super::exit_status(report);
+            let exit_status = crate::commands::daemon::exit_status(report);
             let failed = exit_status == crate::common::session::ExitStatus::Failed;
             if output_session.is_json() {
                 let rendered = render(report, Format::plain(true))?;
@@ -121,7 +121,7 @@ pub(crate) fn cycle(
 
 pub(crate) fn stopped(
     output_session: &crate::common::session::OutputSession,
-    report: &super::DaemonStopped,
+    report: &crate::commands::daemon::DaemonStopped,
 ) -> CliResult<String> {
     let at = time::OffsetDateTime::now_utc();
     if output_session.is_json() {
@@ -148,7 +148,10 @@ fn rfc3339(at: time::OffsetDateTime) -> CliResult<String> {
     Ok(at.format(&time::format_description::well_known::Rfc3339)?)
 }
 
-pub(crate) fn render_stopped(report: &super::DaemonStopped, format: Format) -> CliResult<String> {
+pub(crate) fn render_stopped(
+    report: &crate::commands::daemon::DaemonStopped,
+    format: Format,
+) -> CliResult<String> {
     if format.json {
         return Ok(serde_json::to_string(&serde_json::json!({
             "event": "stopped",
@@ -175,7 +178,10 @@ pub(crate) fn status(outcome: &Outcome) -> &'static str {
     }
 }
 
-pub(crate) fn render(report: &super::DaemonReport, format: Format) -> CliResult<String> {
+pub(crate) fn render(
+    report: &crate::commands::daemon::DaemonReport,
+    format: Format,
+) -> CliResult<String> {
     if format.json {
         let ari_value: serde_json::Value =
             serde_json::from_str(&render_ari(&report.ari, Format::plain(true))?)?;

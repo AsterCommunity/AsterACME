@@ -46,7 +46,7 @@ pub(super) fn choose(
                             if record.new_order_intent_saved && record.order_url.is_none() {
                                 "creating order (result unconfirmed)"
                             } else {
-                                super::render::request_status(
+                                crate::commands::cert::render::request_status(
                                     record,
                                     time::OffsetDateTime::now_utc(),
                                 )

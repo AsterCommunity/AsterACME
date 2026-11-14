@@ -14,13 +14,13 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 /// Command lifetime dependencies: one output session and one reusable HTTP pool.
 #[derive(Clone)]
 pub(crate) struct CommandContext {
-    pub(crate) output: super::session::OutputSession,
+    pub(crate) output: crate::common::session::OutputSession,
     pub(crate) http: aster_acme::transport::HttpPool,
 }
 impl CommandContext {
     pub(crate) fn new(json: bool) -> Self {
         Self {
-            output: super::session::OutputSession::new(json),
+            output: crate::common::session::OutputSession::new(json),
             http: aster_acme::transport::HttpPool::default(),
         }
     }
@@ -103,7 +103,7 @@ impl CliContext {
     /// Registration is the only operation that may create a missing account identity.
     pub(crate) async fn require_account(&self) -> CliResult<aster_acme::account::AccountRecord> {
         self.store.metadata().await?.ok_or_else(|| {
-            Box::new(super::error::MissingLocalAccount {
+            Box::new(crate::common::error::MissingLocalAccount {
                 name: self.name.clone(),
             }) as Box<dyn std::error::Error>
         })

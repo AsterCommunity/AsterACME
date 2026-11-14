@@ -15,9 +15,9 @@ use crate::common::session::Format;
 
 pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String> {
     if format.json {
-        return Ok(serde_json::to_string_pretty(&super::output::Output::from(
-            report,
-        ))?);
+        return Ok(serde_json::to_string_pretty(
+            &crate::commands::account::output::Output::from(report),
+        )?);
     }
     let color = format.color;
     Ok(match report {
@@ -94,7 +94,7 @@ fn rotation_label(phase: aster_acme_core::account::KeyRotationPhase) -> &'static
 fn list_text(
     accounts: &[aster_acme_cli_storage::inventory::LocalAccount],
     default: &str,
-    verification: Option<&[super::report::AccountVerification]>,
+    verification: Option<&[crate::commands::account::report::AccountVerification]>,
     color: bool,
 ) -> String {
     if accounts.is_empty() {
@@ -321,7 +321,7 @@ pub(super) mod tests {
     use aster_acme_protocol::url::AcmeUrl;
 
     pub(in crate::commands::account) fn json_value(report: &AccountReport) -> serde_json::Value {
-        serde_json::to_value(super::super::output::Output::from(report)).unwrap()
+        serde_json::to_value(crate::commands::account::output::Output::from(report)).unwrap()
     }
 
     #[test]

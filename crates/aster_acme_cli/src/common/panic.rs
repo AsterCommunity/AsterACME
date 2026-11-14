@@ -46,7 +46,7 @@ impl PanicState {
             env!("CARGO_PKG_REPOSITORY"),
         )
         .with_issue_template("issues/new")
-        .with_timestamp(|| super::time::timestamp(Some(time::OffsetDateTime::now_utc())))
+        .with_timestamp(|| crate::common::time::timestamp(Some(time::OffsetDateTime::now_utc())))
         .with_report_writer(Arc::new(writer))
         .with_output(PanicOutput::Sink(state.clone()));
         aster_forge_panic::install_panic_hook(config);

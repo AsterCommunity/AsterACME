@@ -22,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 pub(super) async fn execute(
     args: RenewArgs,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
-    let options = super::execute::options(&args.run.local, &args.run.http, None);
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
+    let options = crate::commands::cert::execute::options(&args.run.local, &args.run.http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
     match (
@@ -63,7 +63,7 @@ pub(super) async fn execute(
                 cli,
             };
             let report = run_batch(records, &executor, &cancellation).await;
-            Ok(super::report::CertificateReport::Batch {
+            Ok(crate::commands::cert::report::CertificateReport::Batch {
                 report,
                 data_dir: settings.data_dir,
             })
@@ -101,7 +101,7 @@ pub(super) async fn execute(
                 cli,
             };
             let result = executor.run(selected).await?;
-            Ok(super::report::CertificateReport::Result {
+            Ok(crate::commands::cert::report::CertificateReport::Result {
                 result,
                 data_dir: settings.data_dir,
             })
@@ -152,7 +152,7 @@ pub(crate) struct Transaction<'a> {
 #[async_trait(?Send)]
 impl RenewalExecutor for Transaction<'_> {
     async fn run(&self, record: &IssueRecord) -> CliResult<CertificateResult> {
-        let options = super::execute::options(
+        let options = crate::commands::cert::execute::options(
             &self.run.local,
             &self.run.http,
             Some(record.account_name.clone()),
@@ -190,8 +190,8 @@ impl RenewalExecutor for Transaction<'_> {
             match self.store.record_renewal_preparation_failure(
                 record, self.immediate, time::OffsetDateTime::now_utc(),
             ).await {
-                Ok(Some(retry)) => super::execute::report_renewal_retry(
-                    &super::progress::Progress::new(self.cli.output.clone()), record, &retry,
+                Ok(Some(retry)) => crate::commands::cert::execute::report_renewal_retry(
+                    &crate::commands::cert::progress::Progress::new(self.cli.output.clone()), record, &retry,
                 ),
                 Ok(None) => {},
                 Err(checkpoint_error) => self.cli.output.progress(
@@ -207,7 +207,7 @@ impl RenewalExecutor for Transaction<'_> {
         if !self.automatic {
             return None;
         }
-        match super::validation::ValidationMethod::from_record(record) {
+        match crate::commands::cert::validation::ValidationMethod::from_record(record) {
             Ok(method) if method.automatic() => None,
             Ok(_) | Err(_) => Some(SkipReason::ManualValidation),
         }

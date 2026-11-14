@@ -56,7 +56,7 @@ pub(crate) fn select_index(
     message: &str,
     choices: &[String],
     default: usize,
-    output: &super::session::OutputSession,
+    output: &crate::common::session::OutputSession,
 ) -> CliResult<usize> {
     output.interaction_started();
     let items = choices
@@ -93,7 +93,7 @@ impl fmt::Display for SelectionItem {
 pub(crate) fn confirm_write(
     message: &str,
     yes: bool,
-    output: &super::session::OutputSession,
+    output: &crate::common::session::OutputSession,
 ) -> CliResult<()> {
     confirm_with(
         message,
@@ -118,7 +118,7 @@ pub(crate) fn confirm_action(
     details: &str,
     question: &str,
     yes: bool,
-    output: &super::session::OutputSession,
+    output: &crate::common::session::OutputSession,
 ) -> CliResult<()> {
     if yes {
         return Ok(());
@@ -129,7 +129,7 @@ pub(crate) fn confirm_action(
         )
         .into());
     }
-    output.context(&super::output::confirmation(
+    output.context(&crate::common::output::confirmation(
         details,
         output.diagnostic_format().color,
     ));

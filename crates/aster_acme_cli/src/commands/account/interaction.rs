@@ -26,9 +26,11 @@ pub(super) fn replacement_contacts(
     match (clear, contacts.is_empty(), interactive) {
         (true, true, _) => Ok(Vec::new()),
         (true, false, _) => Err("Use --contact or --clear-contacts, not both.".into()),
-        (false, false, _) => Ok(super::contact::normalize(contacts)?),
+        (false, false, _) => Ok(crate::commands::account::contact::normalize(contacts)?),
         (false, true, false) => Err("Specify --contact <EMAIL> or --clear-contacts.".into()),
-        (false, true, true) => Ok(super::contact::normalize(vec![prompts.email()?])?),
+        (false, true, true) => Ok(crate::commands::account::contact::normalize(vec![
+            prompts.email()?,
+        ])?),
     }
 }
 
@@ -57,12 +59,14 @@ impl RegistrationPrompts for TerminalPrompts<'_> {
                 .with_placeholder("you@example.com")
                 .with_help_message("Optional CA contact; saved locally for future registrations.")
                 .with_validator(|input: &str| {
-                    Ok(match super::contact::normalize(vec![input.to_owned()]) {
-                        Ok(_) => inquire::validator::Validation::Valid,
-                        Err(_) => inquire::validator::Validation::Invalid(
-                            "Enter one email address, e.g. you@example.com.".into(),
-                        ),
-                    })
+                    Ok(
+                        match crate::commands::account::contact::normalize(vec![input.to_owned()]) {
+                            Ok(_) => inquire::validator::Validation::Valid,
+                            Err(_) => inquire::validator::Validation::Invalid(
+                                "Enter one email address, e.g. you@example.com.".into(),
+                            ),
+                        },
+                    )
                 })
                 .prompt(),
         )
@@ -83,7 +87,7 @@ pub(super) fn contact(
     if !prompts.confirm("Add a contact email for this account? (optional)")? {
         return Ok(false);
     }
-    options.contacts = super::contact::normalize(vec![prompts.email()?])?;
+    options.contacts = crate::commands::account::contact::normalize(vec![prompts.email()?])?;
     Ok(true)
 }
 

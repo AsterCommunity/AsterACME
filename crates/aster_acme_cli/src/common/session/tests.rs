@@ -266,7 +266,7 @@ fn debug_events_share_progress_format_and_remain_suppressed_in_json() {
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
             .with_ansi(false)
-            .event_format(super::super::log::DiagnosticFormat { color: false })
+            .event_format(crate::common::log::DiagnosticFormat { color: false })
             .with_writer(output.clone())
             .finish();
         tracing::subscriber::with_default(subscriber, || {

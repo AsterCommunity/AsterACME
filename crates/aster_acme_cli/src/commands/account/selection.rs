@@ -172,7 +172,7 @@ pub(super) fn resolve(
                 aster_acme_core::account::DeactivationState::Pending => "deactivation pending",
                 aster_acme_core::account::DeactivationState::Confirmed => "deactivated",
                 aster_acme_core::account::DeactivationState::NotRequested => {
-                    super::report::state_label(account.state)
+                    crate::commands::account::report::state_label(account.state)
                 }
             };
             crate::common::selection::ChoiceLabel {

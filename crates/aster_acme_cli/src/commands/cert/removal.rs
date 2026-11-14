@@ -28,7 +28,7 @@ pub(super) async fn execute(
     yes: bool,
     local: LocalArgs,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let settings = CliSettings::load(&AccountArgs {
         data_dir: local.data_dir.clone(),
         json: local.json,
@@ -107,7 +107,7 @@ pub(super) async fn execute(
         )?;
     }
     removal.remove().await?;
-    Ok(super::report::CertificateReport::Removed {
+    Ok(crate::commands::cert::report::CertificateReport::Removed {
         name: name.as_str().into(),
         scope,
         ids,
@@ -241,7 +241,7 @@ mod tests {
             .await
             .unwrap();
         let target = || SavedTargetArgs {
-            identity: super::super::args::CertificateNameArgs {
+            identity: crate::commands::cert::args::CertificateNameArgs {
                 name: Some("example.com".into()),
                 named_name: None,
             },

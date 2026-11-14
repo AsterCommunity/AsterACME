@@ -78,7 +78,7 @@ impl ChallengeSolver for Manual {
         }
         if !reused && self.interactive && !self.yes {
             let progress = self.progress.clone();
-            let details = super::super::render::requirement_lines(&requirements);
+            let details = crate::commands::cert::render::requirement_lines(&requirements);
             let message = match self.method {
                 ChallengeKind::Dns01 => {
                     "Action required: add all TXT values; keep unrelated values"

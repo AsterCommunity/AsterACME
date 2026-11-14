@@ -92,7 +92,7 @@ pub(super) fn complete(
             if args.webroot.is_some() || args.listen_address.is_some() {
                 return Err("DNS external does not use --webroot or --listen-address.".into());
             }
-            super::validation::external_configuration(args.provider.as_deref())?;
+            crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;
         } else {
             if args.provider.is_some() {
                 return Err("--provider is only valid with -c dns_external.".into());
@@ -138,7 +138,7 @@ pub(super) fn complete(
         args.provider = Some(prompts.text("DNS provider profile:", None)?);
     }
     if method == ValidationMethod::DnsExternal {
-        super::validation::external_configuration(args.provider.as_deref())?;
+        crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;
     } else if args.provider.is_some() {
         return Err("--provider is only valid with -c dns_external.".into());
     }
@@ -148,7 +148,7 @@ pub(super) fn complete(
     }
     complete_method(args, method, prompts)?;
     if method == ValidationMethod::DnsExternal {
-        super::validation::external_configuration(args.provider.as_deref())?;
+        crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;
     } else {
         configuration(method, args.webroot.as_deref(), args.listen_address)?;
     }

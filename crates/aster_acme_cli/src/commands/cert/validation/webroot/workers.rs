@@ -29,8 +29,7 @@ impl Workers {
         let workers = self
             .0
             .lock()
-            .map(|mut workers| std::mem::take(&mut *workers))
-            .unwrap_or_default();
+            .map_or_default(|mut workers| std::mem::take(&mut *workers));
         for worker in workers {
             let _ = worker.await;
         }

@@ -435,7 +435,11 @@ async fn unknown_creation_outcome_is_never_reposted_and_material_survives() {
     assert!(matches!(
         fixture
             .service
-            .run(session.as_mut(), &Dns(false), &super::tests::execution())
+            .run(
+                session.as_mut(),
+                &Dns(false),
+                &crate::issuance::tests::execution()
+            )
             .await,
         Err(IssueError::CreationUncertain)
     ));

@@ -193,8 +193,8 @@ impl OutputSession {
         state.finished = true;
         let message = "Unexpected internal error; the operation may be incomplete.";
         if self.is_json() {
-            let text = serde_json::to_string(&super::error::ErrorOutput {
-                error: super::error::Diagnostic {
+            let text = serde_json::to_string(&crate::common::error::ErrorOutput {
+                error: crate::common::error::Diagnostic {
                     message,
                     hint: Some(hint),
                 },

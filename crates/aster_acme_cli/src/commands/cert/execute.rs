@@ -47,12 +47,12 @@ pub(super) fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String
 async fn issue(
     mut args: IssueArgs,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let interactive = terminal::interactive(args.run.local.json);
-    super::interaction::complete(
+    crate::commands::cert::interaction::complete(
         &mut args,
         interactive,
-        &mut super::interaction::TerminalPrompts(&cli.output),
+        &mut crate::commands::cert::interaction::TerminalPrompts(&cli.output),
     )?;
     let mut options = options(&args.run.local, &args.run.http, args.account.clone());
     let settings = CliSettings::load(&options).await?;
@@ -98,7 +98,7 @@ async fn issue(
         cli,
     )
     .await?;
-    Ok(super::report::CertificateReport::Result {
+    Ok(crate::commands::cert::report::CertificateReport::Result {
         result,
         data_dir: root,
     })
@@ -114,8 +114,10 @@ async fn select_saved_issue(
         Some(explicit) => {
             let query = IssueQuery {
                 name: match explicit {
-                    super::args::ResumeTarget::Choose => None,
-                    super::args::ResumeTarget::Named(name) => Some(CertificateName::new(name)?),
+                    crate::commands::cert::args::ResumeTarget::Choose => None,
+                    crate::commands::cert::args::ResumeTarget::Named(name) => {
+                        Some(CertificateName::new(name)?)
+                    }
                 },
                 unfinished: Some(true),
                 operation_id: args.operation.clone(),
@@ -135,8 +137,8 @@ async fn select_saved_issue(
             let name = selection::certificate_name(
                 &records,
                 match explicit {
-                    super::args::ResumeTarget::Choose => None,
-                    super::args::ResumeTarget::Named(name) => Some(name.as_str()),
+                    crate::commands::cert::args::ResumeTarget::Choose => None,
+                    crate::commands::cert::args::ResumeTarget::Named(name) => Some(name.as_str()),
                 },
                 args.operation.as_deref(),
                 selection::CertificateLabel::Standard,
@@ -168,7 +170,11 @@ async fn select_saved_issue(
                     .await?
                     .into_iter()
                     .collect();
-                super::similar::choose(candidates, args.if_similar_order, &cli.output)?
+                crate::commands::cert::similar::choose(
+                    candidates,
+                    args.if_similar_order,
+                    &cli.output,
+                )?
             }
         }
     })
@@ -198,10 +204,10 @@ pub(super) async fn transact(
     options: AccountArgs,
     store: &CliIssueStore,
     start: Start,
-    run: &super::args::RunArgs,
+    run: &crate::commands::cert::args::RunArgs,
     mode: RunMode,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateResult> {
+) -> CliResult<crate::commands::cert::report::CertificateResult> {
     let progress = Arc::new(Progress::new(cli.output.clone()));
     let data_dir = settings.data_dir.clone();
     let context = settings.account(&options).await?;
@@ -266,7 +272,9 @@ pub(super) async fn transact(
             {
                 Ok(aster_acme_cli_storage::issuance::RenewalPreparation::Ready(session)) => session,
                 Ok(aster_acme_cli_storage::issuance::RenewalPreparation::NotDue(record)) => {
-                    return Ok(super::report::CertificateResult::NotDue(record));
+                    return Ok(crate::commands::cert::report::CertificateResult::NotDue(
+                        record,
+                    ));
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -303,7 +311,7 @@ async fn report_issue_failure(
     progress: &Progress,
     execution: &ExecutionContext,
     error: Box<dyn std::error::Error>,
-) -> CliResult<super::report::CertificateResult> {
+) -> CliResult<crate::commands::cert::report::CertificateResult> {
     let saved = session.record().await?;
     if saved.renewal_of.is_some() && saved.unfinished() && !execution.cancellation.is_cancelled() {
         let blocked_reason = if saved.new_order_intent_saved
@@ -407,20 +415,21 @@ async fn attach_deployment_results(
     outcome: IssueOutcome,
     store: &CliIssueStore,
     execution: &ExecutionContext,
-) -> super::report::CertificateResult {
+) -> crate::commands::cert::report::CertificateResult {
     let deployment_results = match &outcome {
         IssueOutcome::Completed { record, .. } => {
             let name = record.name.clone();
             let generation = record.generation_name();
-            super::deployment::after_issuance(store, &name, &generation, execution).await
+            crate::commands::cert::deployment::after_issuance(store, &name, &generation, execution)
+                .await
         }
         IssueOutcome::ActionRequired { .. } => (Vec::new(), Vec::new()),
     };
     let (deployments, deployment_events) = deployment_results;
     if deployments.is_empty() && deployment_events.is_empty() {
-        super::report::CertificateResult::Issuance(outcome)
+        crate::commands::cert::report::CertificateResult::Issuance(outcome)
     } else {
-        super::report::CertificateResult::Issued {
+        crate::commands::cert::report::CertificateResult::Issued {
             outcome,
             deployments,
             deployment_events,
@@ -478,7 +487,7 @@ pub(super) enum RunMode {
 struct Foreground<'a> {
     context: &'a CliContext,
     options: &'a AccountArgs,
-    args: &'a super::args::RunArgs,
+    args: &'a crate::commands::cert::args::RunArgs,
     mode: RunMode,
     cli: &'a crate::common::context::CommandContext,
     progress: Arc<Progress>,
@@ -493,7 +502,7 @@ impl Foreground<'_> {
     ) -> CliResult<IssueOutcome> {
         let saved = session.record().await?;
         let solver = if saved.solver_id == "dns_external" {
-            super::validation::external_adapter(
+            crate::commands::cert::validation::external_adapter(
                 &saved,
                 self.context
                     .config_path
@@ -503,7 +512,7 @@ impl Foreground<'_> {
             )
             .await?
         } else {
-            super::validation::adapter(
+            crate::commands::cert::validation::adapter(
                 &saved,
                 matches!(self.mode, RunMode::Single(_)) && terminal::interactive(self.options.json),
                 self.args.yes,
@@ -554,12 +563,12 @@ impl Foreground<'_> {
 pub(crate) async fn execute(
     command: CertCommand,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     match command {
         CertCommand::Issue(args) => issue(args, cli).await,
-        CertCommand::Renew(args) => super::renewal::execute(args, cli).await,
+        CertCommand::Renew(args) => crate::commands::cert::renewal::execute(args, cli).await,
         CertCommand::Deploy(args) => {
-            super::deployment::execute(args, cli, CancellationToken::new()).await
+            crate::commands::cert::deployment::execute(args, cli, CancellationToken::new()).await
         }
         CertCommand::Remove {
             target,
@@ -583,7 +592,7 @@ pub(crate) async fn execute(
                     );
                 }
             };
-            super::removal::execute(target, filter, yes, local, cli).await
+            crate::commands::cert::removal::execute(target, filter, yes, local, cli).await
         }
         CertCommand::List {
             name,
@@ -609,7 +618,9 @@ pub(crate) async fn execute(
                     ..IssueQuery::default()
                 })
                 .await?;
-            Ok(super::report::CertificateReport::List(records))
+            Ok(crate::commands::cert::report::CertificateReport::List(
+                records,
+            ))
         }
         CertCommand::Show {
             target,
@@ -623,13 +634,13 @@ pub(crate) async fn execute(
 }
 
 async fn show(
-    target: super::args::SavedTargetArgs,
+    target: crate::commands::cert::args::SavedTargetArgs,
     history: bool,
     verify: bool,
     http: HttpArgs,
     local: LocalArgs,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let options = options(&local, &http, None);
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
@@ -658,7 +669,7 @@ async fn show(
     } else {
         render::DetailView::InUse
     };
-    Ok(super::report::CertificateReport::Show {
+    Ok(crate::commands::cert::report::CertificateReport::Show {
         record: Box::new(record),
         verified: verify,
         view,
@@ -667,7 +678,7 @@ async fn show(
 
 pub(super) async fn selected_record(
     store: &CliIssueStore,
-    target: &super::args::SavedTargetArgs,
+    target: &crate::commands::cert::args::SavedTargetArgs,
     cli: &crate::common::context::CommandContext,
     mode: selection::RequestSelection,
 ) -> CliResult<IssueRecord> {
@@ -749,11 +760,16 @@ fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
     let method = args
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
-    let solver_config = if method == super::validation::ValidationMethod::DnsExternal {
-        super::validation::external_configuration(args.provider.as_deref())?
-    } else {
-        super::validation::configuration(method, args.webroot.as_deref(), args.listen_address)?
-    };
+    let solver_config =
+        if method == crate::commands::cert::validation::ValidationMethod::DnsExternal {
+            crate::commands::cert::validation::external_configuration(args.provider.as_deref())?
+        } else {
+            crate::commands::cert::validation::configuration(
+                method,
+                args.webroot.as_deref(),
+                args.listen_address,
+            )?
+        };
     let identifiers = args.domain.clone();
     let primary = identifiers
         .first()
@@ -866,6 +882,10 @@ mod tests {
     use crate::commands::cert::execute::*;
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Regression matrix covers initial issue and renewal deployment in one transaction"
+    )]
     async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
         use aster_acme_cli_storage::issuance::{
             DeploymentDefinition, DeploymentPermissions, DeploymentTarget,
@@ -933,7 +953,9 @@ mod tests {
                     },
                 )
                 .await;
-                let super::super::report::CertificateResult::Issued { deployments, .. } = result
+                let crate::commands::cert::report::CertificateResult::Issued {
+                    deployments, ..
+                } = result
                 else {
                     panic!("renewal did not run configured deployments");
                 };
@@ -1288,14 +1310,14 @@ mod tests {
         drop(session);
         let journal = std::fs::read(generation.join("operation.toml")).unwrap();
         let definition = std::fs::read(temp.path().join("certs/web/cert.toml")).unwrap();
-        let args = super::super::args::RenewArgs {
-            target: super::super::args::CertificateNameArgs {
+        let args = crate::commands::cert::args::RenewArgs {
+            target: crate::commands::cert::args::CertificateNameArgs {
                 name: Some("web".into()),
                 named_name: None,
             },
             now: false,
             all: false,
-            run: super::super::args::RunArgs {
+            run: crate::commands::cert::args::RunArgs {
                 max_polls: Some(30),
                 poll_interval: None,
                 yes: false,
@@ -1308,9 +1330,12 @@ mod tests {
                 },
             },
         };
-        super::super::renewal::execute(args, &crate::common::context::CommandContext::new(true))
-            .await
-            .unwrap();
+        crate::commands::cert::renewal::execute(
+            args,
+            &crate::common::context::CommandContext::new(true),
+        )
+        .await
+        .unwrap();
         assert_eq!(store.query(IssueQuery::default()).await.unwrap().len(), 1);
         assert_eq!(
             std::fs::read(generation.join("operation.toml")).unwrap(),

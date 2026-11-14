@@ -69,7 +69,7 @@ pub(super) fn diagnostic(
     retry: Option<&RetryAfter>,
 ) -> (String, Option<String>) {
     let (message, mut hint) = match &problem.kind {
-        ProblemKind::AccountDoesNotExist => super::missing_account(),
+        ProblemKind::AccountDoesNotExist => crate::common::error::missing_account(),
         kind => {
             let detail = problem
                 .detail
@@ -124,7 +124,7 @@ fn guidance(kind: &ProblemKind, instance: Option<&str>, retry: Option<&RetryAfte
         ProblemKind::BadRevocationReason=>"Choose a revocation --reason accepted by this CA, or omit it for a new request. An unconfirmed prior revocation must retain its original reason.".into(),
         ProblemKind::AlreadyReplaced=>"The predecessor already has another replacement order. Inspect the saved renewal and existing replacement; do not resume a rejected newOrder, silently drop replaces or create another order.".into(),
         ProblemKind::AlreadyRevoked=>"The CA reports that this certificate has already been revoked; this does not reactivate it or revoke its account.".into(),
-        ProblemKind::RateLimited=>super::retry_hint(retry),
+        ProblemKind::RateLimited=>crate::common::error::retry_hint(retry),
         ProblemKind::UserActionRequired=>format!("The CA requires user action: {}",instance.unwrap_or("see your CA account portal")),
         ProblemKind::ExternalAccountRequired=>"Supply the EAB credentials issued by this CA.".into(),
         ProblemKind::Caa=>"Check the domain's CAA records and the CA's issuer identity before starting another request.".into(),

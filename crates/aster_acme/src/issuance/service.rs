@@ -517,7 +517,7 @@ impl IssueService {
         let response = match bounded(execution, self.post(endpoint, &body)).await {
             Ok(response) => response,
             Err(error) => {
-                if let Some(failure) = super::RequestFailure::from_error(&error) {
+                if let Some(failure) = crate::issuance::RequestFailure::from_error(&error) {
                     record.creation_failure = Some(failure);
                     session.save(record).await?;
                     tracing::debug!(operation_id = %record.operation_id, elapsed_ms = started.elapsed().as_millis(), "newOrder error response persisted; no order status inferred");
@@ -865,7 +865,8 @@ impl IssueService {
                 {
                     match problem.kind {
                         ProblemKind::BadCsr => {
-                            record.finalize_rejection = super::RequestFailure::from_error(&error);
+                            record.finalize_rejection =
+                                crate::issuance::RequestFailure::from_error(&error);
                             session.save(record).await?;
                         }
                         ProblemKind::OrderNotReady => {
@@ -948,7 +949,7 @@ impl IssueService {
                     limit: execution.max_polls,
                     source: record
                         .poll_wait_source
-                        .unwrap_or(super::PollWaitSource::LocalInterval),
+                        .unwrap_or(crate::issuance::PollWaitSource::LocalInterval),
                 });
             }
             bounded(execution, async {
@@ -1024,9 +1025,9 @@ fn schedule_retry(
     let now = time::OffsetDateTime::now_utc();
     tracing::debug!(retry_after = ?retry, local_interval_ms = fallback.as_millis(), "Scheduling next CA poll");
     let source = if retry.is_some() {
-        super::PollWaitSource::RetryAfter
+        crate::issuance::PollWaitSource::RetryAfter
     } else {
-        super::PollWaitSource::LocalInterval
+        crate::issuance::PollWaitSource::LocalInterval
     };
     let delay = retry
         .map_or(fallback, |hint| match hint {

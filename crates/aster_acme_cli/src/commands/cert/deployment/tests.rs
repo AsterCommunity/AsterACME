@@ -220,7 +220,7 @@ pub(crate) fn child_command(mode: &str) -> Vec<String> {
 async fn manage_binding(
     fixture: &Fixture,
     arguments: &[&str],
-) -> CliResult<super::super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     use clap::Parser as _;
     let mut words = vec![
         "aster-acme",
@@ -484,7 +484,7 @@ async fn deploy_entry_uses_shared_selection_for_missing_name_and_lists_explicit_
         }
         let parsed = crate::app::Args::try_parse_from(words).unwrap();
         let crate::app::Command::Cert {
-            command: super::super::args::CertCommand::Deploy(args),
+            command: crate::commands::cert::args::CertCommand::Deploy(args),
         } = parsed.command
         else {
             panic!("expected deploy");
@@ -492,7 +492,8 @@ async fn deploy_entry_uses_shared_selection_for_missing_name_and_lists_explicit_
         let cli = crate::common::context::CommandContext::new(true);
         let result = execute(args, &cli, tokio_util::sync::CancellationToken::new()).await;
         if named {
-            let super::super::report::CertificateReport::Deployment(report) = result.unwrap()
+            let crate::commands::cert::report::CertificateReport::Deployment(report) =
+                result.unwrap()
             else {
                 panic!("expected report");
             };
@@ -693,7 +694,7 @@ async fn interactive_selection_child() {
     }
     let parsed = crate::app::Args::try_parse_from(words).unwrap();
     let crate::app::Command::Cert {
-        command: super::super::args::CertCommand::Deploy(args),
+        command: crate::commands::cert::args::CertCommand::Deploy(args),
     } = parsed.command
     else {
         panic!("expected deploy");
@@ -701,9 +702,11 @@ async fn interactive_selection_child() {
     let cli = crate::common::context::CommandContext::new(false);
     match execute(args, &cli, tokio_util::sync::CancellationToken::new()).await {
         Ok(report) => {
-            let text =
-                super::super::render::render(&report, crate::common::session::Format::plain(false))
-                    .unwrap();
+            let text = crate::commands::cert::render::render(
+                &report,
+                crate::common::session::Format::plain(false),
+            )
+            .unwrap();
             println!("{text}");
         }
         Err(error) if error.is::<crate::common::terminal::Canceled>() => {

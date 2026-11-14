@@ -584,7 +584,7 @@ fn state_reads_reject_hardlinks_and_enforce_exact_limit() {
         read_private(&path, 4),
         Err(StorageError::InsecurePath)
     ));
-    assert!(super::toml_file::open_lock(&path).is_err());
+    assert!(crate::account::toml_file::open_lock(&path).is_err());
     let unsafe_dir = temp.path().join("unsafe");
     fs::create_dir(&unsafe_dir).unwrap();
     fs::set_permissions(&unsafe_dir, fs::Permissions::from_mode(0o777)).unwrap();

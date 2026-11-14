@@ -72,7 +72,7 @@ async fn batch_continues_after_failure_and_manual_action_without_treating_either
     );
     assert_eq!(
         report.summary(),
-        super::super::report::RenewalSummary {
+        crate::commands::cert::report::RenewalSummary {
             completed: 1,
             action_required: 1,
             not_due: 1,
@@ -160,7 +160,7 @@ async fn empty_inventory_and_pre_cancelled_batches_do_not_execute() {
     let empty = run_batch(vec![], &executor, &token).await;
     assert_eq!(
         empty.summary(),
-        super::super::report::RenewalSummary::default()
+        crate::commands::cert::report::RenewalSummary::default()
     );
     let human = render::batch(
         &empty,
@@ -224,7 +224,7 @@ impl LocalFixture {
                 json: true,
             },
         };
-        let options = super::super::execute::options(&run.local, &run.http, None);
+        let options = crate::commands::cert::execute::options(&run.local, &run.http, None);
         let settings = CliSettings::load(&options).await.unwrap();
         let store = CliIssueStore::new(temp.path().into(), Duration::from_millis(100));
         Self {
@@ -298,14 +298,14 @@ async fn real_transactions_keep_not_due_material_unchanged_skip_unissued_and_con
         .project(fixture.store.query(IssueQuery::default()).await.unwrap())
         .unwrap();
     records[0].account_name = "missing".into();
-    let work = super::super::report::RenewalWork::from_records(
+    let work = crate::commands::cert::report::RenewalWork::from_records(
         &records,
         false,
         time::OffsetDateTime::now_utc(),
     );
     assert_eq!(work.scheduled, 0);
     assert_eq!(work.not_due, 2);
-    let early = super::super::report::RenewalWork::from_records(
+    let early = crate::commands::cert::report::RenewalWork::from_records(
         &records,
         true,
         time::OffsetDateTime::now_utc(),
@@ -520,7 +520,7 @@ async fn certificate_lock_timeout_is_one_failure_and_does_not_stop_the_next_due_
     assert_eq!(report.summary().not_due, 1);
     assert_eq!(
         report.disposition(),
-        super::super::report::BatchDisposition::PartialFailure
+        crate::commands::cert::report::BatchDisposition::PartialFailure
     );
     assert_eq!(
         fixture
@@ -806,9 +806,10 @@ impl LocalFixture {
             )
             .await
             .unwrap();
-            super::super::validation::external_configuration(Some("test-provider")).unwrap()
+            crate::commands::cert::validation::external_configuration(Some("test-provider"))
+                .unwrap()
         } else {
-            super::super::validation::configuration(
+            crate::commands::cert::validation::configuration(
                 method,
                 (method == ValidationMethod::Webroot).then_some(root.as_path()),
                 matches!(

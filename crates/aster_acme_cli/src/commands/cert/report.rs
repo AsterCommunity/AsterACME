@@ -15,7 +15,7 @@ pub(crate) enum CertificateReport {
     Show {
         record: Box<IssueRecord>,
         verified: bool,
-        view: super::render::DetailView,
+        view: crate::commands::cert::render::DetailView,
     },
     Revoked(Box<IssueRecord>),
     Removed {

@@ -40,7 +40,7 @@ fn hook_child() {
     }
     assert!(
         output
-            .finish("duplicate", super::super::session::FinalChannel::Result)
+            .finish("duplicate", crate::common::session::FinalChannel::Result)
             .is_err()
     );
     if std::env::var_os("ASTER_TEST_PANIC_EXIT").is_some() {

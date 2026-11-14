@@ -553,7 +553,7 @@ async fn await_tls_alpn_validation(
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         loop {
-            match super::super::tls_alpn::tests::verify_challenge_certificate(
+            match crate::commands::cert::validation::tls_alpn::tests::verify_challenge_certificate(
                 address,
                 "example.com",
                 digest,
@@ -1103,8 +1103,8 @@ async fn similar_order_decision_does_not_allocate_a_key_or_contact_a_ca() {
     let before = std::fs::read(fixture.generation.lock().unwrap().join("private-key.pk8")).unwrap();
     let requests = fixture.server.received_requests().await.unwrap().len();
     let output = crate::common::session::OutputSession::new(true);
-    assert!(super::super::super::similar::choose(vec![*record.clone()], false, &output).is_err());
-    let selected = super::super::super::similar::choose(vec![*record], true, &output)
+    assert!(crate::commands::cert::similar::choose(vec![*record.clone()], false, &output).is_err());
+    let selected = crate::commands::cert::similar::choose(vec![*record], true, &output)
         .unwrap()
         .unwrap();
     assert_eq!(selected.challenge, ChallengeKind::Http01);
@@ -1287,7 +1287,7 @@ async fn poll_budget_is_exact_preserves_checkpoint_and_resume_does_not_create_an
     for invalid in [0, 1001] {
         let execution = IssueExecution {
             max_polls: invalid,
-            context: super::execution(),
+            context: crate::commands::cert::validation::tests::execution(),
             poll_interval: Duration::from_millis(1),
         };
         assert!(

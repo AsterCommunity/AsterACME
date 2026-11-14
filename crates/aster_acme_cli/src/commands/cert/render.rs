@@ -90,7 +90,7 @@ fn ari_log_events(report: &aster_acme::maintenance::Report) -> Vec<MaintenanceLo
         .collect()
 }
 
-fn renewal_log_event(entry: &super::report::RenewalEntry) -> MaintenanceLogEvent {
+fn renewal_log_event(entry: &crate::commands::cert::report::RenewalEntry) -> MaintenanceLogEvent {
     use crate::commands::cert::report::RenewalResult;
     let (kind, message) = match &entry.result {
         RenewalResult::Outcome(
@@ -134,7 +134,7 @@ use crate::commands::cert::report::{
 };
 
 pub(crate) fn render(
-    report: &super::report::CertificateReport,
+    report: &crate::commands::cert::report::CertificateReport,
     format: Format,
 ) -> CliResult<String> {
     use crate::commands::cert::report::CertificateReport;
@@ -578,10 +578,11 @@ fn request_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
         field("CA:", &output::safe(record.directory.as_str()), color),
     ];
     if matches!(
-        super::validation::ValidationMethod::from_record(record),
-        Ok(super::validation::ValidationMethod::Webroot)
-    ) && let Ok(config) =
-        serde_json::from_value::<super::validation::WebrootConfig>(record.solver_config.clone())
+        crate::commands::cert::validation::ValidationMethod::from_record(record),
+        Ok(crate::commands::cert::validation::ValidationMethod::Webroot)
+    ) && let Ok(config) = serde_json::from_value::<
+        crate::commands::cert::validation::WebrootConfig,
+    >(record.solver_config.clone())
     {
         lines.push(field(
             "Webroot:",
@@ -600,9 +601,9 @@ fn request_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
         );
         lines.push(field("CA problem:", &output::safe(&message), color));
     }
-    if let Ok(config) =
-        serde_json::from_value::<super::validation::StandaloneConfig>(record.solver_config.clone())
-    {
+    if let Ok(config) = serde_json::from_value::<crate::commands::cert::validation::StandaloneConfig>(
+        record.solver_config.clone(),
+    ) {
         lines.push(field(
             "Listen address:",
             &config.listen_address.to_string(),
@@ -853,7 +854,7 @@ enum ResultOutput<'a> {
         records: &'a [ValidationRequirement],
         artifacts: ArtifactPaths,
         deployments: Vec<DeploymentStatusView<'a>>,
-        deployment_events: &'a [super::report::DeploymentEvent],
+        deployment_events: &'a [crate::commands::cert::report::DeploymentEvent],
     },
     NotDue {
         operation: &'a IssueRecord,
@@ -940,7 +941,7 @@ pub(super) fn result(
 fn issued_result(
     issued: &IssueOutcome,
     deployments: &[aster_acme_cli_storage::issuance::DeploymentBinding],
-    deployment_events: &[super::report::DeploymentEvent],
+    deployment_events: &[crate::commands::cert::report::DeploymentEvent],
     format: Format,
     data_dir: &std::path::Path,
 ) -> CliResult<String> {
@@ -999,14 +1000,14 @@ fn deployment_removed(name: &str, id: &str, format: Format) -> CliResult<String>
 }
 
 pub(crate) fn deployment_report(
-    report: &super::report::DeploymentReport,
+    report: &crate::commands::cert::report::DeploymentReport,
     format: Format,
 ) -> CliResult<String> {
     #[derive(Serialize)]
     struct View<'a> {
         certificate: &'a str,
         deployments: Vec<DeploymentStatusView<'a>>,
-        events: &'a [super::report::DeploymentEvent],
+        events: &'a [crate::commands::cert::report::DeploymentEvent],
     }
     if format.json {
         return Ok(serde_json::to_string_pretty(&View {
@@ -1060,7 +1061,7 @@ fn deployment_table(
     name: &str,
     entries: &[aster_acme_cli_storage::issuance::DeploymentBinding],
     attempted: bool,
-    events: &[super::report::DeploymentEvent],
+    events: &[crate::commands::cert::report::DeploymentEvent],
     format: Format,
 ) -> String {
     let mut rows = vec![[
@@ -1075,9 +1076,15 @@ fn deployment_table(
         let error = current_error(events, &entry.id);
         rows.push([
             entry.id.clone(),
-            entry.generation.clone().unwrap_or_else(|| "—".into()),
+            entry
+                .pending_generation
+                .clone()
+                .or_else(|| entry.generation.clone())
+                .unwrap_or_else(|| "—".into()),
             if error.is_some() {
                 "execution failed".into()
+            } else if entry.pending_generation.is_some() {
+                "pending deployment".into()
             } else {
                 deployment_phase(entry.phase).0.into()
             },
@@ -1098,6 +1105,7 @@ fn deployment_table(
         format.color,
         |row, column| match column {
             2 if current_error(events, &entries[row].id).is_some() => Style::Red,
+            2 if entries[row].pending_generation.is_some() => Style::Yellow,
             2 => deployment_phase(entries[row].phase).1,
             _ => Style::Plain,
         },
@@ -1115,7 +1123,10 @@ fn deployment_table(
     lines.join("\n")
 }
 
-fn current_error<'a>(events: &'a [super::report::DeploymentEvent], id: &str) -> Option<&'a str> {
+fn current_error<'a>(
+    events: &'a [crate::commands::cert::report::DeploymentEvent],
+    id: &str,
+) -> Option<&'a str> {
     events
         .iter()
         .rev()
@@ -1157,7 +1168,7 @@ fn result_output<'a>(
 }
 
 impl<'a> ResultOutput<'a> {
-    fn with_events(mut self, events: &'a [super::report::DeploymentEvent]) -> Self {
+    fn with_events(mut self, events: &'a [crate::commands::cert::report::DeploymentEvent]) -> Self {
         if let Self::Completed {
             deployment_events,
             deployments,
@@ -1356,7 +1367,7 @@ pub(crate) fn batch(
 }
 
 fn render_batch_entry(
-    entry: &super::report::RenewalEntry,
+    entry: &crate::commands::cert::report::RenewalEntry,
     format: Format,
     data_dir: &std::path::Path,
 ) -> CliResult<(&'static str, Option<time::OffsetDateTime>, Option<String>)> {
@@ -1712,7 +1723,7 @@ mod tests {
 
     #[test]
     fn deployment_list_empty_and_json_match_other_local_lists() {
-        let report = super::super::report::DeploymentReport {
+        let report = crate::commands::cert::report::DeploymentReport {
             events: Vec::new(),
             name: "web".into(),
             entries: Vec::new(),
@@ -1744,7 +1755,7 @@ mod tests {
             DeploymentPhase::ReloadUncertain,
             DeploymentPhase::Deployed,
         ];
-        let report = super::super::report::DeploymentReport {
+        let mut report = crate::commands::cert::report::DeploymentReport {
             events: Vec::new(),
             name: "web\n".into(),
             entries: phases
@@ -1770,6 +1781,9 @@ mod tests {
                 .collect(),
             attempted: false,
         };
+        report.entries[0].phase = DeploymentPhase::Deployed;
+        report.entries[0].generation = Some("generation-old".into());
+        report.entries[0].pending_generation = Some("generation-next".into());
         let plain = deployment_report(&report, Format::plain(false)).unwrap();
         let colored = deployment_report(
             &report,
@@ -1781,11 +1795,13 @@ mod tests {
         .unwrap();
         assert!(plain.starts_with("Local deployments for web\\n (saved execution status):"));
         assert!(plain.contains("reload unconfirmed"));
+        assert!(plain.contains("pending deployment"));
         assert!(plain.contains("error\\nvalue"));
         assert!(!plain.contains("secret-command"));
         assert!(colored.contains("\x1b[1;36mDEPLOYMENT"));
         assert!(colored.contains("\x1b[31mreload failed"));
         assert!(colored.contains("\x1b[32mdeployed"));
+        assert!(colored.contains("\x1b[33mpending deployment"));
         let header = plain.lines().nth(1).unwrap();
         for line in plain
             .lines()
@@ -2286,9 +2302,9 @@ mod tests {
             assert_eq!(
                 batch_report.disposition(),
                 if failed {
-                    super::super::report::BatchDisposition::PartialFailure
+                    crate::commands::cert::report::BatchDisposition::PartialFailure
                 } else {
-                    super::super::report::BatchDisposition::Completed
+                    crate::commands::cert::report::BatchDisposition::Completed
                 }
             );
             let json: serde_json::Value = serde_json::from_str(

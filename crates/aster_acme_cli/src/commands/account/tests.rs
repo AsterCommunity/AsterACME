@@ -37,10 +37,10 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
         .unwrap();
     let args = |yes| RemoveArgs {
         yes,
-        target: super::args::LocalTargetArgs {
-            identity: super::args::NameArgs {
+        target: crate::commands::account::args::LocalTargetArgs {
+            identity: crate::commands::account::args::NameArgs {
                 positional_name: Some("personal".into()),
-                ..super::args::NameArgs::default()
+                ..crate::commands::account::args::NameArgs::default()
             },
             local: LocalArgs {
                 data_dir: Some(temp.path().into()),
@@ -508,10 +508,10 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
     assert_eq!(render::tests::json_value(&report)["deactivated"], true);
     assert!(
         execute::execute(
-            AccountCommand::Switch(super::args::LocalTargetArgs {
-                identity: super::args::NameArgs {
+            AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+                identity: crate::commands::account::args::NameArgs {
                     positional_name: Some("old".into()),
-                    ..super::args::NameArgs::default()
+                    ..crate::commands::account::args::NameArgs::default()
                 },
                 local: LocalArgs {
                     data_dir: Some(temp.path().into()),
@@ -596,8 +596,8 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
 }
 
 // Test fixtures use resolved input; rebuild only fields owned by each parser group.
-impl From<super::args::AccountArgs> for LocalArgs {
-    fn from(args: super::args::AccountArgs) -> Self {
+impl From<crate::commands::account::args::AccountArgs> for LocalArgs {
+    fn from(args: crate::commands::account::args::AccountArgs) -> Self {
         Self {
             data_dir: args.data_dir,
             json: args.json,
@@ -605,14 +605,16 @@ impl From<super::args::AccountArgs> for LocalArgs {
     }
 }
 
-impl From<super::args::AccountArgs> for super::args::NetworkArgs {
-    fn from(args: super::args::AccountArgs) -> Self {
+impl From<crate::commands::account::args::AccountArgs>
+    for crate::commands::account::args::NetworkArgs
+{
+    fn from(args: crate::commands::account::args::AccountArgs) -> Self {
         Self {
-            identity: super::args::NameArgs {
+            identity: crate::commands::account::args::NameArgs {
                 name: args.name,
-                ..super::args::NameArgs::default()
+                ..crate::commands::account::args::NameArgs::default()
             },
-            ca: super::args::CaArgs {
+            ca: crate::commands::account::args::CaArgs {
                 ca: None,
                 ca_directory: args.ca_directory,
             },
@@ -628,14 +630,16 @@ impl From<super::args::AccountArgs> for super::args::NetworkArgs {
     }
 }
 
-impl From<super::args::AccountArgs> for super::args::RegisterArgs {
-    fn from(mut args: super::args::AccountArgs) -> Self {
+impl From<crate::commands::account::args::AccountArgs>
+    for crate::commands::account::args::RegisterArgs
+{
+    fn from(mut args: crate::commands::account::args::AccountArgs) -> Self {
         let key_algorithm = args.key_algorithm;
         let (yes, accept_terms) = (args.yes, args.accept_terms);
         let contact = std::mem::take(&mut args.contact);
         let eab_kid = args.eab_kid.take();
         let eab_key_file = args.eab_key_file.take();
-        let network = super::args::NetworkArgs::from(args);
+        let network = crate::commands::account::args::NetworkArgs::from(args);
         Self {
             identity: network.identity,
             key_algorithm,
@@ -656,10 +660,10 @@ async fn switch_without_a_name_in_automation_fails_without_selecting_the_default
     use crate::commands::account::{args::AccountArgs, execute};
     let temp = tempfile::tempdir().unwrap();
     let error = execute::execute(
-        AccountCommand::Switch(super::args::LocalTargetArgs {
-            identity: super::args::NameArgs {
+        AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+            identity: crate::commands::account::args::NameArgs {
                 positional_name: None,
-                ..super::args::NameArgs::default()
+                ..crate::commands::account::args::NameArgs::default()
             },
             local: AccountArgs {
                 data_dir: Some(temp.path().into()),
@@ -846,10 +850,10 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     };
     assert!(
         execute::execute(
-            AccountCommand::Switch(super::args::LocalTargetArgs {
-                identity: super::args::NameArgs {
+            AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+                identity: crate::commands::account::args::NameArgs {
                     positional_name: Some("work".into()),
-                    ..super::args::NameArgs::default()
+                    ..crate::commands::account::args::NameArgs::default()
                 },
                 local: options().into()
             }),
@@ -864,10 +868,10 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     record.account_url = Some(AcmeUrl::new("https://custom.invalid/account/1").unwrap());
     store.save(&record).await.unwrap();
     let result = execute::execute(
-        AccountCommand::Switch(super::args::LocalTargetArgs {
-            identity: super::args::NameArgs {
+        AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+            identity: crate::commands::account::args::NameArgs {
                 positional_name: Some("work".into()),
-                ..super::args::NameArgs::default()
+                ..crate::commands::account::args::NameArgs::default()
             },
             local: options().into(),
         }),
@@ -1212,11 +1216,13 @@ async fn existing_account_commands_reject_missing_names_before_prompts_keys_or_h
         let Command::Account { command } = parsed.command else {
             panic!("expected account");
         };
-        let error =
-            super::execute::execute(command, &crate::common::context::CommandContext::new(true))
-                .await
-                .err()
-                .unwrap();
+        let error = crate::commands::account::execute::execute(
+            command,
+            &crate::common::context::CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(
             error
                 .to_string()

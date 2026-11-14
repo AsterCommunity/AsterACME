@@ -169,7 +169,7 @@ pub(crate) struct IssueArgs {
     pub key_algorithm: KeyAlgorithm,
     /// Validation implementation; omitted prompts on terminals, required in scripts.
     #[arg(short = 'c', long, value_enum, conflicts_with = "resume")]
-    pub challenge: Option<super::validation::ValidationMethod>,
+    pub challenge: Option<crate::commands::cert::validation::ValidationMethod>,
     /// Resume one fully matching unfinished request; multiple matches require an explicit target.
     #[arg(long, conflicts_with_all = ["resume", "name"])]
     pub if_similar_order: bool,

@@ -10,7 +10,7 @@ use std::{
     path::Path,
 };
 
-pub(super) const VIEW_KIND: super::ViewKind = super::ViewKind::Link;
+pub(super) const VIEW_KIND: crate::state_file::ViewKind = crate::state_file::ViewKind::Link;
 pub(super) struct Directory {
     inner: aster_forge_utils::state_directory::StateDirectory,
 }

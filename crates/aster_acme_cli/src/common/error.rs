@@ -181,7 +181,7 @@ pub(crate) struct ErrorOutput<'a> {
 
 pub(crate) fn render(
     error: &(dyn std::error::Error + 'static),
-    format: super::session::Format,
+    format: crate::common::session::Format,
 ) -> CliResult<String> {
     let (message, hint) = diagnostic(error);
     if format.json {

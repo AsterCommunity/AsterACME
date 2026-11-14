@@ -212,11 +212,11 @@ fn requirements_path(requirement: &ValidationRequirement) -> &str {
 
 #[test]
 fn execution_limit_precedence_is_cli_then_config_then_builtin() {
-    fn args(extra: &[&str]) -> super::super::args::RunArgs {
+    fn args(extra: &[&str]) -> crate::commands::cert::args::RunArgs {
         let mut command_line = vec!["aster-acme", "cert", "issue", "--resume", "web"];
         command_line.extend_from_slice(extra);
         let crate::app::Command::Cert {
-            command: super::super::args::CertCommand::Issue(args),
+            command: crate::commands::cert::args::CertCommand::Issue(args),
         } = crate::app::Args::parse_from(command_line).command
         else {
             panic!("expected issue");
@@ -258,11 +258,11 @@ fn execution_limit_precedence_is_cli_then_config_then_builtin() {
 
 #[test]
 fn poll_interval_cli_overrides_config_and_does_not_leak_into_read_only_commands() {
-    fn run(extra: &[&str]) -> super::super::args::RunArgs {
+    fn run(extra: &[&str]) -> crate::commands::cert::args::RunArgs {
         let mut command_line = vec!["aster-acme", "cert", "issue", "--resume", "web"];
         command_line.extend_from_slice(extra);
         let crate::app::Command::Cert {
-            command: super::super::args::CertCommand::Issue(options),
+            command: crate::commands::cert::args::CertCommand::Issue(options),
         } = crate::app::Args::parse_from(command_line).command
         else {
             panic!("expected issue");
@@ -513,10 +513,10 @@ fn poll_budget_defaults_and_cli_bounds_apply_to_both_issue_and_renew() {
             panic!("expected cert");
         };
         match command {
-            super::super::args::CertCommand::Issue(args) => {
+            crate::commands::cert::args::CertCommand::Issue(args) => {
                 assert_eq!(args.run.max_polls, Some(10));
             }
-            super::super::args::CertCommand::Renew(args) => {
+            crate::commands::cert::args::CertCommand::Renew(args) => {
                 assert_eq!(args.run.max_polls, Some(10));
             }
             _ => panic!("wrong command"),

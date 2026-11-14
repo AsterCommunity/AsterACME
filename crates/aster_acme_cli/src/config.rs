@@ -148,7 +148,7 @@ fn parse(text: &str) -> CliResult<Config> {
     if let Some(directory) = &document.config.ca_directory {
         aster_acme_protocol::url::AcmeUrl::new(directory)?;
     }
-    super::commands::account::contact::normalize(document.config.contact.clone())?;
+    crate::commands::account::contact::normalize(document.config.contact.clone())?;
     Ok(document.config)
 }
 

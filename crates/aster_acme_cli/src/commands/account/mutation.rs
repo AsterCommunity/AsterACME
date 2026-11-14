@@ -19,10 +19,10 @@ async fn context(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<CliContext> {
     let settings = CliSettings::load(options).await?;
-    super::selection::complete(
+    crate::commands::account::selection::complete(
         options,
         &settings,
-        super::selection::Mode::Operation(operation),
+        crate::commands::account::selection::Mode::Operation(operation),
         cli,
     )
     .await?;
@@ -58,11 +58,11 @@ pub(super) async fn update_contacts(
     record
         .action(aster_acme_core::account::AccountOperation::Update)
         .map_err(AccountError::from)?;
-    let contacts = super::interaction::replacement_contacts(
+    let contacts = crate::commands::account::interaction::replacement_contacts(
         args.contact,
         args.clear_contacts,
         terminal::interactive(options.json),
-        &mut super::interaction::TerminalPrompts(&cli.output),
+        &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
     )?;
     terminal::confirm_action(
         &format!(

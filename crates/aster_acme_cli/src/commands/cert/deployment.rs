@@ -35,7 +35,7 @@ pub(super) async fn execute(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
     cancellation: tokio_util::sync::CancellationToken,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
     // Never drop the command future while publication owns a blocking task.
     // Cancellation is propagated to the shared execution boundaries instead.
@@ -50,7 +50,7 @@ async fn execute_inner(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
     execution: &Execution,
-) -> CliResult<super::report::CertificateReport> {
+) -> CliResult<crate::commands::cert::report::CertificateReport> {
     let options: AccountArgs = args.local().clone().into();
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir, Duration::from_secs(5));
@@ -75,26 +75,32 @@ async fn execute_inner(
                 binding_id(&bindings, "inspect", &cli.output)?
             };
             let binding = store.deployment(&name, &id).await?;
-            return Ok(super::report::CertificateReport::DeploymentDetails {
-                name: name.as_str().into(),
-                binding: Box::new(binding),
-            });
+            return Ok(
+                crate::commands::cert::report::CertificateReport::DeploymentDetails {
+                    name: name.as_str().into(),
+                    binding: Box::new(binding),
+                },
+            );
         }
         DeployCommand::Remove(args) => {
             let definitions = store.deployments(&name).await?;
             let id = remove_id(args.id, &definitions, &cli.output)?;
             store.remove_deployment(&name, &id).await?;
-            return Ok(super::report::CertificateReport::DeploymentRemoved {
-                name: name.as_str().into(),
-                id,
-            });
+            return Ok(
+                crate::commands::cert::report::CertificateReport::DeploymentRemoved {
+                    name: name.as_str().into(),
+                    id,
+                },
+            );
         }
         DeployCommand::Update(args) => {
             let binding = update(&store, &name, args, &cli.output).await?;
-            return Ok(super::report::CertificateReport::DeploymentUpdated {
-                name: name.as_str().into(),
-                binding: Box::new(binding),
-            });
+            return Ok(
+                crate::commands::cert::report::CertificateReport::DeploymentUpdated {
+                    name: name.as_str().into(),
+                    binding: Box::new(binding),
+                },
+            );
         }
         DeployCommand::Add(mut args) => {
             complete_add(&store, &name, &mut args, &cli.output).await?;
@@ -135,14 +141,14 @@ async fn execute_inner(
             (entries, true)
         }
     };
-    Ok(super::report::CertificateReport::Deployment(
-        DeploymentReport {
+    Ok(
+        crate::commands::cert::report::CertificateReport::Deployment(DeploymentReport {
             name: name.as_str().into(),
             entries,
             events: execution_events,
             attempted,
-        },
-    ))
+        }),
+    )
 }
 
 /// Retry due failures and durable intents to publish the current generation.
@@ -436,15 +442,15 @@ async fn select_certificate(
         })
         .await?;
     if managing {
-        super::selection::certificate_name(
+        crate::commands::cert::selection::certificate_name(
             &candidates,
             explicit,
             None,
-            super::selection::CertificateLabel::Deployment,
+            crate::commands::cert::selection::CertificateLabel::Deployment,
             output,
         )
     } else {
-        super::selection::deployment_certificate_name(&candidates, explicit, output)
+        crate::commands::cert::selection::deployment_certificate_name(&candidates, explicit, output)
     }
 }
 

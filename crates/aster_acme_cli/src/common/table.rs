@@ -94,8 +94,8 @@ mod tests {
         let styled = align(
             &rows,
             Some(&|row, column, cell| match (row, column) {
-                (1, 0) => super::super::output::styled(cell, Style::Red, true),
-                (1, 1) => super::super::output::styled(cell, Style::Yellow, true),
+                (1, 0) => crate::common::output::styled(cell, Style::Red, true),
+                (1, 1) => crate::common::output::styled(cell, Style::Yellow, true),
                 _ => cell.to_owned(),
             }),
         );
