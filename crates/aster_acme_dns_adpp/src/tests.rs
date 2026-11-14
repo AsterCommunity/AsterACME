@@ -223,8 +223,14 @@ fn accepted_rfc_json_examples_match_the_implemented_wire_schema() {
     let rfc = include_str!(
         "../../../docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md"
     );
+    assert_eq!(validate_rfc_examples(rfc), 7);
+    assert_eq!(validate_rfc_examples(&rfc.replace('\n', "\r\n")), 7);
+}
+
+fn validate_rfc_examples(rfc: &str) -> usize {
+    let normalized = rfc.replace("\r\n", "\n").replace('\r', "\n");
     let mut count = 0;
-    for block in rfc.split("```json\n").skip(1) {
+    for block in normalized.split("```json\n").skip(1) {
         let text = block.split("```").next().unwrap();
         let value: serde_json::Value = serde_json::from_str(text).unwrap();
         if value.get("records").is_some() {
@@ -239,5 +245,5 @@ fn accepted_rfc_json_examples_match_the_implemented_wire_schema() {
         }
         count += 1;
     }
-    assert_eq!(count, 7);
+    count
 }

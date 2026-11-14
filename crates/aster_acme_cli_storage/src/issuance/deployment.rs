@@ -125,6 +125,12 @@ pub struct DeploymentBinding {
 }
 
 impl DeploymentBinding {
+    /// Whether the saved state has no outstanding automatic publication intent.
+    #[must_use]
+    pub fn is_deployed(&self) -> bool {
+        self.phase == DeploymentPhase::Deployed && self.pending_generation.is_none()
+    }
+
     /// Snapshot predicate only. Execution must repeat this check under its lease.
     #[must_use]
     pub fn retry_due(&self, generation: &str, now: time::OffsetDateTime) -> bool {
@@ -485,6 +491,9 @@ impl DeploymentSession {
         configuration
             .generation
             .clone_from(&self.definition.generation);
+        configuration
+            .pending_generation
+            .clone_from(&self.definition.pending_generation);
         configuration.phase = self.definition.phase;
         configuration.attempts = self.definition.attempts;
         configuration.retry_failures = self.definition.retry_failures;

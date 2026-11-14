@@ -1,8 +1,5 @@
 //! Certificate command outcomes, independent of terminal rendering and batch traversal.
-use aster_acme::{
-    deployment::DeploymentPhase,
-    issuance::{IssueOutcome, IssueRecord},
-};
+use aster_acme::issuance::{IssueOutcome, IssueRecord};
 use serde::Serialize;
 
 pub(crate) enum CertificateReport {
@@ -51,9 +48,7 @@ pub(crate) struct DeploymentReport {
 
 impl DeploymentReport {
     pub(crate) fn has_failures(&self) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.phase != DeploymentPhase::Deployed)
+        self.entries.iter().any(|entry| !entry.is_deployed())
             || self
                 .events
                 .iter()
@@ -97,10 +92,7 @@ impl CertificateReport {
                         .events
                         .iter()
                         .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                        || report
-                            .entries
-                            .iter()
-                            .any(|entry| entry.phase != DeploymentPhase::Deployed)) =>
+                        || report.entries.iter().any(|entry| !entry.is_deployed())) =>
             {
                 ExitStatus::Failed
             }
@@ -115,9 +107,7 @@ impl CertificateReport {
             } if deployment_events
                 .iter()
                 .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                || deployments
-                    .iter()
-                    .any(|entry| entry.phase != DeploymentPhase::Deployed) =>
+                || deployments.iter().any(|entry| !entry.is_deployed()) =>
             {
                 ExitStatus::Failed
             }
@@ -314,9 +304,7 @@ impl RenewalBatch {
                 }) if deployment_events
                     .iter()
                     .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                    || deployments.iter().any(|entry| {
-                        entry.phase != aster_acme::deployment::DeploymentPhase::Deployed
-                    }) =>
+                    || deployments.iter().any(|entry| !entry.is_deployed()) =>
                 {
                     summary.failed += 1;
                 }

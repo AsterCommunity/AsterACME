@@ -39,6 +39,19 @@ class GitHubAutomationWorkflows(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 MODULE.main.__globals__["validate_concurrency"](path)
 
+    def test_duplicate_workflow_and_concurrency_keys_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "workflow.yml"
+            cases = [
+                "concurrency:\n  group: wrong\n  group: aster-repository-label-writers\n  cancel-in-progress: false\n  queue: max\n",
+                "concurrency:\n  group: aster-repository-label-writers\n  cancel-in-progress: false\n  queue: max\nconcurrency:\n  group: aster-repository-label-writers\n  cancel-in-progress: false\n  queue: max\n",
+            ]
+            for contents in cases:
+                with self.subTest(contents=contents):
+                    path.write_text(contents, encoding="utf-8")
+                    with self.assertRaises(MODULE.yaml.constructor.ConstructorError):
+                        MODULE.main.__globals__["validate_concurrency"](path)
+
 
 if __name__ == "__main__":
     unittest.main()

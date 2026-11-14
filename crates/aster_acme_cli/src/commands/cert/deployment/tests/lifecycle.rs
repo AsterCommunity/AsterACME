@@ -284,6 +284,26 @@ async fn cancelled_new_generation_is_queued_for_daemon_deployment() {
         .unwrap()
     );
 
+    let previous = entries[0].clone();
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, "queued")
+        .await
+        .unwrap();
+    let publication_execution = Execution {
+        cancellation: tokio_util::sync::CancellationToken::new(),
+        deadline: None,
+    };
+    publication_execution.cancellation.cancel();
+    assert!(
+        prepare_publication(&mut session, Some(&publication_execution))
+            .await
+            .is_err()
+    );
+    assert_eq!(session.definition(), &previous);
+    drop(session);
+    assert_eq!(fixture.status("queued").await, previous);
+
     let retried = retry_due(
         &fixture.store,
         Duration::from_secs(30),
@@ -319,6 +339,11 @@ async fn checkpoint_restore_rejects_changed_binding_configuration() {
     let mut session = fixture
         .store
         .open_deployment(&fixture.name, "checkpoint")
+        .await
+        .unwrap();
+    let pending_generation = session.artifacts().generation.clone();
+    session
+        .save_pending_generation(&pending_generation)
         .await
         .unwrap();
     let snapshot = session.definition().clone();

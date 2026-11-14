@@ -1391,9 +1391,7 @@ fn render_batch_entry(
                     if deployment_events
                         .iter()
                         .any(|event| event.kind == output::MessageKind::Error)
-                        || deployments.iter().any(|entry| {
-                            entry.phase != aster_acme::deployment::DeploymentPhase::Deployed
-                        }) =>
+                        || deployments.iter().any(|entry| !entry.is_deployed()) =>
                 {
                     (
                         "deployment failed",
@@ -1465,9 +1463,7 @@ fn batch_status_style(result: &RenewalResult) -> Style {
         }) if deployment_events
             .iter()
             .any(|event| event.kind == output::MessageKind::Error)
-            || deployments
-                .iter()
-                .any(|entry| entry.phase != aster_acme::deployment::DeploymentPhase::Deployed) =>
+            || deployments.iter().any(|entry| !entry.is_deployed()) =>
         {
             Style::Red
         }
@@ -2223,14 +2219,19 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep single and batch deployment status parity in one outcome matrix"
+    )]
     fn issued_deployment_failure_is_visible_in_single_and_batch_json_and_exit_status() {
         use crate::commands::cert::report::{CertificateReport, RenewalEntry, RenewalResult};
         use aster_acme::deployment::DeploymentPhase;
         use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
-        for phase in [
-            DeploymentPhase::Deployed,
-            DeploymentPhase::ReloadFailed,
-            DeploymentPhase::ReloadUncertain,
+        for (phase, pending_generation) in [
+            (DeploymentPhase::Deployed, None),
+            (DeploymentPhase::ReloadFailed, None),
+            (DeploymentPhase::ReloadUncertain, None),
+            (DeploymentPhase::Deployed, Some("generation-next")),
         ] {
             let result_value = CertificateResult::Issued {
                 deployment_events: Vec::new(),
@@ -2248,7 +2249,7 @@ mod tests {
                     timeout_seconds: 30,
                     max_retries: 0,
                     generation: Some("generation".into()),
-                    pending_generation: None,
+                    pending_generation: pending_generation.map(str::to_owned),
                     phase,
                     attempts: 1,
                     retry_failures: 0,
@@ -2256,7 +2257,7 @@ mod tests {
                     last_error: None,
                 }],
             };
-            let failed = phase != DeploymentPhase::Deployed;
+            let failed = phase != DeploymentPhase::Deployed || pending_generation.is_some();
             let report = CertificateReport::Result {
                 result: result_value,
                 data_dir: "/tmp".into(),
@@ -2282,6 +2283,14 @@ mod tests {
             };
             assert_eq!(batch_report.summary().failed, usize::from(failed));
             assert_eq!(batch_report.summary().completed, usize::from(!failed));
+            assert_eq!(
+                batch_report.disposition(),
+                if failed {
+                    super::super::report::BatchDisposition::PartialFailure
+                } else {
+                    super::super::report::BatchDisposition::Completed
+                }
+            );
             let json: serde_json::Value = serde_json::from_str(
                 &batch(
                     &batch_report,
@@ -2292,21 +2301,39 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
+                json["status"],
+                if failed {
+                    "partial_failure"
+                } else {
+                    "completed"
+                }
+            );
+            assert_eq!(
                 json["results"][0]["result"]["deployments"][0]["id"],
                 "nginx"
             );
-            assert!(
-                batch(
-                    &batch_report,
-                    Format::plain(false),
-                    std::path::Path::new("/tmp")
-                )
-                .unwrap()
-                .contains(if failed {
-                    "deployment failed"
+            let text = batch(
+                &batch_report,
+                Format::plain(false),
+                std::path::Path::new("/tmp"),
+            )
+            .unwrap();
+            assert!(text.contains(if failed {
+                "deployment failed"
+            } else {
+                "completed"
+            }));
+            assert_eq!(
+                CertificateReport::Batch {
+                    report: batch_report,
+                    data_dir: "/tmp".into(),
+                }
+                .exit_status(),
+                if failed {
+                    crate::common::session::ExitStatus::Failed
                 } else {
-                    "completed"
-                })
+                    crate::common::session::ExitStatus::Success
+                }
             );
         }
     }
