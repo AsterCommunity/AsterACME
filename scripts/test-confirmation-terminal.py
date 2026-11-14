@@ -39,13 +39,12 @@ def run_case(binary, mode, keys, echoed):
                     break
                 output.extend(chunk)
             if not sent and PROMPT in output:
-                if mode == "timeout":
-                    # Native inquire owns the terminal until input completes.
-                    # An expired execution must be rejected after its answer,
-                    # without leaking a reader or issuing a CA acknowledgement.
-                    time.sleep(0.7)
                 if keys:
                     os.write(master, keys)
+                if mode == "paste":
+                    time.sleep(0.2)
+                    assert process.poll() is None, "pasted newline must not submit the answer"
+                    os.write(master, b"\r")
                 sent = True
             if process.poll() is not None:
                 # Drain remaining writes before checking the full transcript.
@@ -83,11 +82,18 @@ def main():
         ("yes-word", b"yes\r", b"Yes"), ("no-word", b"no\r", b"No"),
         ("default", b"\r", b"No"), ("replace", b"n\x7fy\r", b"Yes"),
         ("erase", b"y\x7f\r", b"No"),
+        ("uppercase", b"YES\r", b"Yes"),
+        ("insert", b"ys\x1b[De\r", b"Yes"),
+        ("delete", b"xno\x1b[H\x1b[3~\x1b[F\r", b"No"),
+        ("invalid", b"maybe\r" + b"\x7f" * 5 + b"yes\r", b"Yes"),
+        ("limit", b"x" * 64 + b"\x7f" * 8 + b"y\r", b"Yes"),
+        ("paste", b"\x1b[200~yes\r\n\x1b[201~", b"Yes"),
         ("escape", b"\x1b", b""), ("ctrl-c", b"\x03", b""),
-        ("timeout", b"y\r", b"Yes"),
+        ("timeout", b"", b""), ("cancel", b"", b""),
+        ("shutdown", b"", b""),
     ]:
         run_case(binary, mode, keys, echoed)
-    print("Confirmation PTY: 10 scenarios passed (native inquire answers/edits, expiry and terminal restoration)")
+    print("Confirmation PTY: 18 scenarios passed (answers/edits/input limits/paste, idle deadline/cancel/shutdown and terminal restoration)")
 
 
 if __name__ == "__main__":

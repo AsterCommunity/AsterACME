@@ -269,7 +269,7 @@ CAA建议性检查：issue/renew在首次newOrder前按directory的meta.caaIdent
 
 `cert remove NAME --failed`清理该名称下明确失败且不可恢复的未签发申请；终端省略NAME时只从失败候选中选择，非交互必须给出名称。creation明确4xx拒绝（排除408/429）、固定CSR被拒、order/authorization终态和订单过期可匹配；已签发、in_use、可恢复以及远端结果未知的申请保留。筛选由IssueRecord规则与storage查询提供，执行持锁重验；需确认或--yes，不访问CA，也不自动删除DNS/webroot材料或部署副本。
 
-人工验证确认复用其他命令相同的inquire::Confirm：默认否，y/yes和n/no、退格编辑、可见输入，由控件恢复终端模式。Esc/Ctrl-C即时结束；当前inquire没有外部中断接口，整体期限或程序取消在用户结束输入后复核，不再执行后续CA操作。
+人工验证确认由独立crossterm读取线程执行，复用inquire的y/yes与n/no解析、默认否，支持可见输入、退格/删除及光标编辑。线程以最多50ms间隔轮询操作期限、取消和shutdown；终端空闲时无需按键也会结束。Esc/Ctrl-C取消执行，deadline或shutdown不冒充用户取消。读取线程自行恢复raw mode后再被join，终端IO/恢复失败不报告确认成功；其他普通CLI交互仍使用inquire。
 
 
 ## 吊销签名身份

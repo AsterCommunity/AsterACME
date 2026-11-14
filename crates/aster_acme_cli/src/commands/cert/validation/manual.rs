@@ -9,6 +9,8 @@ use aster_acme::{
 };
 use async_trait::async_trait;
 
+mod confirmation;
+
 pub(super) struct Manual {
     pub(super) reusable: Vec<ValidationRequirement>,
     pub(super) method: ChallengeKind,
@@ -150,47 +152,17 @@ impl ChallengeSolver for Manual {
     }
 }
 
-// Use the same native inquire widget as other CLI confirmations. Its public
-// API is blocking and has no external cancellation hook: never detach a live
-// prompt or force-disable its raw mode from a different thread. Shutdown joins
-// it, then the saved execution scope is checked before any CA operation.
 fn confirm(
     question: &str,
     execution: &ExecutionContext,
     stop: &tokio_util::sync::CancellationToken,
     progress: &Progress,
 ) -> Result<bool, IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
-    if stop.is_cancelled() {
-        return Err(IssueError::Interrupted);
-    }
     progress.output.interaction_started();
-    let answer = inquire::Confirm::new(question)
-        .with_default(false)
-        .with_render_config(crate::common::terminal::prompt_style(
-            progress.output.diagnostic_format().color,
-            false,
-        ))
-        .prompt();
-    let answer = match answer {
-        Ok(answer) => answer,
-        Err(
-            inquire::InquireError::OperationCanceled | inquire::InquireError::OperationInterrupted,
-        ) => {
-            execution.cancellation.cancel();
-            return Err(IssueError::Interrupted);
-        }
-        Err(error) => {
-            return Err(IssueError::Publication(format!(
-                "confirmation terminal failed: {error}"
-            )));
-        }
-    };
-    execution.check().map_err(|_| IssueError::Interrupted)?;
-    if stop.is_cancelled() {
-        return Err(IssueError::Interrupted);
-    }
-    Ok(answer)
+    progress.output.check_health().map_err(|error| {
+        IssueError::Publication(format!("confirmation terminal failed: {error}"))
+    })?;
+    confirmation::confirm(question, execution, stop)
 }
 
 #[cfg(test)]
@@ -206,7 +178,7 @@ mod tests {
         let execution = ExecutionContext {
             cancellation: cancellation.clone(),
             deadline: std::time::Instant::now()
-                + std::time::Duration::from_millis(if mode == "timeout" { 400 } else { 10_000 }),
+                + std::time::Duration::from_millis(if mode == "timeout" { 600 } else { 10_000 }),
         };
         let solver = Manual {
             reusable: Vec::new(),
@@ -224,25 +196,42 @@ mod tests {
             path: "/.well-known/acme-challenge/token".into(),
             content: "token.thumbprint".into(),
         }];
-        let result = tokio::time::timeout_at(
-            tokio::time::Instant::from_std(execution.deadline),
+        let cancel_task = if mode == "cancel" {
+            Some(tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                cancellation.cancel();
+            }))
+        } else {
+            None
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(if mode == "shutdown" { 600 } else { 5_000 }),
             solver.ready(&publications(&requirements), &execution),
         )
         .await;
         solver.shutdown().await;
+        if let Some(task) = cancel_task {
+            task.await.unwrap();
+        }
         assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
         match mode.as_str() {
-            "yes" | "yes-word" | "replace" => assert!(result.unwrap().unwrap().ready),
-            "no" | "no-word" | "default" | "erase" => assert!(!result.unwrap().unwrap().ready),
-            _ => assert!(result.is_err() || result.unwrap().is_err()),
+            "yes" | "yes-word" | "replace" | "uppercase" | "insert" | "invalid" | "limit"
+            | "paste" => {
+                assert!(result.unwrap().unwrap().ready);
+            }
+            "no" | "no-word" | "default" | "erase" | "delete" => {
+                assert!(!result.unwrap().unwrap().ready);
+            }
+            "shutdown" => assert!(result.is_err()),
+            _ => assert!(matches!(result.unwrap(), Err(IssueError::Interrupted))),
         }
         assert_eq!(
-            cancellation.is_cancelled(),
-            matches!(mode.as_str(), "escape" | "ctrl-c")
+            execution.cancellation.is_cancelled(),
+            matches!(mode.as_str(), "escape" | "ctrl-c" | "cancel")
         );
         println!(
             "CONFIRM_RESTORED mode={mode} cancelled={}",
-            cancellation.is_cancelled()
+            execution.cancellation.is_cancelled()
         );
     }
 }

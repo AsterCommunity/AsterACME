@@ -46,7 +46,7 @@ issue与renew共用Foreground：directory发现后、首次newOrder前检查全�
 
 ## 人工验证与终端
 
-DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制。普通预检失败或耗尽自身预算时仅警告后继续CA验证；用户取消或整体deadline到达时立即停止执行，不继续CA验证。人工验证确认复用原生inquire::Confirm，输入/编辑/回显与其他CLI一致；默认否，Esc/Ctrl-C退出。inquire公开API不支持外部取消钩子：等待用户输入期间不强制中断控件，shutdown等待其结束，随后重新检查取消/整体期限，在失效执行中不得继续通知CA。终端raw mode由inquire管理，不跨线程强制关闭、不遗留后台提示。
+DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制。普通预检失败或耗尽自身预算时仅警告后继续CA验证；用户取消或整体deadline到达时立即停止执行，不继续CA验证。人工验证确认使用manual/confirmation的crossterm轮询reader，保留默认否、可见输入与编辑，复用inquire布尔解析。reader每次poll最多50ms，并在poll和接受答案前检查取消/整体deadline；shutdown取消独立stop令牌，空闲终端无需输入也会退出。Esc/Ctrl-C取消执行；单纯deadline和stop不改用户取消令牌。reader在自己的线程恢复raw mode，shutdown再join，不分离后台提示、不跨线程改终端模式。
 
 ## Webroot文件所有权
 
