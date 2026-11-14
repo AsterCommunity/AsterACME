@@ -421,10 +421,6 @@ impl DeploymentSession {
         attempts: u8,
         error: Option<String>,
     ) -> Result<(), IssueError> {
-        let slot = self.slot.clone();
-        let name = self.name.clone();
-        let id = self.definition.id.clone();
-        let operation = self.record.operation_id.clone();
         let generation = self.artifacts.generation.clone();
         let mut updated = self.definition.clone();
         updated.generation = Some(generation);
@@ -439,6 +435,44 @@ impl DeploymentSession {
             updated.retry_failures = 0;
             updated.retry_at = None;
         }
+        self.persist_binding(updated).await
+    }
+
+    /// Restore the complete checkpoint when a recorded intent never started.
+    /// The caller must establish that no publication or reload side effect began.
+    /// Unlike `save_state`, this retains the original generation and retry state.
+    ///
+    /// # Errors
+    /// Rejects a snapshot with different configuration, stale selection or persistence failure.
+    pub async fn restore_checkpoint(
+        &mut self,
+        previous: &DeploymentBinding,
+    ) -> Result<(), IssueError> {
+        let mut configuration = previous.clone();
+        configuration
+            .generation
+            .clone_from(&self.definition.generation);
+        configuration.phase = self.definition.phase;
+        configuration.attempts = self.definition.attempts;
+        configuration.retry_failures = self.definition.retry_failures;
+        configuration.retry_at = self.definition.retry_at;
+        configuration
+            .last_error
+            .clone_from(&self.definition.last_error);
+        if configuration != self.definition {
+            return Err(failure(
+                "deployment checkpoint configuration does not match this session",
+            ));
+        }
+        self.persist_binding(previous.clone()).await
+    }
+
+    async fn persist_binding(&mut self, updated: DeploymentBinding) -> Result<(), IssueError> {
+        let slot = self.slot.clone();
+        let name = self.name.clone();
+        let id = self.definition.id.clone();
+        let operation = self.record.operation_id.clone();
+        let expected = self.definition.clone();
         let stored = updated.clone();
         let lease = self.lease.clone();
         tokio::task::spawn_blocking(move || {
@@ -454,6 +488,9 @@ impl DeploymentSession {
                 .iter_mut()
                 .find(|item| item.id == id)
                 .ok_or_else(|| failure("deployment binding removed during execution"))?;
+            if *binding != expected {
+                return Err(failure("deployment checkpoint changed during execution"));
+            }
             *binding = stored;
             write_selection(&slot, &config)
         })

@@ -4,8 +4,8 @@ use std::{
     io::{Read as _, Write as _},
     process::Stdio,
     sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicUsize, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -71,6 +71,7 @@ fn spec(mode: &str) -> ProcessSpec {
     spec
 }
 async fn check() {
+    check_pid_line_framing();
     let token = CancellationToken::new();
     let mut echo = spec("echo");
     echo.stdin = Some(vec![0xff; 1024 * 1024]);
@@ -112,38 +113,89 @@ async fn check() {
         Err(ProcessFailure::CancelledBeforeStart)
     ));
     assert!(!output.started);
-    let token = CancellationToken::new();
-    let cancel = token.clone();
-    let observed_cancel_pid = Arc::new(AtomicU32::new(0));
-    let cancel_pid = observed_cancel_pid.clone();
-    let output = run(spec("tree"), &token, move |stream, bytes| {
-        if stream == ProcessStream::Stdout && !bytes.is_empty() {
-            let text = String::from_utf8_lossy(bytes);
-            if let Ok(pid) = text.trim().parse::<u32>() {
-                cancel_pid.store(pid, Ordering::SeqCst);
-            }
-            cancel.cancel();
-        }
-    })
-    .await;
-    assert!(matches!(output.status, Err(ProcessFailure::Cancelled)));
-    assert!(output.started);
-    wait_until_dead(observed_cancel_pid.load(Ordering::SeqCst)).await;
-    let mut timeout = spec("tree");
+    check_tree_cancellation().await;
+    // A timeout includes process startup. It need not capture any output or PID
+    // to prove the timeout outcome; tree shutdown is checked after a ready handshake.
+    let mut timeout = spec("wait");
     timeout.timeout = Duration::from_millis(100);
     let timed_out = run(timeout, &CancellationToken::new(), |_, _| {}).await;
     assert!(matches!(timed_out.status, Err(ProcessFailure::TimedOut)));
-    let descendant = String::from_utf8_lossy(&timed_out.stdout.bytes)
-        .trim()
-        .parse::<u32>()
-        .unwrap();
-    wait_until_dead(descendant).await;
     let mut missing = spec("echo");
     missing.program =
         std::env::temp_dir().join(format!("asteracme-no-provider-{}", std::process::id()));
     let output = run(missing, &CancellationToken::new(), |_, _| {}).await;
     assert!(matches!(output.status, Err(ProcessFailure::Spawn(_))));
     assert!(!output.started);
+}
+
+#[derive(Default)]
+struct PidLine(Vec<u8>);
+impl PidLine {
+    fn push(&mut self, bytes: &[u8]) -> Option<u32> {
+        self.0.extend_from_slice(bytes);
+        let end = self.0.iter().position(|byte| *byte == b'\n')?;
+        std::str::from_utf8(&self.0[..end])
+            .ok()?
+            .trim_end_matches('\r')
+            .parse::<u32>()
+            .ok()
+            .filter(|pid| *pid > 0)
+    }
+}
+
+fn check_pid_line_framing() {
+    let line = b"12345\n";
+    for split in 0..line.len() {
+        let mut framing = PidLine::default();
+        assert_eq!(framing.push(&line[..split]), None);
+        assert_eq!(framing.push(&line[split..]), Some(12345));
+    }
+    let mut framing = PidLine::default();
+    for byte in b"12345" {
+        assert_eq!(framing.push(&[*byte]), None);
+    }
+    assert_eq!(framing.push(b"\r\n"), Some(12345));
+    for invalid in [b"not-a-pid\n".as_slice(), b"0\n", b"4294967296\n"] {
+        assert_eq!(PidLine::default().push(invalid), None);
+    }
+}
+
+async fn check_tree_cancellation() {
+    let token = CancellationToken::new();
+    let (ready, received) = tokio::sync::oneshot::channel();
+    let state = Mutex::new((PidLine::default(), Some(ready)));
+    // Allow fixture startup ample time; cancellation is triggered only after a
+    // complete PID line, independently of this fallback process timeout.
+    let mut tree = spec("tree");
+    tree.timeout = Duration::from_secs(30);
+    let running = run(tree, &token, |stream, bytes| {
+        if stream == ProcessStream::Stdout {
+            let mut state = state.lock().unwrap();
+            if let Some(pid) = state.0.push(bytes)
+                && let Some(ready) = state.1.take()
+            {
+                ready.send(pid).unwrap();
+            }
+        }
+    });
+    tokio::pin!(running);
+    let pid = tokio::select! {
+        result = &mut running => panic!("tree exited before readiness: {:?}", result.status),
+        ready = tokio::time::timeout(Duration::from_secs(10), received) => ready
+            .expect("tree fixture did not become ready")
+            .expect("tree fixture readiness was lost"),
+    };
+    assert!(
+        process_alive(pid),
+        "fixture descendant was not alive before cancellation"
+    );
+    token.cancel();
+    let output = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("cancelled process did not finish shutdown");
+    assert!(matches!(output.status, Err(ProcessFailure::Cancelled)));
+    assert!(output.started);
+    wait_until_dead(pid).await;
 }
 
 async fn wait_until_dead(pid: u32) {
@@ -162,6 +214,8 @@ async fn wait_until_dead(pid: u32) {
 fn process_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
 }

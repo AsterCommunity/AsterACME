@@ -320,15 +320,24 @@ async fn report_issue_failure(
         } else {
             None
         };
-        let ca_retry_at = saved
-            .creation_failure
-            .as_ref()
-            .and_then(|failure| failure.retry_at)
-            .or_else(|| {
-                (saved.poll_wait_source == Some(aster_acme::issuance::PollWaitSource::RetryAfter))
-                    .then_some(saved.next_poll_at)
-                    .flatten()
-            });
+        let ca_retry_at = [
+            saved
+                .creation_failure
+                .as_ref()
+                .and_then(|failure| failure.retry_at),
+            saved
+                .finalize_rejection
+                .as_ref()
+                .and_then(|failure| failure.retry_at),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .or_else(|| {
+            (saved.poll_wait_source == Some(aster_acme::issuance::PollWaitSource::RetryAfter))
+                .then_some(saved.next_poll_at)
+                .flatten()
+        });
         let retry = session
             .record_renewal_failure(time::OffsetDateTime::now_utc(), ca_retry_at, blocked_reason)
             .await?;
@@ -961,47 +970,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renewal_deadline_enters_backoff_but_user_cancellation_does_not() {
-        use rcgen::{CertificateParams, Issuer, KeyPair};
-        for cancelled in [false, true] {
+    async fn renewal_failures_retain_ca_deadlines_but_user_cancellation_does_not_count() {
+        // Explicit failures take their maximum; poll Retry-After remains the
+        // fallback only when neither failure has a CA-provided deadline.
+        for (
+            cancelled,
+            creation_minutes,
+            finalize_minutes,
+            poll_minutes,
+            poll_is_ca,
+            expected_minutes,
+        ) in [
+            (false, None, None, None, false, None),
+            (true, None, None, None, false, None),
+            (false, None, Some(60), None, false, Some(60)),
+            (false, Some(90), Some(60), None, false, Some(90)),
+            (false, Some(30), Some(60), None, false, Some(60)),
+            (false, Some(30), None, None, false, Some(30)),
+            (false, None, None, Some(45), true, Some(45)),
+            (false, None, None, Some(45), false, None),
+            (false, Some(30), Some(60), Some(90), true, Some(60)),
+            (true, None, Some(60), None, false, None),
+        ] {
             let temp = tempfile::tempdir().unwrap();
             let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
             let account = allocation_account();
-            let request = IssueRequest {
-                name: CertificateName::new("deadline").unwrap(),
-                identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
-                account_name: "default".into(),
-                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
-                challenge: aster_acme::challenge::ChallengeKind::Dns01,
-                solver_id: "manual_dns".into(),
-                solver_config: serde_json::json!({}),
-            };
-            let session = store.create(&request, &account).await.unwrap();
-            let mut current = session.record().await.unwrap();
-            let key = zeroize::Zeroizing::new(
-                std::fs::read(
-                    temp.path()
-                        .join("certs/deadline")
-                        .join(current.generation_name())
-                        .join("private-key.pk8"),
-                )
-                .unwrap(),
-            );
-            let key = KeyPair::try_from(key.as_slice()).unwrap();
-            let issuer = Issuer::new(
-                CertificateParams::new(Vec::<String>::new()).unwrap(),
-                KeyPair::generate().unwrap(),
-            );
-            let chain = CertificateParams::new(vec!["example.com".to_owned()])
-                .unwrap()
-                .signed_by(&key, &issuer)
-                .unwrap()
-                .pem();
-            current.phase = aster_acme_core::workflow::IssuancePhase::Completed;
-            let current = session.complete(&current, chain.as_bytes()).await.unwrap();
-            drop(session);
+            let current = renewal_failure_predecessor(&store, temp.path(), &account).await;
             let mut attempt = store.renew(&current.name, &account).await.unwrap();
-            let record = attempt.record().await.unwrap();
+            let mut record = attempt.record().await.unwrap();
+            let observed_at = time::OffsetDateTime::now_utc();
+            let deadline = |minutes| observed_at + time::Duration::minutes(minutes);
+            let rejection = |minutes| aster_acme::issuance::RequestFailure {
+                status: 400,
+                problem: None,
+                retry_at: Some(deadline(minutes)),
+            };
+            record.creation_failure = creation_minutes.map(rejection);
+            record.finalize_rejection = finalize_minutes.map(rejection);
+            record.next_poll_at = poll_minutes.map(deadline);
+            record.poll_wait_source = poll_minutes.map(|_| {
+                if poll_is_ca {
+                    aster_acme::issuance::PollWaitSource::RetryAfter
+                } else {
+                    aster_acme::issuance::PollWaitSource::LocalInterval
+                }
+            });
+            attempt.save(&record).await.unwrap();
             let execution = ExecutionContext {
                 cancellation: CancellationToken::new(),
                 deadline: Instant::now(),
@@ -1032,8 +1046,59 @@ mod tests {
             assert_eq!(saved.renewal_retry.is_some(), !cancelled);
             if let Some(retry) = saved.renewal_retry {
                 assert_eq!(retry.failures, 1);
+                assert_eq!(retry.ca_retry_at, expected_minutes.map(deadline));
+                if expected_minutes.is_some() {
+                    let error = store
+                        .prepare_renewal(&current.name, &current.operation_id, true, &account)
+                        .await
+                        .err()
+                        .expect("--now must preserve the CA deadline");
+                    assert!(
+                        error.to_string().contains("CA Retry-After has not elapsed"),
+                        "{error}"
+                    );
+                }
             }
         }
+    }
+
+    async fn renewal_failure_predecessor(
+        store: &CliIssueStore,
+        root: &std::path::Path,
+        account: &aster_acme::account::AccountRecord,
+    ) -> IssueRecord {
+        use rcgen::{CertificateParams, Issuer, KeyPair};
+        let request = IssueRequest {
+            name: CertificateName::new("deadline").unwrap(),
+            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            account_name: "default".into(),
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            challenge: aster_acme::challenge::ChallengeKind::Dns01,
+            solver_id: "manual_dns".into(),
+            solver_config: serde_json::json!({}),
+        };
+        let session = store.create(&request, account).await.unwrap();
+        let mut current = session.record().await.unwrap();
+        let key = zeroize::Zeroizing::new(
+            std::fs::read(
+                root.join("certs/deadline")
+                    .join(current.generation_name())
+                    .join("private-key.pk8"),
+            )
+            .unwrap(),
+        );
+        let key = KeyPair::try_from(key.as_slice()).unwrap();
+        let issuer = Issuer::new(
+            CertificateParams::new(Vec::<String>::new()).unwrap(),
+            KeyPair::generate().unwrap(),
+        );
+        let chain = CertificateParams::new(vec!["example.com".to_owned()])
+            .unwrap()
+            .signed_by(&key, &issuer)
+            .unwrap()
+            .pem();
+        current.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+        session.complete(&current, chain.as_bytes()).await.unwrap()
     }
     fn allocation_account() -> aster_acme::account::AccountRecord {
         serde_json::from_value(serde_json::json!({

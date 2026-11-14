@@ -164,6 +164,109 @@ async fn manual_cancel_before_start_does_not_publish_or_reload() {
 }
 
 #[tokio::test]
+async fn cancelled_publication_intent_restores_old_generation_and_complete_retry_checkpoint() {
+    for phase in [
+        DeploymentPhase::Configured,
+        DeploymentPhase::Deployed,
+        DeploymentPhase::ReloadFailed,
+    ] {
+        let fixture = Fixture::new().await;
+        let target = fixture.add("rollback", Vec::new(), 0).await;
+        let mut session = fixture
+            .store
+            .open_deployment(&fixture.name, "rollback")
+            .await
+            .unwrap();
+        if phase != DeploymentPhase::Configured {
+            session.publish().await.unwrap();
+            session.save_state(phase, 2, None).await.unwrap();
+            if phase == DeploymentPhase::ReloadFailed {
+                session
+                    .record_failure(
+                        phase,
+                        2,
+                        "old-generation reload failed".into(),
+                        time::OffsetDateTime::now_utc(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let previous = session.definition().clone();
+        let published = std::fs::read(target.join("fullchain.pem")).ok();
+        drop(session);
+        let renewed = fixture.complete(true).await;
+        let mut session = fixture
+            .store
+            .open_deployment(&fixture.name, "rollback")
+            .await
+            .unwrap();
+        assert_ne!(
+            previous.generation.as_deref(),
+            Some(session.artifacts().generation.as_str())
+        );
+        let execution = Execution {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: None,
+        };
+        // prepare_publication records Publishing before rechecking cancellation,
+        // reproducing a signal arriving during the intent write without timing races.
+        execution.cancellation.cancel();
+        assert!(
+            prepare_publication(&mut session, Some(&execution))
+                .await
+                .is_err()
+        );
+        assert_eq!(session.definition(), &previous, "{phase:?}");
+        assert_eq!(std::fs::read(target.join("fullchain.pem")).ok(), published);
+        drop(session);
+        assert_eq!(fixture.status("rollback").await, previous);
+        let deployed = fixture.automatic(&fixture.store).await;
+        assert_eq!(deployed[0].phase, DeploymentPhase::Deployed);
+        assert_eq!(
+            deployed[0].generation.as_deref(),
+            Some(renewed.generation_name().as_str())
+        );
+        let generation = fixture
+            .temp
+            .path()
+            .join("certs/web")
+            .join(renewed.generation_name());
+        assert_eq!(
+            std::fs::read(target.join("fullchain.pem")).unwrap(),
+            std::fs::read(generation.join("fullchain.pem")).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_restore_rejects_changed_binding_configuration() {
+    let fixture = Fixture::new().await;
+    fixture.add("checkpoint", Vec::new(), 0).await;
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, "checkpoint")
+        .await
+        .unwrap();
+    let snapshot = session.definition().clone();
+    session
+        .save_state(DeploymentPhase::Publishing, 0, None)
+        .await
+        .unwrap();
+    let publishing = session.definition().clone();
+    let mut wrong = snapshot.clone();
+    wrong.id = "other".into();
+    assert!(session.restore_checkpoint(&wrong).await.is_err());
+    wrong = snapshot.clone();
+    wrong.timeout_seconds += 1;
+    assert!(session.restore_checkpoint(&wrong).await.is_err());
+    assert_eq!(session.definition(), &publishing);
+    session.restore_checkpoint(&snapshot).await.unwrap();
+    drop(session);
+    assert_eq!(fixture.status("checkpoint").await, snapshot);
+}
+
+#[tokio::test]
 async fn manual_cancellation_during_publication_waits_for_completion_and_saves_outcome() {
     for fails in [false, true] {
         let fixture = Fixture::new().await;

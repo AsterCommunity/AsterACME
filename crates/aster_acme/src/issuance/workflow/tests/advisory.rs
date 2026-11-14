@@ -166,7 +166,8 @@ async fn uncooperative_advice_is_bounded_by_cancellation_and_operation_deadline(
         let advice = Uncooperative(tokio::sync::Notify::new());
         let stage = Stage::new(&advice);
         let mut scope = execution();
-        scope.context.deadline = std::time::Instant::now() + Duration::from_secs(2);
+        scope.context.deadline =
+            std::time::Instant::now() + Duration::from_secs(if cancel { 30 } else { 2 });
         let signal = scope.context.cancellation.clone();
         let workflow = f.workflow();
         let result = tokio::time::timeout(Duration::from_secs(5), async {
@@ -176,8 +177,14 @@ async fn uncooperative_advice_is_bounded_by_cancellation_and_operation_deadline(
             tokio::select! {
                 result=&mut task => result,
                 ()=advice.0.notified() => {
-                    if cancel { signal.cancel(); }
-                    task.await
+                    if cancel {
+                        signal.cancel();
+                        tokio::time::timeout(Duration::from_secs(1), task)
+                            .await
+                            .expect("cancellation must interrupt advice before the operation deadline")
+                    } else {
+                        task.await
+                    }
                 }
             }
         })

@@ -635,15 +635,7 @@ async fn prepare_publication(
     }
     if execution.is_some_and(|execution| execution.check().is_err()) {
         if !uncertain(session.definition()) {
-            session
-                .save_state(
-                    previous.phase,
-                    previous.attempts,
-                    previous
-                        .last_error
-                        .or_else(|| Some("deployment cancelled before file publication".into())),
-                )
-                .await?;
+            session.restore_checkpoint(&previous).await?;
         }
         return Err("deployment cancelled before file publication".into());
     }
@@ -880,13 +872,7 @@ async fn settle_reload_attempt(
     if !result.started
         && (uncertain(previous) || execution.is_some_and(|execution| execution.check().is_err()))
     {
-        session
-            .save_state(
-                previous.phase,
-                previous.attempts,
-                previous.last_error.clone(),
-            )
-            .await?;
+        session.restore_checkpoint(previous).await?;
         return Err(
             "reload was not started; previous execution state retained; no process was terminated"
                 .into(),
