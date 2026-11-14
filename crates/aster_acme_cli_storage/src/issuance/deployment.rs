@@ -104,6 +104,9 @@ pub struct DeploymentBinding {
     /// Last operation generation this target attempted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<String>,
+    /// A completed issuance generation awaiting automatic publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_generation: Option<String>,
     /// Last durable deployment phase.
     #[serde(default = "configured")]
     pub phase: DeploymentPhase,
@@ -125,6 +128,10 @@ impl DeploymentBinding {
     /// Snapshot predicate only. Execution must repeat this check under its lease.
     #[must_use]
     pub fn retry_due(&self, generation: &str, now: time::OffsetDateTime) -> bool {
+        if self.pending_generation.as_deref() == Some(generation) {
+            return !self.phase.reload_uncertain()
+                && self.retry_at.is_none_or(|deadline| deadline <= now);
+        }
         aster_acme::deployment::DeploymentRetryState {
             generation: self.generation.as_deref(),
             phase: self.phase,
@@ -199,6 +206,7 @@ impl CliIssueStore {
                 timeout_seconds: definition.timeout_seconds,
                 max_retries: definition.max_retries,
                 generation: None,
+                pending_generation: None,
                 phase: DeploymentPhase::Configured,
                 attempts: 0,
                 retry_failures: 0,
@@ -377,7 +385,13 @@ impl DeploymentSession {
             DeploymentIntent::Retry {
                 generation,
                 snapshot,
-            } => generation == current && binding == snapshot && binding.retry_due(current, now),
+            } => {
+                generation == current
+                    && binding == snapshot
+                    && binding.retry_due(current, now)
+                    && (binding.generation.as_deref() == Some(current)
+                        || binding.pending_generation.as_deref() == Some(current))
+            }
         }
     }
 
@@ -423,7 +437,7 @@ impl DeploymentSession {
     ) -> Result<(), IssueError> {
         let generation = self.artifacts.generation.clone();
         let mut updated = self.definition.clone();
-        updated.generation = Some(generation);
+        updated.generation = Some(generation.clone());
         updated.phase = phase;
         updated.attempts = attempts;
         updated.last_error = error;
@@ -435,6 +449,25 @@ impl DeploymentSession {
             updated.retry_failures = 0;
             updated.retry_at = None;
         }
+        if updated.generation.as_deref() == Some(generation.as_str()) {
+            updated.pending_generation = None;
+        }
+        self.persist_binding(updated).await
+    }
+
+    /// Save that an issued generation needs deployment, without claiming it was tried.
+    ///
+    /// # Errors
+    /// Rejects uncertain reloads and stale bindings or persistence failures.
+    pub async fn save_pending_generation(&mut self, generation: &str) -> Result<(), IssueError> {
+        if self.definition.phase.reload_uncertain() {
+            return Err(failure(
+                "uncertain reload outcome blocks automatic deployment",
+            ));
+        }
+        let mut updated = self.definition.clone();
+        updated.pending_generation = Some(generation.to_owned());
+        updated.retry_at = None;
         self.persist_binding(updated).await
     }
 

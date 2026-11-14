@@ -15,6 +15,7 @@ fn binding(target: DeploymentTarget) -> DeploymentBinding {
         timeout_seconds: 42,
         max_retries: 4,
         generation: Some("generation-one".into()),
+        pending_generation: None,
         phase: DeploymentPhase::ReloadFailed,
         attempts: 5,
         retry_failures: 0,

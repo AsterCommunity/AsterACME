@@ -12,6 +12,7 @@ fn binding(target: DeploymentTarget) -> DeploymentBinding {
         timeout_seconds: 30,
         max_retries: 3,
         generation: None,
+        pending_generation: None,
         phase: DeploymentPhase::Configured,
         attempts: 0,
         retry_failures: 0,
@@ -52,6 +53,24 @@ fn retry_due_has_exact_time_generation_and_phase_boundaries() {
         value.retry_at = None;
         assert_eq!(value.retry_due("current", now), retryable);
     }
+}
+
+#[test]
+fn pending_generation_is_retryable_without_claiming_the_previous_generation_was_deployed() {
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let mut value = binding(DeploymentTarget::Directory {
+        path: std::env::temp_dir(),
+    });
+    value.generation = Some("generation-a".into());
+    value.pending_generation = Some("generation-b".into());
+    value.phase = DeploymentPhase::Deployed;
+    assert!(value.retry_due("generation-b", now));
+    assert!(!value.retry_due("generation-a", now));
+    value.phase = DeploymentPhase::ReloadUncertain;
+    assert!(!value.retry_due("generation-b", now));
+    value.phase = DeploymentPhase::Deployed;
+    value.retry_at = Some(now + time::Duration::seconds(1));
+    assert!(!value.retry_due("generation-b", now));
 }
 
 #[test]

@@ -60,6 +60,7 @@ impl CliIssueStore {
             if *binding != old && !old.phase.reload_uncertain() {
                 binding.phase = DeploymentPhase::Configured;
                 binding.generation = None;
+                binding.pending_generation = None;
                 binding.attempts = 0;
                 binding.last_error = None;
             }

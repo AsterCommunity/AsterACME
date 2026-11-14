@@ -1,6 +1,7 @@
 """Static tests for repository label-writer concurrency and risk coverage."""
 
 import importlib.util
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -18,6 +19,25 @@ SPEC.loader.exec_module(MODULE)
 class GitHubAutomationWorkflows(unittest.TestCase):
     def test_shared_label_writer_contract(self):
         MODULE.main()
+
+    def test_concurrency_values_are_structural_and_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "workflow.yml"
+            path.write_text(
+                "concurrency:\n  group: aster-repository-label-writers-extra # aster-repository-label-writers\n"
+                "  cancel-in-progress: false\n  queue: max\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                MODULE.main.__globals__["validate_concurrency"](path)
+            path.write_text(
+                "# concurrency:\n#   group: aster-repository-label-writers\n"
+                "concurrency:\n  group: aster-repository-label-writers-wrong\n"
+                "  cancel-in-progress: false\n  queue: max\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                MODULE.main.__globals__["validate_concurrency"](path)
 
 
 if __name__ == "__main__":

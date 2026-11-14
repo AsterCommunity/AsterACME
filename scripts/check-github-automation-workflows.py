@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import json
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,15 +14,32 @@ WORKFLOWS = [
 GROUP = "aster-repository-label-writers"
 
 
+def workflow_concurrency(path: Path) -> dict[str, str]:
+    """Parse the workflow-level concurrency mapping used by this contract."""
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    concurrency = workflow.get("concurrency") if isinstance(workflow, dict) else None
+    if not isinstance(concurrency, dict):
+        raise SystemExit(f"{path}: missing workflow-level concurrency mapping")
+    if set(concurrency) != {"group", "cancel-in-progress", "queue"}:
+        raise SystemExit(f"{path}: concurrency must contain exactly group, cancel-in-progress and queue")
+    if any(not isinstance(value, (str, bool)) for value in concurrency.values()):
+        raise SystemExit(f"{path}: concurrency values must be scalar")
+    return concurrency
+
+
+def validate_concurrency(path: Path) -> None:
+    concurrency = workflow_concurrency(path)
+    if concurrency["group"] != GROUP:
+        raise SystemExit(f"{path}: missing shared label-writer concurrency group")
+    if concurrency["cancel-in-progress"] is not False:
+        raise SystemExit(f"{path}: label writer must retain in-flight work")
+    if concurrency["queue"] != "max":
+        raise SystemExit(f"{path}: label writer must retain queued workflow runs")
+
+
 def main() -> None:
     for path in WORKFLOWS:
-        text = path.read_text(encoding="utf-8")
-        if f"group: {GROUP}" not in text:
-            raise SystemExit(f"{path}: missing shared label-writer concurrency group")
-        if "cancel-in-progress: false" not in text:
-            raise SystemExit(f"{path}: label writer must retain in-flight work")
-        if "queue: max" not in text:
-            raise SystemExit(f"{path}: label writer must retain queued workflow runs")
+        validate_concurrency(path)
     config = json.loads((ROOT / ".github/aster-automation.json").read_text(encoding="utf-8"))
     high_risk = next(rule for rule in config["labels"]["rules"] if rule["label"] == "Risk: High")
     for entry in ("crates/aster_acme/src/crypto.rs", "crates/aster_acme/src/transport.rs", "crates/aster_acme/src/storage.rs"):

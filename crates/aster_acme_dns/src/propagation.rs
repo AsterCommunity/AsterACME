@@ -18,7 +18,7 @@ impl Default for PropagationPolicy {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(5),
-            timeout: Duration::from_secs(120),
+            timeout: Duration::from_mins(2),
         }
     }
 }

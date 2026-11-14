@@ -1036,6 +1036,7 @@ fn deployment_selection_is_exact_and_empty_inventory_is_explicit() {
         timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
         max_retries: DEFAULT_RETRIES,
         generation: None,
+        pending_generation: None,
         phase: DeploymentPhase::Configured,
         attempts: 0,
         retry_failures: 0,

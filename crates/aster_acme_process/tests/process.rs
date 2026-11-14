@@ -120,6 +120,7 @@ async fn check() {
     timeout.timeout = Duration::from_millis(100);
     let timed_out = run(timeout, &CancellationToken::new(), |_, _| {}).await;
     assert!(matches!(timed_out.status, Err(ProcessFailure::TimedOut)));
+    check_tree_timeout().await;
     let mut missing = spec("echo");
     missing.program =
         std::env::temp_dir().join(format!("asteracme-no-provider-{}", std::process::id()));
@@ -195,6 +196,35 @@ async fn check_tree_cancellation() {
         .expect("cancelled process did not finish shutdown");
     assert!(matches!(output.status, Err(ProcessFailure::Cancelled)));
     assert!(output.started);
+    wait_until_dead(pid).await;
+}
+
+async fn check_tree_timeout() {
+    let (ready, received) = tokio::sync::oneshot::channel();
+    let state = Mutex::new((PidLine::default(), Some(ready)));
+    let cancellation = CancellationToken::new();
+    let mut tree = spec("tree");
+    tree.timeout = Duration::from_secs(2);
+    let running = run(tree, &cancellation, |stream, bytes| {
+        if stream == ProcessStream::Stdout {
+            let mut state = state.lock().unwrap();
+            if let Some(pid) = state.0.push(bytes)
+                && let Some(ready) = state.1.take()
+            {
+                ready.send(pid).unwrap();
+            }
+        }
+    });
+    tokio::pin!(running);
+    let pid = tokio::select! {
+        result = &mut running => panic!("tree timed out before readiness: {:?}", result.status),
+        ready = tokio::time::timeout(Duration::from_secs(10), received) => ready
+            .expect("tree timeout fixture did not become ready")
+            .expect("tree timeout fixture readiness was lost"),
+    };
+    assert!(process_alive(pid));
+    let output = running.await;
+    assert!(matches!(output.status, Err(ProcessFailure::TimedOut)));
     wait_until_dead(pid).await;
 }
 

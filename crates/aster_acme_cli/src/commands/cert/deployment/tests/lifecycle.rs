@@ -240,6 +240,79 @@ async fn cancelled_publication_intent_restores_old_generation_and_complete_retry
 }
 
 #[tokio::test]
+async fn cancelled_new_generation_is_queued_for_daemon_deployment() {
+    let fixture = Fixture::new().await;
+    let target = fixture.add("queued", Vec::new(), 0).await;
+    let previous = fixture.automatic(&fixture.store).await.remove(0);
+    assert_eq!(previous.phase, DeploymentPhase::Deployed);
+    let old_generation = previous.generation.clone().unwrap();
+    let renewed = fixture.complete(true).await;
+    let generation = renewed.generation_name();
+    assert_ne!(generation, old_generation);
+
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+    let (entries, _) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        &generation,
+        &aster_acme::solver::ExecutionContext {
+            cancellation: cancellation.clone(),
+            deadline: std::time::Instant::now() + Duration::from_secs(30),
+        },
+    )
+    .await;
+    assert_eq!(
+        entries[0].generation.as_deref(),
+        Some(old_generation.as_str())
+    );
+    assert_eq!(entries[0].phase, DeploymentPhase::Deployed);
+    assert_eq!(
+        entries[0].pending_generation.as_deref(),
+        Some(generation.as_str())
+    );
+    assert_eq!(
+        std::fs::read(target.join("fullchain.pem")).unwrap(),
+        std::fs::read(
+            fixture
+                .temp
+                .path()
+                .join("certs/web")
+                .join(old_generation)
+                .join("fullchain.pem")
+        )
+        .unwrap()
+    );
+
+    let retried = retry_due(
+        &fixture.store,
+        Duration::from_secs(30),
+        &tokio_util::sync::CancellationToken::new(),
+        &crate::common::context::CommandContext::new(true),
+        fixture
+            .store
+            .query(aster_acme::storage::query::IssueQuery {
+                view: aster_acme::storage::query::IssueView::Managed,
+                in_use: Some(true),
+                ..aster_acme::storage::query::IssueQuery::default()
+            })
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(retried.len(), 1);
+    let saved = fixture.status("queued").await;
+    assert_eq!(saved.generation.as_deref(), Some(generation.as_str()));
+    assert_eq!(saved.pending_generation, None);
+    assert_eq!(saved.phase, DeploymentPhase::Deployed);
+    let generation_path = fixture.temp.path().join("certs/web").join(generation);
+    assert_eq!(
+        std::fs::read(target.join("fullchain.pem")).unwrap(),
+        std::fs::read(generation_path.join("fullchain.pem")).unwrap()
+    );
+}
+
+#[tokio::test]
 async fn checkpoint_restore_rejects_changed_binding_configuration() {
     let fixture = Fixture::new().await;
     fixture.add("checkpoint", Vec::new(), 0).await;

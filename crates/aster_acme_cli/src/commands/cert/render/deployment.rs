@@ -73,6 +73,13 @@ pub(super) fn details(
                 .as_deref()
                 .map_or_else(|| "—".into(), output::safe),
         ),
+        (
+            "Pending generation:",
+            binding
+                .pending_generation
+                .as_deref()
+                .map_or_else(|| "—".into(), output::safe),
+        ),
         ("Saved status:", output::styled(phase, style, format.color)),
         ("Reload attempts:", binding.attempts.to_string()),
         (

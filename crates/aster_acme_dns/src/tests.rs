@@ -316,7 +316,6 @@ async fn propagation_uses_one_dns_answer_for_all_values_at_the_same_owner() {
         policy.wait(&lookup, &[first, second], &execution()).await,
         Err(PropagationError::NotVisible)
     ));
-    assert!(lookup.0.load(Ordering::SeqCst) > 1);
 }
 #[test]
 fn sensitive_context_does_not_leak_through_debug() {

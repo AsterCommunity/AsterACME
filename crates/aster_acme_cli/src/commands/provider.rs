@@ -132,15 +132,17 @@ pub(crate) struct ProviderReport {
     cleanup: Vec<CleanupView>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     cancelled: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    incomplete: bool,
 }
 
 impl ProviderReport {
-    pub(crate) fn has_failures(&self) -> bool {
-        self.cleanup.iter().any(|item| !item.completed)
-    }
-
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    pub(crate) fn has_failures(&self) -> bool {
+        self.incomplete || self.cleanup.iter().any(|item| !item.completed)
     }
 }
 
@@ -169,6 +171,7 @@ pub(crate) async fn execute(
                 removed: None,
                 cleanup: Vec::new(),
                 cancelled: false,
+                incomplete: false,
             })
         }
         ProviderCommand::List(_) => {
@@ -183,6 +186,7 @@ pub(crate) async fn execute(
                 removed: None,
                 cleanup: Vec::new(),
                 cancelled: false,
+                incomplete: false,
             })
         }
         ProviderCommand::Show(args) => Ok(ProviderReport {
@@ -191,6 +195,7 @@ pub(crate) async fn execute(
             removed: None,
             cleanup: Vec::new(),
             cancelled: false,
+            incomplete: false,
         }),
         ProviderCommand::Update(args) => {
             if let Some(executable) = &args.exec {
@@ -220,6 +225,7 @@ pub(crate) async fn execute(
                 removed: None,
                 cleanup: Vec::new(),
                 cancelled: false,
+                incomplete: false,
             })
         }
         ProviderCommand::Cleanup(args) => {
@@ -252,6 +258,7 @@ async fn remove_profile(
         removed: Some(args.name),
         cleanup: Vec::new(),
         cancelled: false,
+        incomplete: false,
     })
 }
 
@@ -276,6 +283,8 @@ async fn cleanup_profile(
         deadline: std::time::Instant::now() + Duration::from_secs(300),
     };
     let mut cleanup = Vec::new();
+    let mut interrupted = false;
+    let mut incomplete = false;
     for record in records.into_iter().filter(|record| {
         record.solver_id == "dns_external"
             && record
@@ -290,6 +299,8 @@ async fn cleanup_profile(
             && record.publication_cleanup_eligible(time::OffsetDateTime::now_utc())
     }) {
         if execution.check().is_err() {
+            interrupted = true;
+            incomplete = true;
             break;
         }
         let session = issues
@@ -319,7 +330,10 @@ async fn cleanup_profile(
         profiles: Vec::new(),
         removed: None,
         cleanup,
-        cancelled: execution.cancellation.is_cancelled(),
+        cancelled: interrupted
+            || execution.cancellation.is_cancelled()
+            || execution.deadline <= std::time::Instant::now(),
+        incomplete,
     })
 }
 
@@ -358,9 +372,14 @@ pub(crate) fn render(report: &ProviderReport, format: Format) -> CliResult<Strin
     }
     if report.operation == "cleanup" {
         if report.cleanup.is_empty() {
-            return Ok("No terminal DNS publication cleanup is pending for this provider.".into());
+            return Ok(if report.incomplete {
+                "Provider cleanup deadline expired before all matching requests were examined."
+                    .into()
+            } else {
+                "No terminal DNS publication cleanup is pending for this provider.".into()
+            });
         }
-        return Ok(report
+        let mut lines = report
             .cleanup
             .iter()
             .map(|item| {
@@ -377,8 +396,11 @@ pub(crate) fn render(report: &ProviderReport, format: Format) -> CliResult<Strin
                         .map_or(String::new(), |error| format!(": {}", safe(error)))
                 )
             })
-            .collect::<Vec<_>>()
-            .join("\n"));
+            .collect::<Vec<_>>();
+        if report.incomplete {
+            lines.push("[ERROR] Provider cleanup did not examine all matching requests before its deadline.".into());
+        }
+        return Ok(lines.join("\n"));
     }
     if report.profiles.is_empty() {
         return Ok("No DNS provider profiles configured.".into());
@@ -423,7 +445,7 @@ pub(crate) fn render(report: &ProviderReport, format: Format) -> CliResult<Strin
 mod tests {
     use crate::{
         app::{Args, Command},
-        commands::provider::{execute, render},
+        commands::provider::{CleanupView, ProviderReport, execute, render},
         common::{context::CommandContext, session::Format},
     };
     use clap::Parser;
@@ -438,6 +460,36 @@ mod tests {
             panic!("not provider command");
         };
         command
+    }
+
+    #[test]
+    fn incomplete_cleanup_report_is_rendered_and_fails_the_command() {
+        let report = ProviderReport {
+            operation: "cleanup",
+            profiles: Vec::new(),
+            removed: None,
+            cleanup: vec![CleanupView {
+                certificate: "web".into(),
+                operation: "operation-id".into(),
+                completed: true,
+                error: None,
+            }],
+            cancelled: false,
+            incomplete: true,
+        };
+        assert!(report.has_failures());
+        assert_eq!(
+            crate::dispatch::CommandReport::Provider(report.clone()).exit_status(),
+            crate::common::session::ExitStatus::Failed
+        );
+        assert!(
+            render(&report, Format::plain(false))
+                .unwrap()
+                .contains("did not examine all matching requests")
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&render(&report, Format::plain(true)).unwrap()).unwrap();
+        assert_eq!(json["incomplete"], true);
     }
     #[tokio::test]
     async fn cleanup_command_is_offline_and_reports_all_terminal_results() {

@@ -145,7 +145,7 @@ async fn execute_inner(
     ))
 }
 
-/// Retry only durable, known deployment failures for the current certificate generation.
+/// Retry due failures and durable intents to publish the current generation.
 /// Uncertain reloads stay behind the existing explicit-inspection barrier.
 pub(crate) async fn retry_due(
     store: &CliIssueStore,
@@ -456,15 +456,6 @@ pub(super) async fn after_issuance(
     generation: &str,
     execution: &aster_acme::solver::ExecutionContext,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
-    if execution.check().is_err() {
-        return (
-            Vec::new(),
-            vec![event(
-                MessageKind::Error,
-                "Deployment not started: issuance execution was cancelled or its deadline expired; issued certificate retained. Run cert deploy explicitly.",
-            )],
-        );
-    }
     // Do not drop automatic_inner at the operation deadline: a started blocking
     // publication continues under its lease. The worker records the final publish
     // state, then checks the deadline before starting reload or another target.
@@ -492,6 +483,34 @@ async fn automatic_inner(
     };
     let mut result = Vec::with_capacity(definitions.len());
     let mut events = Vec::new();
+    let mut definitions = definitions;
+    for definition in &mut definitions {
+        if definition.generation.as_deref() == Some(generation)
+            || definition.pending_generation.as_deref() == Some(generation)
+            || definition.phase.reload_uncertain()
+        {
+            continue;
+        }
+        match store.open_deployment(name, &definition.id).await {
+            Ok(mut session) => match session.save_pending_generation(generation).await {
+                Ok(()) => *definition = session.definition().clone(),
+                Err(error) => events.push(event(
+                    MessageKind::Error,
+                    format!(
+                        "Deployment '{}' intent could not be saved: {error}",
+                        definition.id
+                    ),
+                )),
+            },
+            Err(error) => events.push(event(
+                MessageKind::Error,
+                format!(
+                    "Deployment '{}' intent could not be saved: {error}",
+                    definition.id
+                ),
+            )),
+        }
+    }
     let mut definitions = definitions.into_iter();
     while let Some(definition) = definitions.next() {
         if execution.check().is_err() {
@@ -579,17 +598,14 @@ async fn run_one(
     progress: Option<&Progress>,
     execution: Option<&Execution>,
 ) -> CliResult<DeploymentExecution> {
-    if execution.is_some_and(|execution| execution.check().is_err()) {
+    if execution.is_some_and(|execution| execution.check().is_err())
+        && matches!(intent, DeploymentIntent::Explicit)
+    {
         return Err(
-            "issuance was cancelled or its execution deadline expired before deployment".into(),
+            "deployment was cancelled or its execution deadline expired before startup".into(),
         );
     }
     let mut session = store.open_deployment(name, id).await?;
-    if execution.is_some_and(|execution| execution.check().is_err()) {
-        return Err(
-            "issuance was cancelled or its execution deadline expired before publication".into(),
-        );
-    }
     let mut events = Vec::new();
     if !session.admits(intent, time::OffsetDateTime::now_utc()) {
         return Ok(DeploymentExecution {
@@ -599,6 +615,27 @@ async fn run_one(
         });
     }
     let current_generation = session.artifacts().generation.clone();
+    if let DeploymentIntent::AfterIssuance { generation } = intent
+        && session.definition().generation.as_deref() != Some(generation)
+        && session.definition().pending_generation.as_deref() != Some(generation)
+    {
+        session.save_pending_generation(generation).await?;
+    }
+    if execution.is_some_and(|execution| execution.check().is_err()) {
+        record_event(
+            &mut events,
+            MessageKind::Warning,
+            &format!(
+                "Deployment '{id}' for generation {current_generation} is queued for the next maintenance cycle"
+            ),
+            progress,
+        );
+        return Ok(DeploymentExecution {
+            attempted: false,
+            binding: session.definition().clone(),
+            events,
+        });
+    }
     record_event(
         &mut events,
         MessageKind::Info,
