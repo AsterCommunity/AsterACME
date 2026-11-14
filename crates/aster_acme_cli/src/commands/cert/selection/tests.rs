@@ -64,8 +64,8 @@ fn record(id: char, created: &str) -> aster_acme::issuance::IssueRecord {
         "operation_id":id.to_string().repeat(43),"name":"example.com","created_at":created,
         "account_name":"default","account_id":"account","directory":"https://ca.example/directory",
         "account_url":"https://ca.example/account","account_thumbprint":"key","identifiers":["example.com"],
-        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","phase":"creating_order","creation_submitted":false,"order_url":null,"order":null,
-        "authorizations":[],"finalize_submitted":"not_submitted","next_poll_at":null,"certificate_not_after":null
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","phase":"creating_order","new_order_intent_saved":false,"order_url":null,"order":null,
+        "authorizations":[],"finalize_submitted":"not_submitted","next_poll_at":null
     })).unwrap()
 }
 

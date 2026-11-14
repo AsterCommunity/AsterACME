@@ -165,9 +165,10 @@ fn method_specific_fields_do_not_make_unknown_challenges_require_dns01_tokens() 
         {"type":"future","status":"pending","url":"https://ca.example/future","token":{"extension":true}}
     ]});
     let parsed: AuthorizationObject = serde_json::from_value(resource.clone()).unwrap();
-    assert!(
-        matches!(&parsed.challenges[0].kind,WireChallengeKind::Unknown(value) if value=="dns-persist-01")
-    );
+    assert!(matches!(
+        &parsed.challenges[0].kind,
+        WireChallengeKind::DnsPersist01
+    ));
     assert_eq!(
         parsed.challenges[0].parameters["issuer-domain-names"],
         serde_json::json!(["letsencrypt.org"])
@@ -240,4 +241,22 @@ fn exact_urls_reject_dot_segment_normalization_without_reencoding_valid_paths() 
     for path in ["a%2fb", "order'quote", "x..y/order", "%252e%252e/order"] {
         assert!(crate::url::AcmeUrl::new(&format!("https://ca.example/{path}")).is_ok());
     }
+}
+
+#[test]
+fn directory_caa_identities_preserve_alternatives_and_optional_absence() {
+    let directory: crate::directory::Directory = serde_json::from_value(serde_json::json!({
+        "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account",
+        "meta":{"caaIdentities":["ca.example", "alternate.example"]}
+    }))
+    .unwrap();
+    assert_eq!(
+        directory.meta.caa_identities,
+        ["ca.example", "alternate.example"]
+    );
+    let no_meta: crate::directory::Directory = serde_json::from_value(serde_json::json!({
+        "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account"
+    }))
+    .unwrap();
+    assert_eq!(no_meta.meta.caa_identities, Vec::<String>::new());
 }

@@ -1,12 +1,18 @@
-//! Bounded advisory observation of public HTTP-01 files after publication.
-use crate::commands::cert::validation::{
-    Arc, ChallengeKind, ChallengeSolver, IssueError, PRECHECK_TIMEOUT, Progress,
-};
+//! Bounded advisory DNS/HTTP observations after the publication solver is ready.
+use crate::commands::cert::progress::Progress;
 use crate::common::output::MessageKind;
-use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext, transport::HttpPool};
+use aster_acme::precheck::{Runner, http::Http};
+use aster_acme::{
+    challenge::ChallengeKind,
+    issuance::IssueError,
+    solver::{ChallengePublication, ChallengeSolver, CleanupResult, ReadyResult, RestoreResult},
+};
+use aster_acme::{solver::ExecutionContext, transport::HttpPool};
 use async_trait::async_trait;
+use std::sync::Arc;
 #[cfg(test)]
 use std::time::Duration;
+#[cfg(test)]
 use std::time::Instant;
 
 pub(super) struct Checked {
@@ -21,70 +27,93 @@ impl ChallengeSolver for Checked {
     }
     async fn restore(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<(), IssueError> {
-        self.inner.restore(requirements, execution).await
+    ) -> Result<RestoreResult, IssueError> {
+        self.inner.restore(publications, execution).await
     }
     async fn shutdown(&self) {
         self.inner.shutdown().await;
     }
+    fn requires_receipt(&self) -> bool {
+        self.inner.requires_receipt()
+    }
+    async fn prepare(
+        &self,
+        publications: &[ChallengePublication],
+        execution: &ExecutionContext,
+    ) -> Result<Vec<aster_acme::solver::PublicationPlanUpdate>, IssueError> {
+        self.inner.prepare(publications, execution).await
+    }
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
-        if !self.inner.ready(requirements, execution).await? {
-            return Ok(false);
-        }
+    ) -> Result<ReadyResult, IssueError> {
+        self.inner.ready(publications, execution).await
+    }
+    async fn wait_ready(
+        &self,
+        publications: &[ChallengePublication],
+        execution: &ExecutionContext,
+    ) -> Result<(), IssueError> {
+        self.inner.wait_ready(publications, execution).await?;
         execution.check().map_err(|_| IssueError::Interrupted)?;
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
+        match self.kind() {
+            ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 => {
+                if !self.requires_receipt() {
+                    crate::commands::cert::precheck::dns::run(
+                        &requirements,
+                        execution,
+                        &self.progress,
+                    )
+                    .await?;
+                }
+                return Ok(());
+            }
+            ChallengeKind::TlsAlpn01 => return Ok(()),
+            ChallengeKind::Http01 => {}
+        }
         self.progress.output.progress(
             MessageKind::Info,
-            &format!(
-                "Checking public HTTP challenge files (advisory, up to {} seconds)",
-                PRECHECK_TIMEOUT.as_secs()
-            ),
+            "Checking public HTTP challenge files (advisory, up to 5 seconds)",
         );
-        let deadline = execution.deadline.min(Instant::now() + PRECHECK_TIMEOUT);
-        let check = async {
-            for requirement in requirements {
-                let ValidationRequirement::Http01 { url, content, .. } = requirement else {
-                    return Ok(false);
-                };
-                if !self
-                    .pool
-                    .check_http_challenge(url, content.as_bytes(), PRECHECK_TIMEOUT)
-                    .await?
-                {
-                    return Ok(false);
-                }
-            }
-            Ok::<_, aster_acme::transport::TransportError>(true)
-        };
-        let result = tokio::select! {
-            biased;
-            () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
-            result = tokio::time::timeout_at(deadline.into(), check) => result,
-        };
-        execution.check().map_err(|_| IssueError::Interrupted)?;
-        match result {
-            Ok(Ok(true)) => self.progress.output.progress(MessageKind::Success, "HTTP files match locally; the CA will independently verify public access"),
-            _ => self.progress.output.progress(MessageKind::Warning, "HTTP files could not be confirmed locally (content, network or redirect); continuing to CA validation"),
+        let report = Runner::default()
+            .run(&Http::new(&self.pool), &requirements, execution)
+            .await
+            .map_err(|_| IssueError::Interrupted)?;
+        if report
+            .observations
+            .iter()
+            .all(|observation| matches!(observation.result, Ok(true)))
+        {
+            self.progress.output.progress(
+                MessageKind::Success,
+                "HTTP files match locally; the CA will independently verify public access",
+            );
+        } else {
+            self.progress.output.progress(MessageKind::Warning, "HTTP files could not be confirmed locally (content, network or redirect); continuing to CA validation");
         }
-        Ok(true)
+        Ok(())
     }
     async fn cleanup(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
-        self.inner.cleanup(requirements, execution).await
+    ) -> Result<CleanupResult, IssueError> {
+        self.inner.cleanup(publications, execution).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::cert::validation::http::*;
+    use crate::commands::cert::precheck::validation::*;
+    use crate::commands::cert::validation::tests::publications;
+    use aster_acme::issuance::ValidationRequirement;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -98,17 +127,13 @@ mod tests {
         }
         async fn ready(
             &self,
-            _: &[ValidationRequirement],
+            _: &[aster_acme::solver::ChallengePublication],
             _: &ExecutionContext,
-        ) -> Result<bool, IssueError> {
-            Ok(true)
-        }
-        async fn cleanup(
-            &self,
-            _: &[ValidationRequirement],
-            _: &ExecutionContext,
-        ) -> Result<bool, IssueError> {
-            Ok(true)
+        ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
+            Ok(aster_acme::solver::ReadyResult {
+                ready: true,
+                ..Default::default()
+            })
         }
     }
 
@@ -140,8 +165,11 @@ mod tests {
             path: "/challenge".into(),
             content: "token.thumb".into(),
         }];
-        assert!(checked.ready(&requirements, &context).await.unwrap());
-        assert_eq!(PRECHECK_TIMEOUT, Duration::from_secs(5));
+        checked
+            .wait_ready(&publications(&requirements), &context)
+            .await
+            .unwrap();
+        assert_eq!(Runner::default().timeout(), Duration::from_secs(5));
         assert!(diagnostics.text().contains("up to 5 seconds"));
         assert!(diagnostics.text().contains("HTTP files match locally"));
         assert!(!diagnostics.text().contains("could not be confirmed"));
@@ -152,7 +180,9 @@ mod tests {
         let checked = Checked {
             inner: Box::new(Ready),
             pool: HttpPool::default(),
-            progress: crate::commands::cert::validation::tests::progress(),
+            progress: Arc::new(Progress::new(crate::common::session::OutputSession::new(
+                true,
+            ))),
         };
         for cancelled in [false, true] {
             let context = ExecutionContext {
@@ -168,18 +198,11 @@ mod tests {
                 context.cancellation.cancel();
             }
             assert!(matches!(
-                checked.ready(&[], &context).await,
+                checked.wait_ready(&publications(&[]), &context).await,
                 Err(IssueError::Interrupted)
             ));
         }
     }
-}
-
-#[cfg(test)]
-mod timeout_tests {
-    use crate::commands::cert::validation::http::*;
-    use crate::commands::cert::validation::manual::Manual;
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     #[tokio::test]
     async fn fixed_five_second_limit_warns_but_shorter_operation_deadline_interrupts() {
@@ -201,14 +224,7 @@ mod timeout_tests {
             let (output, _, diagnostics) = crate::common::session::tests::session(false);
             let progress = Arc::new(Progress::new(output));
             let checked = Checked {
-                inner: Box::new(Manual {
-                    method: ChallengeKind::Http01,
-                    saved: true,
-                    interactive: false,
-                    yes: true,
-                    progress: progress.clone(),
-                    prompt: std::sync::Mutex::new(None),
-                }),
+                inner: Box::new(Ready),
                 pool: HttpPool::default(),
                 progress,
             };
@@ -217,10 +233,12 @@ mod timeout_tests {
                 deadline: Instant::now() + operation_budget,
             };
             let started = Instant::now();
-            let result = checked.ready(&requirements, &context).await;
-            if operation_budget > PRECHECK_TIMEOUT {
-                assert!(result.unwrap());
-                assert!(started.elapsed() >= PRECHECK_TIMEOUT);
+            let result = checked
+                .wait_ready(&publications(&requirements), &context)
+                .await;
+            if operation_budget > Runner::default().timeout() {
+                result.unwrap();
+                assert!(started.elapsed() >= Runner::default().timeout());
                 assert!(started.elapsed() < Duration::from_secs(8));
                 assert!(diagnostics.text().contains("could not be confirmed"));
             } else {

@@ -1,7 +1,7 @@
 //! RFC 7515 flattened JWS and RFC 8555 protected headers, independent of signing keys.
 use serde::{Deserialize, Serialize};
 
-/// Account JWS algorithms implemented by this client. CA acceptance is independent.
+/// JWS algorithms implemented by this client. CA acceptance is independent.
 /// RFC 8555 mandates ES256 and recommends RFC 8037 `EdDSA` with Ed25519.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SignatureAlgorithm {
@@ -33,11 +33,11 @@ pub struct FlattenedJws {
     pub signature: String,
 }
 
-/// Exactly one account identity is serialized in a protected header.
+/// Exactly one signing identity is serialized in a protected header.
 #[derive(Clone, Copy, Serialize)]
 #[serde(untagged)]
 pub enum RequestIdentity<'a, J> {
-    /// Public key for account creation and lookup.
+    /// Public key for account creation/lookup or certificate-key revocation.
     Jwk { jwk: &'a J },
     /// Account URL for authenticated account requests.
     Kid { kid: &'a str },

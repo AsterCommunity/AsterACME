@@ -11,6 +11,8 @@ wire_enum! {
         Http01 => "http-01",
         /// DNS TXT publication.
         Dns01 => "dns-01",
+        /// Persistent DNS TXT publication (draft-ietf-acme-dns-persist-02).
+        DnsPersist01 => "dns-persist-01",
         /// Dedicated TLS ALPN response.
         TlsAlpn01 => "tls-alpn-01",
     }
@@ -104,4 +106,25 @@ pub struct ChallengeObject {
     /// to have a token; unsupported methods retain their complete extension data.
     #[serde(flatten)]
     pub parameters: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Selected dns-persist-01 parameters, decoded only when executing that method.
+/// Draft-02 uses camelCase; older draft spellings are not aliases.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsPersistParameters {
+    /// One to ten normalized issuer names; semantic validation belongs to the client.
+    pub issuer_domain_names: Vec<String>,
+}
+
+impl ChallengeObject {
+    /// Decode the draft-02 fields without imposing them on other offered challenges.
+    ///
+    /// # Errors
+    /// Rejects missing or incorrectly typed issuerDomainNames.
+    pub fn dns_persist_parameters(&self) -> Result<DnsPersistParameters, serde_json::Error> {
+        serde_json::from_value(serde_json::Value::Object(
+            self.parameters.clone().into_iter().collect(),
+        ))
+    }
 }

@@ -3,7 +3,7 @@
 use crate::account::*;
 use crate::inventory;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
-use aster_acme::storage::account::KeyAccess;
+use aster_acme::storage::account::{AccountStoreErrorKind, KeyAccess};
 use aster_acme::storage::query::AccountQuery;
 use aster_acme_core::account::AccountRecordState;
 use tokio::time::sleep;
@@ -279,7 +279,7 @@ async fn named_account_is_one_directory_and_missing_identity_or_key_is_an_error(
     assert_eq!(fs::read(slot.join("account.toml")).unwrap(), record);
     atomic_write(
         &slot.join("account-key.pk8"),
-        &AccountKey::generate(KeyAlgorithm::EcdsaP256)
+        &SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256)
             .unwrap()
             .to_pkcs8()
             .unwrap(),
@@ -446,8 +446,19 @@ async fn locks_timeout_release_and_allow_waiting_contenders() {
     let thumb = "t".repeat(43);
     let held = store.lock_account(&directory, &thumb).await.unwrap();
     let start = tokio::time::Instant::now();
-    assert!(store.lock_account(&directory, &thumb).await.is_err());
+    let error = store
+        .lock_account(&directory, &thumb)
+        .await
+        .err()
+        .expect("held lock must time out");
+    assert_eq!(error.kind, AccountStoreErrorKind::LockUnavailable);
     assert!(start.elapsed() >= Duration::from_millis(60));
+    let signer_error = store
+        .signer(&directory, "default", KeyAccess::Existing)
+        .await
+        .err()
+        .expect("signer lock must time out before reading the key");
+    assert_eq!(signer_error.kind, AccountStoreErrorKind::LockUnavailable);
     drop(held);
     let held = store.lock_account(&directory, &thumb).await.unwrap();
     drop(held);

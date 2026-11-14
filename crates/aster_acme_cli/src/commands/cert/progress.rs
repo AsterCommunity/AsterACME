@@ -21,16 +21,6 @@ impl Progress {
         }
     }
 
-    pub(super) fn protocol(
-        &self,
-        directory: &aster_acme_protocol::directory::Directory,
-        record: &aster_acme::issuance::IssueRecord,
-    ) {
-        for message in protocol_messages(directory, record) {
-            self.output.progress(MessageKind::Info, &message);
-        }
-    }
-
     fn should_display(&self, event: &IssueEvent) -> bool {
         if self.output.is_json() {
             return false;
@@ -47,6 +37,24 @@ impl Progress {
                     != Some(status)
             }
             _ => true,
+        }
+    }
+}
+
+impl aster_acme::issuance::workflow::WorkflowObserver for Progress {
+    fn discovering(&self) {
+        self.output.progress(
+            MessageKind::Info,
+            "Discovering ACME endpoints over verified TLS",
+        );
+    }
+    fn discovered(
+        &self,
+        directory: &aster_acme_protocol::directory::Directory,
+        record: &aster_acme::issuance::IssueRecord,
+    ) {
+        for message in protocol_messages(directory, record) {
+            self.output.progress(MessageKind::Info, &message);
         }
     }
 }
@@ -99,7 +107,7 @@ impl IssueObserver for Progress {
             ),
             IssueEvent::PublicationRequired { count, method } => (
                 MessageKind::Info,
-                format!("Prepared {count} {} requirement(s)", match method { aster_acme::challenge::ChallengeKind::Dns01 => "DNS TXT", aster_acme::challenge::ChallengeKind::Http01 => "HTTP file", aster_acme::challenge::ChallengeKind::TlsAlpn01 => "TLS-ALPN" }),
+                format!("Prepared {count} {} requirement(s)", match method { aster_acme::challenge::ChallengeKind::Dns01 => "DNS TXT", aster_acme::challenge::ChallengeKind::DnsPersist01 => "persistent DNS TXT", aster_acme::challenge::ChallengeKind::Http01 => "HTTP file", aster_acme::challenge::ChallengeKind::TlsAlpn01 => "TLS-ALPN" }),
             ),
             IssueEvent::PublicationReady { method } => (
                 MessageKind::Info,
@@ -152,7 +160,7 @@ fn protocol_messages(
     }
     let strategy = match (
         &record.renewal_of,
-        record.creation_submitted,
+        record.new_order_intent_saved,
         record.submitted_replaces.as_ref(),
         directory.renewal_info.as_ref(),
     ) {
@@ -248,10 +256,11 @@ mod tests {
     fn advertised_capabilities_are_distinct_from_the_selected_renewal_strategy() {
         let mut directory:aster_acme_protocol::directory::Directory=serde_json::from_value(serde_json::json!({"newNonce":"https://ca.example/nonce","newAccount":"https://ca.example/account","newOrder":"https://ca.example/order"})).unwrap();
         let mut record:aster_acme::issuance::IssueRecord=serde_json::from_value(serde_json::json!({
-            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"creating_order","creation_submitted":false,"authorizations":[],"finalize_submitted":"not_submitted"
+            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"
         })).unwrap();
         assert!(protocol_messages(&directory, &record)[1].contains("Issuance strategy: RFC 8555"));
         record.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+            retained_validation: Vec::new(),
             operation_id: "old".into(),
             certificate_id: Some("a.b".into()),
         });

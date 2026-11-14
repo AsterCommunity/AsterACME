@@ -1,7 +1,8 @@
 //! Deployment regression and resource lifecycle tests.
 mod hardening;
+mod retry;
 use crate::commands::cert::deployment::*;
-use aster_acme::storage::query::IssueQuery;
+use aster_acme::storage::query::{IssueQuery, IssueView};
 
 struct Fixture {
     temp: tempfile::TempDir,
@@ -11,7 +12,30 @@ struct Fixture {
     progress: Progress,
 }
 
+async fn managed_candidates(store: &CliIssueStore) -> Vec<aster_acme::issuance::IssueRecord> {
+    store
+        .query(IssueQuery {
+            view: IssueView::Managed,
+            in_use: Some(true),
+            ..IssueQuery::default()
+        })
+        .await
+        .unwrap()
+}
+
 impl Fixture {
+    async fn generation(&self) -> String {
+        self.store
+            .query(IssueQuery {
+                name: Some(self.name.clone()),
+                in_use: Some(true),
+                ..IssueQuery::default()
+            })
+            .await
+            .unwrap()
+            .remove(0)
+            .generation_name()
+    }
     async fn new() -> Self {
         use aster_acme::storage::account::{AccountKeyStore, AccountStore, KeyAccess};
 
@@ -225,6 +249,148 @@ async fn manage_binding(
 }
 
 #[tokio::test]
+async fn daemon_retries_only_due_known_deployment_failures_and_reschedules_them() {
+    let fixture = Fixture::new().await;
+    fixture
+        .add("scheduled-failure", child_command("failure"), 0)
+        .await;
+    let binding = fixture.status("scheduled-failure").await;
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, &binding.id)
+        .await
+        .unwrap();
+    session
+        .save_state(
+            DeploymentPhase::ReloadFailed,
+            1,
+            Some("injected reload failure".into()),
+        )
+        .await
+        .unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    let first = session
+        .record_failure(
+            DeploymentPhase::ReloadFailed,
+            1,
+            "injected reload failure".into(),
+            now,
+        )
+        .await
+        .unwrap();
+    drop(session);
+
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let idle = retry_due(
+        &fixture.store,
+        Duration::from_secs(5),
+        &cancellation,
+        &crate::common::context::CommandContext::new(true),
+        managed_candidates(&fixture.store).await,
+    )
+    .await;
+    assert!(idle.is_empty(), "future retry must not execute early");
+
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, &binding.id)
+        .await
+        .unwrap();
+    session
+        .save_state(
+            DeploymentPhase::ReloadFailed,
+            1,
+            Some("injected reload failure".into()),
+        )
+        .await
+        .unwrap();
+    session
+        .record_failure(
+            DeploymentPhase::ReloadFailed,
+            1,
+            "injected reload failure".into(),
+            now - time::Duration::minutes(30),
+        )
+        .await
+        .unwrap();
+    drop(session);
+
+    let attempted = retry_due(
+        &fixture.store,
+        Duration::from_secs(5),
+        &cancellation,
+        &crate::common::context::CommandContext::new(true),
+        managed_candidates(&fixture.store).await,
+    )
+    .await;
+    assert_eq!(attempted.len(), 1);
+    assert!(attempted[0].has_failures());
+    let saved = fixture.status("scheduled-failure").await;
+    assert_eq!(saved.phase, DeploymentPhase::ReloadFailed);
+    assert_eq!(saved.retry_failures, 3);
+    assert!(saved.retry_at.is_some_and(|retry_at| retry_at > now));
+    assert!(first.retry_at.is_some_and(|retry_at| retry_at > now));
+}
+
+#[tokio::test]
+async fn daemon_never_replays_uncertain_reload_and_recovers_interrupted_publication() {
+    let fixture = Fixture::new().await;
+    fixture.add("uncertain", child_command("success"), 0).await;
+    let binding = fixture.status("uncertain").await;
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, &binding.id)
+        .await
+        .unwrap();
+    session
+        .save_state(DeploymentPhase::Publishing, 0, None)
+        .await
+        .unwrap();
+    session
+        .save_state(
+            DeploymentPhase::ReloadUncertain,
+            1,
+            Some("reload result unknown".into()),
+        )
+        .await
+        .unwrap();
+    drop(session);
+
+    fixture
+        .add("publication-crash", child_command("success"), 0)
+        .await;
+    let binding = fixture.status("publication-crash").await;
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, &binding.id)
+        .await
+        .unwrap();
+    session
+        .save_state(DeploymentPhase::Publishing, 0, None)
+        .await
+        .unwrap();
+    drop(session);
+
+    let recovered = retry_due(
+        &fixture.store,
+        Duration::from_secs(5),
+        &tokio_util::sync::CancellationToken::new(),
+        &crate::common::context::CommandContext::new(true),
+        managed_candidates(&fixture.store).await,
+    )
+    .await;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(
+        fixture.status("publication-crash").await.phase,
+        DeploymentPhase::Deployed
+    );
+    assert_eq!(
+        fixture.status("uncertain").await.phase,
+        DeploymentPhase::ReloadUncertain
+    );
+}
+
+#[tokio::test]
 async fn list_and_remove_bindings_work_after_revocation_or_loss_of_current_version() {
     use aster_acme_core::revocation::RevocationState;
     for state in [
@@ -234,10 +400,17 @@ async fn list_and_remove_bindings_work_after_revocation_or_loss_of_current_versi
     ] {
         let fixture = Fixture::new().await;
         let target = fixture.add("nginx", child_command("success"), 0).await;
-        let original = run_one(&fixture.store, &fixture.name, "nginx", true, None, None)
-            .await
-            .unwrap()
-            .binding;
+        let original = run_one(
+            &fixture.store,
+            &fixture.name,
+            "nginx",
+            aster_acme::deployment::DeploymentIntent::Explicit,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .binding;
         let current = fixture
             .store
             .query(IssueQuery {
@@ -543,6 +716,7 @@ async fn interactive_selection_child() {
 #[tokio::test]
 async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_durable() {
     let fixture = Fixture::new().await;
+    let generation = fixture.generation().await;
     let target = fixture.add("nginx", child_command("success"), 0).await;
     let definition = fixture.status("nginx").await;
     assert!(
@@ -558,7 +732,9 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
             &fixture.store,
             &fixture.name,
             "nginx",
-            false,
+            DeploymentIntent::AfterIssuance {
+                generation: &generation
+            },
             Some(&fixture.progress),
             None
         )
@@ -573,7 +749,7 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
         &fixture.store,
         &fixture.name,
         "nginx",
-        true,
+        aster_acme::deployment::DeploymentIntent::Explicit,
         Some(&fixture.progress),
         None,
     )
@@ -600,12 +776,15 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
 #[tokio::test]
 async fn deploy_and_renewal_publish_current_generation_skip_completed_and_keep_bindings() {
     let fixture = Fixture::new().await;
+    let generation = fixture.generation().await;
     let target = fixture.add("nginx", child_command("success"), 0).await;
     let first = run_one(
         &fixture.store,
         &fixture.name,
         "nginx",
-        false,
+        DeploymentIntent::AfterIssuance {
+            generation: &generation,
+        },
         Some(&fixture.progress),
         None,
     )
@@ -667,13 +846,16 @@ async fn reload_failures_are_bounded_and_other_targets_continue() {
 #[tokio::test]
 async fn timeout_is_uncertain_survives_reopen_and_is_not_automatically_replayed() {
     let fixture = Fixture::new().await;
+    let generation = fixture.generation().await;
     let target = fixture.add("slow", child_command("timeout"), 3).await;
     assert_ne!(
         run_one(
             &fixture.store,
             &fixture.name,
             "slow",
-            false,
+            DeploymentIntent::AfterIssuance {
+                generation: &generation
+            },
             Some(&fixture.progress),
             None
         )
@@ -699,6 +881,7 @@ async fn timeout_is_uncertain_survives_reopen_and_is_not_automatically_replayed(
 #[tokio::test]
 async fn cancelling_reload_preserves_intent_releases_lease_and_prevents_automatic_replay() {
     let fixture = Fixture::new().await;
+    let generation = fixture.generation().await;
     fixture.add("slow", child_command("timeout"), 0).await;
     let catalog = fixture.temp.path().join("certs/web/cert.toml");
     {
@@ -706,7 +889,9 @@ async fn cancelling_reload_preserves_intent_releases_lease_and_prevents_automati
             &fixture.store,
             &fixture.name,
             "slow",
-            false,
+            DeploymentIntent::AfterIssuance {
+                generation: &generation,
+            },
             Some(&fixture.progress),
             None,
         );
@@ -740,7 +925,7 @@ async fn publication_failure_does_not_run_reload_and_missing_program_is_saved() 
             &fixture.store,
             &fixture.name,
             "badpath",
-            true,
+            aster_acme::deployment::DeploymentIntent::Explicit,
             Some(&fixture.progress),
             None
         )
@@ -772,7 +957,7 @@ async fn publication_failure_does_not_run_reload_and_missing_program_is_saved() 
             &fixture.store,
             &fixture.name,
             "missing",
-            true,
+            aster_acme::deployment::DeploymentIntent::Explicit,
             Some(&fixture.progress),
             None
         )
@@ -853,6 +1038,8 @@ fn deployment_selection_is_exact_and_empty_inventory_is_explicit() {
         generation: None,
         phase: DeploymentPhase::Configured,
         attempts: 0,
+        retry_failures: 0,
+        retry_at: None,
         last_error: None,
     }];
     assert_eq!(

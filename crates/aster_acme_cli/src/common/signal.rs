@@ -12,6 +12,26 @@ impl InterruptGuard {
             }
         }))
     }
+
+    pub(crate) fn daemon(cancellation: CancellationToken) -> Self {
+        #[cfg(unix)]
+        {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut terminate) => Self(tokio::spawn(async move {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {},
+                        _ = terminate.recv() => {},
+                    }
+                    cancellation.cancel();
+                })),
+                Err(_) => Self::new(cancellation),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Self::new(cancellation)
+        }
+    }
 }
 
 impl Drop for InterruptGuard {

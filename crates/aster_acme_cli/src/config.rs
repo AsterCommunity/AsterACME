@@ -49,6 +49,11 @@ fn template() -> DocumentMut {
             "\n# Maximum order-poll rounds per certificate invocation (1-1000).\n",
         ),
         (
+            "daemon_interval",
+            value(60),
+            "\n# Delay between resident daemon maintenance cycles in seconds (1-86400).\n",
+        ),
+        (
             "contact",
             value(toml_edit::Array::new()),
             "\n# Optional default contacts, e.g. [\"you@example.com\"].\n# Terms acceptance is supplied explicitly with --accept-terms, never stored here.\n",
@@ -132,6 +137,13 @@ fn parse(text: &str) -> CliResult<Config> {
         .is_some_and(|value| !(1..=300).contains(&value))
     {
         return Err("Configuration poll_interval must be between 1 and 300 seconds.".into());
+    }
+    if document
+        .config
+        .daemon_interval
+        .is_some_and(|value| !(1..=86400).contains(&value))
+    {
+        return Err("Configuration daemon_interval must be between 1 and 86400 seconds.".into());
     }
     if let Some(directory) = &document.config.ca_directory {
         aster_acme_protocol::url::AcmeUrl::new(directory)?;
@@ -239,6 +251,7 @@ pub(crate) struct Config {
     pub(crate) operation_timeout: Option<u64>,
     pub(crate) max_polls: Option<u32>,
     pub(crate) poll_interval: Option<u64>,
+    pub(crate) daemon_interval: Option<u64>,
 }
 
 /// Resolve platform paths like gcop-rs, keeping config and private state under one root.
@@ -290,6 +303,8 @@ mod tests {
             "user_agent='legacy-global-agent'",
             "request_timeout=0",
             "request_timeout=301",
+            "daemon_interval=0",
+            "daemon_interval=86401",
             "default_account='../bad'",
             "ca_directory='https://ca.example/#fragment'",
             "contact=['not-an-email']",
@@ -406,6 +421,8 @@ mod tests {
         );
         let generated = std::fs::read_to_string(&explicit).unwrap();
         assert!(generated.contains("# Public CA preset"));
+        assert!(generated.contains("daemon_interval = 60"));
+        assert!(generated.contains("Delay between resident daemon maintenance cycles"));
         assert!(!generated.contains("user_agent"));
         assert!(!generated.contains("terms_accepted ="));
         assert!(root.join("config.toml").exists());

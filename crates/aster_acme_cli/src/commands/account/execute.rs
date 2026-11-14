@@ -12,7 +12,7 @@ use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 use aster_acme::storage::query::AccountQuery;
 use aster_acme::{
     account::{AccountError, AccountService, RegistrationOptions},
-    crypto::{AccountSigner, ExternalAccountCredentials},
+    crypto::{ExternalAccountCredentials, JwsSigner},
 };
 use std::sync::Arc;
 
@@ -269,7 +269,7 @@ async fn remove(
 /// its intent under the operation lock. No unknown account URL is recovered implicitly.
 async fn deactivate(
     context: CliContext,
-    signer: Arc<dyn AccountSigner>,
+    signer: Arc<dyn JwsSigner>,
     options: AccountArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
@@ -390,7 +390,7 @@ async fn offline(context: &CliContext) -> CliResult<AccountReport> {
 /// Read a consistent local snapshot; no discovery, recovery, or metadata refresh occurs.
 async fn local(
     context: &CliContext,
-    signer: &dyn AccountSigner,
+    signer: &dyn JwsSigner,
     name: String,
     verified: bool,
 ) -> CliResult<AccountReport> {
@@ -416,7 +416,7 @@ async fn local(
 
 async fn remote(
     context: CliContext,
-    signer: Arc<dyn AccountSigner>,
+    signer: Arc<dyn JwsSigner>,
     name: String,
     options: AccountArgs,
     operation: Operation,
@@ -521,7 +521,7 @@ async fn remote(
 /// This does not claim the CA has accepted a contact or changed an existing account.
 async fn save_registration_intent(
     context: &CliContext,
-    signer: &dyn AccountSigner,
+    signer: &dyn JwsSigner,
     registration: Option<&RegistrationOptions>,
     persist_contacts: bool,
     user_agent: Option<String>,

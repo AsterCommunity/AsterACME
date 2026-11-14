@@ -1,5 +1,5 @@
 //! Shared terminal table layout. Cells are padded before any ANSI styling is applied.
-use crate::common::output::safe;
+use crate::common::output::{self, Style, safe};
 use unicode_width::UnicodeWidthStr;
 
 /// A style callback receives row/column indices and escaped plain cell text.
@@ -46,6 +46,27 @@ pub(crate) fn align<const N: usize>(
         .collect()
 }
 
+/// Shared inventory/batch presentation: cyan headers, domain-owned cell styles.
+/// The callback receives a zero-based data-row index (the header is excluded).
+/// Escaping and display-width padding remain in `align` before color is applied.
+pub(crate) fn listing<const N: usize>(
+    rows: &[[String; N]],
+    color: bool,
+    cell_style: impl Fn(usize, usize) -> Style,
+) -> Vec<String> {
+    align(
+        rows,
+        Some(&|row, column, cell| {
+            let style = if row == 0 {
+                Style::BoldCyan
+            } else {
+                cell_style(row - 1, column)
+            };
+            output::styled(cell, style, color)
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use crate::common::output::Style;
@@ -83,5 +104,35 @@ mod tests {
             "\x1b[31mfailed (CSR rejected)\x1b[0m  \x1b[33mready\x1b[0m"
         );
         assert_eq!(styled[0], align(&rows, None)[0]);
+    }
+
+    #[test]
+    fn listing_owns_headers_and_preserves_plain_layout_and_escaped_cells() {
+        let rows = [
+            ["NAME".into(), "STATUS".into()],
+            ["猫猫".into(), "failed\nstate".into()],
+        ];
+        let select = |row, column| {
+            assert_eq!(row, 0);
+            if column == 1 {
+                Style::Red
+            } else {
+                Style::Plain
+            }
+        };
+        assert_eq!(listing(&rows, false, select), align(&rows, None));
+        let colored = listing(&rows, true, select);
+        assert!(colored[0].contains("\u{001b}[1;36mNAME\u{001b}[0m"));
+        assert!(colored[1].contains("\u{001b}[31mfailed\\nstate\u{001b}[0m"));
+        assert_eq!(
+            listing::<2>(&[], true, |_, _| panic!("empty table")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            listing(&[["HEADER".into()]], false, |_, _| panic!(
+                "header must not call domain style"
+            )),
+            vec!["HEADER"]
+        );
     }
 }

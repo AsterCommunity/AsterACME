@@ -15,9 +15,13 @@
 pub mod account;
 pub mod challenge;
 pub mod crypto;
+pub mod deployment;
 mod http_client;
 pub mod identifier;
 pub mod issuance;
+pub mod maintenance;
+#[cfg(feature = "precheck")]
+pub mod precheck;
 pub mod renewal;
 mod renewal_calculation;
 pub mod revocation;

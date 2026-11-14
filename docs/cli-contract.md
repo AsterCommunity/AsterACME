@@ -22,11 +22,11 @@
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
 | `account deactivate` | 不可逆地停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
-| `cert remove` | 确认所选申请或显式 --history/--revoked/--all 的本地清理范围；不会吊销 CA 证书 |
+| `cert remove` | 确认所选申请或显式 --history/--revoked/--failed/--all 的本地清理范围；不会吊销 CA 证书 |
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
 | `cert issue --resume <NAME>` | 跳过“Have you published these TXT values?”，然后正常检查 DNS |
 
-人工验证首次脚本调用先返回新材料待办，--yes不能让尚未展示的材料被当作已发布。非TTY/JSON恢复不弹问题；必须--yes显式确认，否则仍返回action_required。终端未带--yes可现场确认；CA始终决定实际授权。
+人工验证首次脚本调用先返回新材料待办，--yes不能让尚未展示的材料被当作已发布。非TTY/JSON恢复不弹问题；必须--yes显式确认，否则仍返回action_required。终端未带--yes可现场确认；CA始终决定实际授权。`dns_persist`续期只对与已签发前任快照完全一致的长期记录免确认；首次或改变的值仍遵守上述规则。
 
 --yes 不出现在 list/show/switch/recover/version；这些命令没有相同的危险操作确认。issue/renew及后续验证实现均按这里的通用确认语义扩展，不让 --yes 获得额外隐式权限。
 
@@ -50,7 +50,7 @@
 | `-a` | `--account` | cert issue 的账户选择 |
 | `-d` | `--domain` | cert issue 的域名，可重复 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
-| `-c` | `--challenge` | manual_dns/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
+| `-c` | `--challenge` | manual_dns/dns_persist/dns_external/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
 
@@ -73,23 +73,37 @@
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、-a、-c manual_dns/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、-a、-c manual_dns/dns_persist/dns_external/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
-| cert revoke | [NAME] / -n、--operation、可选 --reason、-y、HTTP；不删除本地文件 |
-| cert remove | [NAME] / -n、--operation 或 --history/--revoked/--all、-y；纯本地，无 HTTP 参数 |
+| cert revoke | [NAME] / -n、--operation、--sign-with account/certificate-key、可选 --reason、-y、HTTP、--operation-timeout；不删除本地文件 |
+| cert remove | [NAME] / -n、--operation 或 --history/--revoked/--failed/--all、-y；纯本地，无 HTTP 参数 |
 | version | 仅 --json，不读取配置或初始化状态 |
 
 已有账户的显式 CA 选择只用于匹配其绑定，不能修改绑定。--name 表示当前子命令的目标；--account 专门表示证书申请使用的账户，避免两个名字含混。
 
 ## 参数组及互斥
 
-- `--data-dir PATH`：唯一状态根覆盖；配置固定为其中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
+- `--data-dir PATH`：唯一状态根覆盖；也可设置 `ASTER_ACME_DATA_DIR`。命令行参数优先于环境变量，未设置时使用平台默认目录；配置固定为状态根中的 config.toml。所有账户/证书操作共用；version/help 不加载状态。
+- 常驻 `daemon run` 的周期默认60秒，可设置 `[config].daemon_interval` 或传入 `--interval SECONDS` 覆盖（1–86400秒；CLI优先于配置）。值在启动时加载，修改配置后重启daemon生效。
 - `--ca` 与 `--ca-directory` 互斥；内置只有公开生产提供商 letsencrypt/zerossl/google。已有账户始终绑定原 CA，显式不同 CA 拒绝，不因选项换成新账户。
 - `--user-agent` 与 `--request-timeout`：只在确实需要 HTTP 的命令暴露。show/list 的这些参数要求 --verify。timeout 为单请求 1–300 秒；--operation-timeout 为签发前台总预算 1–86400 秒，与 CA expires 独立。
 - 显式 register User-Agent 保存为账户偏好；其他命令覆盖只影响本次。内置默认值不落盘，config 不拥有全局 User-Agent。
 - `--contact` 是完整替换列表，`--clear-contacts` 明确清空，二者互斥；缺省输入不当作清空。
 - `--eab-kid` 与 `--eab-key-file` 必须成对且只属于注册。秘密从文件读取，不直接放 CLI 参数中。
+
+## 持久DNS验证（草案）
+
+```sh
+aster-acme cert issue -n example-cert -a default -d example.com -c dns_persist
+# 首次发布 _validation-persist TXT 后继续同一订单
+aster-acme cert issue --resume example-cert --yes
+aster-acme cert renew example-cert
+```
+
+要求CA符合`draft-ietf-acme-dns-persist-02`；具体wire字段和互操作边界见[RFC参考](rfc-reference.md#dns-persist-草案实现2026-11-14)。`--webroot`和`--listen-address`不适用于`dns_persist`。首次人工发布，确认后由CA验证。多SAN逐条展示；通配符显式增加`policy=wildcard`，长期记录保留供续期使用，完成后不显示“可以删除”。记录授予指定账户持续验证权限，用户要撤回时须手动删除对应TXT，而非依赖证书到期或本地`cert remove`。
+
+续期/daemon可免交互复用已签发前任的相同记录；CA要求的issuer/prefix变化、缺失可复用记录或范围变化均返回新材料待办，不能靠自动维护把未发布的新值当作已就绪。可选TXT建议性检查不代替CA验证；关闭precheck构建仍支持此方式。当前不提供`persistUntil`、跨域hash opt-out或DNS写入选项。
 
 ## 证书部署
 
@@ -126,7 +140,7 @@
 
 0 表示命令成功执行；cert issue 的 action_required 同样为 0，脚本必须检查 status，不能将其误认为 completed。一般错误为 1，Clap 解析错误沿用 2，交互取消为 130。远端查询失败不标为 verified。
 
-续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。周期 ARI 刷新由后续 daemon 唤醒；本轮只有首次签发查询、显式 verify 时到期刷新和嵌入接口。
+续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。`daemon run-once`执行一个非交互维护周期，`daemon run`在前台持续运行；`webroot`、`standalone`、`tls_alpn`、`dns_external`和`dns_persist`自动准入；`dns_persist`仅免确认复用前任相同记录，新材料仍返回待办，人工方法报告为跳过。常驻周期默认间隔60秒，可由`config.daemon_interval`或`--interval`覆盖（1–86400秒）。同一data-dir只允许一个常驻daemon，Unix支持Ctrl-C/SIGTERM协作退出；Windows使用Ctrl-C。人类日志沿用签发的带时间戳级别格式，常驻`--json`为JSON Lines，`run-once --json`仍为单份JSON。`run-once`仍可由cron触发。
 
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
 
@@ -138,7 +152,7 @@ cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / auth
 
 cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN摘要/UTC时间/状态；脚本提供名称或完整operation ID，不猜最新。完成版本不参与签发恢复选择，DNS预检仅建议，JSON不输出人类日志。
 
-新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单只提供 manual_dns，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
+新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/dns_persist/dns_external/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单提供 manual_dns、dns_persist 与 dns_external，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
 
 仅在实际存在证书前台进度时与最终结果之间留一空行；无进度的全未到期批次及单次not_due不加开头空行（JSON不加分隔）；批量标题/计数使用INFO/WARN/ERROR标签，表格复用公共对齐和Style，待办/取消黄色、失败红色、完成绿色、未到期青色。
 
@@ -161,7 +175,7 @@ cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN
 
 ## 方法驱动签发及相似请求
 
-新申请显式 -c 或交互选择 manual_dns/manual_http/webroot/standalone/tls_alpn，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH或终端输入目录，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
+新申请显式 -c 或交互选择 manual_dns/dns_persist/dns_external/manual_http/webroot/standalone/tls_alpn，协议方法由ACME的ChallengeKind决定；webroot要求-w/--webroot PATH或终端输入目录，manual方式不能带此参数。HTTP不接受通配符。resume/renew不允许修改保存的验证实现、协议方法或规范绝对webroot路径。HTTP manual首次脚本先输出URL/path/content待办，显式resume --yes确认已部署；webroot自动发布，不因JSON/批量模式额外要求人工确认。方法、实现配置及类型化材料是当前未发布格式，无旧格式读取/迁移。
 
 本地DNS预检固定限5秒，仅建议：不存在TXT、系统解析器失败和查询超时均WARN后继续CA。用户取消/整体deadline仍终止。DNS skip/force参数已删除，无别名。`--yes`只接受操作确认，不补填验证方式、名称或条款；恢复人工材料才可提交确认。
 
@@ -172,7 +186,7 @@ Creating ACME order日志同时带实现ID和协议名；创建密钥/CSR日志�
 
 ## Debug诊断
 
---debug是跨命令诊断选项，可放根命令或具体子命令后。它只打开产品target的安全DEBUG事件，时间/配色/转义复用common/log和输出会话。显示检查点phase、creation_submitted、是否保存order URL、请求类别、HTTP状态/耗时及有限nonce重试序号；不记录私钥、CSR/JWS正文、响应正文、nonce值或带凭据的原始URL。JSON模式仍关闭人类诊断并只输出一份结果/错误；需要详细人类诊断时去掉--json。未传--debug时保留RUST_LOG环境过滤机制。
+--debug是跨命令诊断选项，可放根命令或具体子命令后。它只打开产品target的安全DEBUG事件，时间/配色/转义复用common/log和输出会话。显示检查点phase、new_order_intent_saved、是否保存order URL、请求类别、HTTP状态/耗时及有限nonce重试序号；不记录私钥、CSR/JWS正文、响应正文、nonce值或带凭据的原始URL。JSON模式仍关闭人类诊断并只输出一份结果/错误；需要详细人类诊断时去掉--json。未传--debug时保留RUST_LOG环境过滤机制。
 
 ```sh
 aster-acme cert issue --resume <NAME> --yes --debug
@@ -248,3 +262,31 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 构建标识的dirty仅描述Git已跟踪文件修改，不包含未跟踪文件；归档构建不会借用父目录仓库revision。Windows存储成功不承诺掉电后的rename目录项持久性，进程重启恢复与断电恢复分开。
 
 `cert deploy show`是操作者显式查看本地配置的入口，按请求展示保存的reload命令与参数；与普通列表、执行摘要不输出argv的边界不同。调用方应按敏感配置保护其输出，工具不按参数名猜测和破坏原始配置。
+
+CAA建议性检查：issue/renew在首次newOrder前按directory的meta.caaIdentities核对所有域名及通配符；多个CA身份任选匹配，不要求全部配置。各域名按RFC8659取首个非空有效CAA集合，不混合各层记录；检查issue/issuewild及RFC8657参数。CAA阶段全部域名共用5秒预算，DNS失败、不匹配、未知属性和超时均只提示并继续；没有caaIdentities时无法判断且不猜测身份。CAA结果仅明确匹配或无适用限制使用INFO，未匹配、未知、不可用、失败、超时和未检查均使用WARN；等级不改变建议性语义。恢复已有订单不重查，不修改DNS或保存请求状态。取消／整体deadline仍停止。TXT与HTTP预检移至同一precheck层，但在挑战发布后执行，不提前读取尚不存在的材料。
+
+预检为编译期可选能力：CLI的默认precheck feature启用CAA/TXT/HTTP建议性观察，`--no-default-features`构建不调用这些预检，仍保留CA正式验证与正常签发。嵌入者直接使用库的feature-gated Runner与检查器，不需要CLI，也不会由IssueService隐式增加DNS/HTTP观察请求。
+
+`cert remove NAME --failed`清理该名称下明确失败且不可恢复的未签发申请；终端省略NAME时只从失败候选中选择，非交互必须给出名称。creation明确4xx拒绝（排除408/429）、固定CSR被拒、order/authorization终态和订单过期可匹配；已签发、in_use、可恢复以及远端结果未知的申请保留。筛选由IssueRecord规则与storage查询提供，执行持锁重验；需确认或--yes，不访问CA，也不自动删除DNS/webroot材料或部署副本。
+
+人工验证确认复用其他命令相同的inquire::Confirm：默认否，y/yes和n/no、退格编辑、可见输入，由控件恢复终端模式。Esc/Ctrl-C即时结束；当前inquire没有外部中断接口，整体期限或程序取消在用户结束输入后复核，不再执行后续CA操作。
+
+
+## 吊销签名身份
+
+```sh
+# 默认使用保存的签发账户
+aster-acme cert revoke web --reason superseded --yes
+# 使用所选世代的证书私钥；不需要原ACME账户
+aster-acme cert revoke web --sign-with certificate-key --reason key-compromise --yes
+# 历史版本沿用精确世代选择
+aster-acme cert revoke web --operation OPERATION_ID --sign-with certificate-key --yes
+```
+
+`--sign-with`默认account，证书密钥模式不会因为失败而自动切回账户。确认显示实际证书名称/operation、CA、原因、签名方式和DER指纹；脚本/JSON仍需--yes，终端默认否。`--operation-timeout`覆盖config.operation_timeout或600秒缺省，`--request-timeout`只限制单次HTTP。两种模式都保留本地文件及部署副本，不自动reload。证书密钥模式使用托管世代的private-key.pk8，不接受任意文件输入；不读取账户目录、CSR或材料manifest。成功JSON在operation.revocation保留signer及certificate_sha256，pending/错误不会显示成功。完整语义见[生命周期](certificate-lifecycle.md#吊销)。
+
+## DNS Provider 命令
+
+`provider add/list/show/update/remove/cleanup`管理独立的`providers/<name>.toml`。`add NAME --exec PATH [--allow-zone ZONE]`接受重复`--arg`和`--allow-zone`；`update NAME`仅修改明确提供的executable/args/zone（`--clear-args`清空argv，`--clear-zones`恢复不限制发布域），必须至少有一个变更。省略zone或配置空列表默认允许任意合法发布域，非空列表才限制最终TXT owner。custom值通过私有TOML文件编辑，不接受明文secret CLI参数；所有展示全量隐藏custom对象。
+
+`cert issue -c dns_external --provider NAME`选择并保存profile ID/schema；`--provider`只用于新建external DNS申请，恢复/续期沿用保存引用，不允许覆盖。DNS external与webroot/listen-address互斥。Profile更新持排他registry租约，并影响后续调用；移除事务复核证书引用，非TTY删除须`--yes`。`provider cleanup NAME`仅处理该profile对应的终态待清理申请，无CA/账户密钥依赖，部分失败保留逐项报告和失败退出码。其余范围及配置样例见[DNS Provider](dns-providers.md)。

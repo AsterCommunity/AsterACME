@@ -6,7 +6,7 @@ use aster_acme::storage::issuance::{IssueSession, IssueStore};
 use aster_acme::storage::query::IssueQuery;
 use aster_acme::{
     account::AccountRecord,
-    challenge::{ChallengeMaterial, ChallengeToken},
+    challenge::{ChallengeToken, tls_alpn01::TlsAlpn01Response},
     identifier::DnsIdentifier,
     issuance::service::IssueService,
     issuance::{IssueExecution, IssueOutcome, IssueRequest},
@@ -26,6 +26,9 @@ use wiremock::{
     matchers::{method, path},
 };
 
+mod dns_external;
+mod dns_persist;
+
 const TOKEN: &str = "opaque-HTTP-token-with-enough-entropy";
 struct Fixture {
     implementation: ValidationMethod,
@@ -44,8 +47,10 @@ impl Fixture {
     async fn new(implementation: ValidationMethod) -> Self {
         let server = MockServer::start().await;
         Mock::given(method("GET")).and(path("/arbitrary-directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "newNonce": format!("{}/nonce",server.uri()), "newAccount": format!("{}/account",server.uri()), "newOrder": format!("{}/orders/create",server.uri())
+            "newNonce": format!("{}/nonce",server.uri()), "newAccount": format!("{}/account",server.uri()), "newOrder": format!("{}/orders/create",server.uri()),
+            "meta": {"issuerDomainNames":["authority.example"], "caaIdentities":["authority.example"], "accountHashPrefix":"https://ca.example/account-hash/"}
         }))).mount(&server).await;
+        mount_account_proof(&server).await;
         Mock::given(method("HEAD"))
             .and(path("/nonce"))
             .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "fresh_nonce"))
@@ -94,24 +99,28 @@ impl Fixture {
             account_name: "default".into(),
             challenge: implementation.kind(),
             solver_id: implementation.id().into(),
-            solver_config: configuration(
-                implementation,
-                if implementation == ValidationMethod::Webroot {
-                    Some(root.as_path())
-                } else {
-                    None
-                },
-                if matches!(
+            solver_config: if implementation == ValidationMethod::DnsExternal {
+                external_configuration(Some("test-provider")).unwrap()
+            } else {
+                configuration(
                     implementation,
-                    ValidationMethod::Standalone | ValidationMethod::TlsAlpn
-                ) {
-                    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                    Some(reservation.local_addr().unwrap())
-                } else {
-                    None
-                },
-            )
-            .unwrap(),
+                    if implementation == ValidationMethod::Webroot {
+                        Some(root.as_path())
+                    } else {
+                        None
+                    },
+                    if matches!(
+                        implementation,
+                        ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+                    ) {
+                        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                        Some(reservation.local_addr().unwrap())
+                    } else {
+                        None
+                    },
+                )
+                .unwrap()
+            },
         };
         let session = store.create(&request, &account).await.unwrap();
         let record = session.record().await.unwrap();
@@ -228,6 +237,8 @@ impl Fixture {
     ) {
         let (challenge_kind, challenge_path) = match implementation {
             ValidationMethod::TlsAlpn => ("tls-alpn-01", "/tls-challenge"),
+            ValidationMethod::DnsPersist => ("dns-persist-01", "/persist-challenge"),
+            ValidationMethod::DnsExternal => ("dns-01", "/dns-challenge"),
             ValidationMethod::ManualDns
             | ValidationMethod::ManualHttp
             | ValidationMethod::Webroot
@@ -240,9 +251,13 @@ impl Fixture {
             .respond_with(move |_: &wiremock::Request| {
                 let validated = implementation == ValidationMethod::TlsAlpn && auth_stage.load(Ordering::SeqCst) >= 2;
                 let processing = implementation == ValidationMethod::TlsAlpn && auth_stage.load(Ordering::SeqCst) > 0;
+                let mut challenge = serde_json::json!({"type":challenge_kind,"url":auth_url,"status":if processing { "processing" } else { "pending" }});
+                if implementation == ValidationMethod::DnsPersist {
+                    challenge["issuerDomainNames"] = serde_json::json!(["authority.example"]);
+                } else { challenge["token"] = serde_json::json!(TOKEN); }
                 ResponseTemplate::new(200).insert_header("Replay-Nonce", "authz").set_body_json(serde_json::json!({
                     "identifier":{"type":"dns","value":"example.com"},"status":if validated { "valid" } else { "pending" },"expires":"2099-01-01T00:00:00Z",
-                    "challenges":[{"type":challenge_kind,"url":auth_url,"status":if processing { "processing" } else { "pending" },"token":TOKEN}]
+                    "challenges":[challenge]
                 }))
             }).mount(&self.server).await;
         Mock::given(method("POST")).and(path(challenge_path))
@@ -250,7 +265,10 @@ impl Fixture {
                 let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
                 assert_eq!(URL_SAFE_NO_PAD.decode(jws.payload).unwrap(), b"{}");
                 stage.store(1, Ordering::SeqCst);
-                ResponseTemplate::new(200).insert_header("Replay-Nonce", "ack").set_body_json(serde_json::json!({"type":challenge_kind,"url":challenge_url,"status":"processing","token":TOKEN}))
+                let mut challenge = serde_json::json!({"type":challenge_kind,"url":challenge_url,"status":"processing"});
+                if implementation == ValidationMethod::DnsPersist { challenge["issuerDomainNames"] = serde_json::json!(["authority.example"]); }
+                else { challenge["token"] = serde_json::json!(TOKEN); }
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "ack").set_body_json(challenge)
             }).mount(&self.server).await;
     }
 
@@ -344,6 +362,25 @@ impl Fixture {
             .filter(|request| request.method == "POST" && request.url.path() == endpoint)
             .count()
     }
+}
+
+async fn mount_account_proof(server: &MockServer) {
+    let proof_url = format!("{}/account/1", server.uri());
+    Mock::given(method("POST"))
+        .and(path("/account/1"))
+        .respond_with(move |request: &wiremock::Request| {
+            let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(URL_SAFE_NO_PAD.decode(jws.payload).unwrap(), b"");
+            let protected: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.protected).unwrap()).unwrap();
+            assert_eq!(protected["url"], proof_url);
+            assert_eq!(protected["kid"], proof_url);
+            ResponseTemplate::new(200)
+                .insert_header("Replay-Nonce", "account_proof")
+                .set_body_json(serde_json::json!({"status":"valid"}))
+        })
+        .mount(server)
+        .await;
 }
 
 #[tokio::test]
@@ -544,20 +581,13 @@ async fn tls_alpn_completes_acme_order_and_resumes_without_reacknowledging() {
             serde_json::from_value(original.solver_config.clone()).unwrap();
         let address = config.listen_address;
         let token = ChallengeToken::new(TOKEN).unwrap();
-        let material = ChallengeMaterial::derive(
-            ChallengeKind::TlsAlpn01,
+        let material = TlsAlpn01Response::derive(
             &DnsIdentifier::new("example.com").unwrap(),
             &token,
             &fixture.account.key_thumbprint,
         )
         .unwrap();
-        let ChallengeMaterial::TlsAlpn01 {
-            authorization_digest,
-            ..
-        } = material
-        else {
-            panic!("expected TLS-ALPN material");
-        };
+        let authorization_digest = material.authorization_digest;
 
         if resume {
             let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
@@ -818,7 +848,15 @@ async fn mismatched_solver_fails_before_any_order_or_acknowledgement() {
             .service
             .run(
                 fixture.session.as_mut().unwrap().as_mut(),
-                &aster_acme_validation::dns01::visibility::DnsVisibility,
+                &crate::commands::cert::validation::manual::Manual {
+                    reusable: Vec::new(),
+                    method: ChallengeKind::Dns01,
+                    saved: false,
+                    interactive: false,
+                    yes: false,
+                    progress: progress(),
+                    prompt: std::sync::Mutex::new(None),
+                },
                 &context
             )
             .await
@@ -852,8 +890,8 @@ async fn saved_http_token_changes_are_rejected_before_publication_or_acknowledge
     );
     let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
     assert_eq!(
-        saved.authorizations[0].validation,
-        record.authorizations[0].validation
+        saved.authorizations[0].validation_requirement,
+        record.authorizations[0].validation_requirement
     );
 }
 
@@ -903,9 +941,9 @@ impl ChallengeSolver for CancelAfterPublication {
 
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        requirements: &[aster_acme::solver::ChallengePublication],
         context: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
         let ready = self.0.ready(requirements, context).await?;
         context.cancellation.cancel();
         Ok(ready)
@@ -1042,7 +1080,7 @@ async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_
             8 => other.identifiers.pop().map(|_| ()).unwrap(),
             9 => other.phase = aster_acme_core::workflow::IssuancePhase::Completed,
             10 => {
-                other.creation_submitted = true;
+                other.new_order_intent_saved = true;
                 other.order_url = None;
             }
             11 => other.revocation.state = aster_acme_core::revocation::RevocationState::Pending,
@@ -1123,7 +1161,7 @@ async fn matching_includes_every_unfinished_phase_but_unconfirmed_creation_never
         );
     }
     record.phase = IssuancePhase::CreatingOrder;
-    record.creation_submitted = true;
+    record.new_order_intent_saved = true;
     record.order_url = None;
     fixture
         .session

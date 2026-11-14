@@ -37,22 +37,7 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
         );
     }
     if let Some(issue) = error.downcast_ref::<aster_acme::issuance::IssueError>() {
-        use aster_acme::issuance::IssueError;
-        return match issue {
-            IssueError::AuthorizationFailed { status, problem } => self::problem::authorization_failed(status, problem.as_deref()),
-            IssueError::Publication(_) if issue.to_string().contains("webroot") || issue.to_string().contains("HTTP") || issue.to_string().contains("isolated") => (issue.to_string(), Some("Inspect the webroot file state and the exact path reported in the error. Retain any isolated cleanup entry until ownership can be verified, then correct the webroot state and retry/resume.".into())),
-            IssueError::Publication(_) => (issue.to_string(), Some("Check the challenge listener address, port availability and bind permissions. HTTP-01 requires public port 80 with Host preserved; TLS-ALPN-01 requires public port 443 with SNI and acme-tls/1 preserved. A custom local port requires forwarding.".into())),
-            IssueError::NameAlreadyExists(name)=>(issue.to_string(),Some(format!("Choose another --name, or inspect cert show '{}'. To continue its unfinished request use cert issue --resume '{}'.",name.as_str(),name.as_str()))),
-            IssueError::RevocationUncertain(error)=>(format!("Certificate revocation outcome is unconfirmed. {}", transport_diagnostic(error).0),Some("Inspect cert show <NAME>. Rerun cert revoke <NAME> --yes with the same reason to request revocation again; local files are retained.".into())),
-            IssueError::Transport(error)=>transport_diagnostic(error),
-            IssueError::Store(error)=>(format!("Could not access certificate storage: {}", error.message),Some("Check --data-dir, managed files and permissions. Retain any .removing marker and remaining files for inspection.".into())),
-            IssueError::PollLimit { .. } => (issue.to_string(), Some("Resume the saved request, or increase --max-polls. Retry-After and the overall --operation-timeout still apply; no new order is created.".into())),
-            IssueError::InvalidOrder { problem } => self::problem::invalid_order(problem.as_deref()),
-            IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; local readiness cannot bypass CA expiry.".into())),
-            IssueError::CreationUncertain=>(issue.to_string(),Some("Use cert list to inspect the retained request. Keep its key/CSR; a missing Location cannot be reconstructed safely and no new order will be created automatically.".into())),
-            IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Saved validation files and records remain under your control.".into())),
-            IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and saved validation requirements. Retain the certificate key and CSR.".into())),
-        };
+        return issue_diagnostic(issue);
     }
     if let Some(account) = error.downcast_ref::<AccountError>() {
         return match account {
@@ -127,6 +112,29 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
         return (storage.to_string(),Some("Check the account name, selected CA and data directory. Switching requires an already registered account.".into()));
     }
     (error.to_string(), None)
+}
+
+fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option<String>) {
+    use aster_acme::issuance::IssueError;
+    match issue {
+        IssueError::LeaseUnavailable(..) => (issue.to_string(), Some("Let the running operation finish, then check the saved certificate state and lock permissions. Lock contention does not advance renewal backoff.".into())),
+        IssueError::AuthorizationFailed { status, problem } => self::problem::authorization_failed(status, problem.as_deref()),
+        IssueError::DnsProvider(_) | IssueError::DnsRouting(_) | IssueError::DnsPropagation(_) | IssueError::DnsRetryAt(_) => (issue.to_string(), Some("Inspect provider show <PROFILE> and its private TOML configuration, allowed DNS zones, resolver diagnostic and provider error code. Retain the saved request and publication receipts; resume the same request after correcting the cause or waiting for the saved retry time. For a terminal request use provider cleanup <PROFILE>.".into())),
+        IssueError::Publication(_) if issue.to_string().contains("webroot") || issue.to_string().contains("HTTP") || issue.to_string().contains("isolated") => (issue.to_string(), Some("Inspect the webroot file state and the exact path reported in the error. Retain any isolated cleanup entry until ownership can be verified, then correct the webroot state and retry/resume.".into())),
+        IssueError::Publication(_) => (issue.to_string(), Some("Check the selected validation implementation and its saved configuration. For DNS use provider show <PROFILE> and inspect private profile permissions; for HTTP/TLS listeners check the address, port forwarding and bind permissions. Retain saved publication material before retrying.".into())),
+        IssueError::NameAlreadyExists(name)=>(issue.to_string(),Some(format!("Choose another --name, or inspect cert show '{}'. To continue its unfinished request use cert issue --resume '{}'.",name.as_str(),name.as_str()))),
+        IssueError::RevocationInput(_)=>(issue.to_string(),Some("Inspect cert show <NAME>, the target certificate and explicit --sign-with selection. Certificate-key mode requires its matching private key, but no ACME account or CSR.".into())),
+        IssueError::RevocationInterrupted=>(issue.to_string(),Some("Inspect cert show <NAME>. Retry cert revoke explicitly with the same certificate and reason, selecting --sign-with certificate-key when applicable; local files are retained.".into())),
+        IssueError::RevocationUncertain(error)=>(format!("Certificate revocation outcome is unconfirmed. {}", transport_diagnostic(error).0),Some("Inspect cert show <NAME>. Rerun cert revoke <NAME> --yes with the same reason; select --sign-with certificate-key when applicable. Local files are retained.".into())),
+        IssueError::Transport(error)=>transport_diagnostic(error),
+        IssueError::Store(error)=>(format!("Could not access certificate storage: {}", error.message),Some("Check --data-dir, managed files and permissions. Retain any .removing marker and remaining files for inspection.".into())),
+        IssueError::PollLimit { .. } => (issue.to_string(), Some("Resume the saved request, or increase --max-polls. Retry-After and the overall --operation-timeout still apply; no new order is created.".into())),
+        IssueError::InvalidOrder { problem } => self::problem::invalid_order(problem.as_deref()),
+        IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; local readiness cannot bypass CA expiry.".into())),
+        IssueError::CreationUncertain=>(issue.to_string(),Some("Use cert list to inspect the retained request. Keep its key/CSR; a missing Location cannot be reconstructed safely and no new order will be created automatically.".into())),
+        IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Saved validation files and records remain under your control.".into())),
+        IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and saved validation requirements. Retain the certificate key and CSR.".into())),
+    }
 }
 
 fn storage_message(message: &str) -> (String, Option<String>) {

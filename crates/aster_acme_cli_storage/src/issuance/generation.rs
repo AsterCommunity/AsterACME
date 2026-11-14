@@ -16,15 +16,12 @@ impl CliIssueStore {
         input: Initialization,
         account: &AccountRecord,
     ) -> Result<RenewalPreparation, IssueError> {
-        match &input {
-            Initialization::New(request) => validate_request(request, account)?,
-            Initialization::Renewal(_) | Initialization::Scheduled { .. }
-                if !account.is_usable() =>
-            {
-                return Err(failure("renewal requires an active account"));
-            }
-            Initialization::Renewal(_) | Initialization::Scheduled { .. } => {}
-        }
+        validate_initialization(&input, account)?;
+        let provider_registry =
+            crate::provider::ProviderProfileStore::new(self.root.clone(), self.timeout)
+                .lease()
+                .await
+                .map_err(|_| failure("provider registry is busy or unsafe"))?;
         let name = match &input {
             Initialization::New(request) => &request.name,
             Initialization::Renewal(name) | Initialization::Scheduled { name, .. } => name,
@@ -33,6 +30,7 @@ impl CliIssueStore {
         let slot = self.slot(name);
         let account = account.clone();
         tokio::task::spawn_blocking(move || {
+            let _provider_registry = provider_registry;
             if let Initialization::Scheduled {
                 expected_in_use,
                 immediate,
@@ -42,7 +40,7 @@ impl CliIssueStore {
             {
                 return Ok(RenewalPreparation::NotDue(Box::new(in_use)));
             }
-            let renewal_of = prepare_initialization(&slot, &input)?;
+            let renewal_of = prepare_initialization(&slot, &input, &account)?;
             let request = initialize_definition(&slot, input, &account)?;
             let generations = read_generations(&slot, &request.name)?;
             if let Some(record) = existing_renewal(&generations, renewal_of.as_ref())? {
@@ -81,7 +79,7 @@ impl CliIssueStore {
                 key_algorithm: request.key_algorithm,
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
-                creation_submitted: false,
+                new_order_intent_saved: false,
                 creation_failure: None,
                 submitted_replaces: None,
                 order_url: None,
@@ -91,8 +89,8 @@ impl CliIssueStore {
                 finalize_rejection: None,
                 next_poll_at: None,
                 poll_wait_source: None,
-                certificate_not_after: None,
                 renewal: None,
+                renewal_retry: None,
                 revocation: aster_acme::revocation::RevocationRecord::default(),
             };
             let generation = slot.join(record.generation_name());
@@ -116,6 +114,19 @@ impl CliIssueStore {
         })
         .await
         .map_err(|_| failure("issuance initialization worker failed"))?
+    }
+}
+
+fn validate_initialization(
+    input: &Initialization,
+    account: &AccountRecord,
+) -> Result<(), IssueError> {
+    match input {
+        Initialization::New(request) => validate_request(request, account),
+        Initialization::Renewal(_) | Initialization::Scheduled { .. } if !account.is_usable() => {
+            Err(failure("renewal requires an active account"))
+        }
+        Initialization::Renewal(_) | Initialization::Scheduled { .. } => Ok(()),
     }
 }
 
@@ -144,8 +155,13 @@ pub(super) fn check_renewal_schedule(
         ));
     }
     in_use.is_in_use = true;
+    let now = time::OffsetDateTime::now_utc();
+    if retry_not_due(&in_use, immediate, now)? {
+        return Ok(Some(in_use));
+    }
     let pending = records.iter().any(|record| {
-        record.unfinished()
+        record.resume_candidate()
+            && !record.expired(now)
             && record
                 .renewal_of
                 .as_ref()
@@ -160,7 +176,7 @@ pub(super) fn check_renewal_schedule(
         pending,
         in_use.revocation.state,
         due.unix_timestamp(),
-        time::OffsetDateTime::now_utc().unix_timestamp(),
+        now.unix_timestamp(),
         immediate,
     ) {
         RenewalDecision::NotDue => Ok(Some(in_use)),
@@ -171,10 +187,32 @@ pub(super) fn check_renewal_schedule(
     }
 }
 
+fn retry_not_due(
+    record: &IssueRecord,
+    immediate: bool,
+    now: time::OffsetDateTime,
+) -> Result<bool, IssueError> {
+    let Some(retry) = &record.renewal_retry else {
+        return Ok(false);
+    };
+    if let Some(reason) = &retry.blocked_reason {
+        return Err(failure(&format!(
+            "automatic renewal is blocked by an uncertain prior result: {reason}"
+        )));
+    }
+    if retry.ca_retry_at.is_some_and(|retry_at| retry_at > now) {
+        return Err(failure(
+            "CA Retry-After has not elapsed; --now cannot bypass it",
+        ));
+    }
+    Ok(!immediate && retry.retry_at.is_some_and(|retry_at| retry_at > now))
+}
+
 // Validate the live selection under the object lease before key generation.
 fn prepare_initialization(
     slot: &Path,
     input: &Initialization,
+    account: &AccountRecord,
 ) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
     match input {
         Initialization::New(_) => {
@@ -187,7 +225,9 @@ fn prepare_initialization(
     removal::ensure_idle(slot)?;
     let renewal_of = match input {
         Initialization::New(_) => None,
-        Initialization::Renewal(_) | Initialization::Scheduled { .. } => predecessor(slot)?,
+        Initialization::Renewal(_) | Initialization::Scheduled { .. } => {
+            predecessor(slot, account)?
+        }
     };
     Ok(renewal_of)
 }
@@ -217,9 +257,36 @@ fn existing_renewal(
     let Some(previous) = previous else {
         return Ok(None);
     };
-    let mut pending = generations
+    let now = time::OffsetDateTime::now_utc();
+    // A crash may precede the retry checkpoint on the predecessor. Remote
+    // submission evidence in the child must still prevent another newOrder.
+    for record in generations
         .iter()
-        .filter(|record| record.unfinished() && record.renewal_of.as_ref() == Some(previous));
+        .filter(|record| record.unfinished() && record.renewal_of.as_ref() == Some(previous))
+    {
+        if let Some(response) = &record.finalize_rejection
+            && response.retry_at.is_some_and(|at| at > now)
+        {
+            return Err(response.error());
+        }
+        if let Some(response) = &record.creation_failure {
+            if !(400..500).contains(&response.status) || response.status == 408 {
+                return Err(IssueError::MutationUncertain(
+                    "previous newOrder outcome is unconfirmed",
+                ));
+            }
+            if response.retry_at.is_some_and(|at| at > now) {
+                return Err(response.error());
+            }
+        } else if record.new_order_intent_saved && record.order_url.is_none() {
+            return Err(IssueError::CreationUncertain);
+        }
+    }
+    let mut pending = generations.iter().filter(|record| {
+        record.resume_candidate()
+            && !record.expired(now)
+            && record.renewal_of.as_ref() == Some(previous)
+    });
     let first = pending.next();
     if pending.next().is_some() {
         return Err(failure(
@@ -231,6 +298,7 @@ fn existing_renewal(
 
 fn predecessor(
     slot: &Path,
+    account: &AccountRecord,
 ) -> Result<Option<aster_acme::issuance::RenewalPredecessor>, IssueError> {
     let config = selection(slot)?;
     let Some(in_use) = config.cert.in_use else {
@@ -240,6 +308,9 @@ fn predecessor(
         .into_iter()
         .find(|record| record.operation_id == in_use)
         .ok_or_else(|| failure("in_use generation is missing"))?;
+    if Some(&record.account_url) != account.account_url.as_ref() {
+        return Err(failure("renewal account URL changed"));
+    }
     let chain = read_private(
         &slot.join(record.generation_name()).join("fullchain.pem"),
         1024 * 1024,
@@ -247,6 +318,7 @@ fn predecessor(
     .map_err(|_| failure("in_use certificate is missing or unsafe"))?;
     let certificate_id = aster_acme::renewal::identifier_from_certificate(&chain)?;
     Ok(Some(aster_acme::issuance::RenewalPredecessor {
+        retained_validation: record.retained_validation_requirements(),
         operation_id: in_use,
         certificate_id,
     }))

@@ -89,12 +89,7 @@ fn finish(
     execution: common::error::CliResult<dispatch::CommandReport>,
     cli: &common::context::CommandContext,
 ) -> std::process::ExitCode {
-    let result = execution.and_then(|report| {
-        let text = report.render(cli.output.format())?;
-        cli.output
-            .finish(&text, common::session::FinalChannel::Result)?;
-        Ok(report.exit_status())
-    });
+    let result = execution.and_then(|report| report.finish(cli));
     match result {
         Ok(status) => status.code(),
         Err(error) => {

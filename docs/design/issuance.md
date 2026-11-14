@@ -4,7 +4,11 @@
 
 ## 一个状态机，多种发布方式
 
-IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
+IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、dns_persist、dns_external、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
+
+四种`ChallengeMaterial`均为具名子模块类型：`dns01::Dns01Record`、`dns_persist::DnsPersistRecord`、`http01::Http01Response`和`tls_alpn01::TlsAlpn01Response`；各模块拥有材料定义、派生和方法约束，公共`KeyAuthorization`只拥有token与账户绑定及共享摘要。DNS Persist的`issuer`与`account_uri`子模块分别拥有issuer集合规则和哈希URI规则，记录本身拥有TXT格式及复用范围。
+
+`ChallengeKind`集中以穷尽match声明directory准入、`PublicationLifetime`、发布前账户证明要求及ack身份字段。`check_execution`在新订单准入时统一校验方法所需元数据；`create`只处理通用newOrder，授权编排根据能力要求执行账户控制权证明。纯`issuance::authorization`负责选择challenge、调用材料所有者、检查固定材料并设置检查点，服务负责保存、网络和solver调用。恢复、清理、完成提示及续期快照共用发布生命周期；持久化与通用编排不解析TXT策略。
 
 IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配置。每个世代独立key/CSR，material.sha256绑定固定字节。恢复沿用保存的材料及配置；相似未完成查询按完整定义匹配，不按主域名猜测。
 
@@ -18,13 +22,31 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 账户ID、directory和kid绑定签发身份；轮换后的当前签名器可继续旧申请。旧thumbprint继续绑定原挑战材料，不被新密钥替换。授权/选中challenge终态保留Problem并拒绝恢复；已valid订单不会因历史challenge记录而错误阻止下载。
 
+`dns-persist-01` 按[固定草案版本](../rfc-reference.md#dns-persist-草案实现2026-11-14)推导域名与账户绑定的哈希URI，不要求token。展示发布材料前用当前账户密钥向精确kid执行空payload的POST-as-GET并要求valid；检查失败不调用solver或ack。`ValidationRequirement::DnsPersist01`保留逻辑TXT，CLI独立展示255字节分片。成功或明确失败均不清理长期记录，也不返回临时cleanup提示。
+
+续期的`RenewalPredecessor.retained_validation`保存来自同一账户/定义的已签发世代快照，保持租约内核验和不可变身份检查；当CA已直接返回valid授权而无需新挑战时，仍将快照带到下一代。服务优先复用仍满足当前issuer/prefix/owner/通配符范围的记录，不因换钥改写已发布hash；无法复用则推导新值并要求重新发布。CLI只自动确认与前任快照完全一致的材料，`--yes`仍不能把首次新材料视作已发布。快照保存类型化`ValidationRequirement`，只保留匹配方法的长期材料；owner/scope相等由材料所有者判断并替换，临时、错配和重复材料不进入复用快照。CLI也只对长期且完全相同的材料免确认，不累积全部历史hash。
+
 执行在CA发现前建立同一取消令牌/deadline，发现、确认、轮询及自动部署共享剩余预算。request_timeout只限制单次请求，max_polls限制本次订单轮询轮数。默认local poll_interval为5秒，不缩短有效Retry-After；每轮展示计数和等待来源。
 
 只读verify不调用ready、ack、finalize或清理。IssueSession.record读取最新持久化状态；每会话IO串行，后台任务携带许可和租约到写完，即使上层等待取消也不提前解锁。
 
+## 统一建议性预检
+
+库 `aster_acme::precheck::Runner` 为显式调用的检查器提供每阶段默认5秒预算、取消和整体deadline，返回带输入索引的结构化Report；本地超时保留完成项，并标记TimedOut/NotChecked。检查器由应用注入：HTTP归aster_acme的precheck-http，CAA/TXT归validation的precheck-caa/precheck-dns。CLI `cert/precheck/{caa,dns,validation}` 仅负责调用时机和展示；solver负责发布材料，CAA不会成为签发状态或执行资格。普通不匹配、解析错误和本地超时只提示，CA最终检查；JSON仍只输出既有业务报告，不夹杂人类预检日志。
+
+系统DNS初始化由`validation::resolver::system`统一处理，`InitializationError`区分读取系统配置与构造解析器，并通过Error::source保留Hickory原始错误。`Txt::system`和`SystemLookup::new`直接返回该类型；通用`Failure::Unavailable { reason }`把原因带入CAA报告，不再将缺少CA身份与解析器失败混为一谈。CLI按原有输出边界转义后显示具体原因，JSON仍不输出人类预检日志；`Failure`携带String后使用Clone而非Copy。
+
+仅保留诊断，不vendor、patch或重写Hickory：不移除IPv6接口标识、不跳过失败的nameserver、不添加公共DNS回退，也不修改系统配置。macOS带`%en0`的地址若被当前Hickory拒绝，预检会明确报告`cannot load system DNS configuration: ... invalid IP address syntax`，仍由CA独立验证。
+
+库默认不启用预检，IssueService::run不自动调用预检；CLI默认启用自己的precheck feature，关闭后仍可正常签发。CLI在统一`precheck::with_validation`装饰器中对solver已就绪的DNS-01/DNS-PERSIST-01材料执行TXT建议检查、对HTTP-01执行HTTP检查，发布solver本身不隐式做网络预检。嵌入者可自行选择检查器并通过Runner::new覆盖默认预算。
+
+issue与renew共用Foreground：directory发现后、首次newOrder前检查全部DNS标识符。恢复已有订单或已提交的创建不重复查CAA；directory未广告caaIdentities时输出无法判断，不根据CA URL猜测身份。CAA阶段所有SAN共享5秒，保留已完成观察，超时后的未检查项为未知。
+
+`protocol::DirectoryMeta.caa_identities`对应RFC8555 §7.1.1，多个issuer是任选匹配，不要求全部发布。`core::caa`按RFC8659处理issue/issuewild、加法授权和未知critical；`validation::caa`使用系统递归解析器（包含别名跟随），只对原标识符爬父域，遇到首个非空CAA集合停止，不合并父子集合、不查询根。NODATA/NXDOMAIN与SERVFAIL等失败分开。通配符去掉*.查询，有issuewild则覆盖issue；仅iodef不限制。RFC8657账户URI/验证方式逐条匹配，CA参数支持和未知critical支持仍由CA决定，客户端结果只为建议。DEBUG可查看本地记录；INFO/WARN显示标识符、查询来源及匹配／无法判断原因。
+
 ## 人工验证与终端
 
-DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制。普通预检失败或耗尽自身预算时仅警告后继续CA验证；用户取消或整体deadline到达时立即停止执行，不继续CA验证。Manual确认线程使用25ms有界终端轮询，观察同一取消/deadline；shutdown结束读取并恢复raw mode，Esc/Ctrl-C映射CLI取消，终端IO失败独立报告。
+DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，不代替CA验证。HTTP预检复用既有连接池，遵循系统／环境代理，允许内网及回环目标；不执行本地DNS过滤或固定，代理可负责域名解析。保留HTTP/HTTPS跳转次数、端口、正文和总时间限制。普通预检失败或耗尽自身预算时仅警告后继续CA验证；用户取消或整体deadline到达时立即停止执行，不继续CA验证。人工验证确认复用原生inquire::Confirm，输入/编辑/回显与其他CLI一致；默认否，Esc/Ctrl-C退出。inquire公开API不支持外部取消钩子：等待用户输入期间不强制中断控件，shutdown等待其结束，随后重新检查取消/整体期限，在失效执行中不得继续通知CA。终端raw mode由inquire管理，不跨线程强制关闭、不遗留后台提示。
 
 ## Webroot文件所有权
 
@@ -43,3 +65,13 @@ listener统一TCP绑定、最多64条连接、每连接5秒期限、任务回收
 TLS-ALPN默认0.0.0.0:443，复用rustls/AWS-LC与同一listener。每DNS标识符独立P-256挑战证书，单一SAN、critical acmeIdentifier（DER OCTET STRING中的32字节摘要）；仅SNI匹配且客户端提供acme-tls/1时选择，不复用证书私钥，不支持通配符/IP。
 
 restore只重建临时响应服务，不重发ack；run每个返回路径await有界shutdown。宿主直接丢弃future时仍须关闭或丢弃solver，Drop负责兜底。公网端口、A/AAAA、Host/SNI转发由用户负责，不自动提权或停其他服务。
+
+## 外部 DNS 发布检查点
+
+`issuance::publication`拥有发布计划、逐授权回执、限流下限及终态清理的持久化顺序；`IssueService`不解析provider JSON。`ChallengeSolver`只有一套带`ChallengePublication`的prepare/restore/ready/wait_ready/cleanup契约：prepare只读，返回的最终DNS路由先保存，再允许ready产生副作用。ready逐条返回回执和部分错误，先保存成功回执与provider retry_at，再运行独立wait_ready。外部DNS要求全部回执齐全才允许ack；manual/HTTP/TLS不生成DNS回执。
+
+DNS solver的正常取消由拥有子进程的runner处理，服务不从外层丢弃正在终止/回收子进程的future。HTTP/webroot/manual保持各自的shutdown与worker/终端恢复约束。返回后服务仍检查同一执行期限，CA提交规则不变。
+
+`dns_external`使用命名Profile与ADPP adapter；路由和receipt都不含provider_custom。恢复沿用已保存CNAME目标；响应丢失时只以同一publication_id重试对账。provider原始错误码、无副作用/未知副作用及本地process/protocol错误分开，DNS路由错误保留resolver原因。CNAME与传播的具体策略、Profile存储和独立清理入口见[Provider操作](../dns-providers.md)。
+
+`issuance::publication::cleanup`可在无ACME客户端/账户密钥时重试已确认终态的清理；逐条保存成功结果，保留失败条目。尚无回执但有保存计划时按原ID对账再清理；未知CA结果禁止调用。它不把本地文件删除当DNS清理。

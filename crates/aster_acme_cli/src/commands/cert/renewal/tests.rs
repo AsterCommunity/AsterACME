@@ -1,6 +1,7 @@
 //! Batch outcomes and cancellation are independent of transport timing and terminal state.
 use crate::commands::cert::render;
 use crate::commands::cert::renewal::*;
+use crate::commands::cert::validation::ValidationMethod;
 use aster_acme::issuance::{IssueOutcome, ValidationRequirement};
 use aster_acme::storage::account::KeyAccess;
 use aster_acme::storage::query::IssueQuery;
@@ -11,7 +12,7 @@ fn record(name: &str) -> IssueRecord {
         "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":name,
         "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
         "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
-        "phase":"completed","creation_submitted":true,"authorizations":[],"finalize_submitted":"submitted"
+        "phase":"completed","new_order_intent_saved":true,"authorizations":[],"finalize_submitted":"submitted"
     })).unwrap();
     record.is_in_use = true;
     record
@@ -161,6 +162,14 @@ async fn empty_inventory_and_pre_cancelled_batches_do_not_execute() {
         empty.summary(),
         super::super::report::RenewalSummary::default()
     );
+    let human = render::batch(
+        &empty,
+        crate::common::session::Format::plain(false),
+        std::path::Path::new("/data"),
+    )
+    .unwrap();
+    assert_eq!(human, "[INFO] No managed certificates to check.");
+    assert!(!human.contains("NAME"));
     token.cancel();
     let report = run_batch(vec![record("later")], &executor, &token).await;
     assert!(executor.calls.borrow().is_empty());
@@ -325,6 +334,7 @@ async fn real_transactions_keep_not_due_material_unchanged_skip_unissued_and_con
         store: &fixture.store,
         run: &fixture.run,
         immediate: false,
+        automatic: false,
         cancellation: Some(&token),
         cli: &fixture.cli,
     };
@@ -381,6 +391,7 @@ async fn now_failure_is_reported_per_item_and_preserves_the_previous_in_use_cert
         store: &fixture.store,
         run: &fixture.run,
         immediate: true,
+        automatic: false,
         cancellation: Some(&token),
         cli: &fixture.cli,
     };
@@ -500,6 +511,7 @@ async fn certificate_lock_timeout_is_one_failure_and_does_not_stop_the_next_due_
         store: &fixture.store,
         run: &fixture.run,
         immediate: false,
+        automatic: false,
         cancellation: Some(&token),
         cli: &fixture.cli,
     };
@@ -523,6 +535,126 @@ async fn certificate_lock_timeout_is_one_failure_and_does_not_stop_the_next_due_
         lease.record().await.unwrap().operation_id,
         locked.operation_id
     );
+    assert!(
+        lease.record().await.unwrap().renewal_retry.is_none(),
+        "lease contention must not count as a failed renewal"
+    );
+}
+
+#[tokio::test]
+async fn missing_account_before_session_creation_gets_one_persisted_backoff() {
+    let fixture = LocalFixture::create().await;
+    let current = fixture.seed("missing-account", true).await;
+    std::fs::rename(
+        fixture.settings.data_dir.join("accounts"),
+        fixture.settings.data_dir.join("accounts-offline"),
+    )
+    .unwrap();
+    let token = CancellationToken::new();
+    let executor = Transaction {
+        settings: &fixture.settings,
+        store: &fixture.store,
+        run: &fixture.run,
+        immediate: true,
+        automatic: false,
+        cancellation: Some(&token),
+        cli: &fixture.cli,
+    };
+    assert!(executor.run(&current).await.is_err());
+    let saved = fixture
+        .store
+        .open_observation(&current.name, &current.operation_id)
+        .await
+        .unwrap()
+        .record()
+        .await
+        .unwrap();
+    assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+    assert!(
+        saved
+            .renewal_retry
+            .as_ref()
+            .unwrap()
+            .retry_at
+            .is_some_and(|at| at > time::OffsetDateTime::now_utc())
+    );
+    // A second worker that already selected the old snapshot cannot increment again.
+    assert!(executor.run(&current).await.is_err());
+    let saved = fixture
+        .store
+        .open_observation(&current.name, &current.operation_id)
+        .await
+        .unwrap()
+        .record()
+        .await
+        .unwrap();
+    assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+    assert_eq!(
+        fixture
+            .store
+            .query(IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn unreadable_account_key_and_fixed_csr_failures_are_checkpointed_before_session_opens() {
+    for corrupt_account in [true, false] {
+        let fixture = LocalFixture::create().await;
+        let current = fixture.seed("preparation", true).await;
+        if corrupt_account {
+            std::fs::write(
+                fixture
+                    .settings
+                    .data_dir
+                    .join("accounts/default/account-key.pk8"),
+                b"broken account key",
+            )
+            .unwrap();
+        } else {
+            let attempt = fixture
+                .store
+                .renew(&current.name, &fixture.account)
+                .await
+                .unwrap();
+            let pending = attempt.record().await.unwrap();
+            drop(attempt);
+            std::fs::write(
+                fixture
+                    .settings
+                    .data_dir
+                    .join("certs/preparation")
+                    .join(pending.generation_name())
+                    .join("request.der"),
+                b"broken fixed CSR",
+            )
+            .unwrap();
+        }
+        let token = CancellationToken::new();
+        let executor = Transaction {
+            settings: &fixture.settings,
+            store: &fixture.store,
+            run: &fixture.run,
+            immediate: true,
+            automatic: false,
+            cancellation: Some(&token),
+            cli: &fixture.cli,
+        };
+        assert!(executor.run(&current).await.is_err());
+        let saved = fixture
+            .store
+            .open_observation(&current.name, &current.operation_id)
+            .await
+            .unwrap()
+            .record()
+            .await
+            .unwrap();
+        assert_eq!(saved.renewal_retry.as_ref().unwrap().failures, 1);
+        assert!(saved.is_in_use);
+    }
 }
 
 #[tokio::test]
@@ -560,4 +692,171 @@ async fn all_not_due_report_has_one_table_and_one_sentence_without_zero_counters
     assert_eq!(machine["summary"]["not_due"], 2);
     assert_eq!(machine["summary"]["failed"], 0);
     assert_eq!(machine["results"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_transaction() {
+    use crate::commands::cert::validation::ValidationMethod;
+    for method in [
+        ValidationMethod::ManualDns,
+        ValidationMethod::DnsPersist,
+        ValidationMethod::DnsExternal,
+        ValidationMethod::ManualHttp,
+        ValidationMethod::Webroot,
+        ValidationMethod::Standalone,
+        ValidationMethod::TlsAlpn,
+    ] {
+        let fixture = LocalFixture::create().await;
+        let record = fixture.seed_with_validation("web", true, method).await;
+        let session = fixture
+            .store
+            .open_observation(&record.name, &record.operation_id)
+            .await
+            .unwrap();
+        let mut due = session.record().await.unwrap();
+        due.renewal.as_mut().unwrap().renew_at =
+            time::OffsetDateTime::now_utc() - time::Duration::seconds(1);
+        session.save(&due).await.unwrap();
+        drop(session);
+        let cancellation = CancellationToken::new();
+        let report = execute_automatic(
+            fixture.settings.clone(),
+            &fixture.store,
+            &fixture.run,
+            &fixture.cli,
+            &cancellation,
+            fixture
+                .store
+                .query(IssueQuery {
+                    in_use: Some(true),
+                    renewal_due_at: Some(time::OffsetDateTime::now_utc()),
+                    ..IssueQuery::default()
+                })
+                .await
+                .unwrap(),
+        )
+        .await;
+        let records = fixture.store.query(IssueQuery::default()).await.unwrap();
+        if method.automatic() {
+            assert_eq!(
+                report.summary().failed,
+                1,
+                "{} should enter the transaction and fail at its unreachable fixture CA",
+                method.id()
+            );
+            let renewal = records
+                .iter()
+                .find(|candidate| candidate.unfinished())
+                .expect(
+                    "eligible method must persist its fixed renewal generation before CA discovery",
+                );
+            assert_eq!(
+                renewal.renewal_of.as_ref().unwrap().operation_id,
+                record.operation_id
+            );
+        } else {
+            assert_eq!(report.summary().skipped, 1);
+            assert!(matches!(
+                report.entries[0].result,
+                RenewalResult::Skipped(SkipReason::ManualValidation)
+            ));
+            assert_eq!(
+                records.len(),
+                1,
+                "manual validation must not create a renewal generation"
+            );
+        }
+    }
+}
+
+impl LocalFixture {
+    async fn seed_with_validation(
+        &self,
+        name: &str,
+        complete: bool,
+        method: ValidationMethod,
+    ) -> IssueRecord {
+        use aster_acme::{
+            crypto::key_algorithm::KeyAlgorithm,
+            issuance::{CertificateName, IssueRequest},
+        };
+        let root = self.settings.data_dir.join("webroot");
+        std::fs::create_dir_all(&root).unwrap();
+        let listen = std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            if method == ValidationMethod::TlsAlpn {
+                443
+            } else {
+                8080
+            },
+        ));
+        let config = if method == ValidationMethod::DnsExternal {
+            aster_acme_cli_storage::provider::ProviderProfileStore::new(
+                self.settings.data_dir.clone(),
+                Duration::from_secs(2),
+            )
+            .add(
+                "test-provider".into(),
+                aster_acme_cli_storage::provider::ProviderProfile::new(
+                    std::env::current_exe().unwrap(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            super::super::validation::external_configuration(Some("test-provider")).unwrap()
+        } else {
+            super::super::validation::configuration(
+                method,
+                (method == ValidationMethod::Webroot).then_some(root.as_path()),
+                matches!(
+                    method,
+                    ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+                )
+                .then_some(listen),
+            )
+            .unwrap()
+        };
+        let req = IssueRequest {
+            challenge: method.kind(),
+            solver_id: method.id().into(),
+            solver_config: config,
+            name: CertificateName::new(name).unwrap(),
+            identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
+            key_algorithm: KeyAlgorithm::EcdsaP256,
+            account_name: "default".into(),
+        };
+        let session = self.store.create(&req, &self.account).await.unwrap();
+        let mut record = session.record().await.unwrap();
+        if complete {
+            use rcgen::{CertificateParams, Issuer, KeyPair};
+            let folder = self
+                .settings
+                .data_dir
+                .join("certs")
+                .join(name)
+                .join(record.generation_name());
+            let key =
+                zeroize::Zeroizing::new(std::fs::read(folder.join("private-key.pk8")).unwrap());
+            let key = KeyPair::try_from(key.as_slice()).unwrap();
+            let issuer = Issuer::new(
+                CertificateParams::new(Vec::<String>::new()).unwrap(),
+                KeyPair::generate().unwrap(),
+            );
+            let mut params = CertificateParams::new(vec!["example.com".to_owned()]).unwrap();
+            params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+            params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(89);
+            record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+            return session
+                .complete(
+                    &record,
+                    params.signed_by(&key, &issuer).unwrap().pem().as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+        record
+    }
 }

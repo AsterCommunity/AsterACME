@@ -10,11 +10,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
-/// Shared advisory precheck budget, independent of HTTP requests and CA polls.
-/// A shorter operation deadline or cancellation always takes precedence.
-const PRECHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-mod http;
+mod dns_external;
 mod listener;
 mod manual;
 mod standalone;
@@ -28,6 +24,14 @@ pub(crate) enum ValidationMethod {
     #[value(name = "manual_dns")]
     #[serde(rename = "manual_dns")]
     ManualDns,
+    /// Provision persistent DNS TXT records once, then reuse them for renewals (draft-02).
+    #[value(name = "dns_persist")]
+    #[serde(rename = "dns_persist")]
+    DnsPersist,
+    /// Publish DNS-01 records through a configured ADPP executable profile.
+    #[value(name = "dns_external")]
+    #[serde(rename = "dns_external")]
+    DnsExternal,
     /// Publish HTTP challenge files yourself using your existing HTTP server.
     #[value(name = "manual_http")]
     #[serde(rename = "manual_http")]
@@ -46,9 +50,17 @@ pub(crate) enum ValidationMethod {
     TlsAlpn,
 }
 impl ValidationMethod {
+    pub(super) const fn automatic(self) -> bool {
+        matches!(
+            self,
+            Self::DnsPersist | Self::DnsExternal | Self::Webroot | Self::Standalone | Self::TlsAlpn
+        )
+    }
+
     pub(super) const fn kind(self) -> ChallengeKind {
         match self {
-            Self::ManualDns => ChallengeKind::Dns01,
+            Self::ManualDns | Self::DnsExternal => ChallengeKind::Dns01,
+            Self::DnsPersist => ChallengeKind::DnsPersist01,
             Self::ManualHttp | Self::Webroot | Self::Standalone => ChallengeKind::Http01,
             Self::TlsAlpn => ChallengeKind::TlsAlpn01,
         }
@@ -56,6 +68,8 @@ impl ValidationMethod {
     pub(super) const fn id(self) -> &'static str {
         match self {
             Self::ManualDns => "manual_dns",
+            Self::DnsPersist => "dns_persist",
+            Self::DnsExternal => "dns_external",
             Self::ManualHttp => "manual_http",
             Self::Webroot => "webroot",
             Self::Standalone => "standalone",
@@ -149,13 +163,19 @@ pub(super) fn configuration(
         (ValidationMethod::Webroot, None) => Err(IssueError::InvalidInput(
             "webroot validation requires --webroot <PATH>",
         )),
-        (ValidationMethod::ManualDns | ValidationMethod::ManualHttp, None) => {
-            serde_json::to_value(ManualConfig {}).map_err(|_| {
-                IssueError::InvalidInput("cannot encode manual validation configuration")
-            })
-        }
+        (ValidationMethod::DnsExternal, _) => Err(IssueError::InvalidInput(
+            "dns_external requires its provider profile configuration",
+        )),
         (
             ValidationMethod::ManualDns
+            | ValidationMethod::DnsPersist
+            | ValidationMethod::ManualHttp,
+            None,
+        ) => serde_json::to_value(ManualConfig {})
+            .map_err(|_| IssueError::InvalidInput("cannot encode manual validation configuration")),
+        (
+            ValidationMethod::ManualDns
+            | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp
             | ValidationMethod::Standalone
             | ValidationMethod::TlsAlpn,
@@ -186,6 +206,9 @@ pub(super) fn adapter(
                 progress,
             )))
         }
+        ValidationMethod::DnsExternal => Err(IssueError::InvalidInput(
+            "dns_external requires its saved provider profile to be loaded by the CLI",
+        )),
         ValidationMethod::TlsAlpn => {
             let config: StandaloneConfig = serde_json::from_value(record.solver_config.clone())
                 .map_err(|_| IssueError::InvalidInput("invalid saved TLS-ALPN configuration"))?;
@@ -199,18 +222,24 @@ pub(super) fn adapter(
                 progress,
             )))
         }
-        ValidationMethod::ManualDns | ValidationMethod::ManualHttp => {
+        ValidationMethod::ManualDns
+        | ValidationMethod::DnsPersist
+        | ValidationMethod::ManualHttp => {
             let _: ManualConfig =
                 serde_json::from_value(record.solver_config.clone()).map_err(|_| {
                     IssueError::InvalidInput("invalid saved manual validation configuration")
                 })?;
             Ok(Box::new(manual::Manual {
+                reusable: record
+                    .renewal_of
+                    .as_ref()
+                    .map_or_else(Vec::new, |previous| previous.retained_validation.clone()),
                 prompt: std::sync::Mutex::new(None),
                 method: record.challenge,
                 saved: record
                     .authorizations
                     .iter()
-                    .any(|auth| auth.validation.is_some()),
+                    .any(|auth| auth.validation_requirement.is_some()),
                 interactive,
                 yes,
                 progress,
@@ -232,23 +261,105 @@ pub(super) fn adapter(
     }
 }
 
-/// Reuse the command pool for advisory HTTP checks without teaching protocol
-/// services about local DNS/network reachability or CLI publication policy.
-pub(super) fn with_http_precheck(
-    solver: Box<dyn ChallengeSolver>,
-    pool: aster_acme::transport::HttpPool,
-    progress: Arc<Progress>,
-) -> Box<dyn ChallengeSolver> {
-    if solver.kind() == ChallengeKind::Http01 {
-        Box::new(http::Checked {
-            inner: solver,
-            pool,
-            progress,
-        })
-    } else {
-        solver
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DnsExternalConfig {
+    pub(super) provider_instance_id: String,
+    pub(super) provider_profile_version: u32,
+}
+
+pub(super) fn external_configuration(
+    provider: Option<&str>,
+) -> Result<serde_json::Value, IssueError> {
+    let Some(provider_instance_id) = provider else {
+        return Err(IssueError::InvalidInput(
+            "dns_external requires --provider <PROFILE>",
+        ));
+    };
+    if !aster_acme_cli_storage::account::valid_account_name(provider_instance_id) {
+        return Err(IssueError::InvalidInput(
+            "invalid DNS provider profile name",
+        ));
     }
+    serde_json::to_value(DnsExternalConfig {
+        provider_instance_id: provider_instance_id.to_owned(),
+        provider_profile_version:
+            aster_acme_cli_storage::provider::ProviderProfile::CURRENT_VERSION,
+    })
+    .map_err(|_| IssueError::InvalidInput("cannot encode DNS provider configuration"))
+}
+
+pub(super) async fn external_adapter(
+    record: &IssueRecord,
+    root: &std::path::Path,
+    progress: Arc<Progress>,
+) -> Result<Box<dyn ChallengeSolver>, IssueError> {
+    let config: DnsExternalConfig = serde_json::from_value(record.solver_config.clone())
+        .map_err(|_| IssueError::InvalidInput("invalid saved DNS provider profile reference"))?;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        root.to_path_buf(),
+        std::time::Duration::from_secs(5),
+    );
+    let profile = store
+        .get(config.provider_instance_id.clone())
+        .await
+        .map_err(|error| {
+            IssueError::Publication(format!(
+                "cannot load DNS provider profile '{}': {error}",
+                config.provider_instance_id
+            ))
+        })?;
+    profile
+        .validate()
+        .map_err(|_| IssueError::InvalidInput("saved DNS provider profile is invalid"))?;
+    if profile.provider_profile_version != config.provider_profile_version {
+        return Err(IssueError::InvalidInput(
+            "provider profile version differs from saved certificate definition",
+        ));
+    }
+    let lookup = aster_acme_dns_resolver::SystemDns::new();
+    Ok(Box::new(dns_external::ExternalDns {
+        context: aster_acme_dns::ProviderContext {
+            provider_instance_id: config.provider_instance_id,
+            provider_profile_version: profile.provider_profile_version,
+            provider_custom: profile.provider_custom.into_iter().collect(),
+        },
+        provider: Arc::new(aster_acme_dns_adpp::AdppProvider::new(
+            aster_acme_dns_adpp::Executable {
+                program: profile.executable,
+                args: profile.args.into_iter().map(Into::into).collect(),
+                timeout: std::time::Duration::from_secs(profile.timeout_seconds),
+            },
+        )),
+        lookup: Arc::new(lookup),
+        allowed_zones: profile.allowed_zones,
+        propagation: aster_acme_dns::propagation::PropagationPolicy {
+            interval: std::time::Duration::from_secs(profile.propagation_interval),
+            timeout: std::time::Duration::from_secs(profile.propagation_timeout),
+        },
+        progress,
+    }))
+}
+
+/// Retry a saved provider's terminal publication cleanup without any CA/account key.
+pub(crate) async fn cleanup_provider(
+    root: &std::path::Path,
+    session: &dyn aster_acme::storage::issuance::IssueSession,
+    output: crate::common::session::OutputSession,
+    execution: &aster_acme::solver::ExecutionContext,
+) -> Result<IssueRecord, IssueError> {
+    let saved = session.record().await?;
+    if ValidationMethod::from_record(&saved)? != ValidationMethod::DnsExternal {
+        return Err(IssueError::InvalidInput(
+            "provider cleanup requires external DNS",
+        ));
+    }
+    let solver = external_adapter(&saved, root, Arc::new(Progress::new(output))).await?;
+    let result =
+        aster_acme::issuance::publication::cleanup(session, solver.as_ref(), execution).await;
+    solver.shutdown().await;
+    result
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

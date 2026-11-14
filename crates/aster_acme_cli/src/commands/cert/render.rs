@@ -11,6 +11,124 @@ use serde::Serialize;
 
 pub(crate) mod deployment;
 
+/// Semantic log records for a resident daemon cycle. Reports remain the single
+/// source for renew/deploy outcomes; the daemon only streams these saved events.
+pub(crate) struct MaintenanceLogEvent {
+    pub(crate) at: time::OffsetDateTime,
+    pub(crate) kind: output::MessageKind,
+    pub(crate) message: String,
+}
+
+pub(crate) fn maintenance_log_events(
+    ari: &aster_acme::maintenance::Report,
+    renewals: &RenewalBatch,
+    deployments: &[crate::commands::cert::report::DeploymentReport],
+) -> Vec<MaintenanceLogEvent> {
+    let mut events = Vec::new();
+    events.extend(ari_log_events(ari));
+    for entry in &renewals.entries {
+        events.push(renewal_log_event(entry));
+        if let RenewalResult::Outcome(CertificateResult::Issued {
+            deployment_events, ..
+        }) = &entry.result
+        {
+            events.extend(deployment_events.iter().map(|event| MaintenanceLogEvent {
+                at: event.at,
+                kind: event.kind,
+                message: format!("{}: {}", entry.name, event.message),
+            }));
+        }
+    }
+    for report in deployments {
+        events.extend(report.events.iter().map(|event| MaintenanceLogEvent {
+            at: event.at,
+            kind: event.kind,
+            message: format!("{}: {}", report.name, event.message),
+        }));
+    }
+    events
+}
+
+fn ari_log_events(report: &aster_acme::maintenance::Report) -> Vec<MaintenanceLogEvent> {
+    use aster_acme::maintenance::Outcome;
+    report
+        .entries
+        .iter()
+        .map(|entry| {
+            let (kind, status) = match &entry.outcome {
+                Outcome::Refreshed => (output::MessageKind::Success, "ARI refreshed".to_owned()),
+                Outcome::RetryScheduled => (
+                    output::MessageKind::Warning,
+                    "ARI retry scheduled".to_owned(),
+                ),
+                Outcome::Unavailable => {
+                    (output::MessageKind::Warning, "ARI unavailable".to_owned())
+                }
+                Outcome::Skipped => (
+                    output::MessageKind::Info,
+                    "ARI refresh no longer due".to_owned(),
+                ),
+                Outcome::Failed(error) => (
+                    output::MessageKind::Error,
+                    crate::common::error::diagnostic(error).0,
+                ),
+                Outcome::Cancelled => (
+                    output::MessageKind::Warning,
+                    "ARI refresh cancelled".to_owned(),
+                ),
+                Outcome::NotStarted => (
+                    output::MessageKind::Warning,
+                    "ARI refresh not started".to_owned(),
+                ),
+            };
+            MaintenanceLogEvent {
+                at: time::OffsetDateTime::now_utc(),
+                kind,
+                message: format!("{}: {status}", entry.name),
+            }
+        })
+        .collect()
+}
+
+fn renewal_log_event(entry: &super::report::RenewalEntry) -> MaintenanceLogEvent {
+    use crate::commands::cert::report::RenewalResult;
+    let (kind, message) = match &entry.result {
+        RenewalResult::Outcome(
+            CertificateResult::Issuance(outcome) | CertificateResult::Issued { outcome, .. },
+        ) => match outcome {
+            IssueOutcome::Completed { record, .. } => (
+                output::MessageKind::Done,
+                format!("Renewed certificate {}", record.name),
+            ),
+            IssueOutcome::ActionRequired { record, .. } => (
+                output::MessageKind::Warning,
+                format!("Renewal action required for {}", record.name),
+            ),
+        },
+        RenewalResult::Outcome(CertificateResult::NotDue(record)) => (
+            output::MessageKind::Info,
+            format!("{}: renewal is not due", record.name),
+        ),
+        RenewalResult::Skipped(reason) => (
+            output::MessageKind::Warning,
+            format!("{}: {}", entry.name, reason.message()),
+        ),
+        RenewalResult::Failed { message, .. } => (
+            output::MessageKind::Error,
+            format!("{}: {}", entry.name, message),
+        ),
+        RenewalResult::Cancelled => (
+            output::MessageKind::Warning,
+            format!("{}: renewal cancelled", entry.name),
+        ),
+    };
+    MaintenanceLogEvent {
+        at: time::OffsetDateTime::now_utc(),
+        kind,
+        message,
+    }
+}
+
 use crate::commands::cert::report::{
     BatchDisposition, CertificateResult, RenewalBatch, RenewalResult, RenewalSummary, SkipReason,
 };
@@ -210,7 +328,7 @@ pub(super) fn list(records: &[IssueRecord], format: Format) -> CliResult<String>
                 || "not observed".into(),
                 |order| String::from(order.status.clone()),
             ),
-            timestamp(record.certificate_not_after),
+            timestamp(record.certificate_not_after()),
             timestamp(
                 record
                     .renewal
@@ -226,19 +344,14 @@ pub(super) fn list(records: &[IssueRecord], format: Format) -> CliResult<String>
     }
     let mut lines =
         vec!["Local certificates (CA order status from saved observations; times in UTC):".into()];
-    lines.extend(crate::common::table::align(
+    lines.extend(crate::common::table::listing(
         &rows,
-        Some(&|row, column, cell| {
-            let style = match (row, column) {
-                (0, _) => Style::BoldCyan,
-                (_, 4) => local_status_style(&records[row - 1], now),
-                (_, 5) => {
-                    order_status_style(records[row - 1].order.as_ref().map(|order| &order.status))
-                }
-                _ => Style::Plain,
-            };
-            output::styled(cell, style, color)
-        }),
+        color,
+        |row, column| match column {
+            4 => local_status_style(&records[row], now),
+            5 => order_status_style(records[row].order.as_ref().map(|order| &order.status)),
+            _ => Style::Plain,
+        },
     ));
     lines.push(output::tips(
         "Use cert show <NAME> for request IDs, CA details and saved validation requirements.",
@@ -397,7 +510,7 @@ fn show_text(
             color,
         ));
     }
-    if let Some(at) = record.certificate_not_after {
+    if let Some(at) = record.certificate_not_after() {
         let style = if at <= now { Style::Red } else { Style::Green };
         lines.push(field(
             "Certificate expires:",
@@ -516,6 +629,9 @@ fn revocation_lines(record: &IssueRecord, color: bool) -> Vec<String> {
         RevocationSource::from(record.revocation.state).label(),
         color,
     ));
+    if let Some(signer) = &record.revocation.signer {
+        lines.push(field("Revocation signer:", signer.method().name(), color));
+    }
     if let Some(at) = record.revocation.confirmed_at {
         lines.push(field("Revoked at:", &timestamp(Some(at)), color));
     }
@@ -600,6 +716,9 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
     if let Some(at) = plan.next_check_at {
         lines.push(field("ARI next check:", &timestamp(Some(at)), color));
     }
+    if let Some(retry) = &record.renewal_retry {
+        lines.extend(renewal_retry_lines(retry, color));
+    }
     if plan.last_query_failed {
         lines.push(field(
             "ARI status:",
@@ -613,6 +732,35 @@ fn renewal_lines(record: &IssueRecord, now: time::OffsetDateTime, color: bool) -
     }
     if let Some(url) = &plan.explanation_url {
         lines.push(field("ARI explanation:", &output::safe(url), color));
+    }
+    lines
+}
+
+fn renewal_retry_lines(
+    retry: &aster_acme::issuance::RenewalRetryState,
+    color: bool,
+) -> Vec<String> {
+    let mut lines = vec![field(
+        "Renewal failures:",
+        &retry.failures.to_string(),
+        color,
+    )];
+    if let Some(reason) = &retry.blocked_reason {
+        lines.push(field(
+            "Automatic retry:",
+            &format!("blocked: {reason}"),
+            color,
+        ));
+    } else {
+        let effective_retry = retry.retry_at.into_iter().chain(retry.ca_retry_at).max();
+        lines.push(field(
+            "Automatic retry:",
+            &timestamp(effective_retry),
+            color,
+        ));
+        if let Some(at) = retry.ca_retry_at {
+            lines.push(field("CA Retry-After:", &timestamp(Some(at)), color));
+        }
     }
     lines
 }
@@ -645,7 +793,7 @@ fn authorization_lines(record: &IssueRecord, color: bool) -> Vec<String> {
             ),
             color,
         ));
-        if let Some(requirement) = &authorization.validation {
+        if let Some(requirement) = &authorization.validation_requirement {
             lines.extend(
                 requirement_lines(std::slice::from_ref(requirement))
                     .into_iter()
@@ -662,6 +810,11 @@ pub(super) fn requirement_lines(requirements: &[ValidationRequirement]) -> Vec<S
     let mut lines = Vec::new();
     for requirement in requirements {
         match requirement {
+            ValidationRequirement::DnsPersist01 { record } => lines.push(format!(
+                "{}  TXT  {}  (persistent; retain for renewal)",
+                output::safe(record.name.as_str()),
+                output::safe(&record.presentation_value())
+            )),
             ValidationRequirement::Dns01 { name, value } => lines.push(format!(
                 "{}  TXT  {}",
                 output::safe(name),
@@ -719,8 +872,11 @@ struct ArtifactPaths {
 struct DeploymentStatusView<'a> {
     id: &'a str,
     generation: Option<&'a str>,
-    phase: aster_acme_cli_storage::issuance::DeploymentPhase,
+    phase: aster_acme::deployment::DeploymentPhase,
     attempts: u8,
+    retry_failures: u32,
+    #[serde(with = "time::serde::rfc3339::option")]
+    retry_at: Option<time::OffsetDateTime>,
     last_error: Option<&'a str>,
     execution_error: Option<&'a str>,
 }
@@ -734,6 +890,8 @@ impl<'a> From<&'a aster_acme_cli_storage::issuance::DeploymentBinding>
             generation: binding.generation.as_deref(),
             phase: binding.phase,
             attempts: binding.attempts,
+            retry_failures: binding.retry_failures,
+            retry_at: binding.retry_at,
             last_error: binding.last_error.as_deref(),
             execution_error: None,
         }
@@ -838,7 +996,7 @@ fn deployment_removed(name: &str, id: &str, format: Format) -> CliResult<String>
     ))
 }
 
-fn deployment_report(
+pub(crate) fn deployment_report(
     report: &super::report::DeploymentReport,
     format: Format,
 ) -> CliResult<String> {
@@ -864,6 +1022,20 @@ fn deployment_report(
         })?);
     }
     if report.entries.is_empty() {
+        if !report.events.is_empty() {
+            return Ok(report
+                .events
+                .iter()
+                .map(|event| {
+                    format!(
+                        "{} {}",
+                        event.kind.badge(format.color),
+                        output::safe(&event.message)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
         return Ok(format!(
             "No deployment targets configured for {}.\n{}",
             output::safe(&report.name),
@@ -894,6 +1066,7 @@ fn deployment_table(
         "GENERATION".into(),
         "STATUS".into(),
         "ATTEMPTS".into(),
+        "RETRY AT (UTC)".into(),
         "ERROR".into(),
     ]];
     for entry in entries {
@@ -907,6 +1080,7 @@ fn deployment_table(
                 deployment_phase(entry.phase).0.into()
             },
             entry.attempts.to_string(),
+            timestamp(entry.retry_at),
             error
                 .map(str::to_owned)
                 .or_else(|| entry.last_error.clone())
@@ -917,17 +1091,14 @@ fn deployment_table(
         "Local deployments for {} (saved execution status):",
         output::safe(name)
     )];
-    lines.extend(crate::common::table::align(
+    lines.extend(crate::common::table::listing(
         &rows,
-        Some(&|row, column, cell| {
-            let style = match (row, column) {
-                (0, _) => Style::BoldCyan,
-                (_, 2) if current_error(events, &entries[row - 1].id).is_some() => Style::Red,
-                (_, 2) => deployment_phase(entries[row - 1].phase).1,
-                _ => Style::Plain,
-            };
-            output::styled(cell, style, format.color)
-        }),
+        format.color,
+        |row, column| match column {
+            2 if current_error(events, &entries[row].id).is_some() => Style::Red,
+            2 => deployment_phase(entries[row].phase).1,
+            _ => Style::Plain,
+        },
     ));
     lines.push(output::tips(
         "Use cert deploy show CERT_NAME DEPLOY_NAME for configuration and saved execution details.",
@@ -952,10 +1123,8 @@ fn current_error<'a>(events: &'a [super::report::DeploymentEvent], id: &str) -> 
         .map(|event| event.message.as_str())
 }
 
-fn deployment_phase(
-    phase: aster_acme_cli_storage::issuance::DeploymentPhase,
-) -> (&'static str, Style) {
-    use aster_acme_cli_storage::issuance::DeploymentPhase;
+fn deployment_phase(phase: aster_acme::deployment::DeploymentPhase) -> (&'static str, Style) {
+    use aster_acme::deployment::DeploymentPhase;
     match phase {
         DeploymentPhase::Configured => ("configured", Style::Yellow),
         DeploymentPhase::Publishing => ("publishing", Style::Yellow),
@@ -1116,7 +1285,7 @@ fn batch_summary(summary: &RenewalSummary, total: usize) -> String {
     }
 }
 
-pub(super) fn batch(
+pub(crate) fn batch(
     report: &RenewalBatch,
     format: Format,
     data_dir: &std::path::Path,
@@ -1128,6 +1297,20 @@ pub(super) fn batch(
         ))?);
     }
     let color = format.color;
+    if report.entries.is_empty() {
+        let (kind, message) = if report.was_cancelled() {
+            (
+                output::MessageKind::Warning,
+                "Batch renewal cancelled before any certificates were processed.",
+            )
+        } else {
+            (
+                output::MessageKind::Info,
+                "No managed certificates to check.",
+            )
+        };
+        return Ok(format!("{} {message}", kind.badge(color)));
+    }
     let mut rows = vec![["NAME".into(), "STATUS".into(), "NEXT RENEWAL (UTC)".into()]];
     let mut details = Vec::new();
     for entry in &report.entries {
@@ -1149,16 +1332,13 @@ pub(super) fn batch(
         BatchDisposition::PartialFailure => output::MessageKind::Error,
     };
     let mut lines = vec![format!("{} Batch renewal results:", kind.badge(color))];
-    lines.extend(crate::common::table::align(
+    lines.extend(crate::common::table::listing(
         &rows,
-        Some(&|row, column, cell| {
-            let style = match (row, column) {
-                (0, _) => Style::BoldCyan,
-                (_, 1) => batch_status_style(&report.entries[row - 1].result),
-                _ => Style::Plain,
-            };
-            output::styled(cell, style, color)
-        }),
+        color,
+        |row, column| match column {
+            1 => batch_status_style(&report.entries[row].result),
+            _ => Style::Plain,
+        },
     ));
     lines.push(String::new());
     lines.push(format!(
@@ -1210,8 +1390,7 @@ fn render_batch_entry(
                         .iter()
                         .any(|event| event.kind == output::MessageKind::Error)
                         || deployments.iter().any(|entry| {
-                            entry.phase
-                                != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
+                            entry.phase != aster_acme::deployment::DeploymentPhase::Deployed
                         }) =>
                 {
                     (
@@ -1284,9 +1463,9 @@ fn batch_status_style(result: &RenewalResult) -> Style {
         }) if deployment_events
             .iter()
             .any(|event| event.kind == output::MessageKind::Error)
-            || deployments.iter().any(|entry| {
-                entry.phase != aster_acme_cli_storage::issuance::DeploymentPhase::Deployed
-            }) =>
+            || deployments
+                .iter()
+                .any(|entry| entry.phase != aster_acme::deployment::DeploymentPhase::Deployed) =>
         {
             Style::Red
         }
@@ -1346,6 +1525,11 @@ pub(super) fn outcome(
             time::OffsetDateTime::now_utc(),
             color,
         ));
+        let retained = record.retained_validation_requirements();
+        if !retained.is_empty() {
+            lines.push("Retain these persistent validation requirements for renewal; remove publication only to revoke future validation:".into());
+            lines.extend(requirement_lines(&retained));
+        }
     }
     if !records.is_empty() {
         lines.push(
@@ -1421,6 +1605,7 @@ pub(super) fn removed(
         RemovalScope::History => "history",
         RemovalScope::Revoked => "revoked",
         RemovalScope::All => "all",
+        RemovalScope::Failed => "failed",
     };
     if format.json {
         return Ok(serde_json::to_string_pretty(&CertificateDeletionOutput {
@@ -1435,6 +1620,15 @@ pub(super) fn removed(
     }
     let color = format.color;
     let message = match scope {
+        RemovalScope::Failed if ids.is_empty() => format!(
+            "No terminally failed requests to remove for {}.",
+            output::safe(name)
+        ),
+        RemovalScope::Failed => format!(
+            "Removed {} terminally failed certificate request(s) for {}.",
+            ids.len(),
+            output::safe(name)
+        ),
         RemovalScope::Operation(_) => format!(
             "Removed local certificate request for {}.",
             output::safe(name)
@@ -1503,6 +1697,9 @@ pub(super) fn revoked(record: &IssueRecord, format: Format) -> CliResult<String>
         crate::common::output::MessageKind::Success.badge(color),
         output::safe(record.name.as_str())
     )];
+    if let Some(signer) = &record.revocation.signer {
+        lines.push(field("Sign with:", signer.method().name(), color));
+    }
     lines.extend(renewal_lines(
         record,
         time::OffsetDateTime::now_utc(),
@@ -1537,9 +1734,8 @@ mod tests {
 
     #[test]
     fn deployment_list_uses_shared_alignment_and_semantic_styles_for_every_phase() {
-        use aster_acme_cli_storage::issuance::{
-            DeploymentBinding, DeploymentPhase, DeploymentTarget,
-        };
+        use aster_acme::deployment::DeploymentPhase;
+        use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
         let phases = [
             DeploymentPhase::Configured,
             DeploymentPhase::Publishing,
@@ -1568,6 +1764,8 @@ mod tests {
                     generation: None,
                     phase: *phase,
                     attempts: 0,
+                    retry_failures: 0,
+                    retry_at: None,
                     last_error: Some("error\nvalue".into()),
                 })
                 .collect(),
@@ -1608,9 +1806,9 @@ mod tests {
             "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00.123456Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
-            "phase":"completed","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
+            "phase":"completed","new_order_intent_saved":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
             "order":{"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"},
-            "authorizations":[],"certificate_not_after":"2099-01-01T00:00:00Z"
+            "authorizations":[]
         })).unwrap();
         let mut record = record;
         record.is_in_use = true;
@@ -1775,7 +1973,7 @@ mod tests {
             "key_algorithm":"ecdsa-p521","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
             "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
             "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],
-            "phase":"finalizing","creation_submitted":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
+            "phase":"finalizing","new_order_intent_saved":true,"order_url":"https://ca.example/order","finalize_submitted":"submitted",
             "order":{"status":"ready","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"},"authorizations":[]
         })).unwrap();
         record.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
@@ -1823,7 +2021,7 @@ mod tests {
     #[test]
     fn final_output_variants_cannot_mix_manual_actions_artifacts_or_not_due_results() {
         let record:IssueRecord=serde_json::from_value(serde_json::json!({
-            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","creation_submitted":true,"authorizations":[],"finalize_submitted":"not_submitted"
+            "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"web","created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key","directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"authorizing","new_order_intent_saved":true,"authorizations":[],"finalize_submitted":"not_submitted"
         })).unwrap();
         let pending = IssueOutcome::ActionRequired {
             record: Box::new(record.clone()),
@@ -1854,6 +2052,7 @@ mod tests {
             complete.phase = aster_acme_core::workflow::IssuancePhase::Completed;
             if renewal {
                 complete.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+                    retained_validation: Vec::new(),
                     operation_id: "old".into(),
                     certificate_id: None,
                 });
@@ -2007,8 +2206,10 @@ mod tests {
             timeout_seconds: 30,
             max_retries: 3,
             generation: Some("generation-1".into()),
-            phase: aster_acme_cli_storage::issuance::DeploymentPhase::Deployed,
+            phase: aster_acme::deployment::DeploymentPhase::Deployed,
             attempts: 1,
+            retry_failures: 0,
+            retry_at: None,
             last_error: None,
         };
         let serialized = serde_json::to_string(&DeploymentStatusView::from(&entry)).unwrap();
@@ -2020,9 +2221,8 @@ mod tests {
     #[test]
     fn issued_deployment_failure_is_visible_in_single_and_batch_json_and_exit_status() {
         use crate::commands::cert::report::{CertificateReport, RenewalEntry, RenewalResult};
-        use aster_acme_cli_storage::issuance::{
-            DeploymentBinding, DeploymentPhase, DeploymentTarget,
-        };
+        use aster_acme::deployment::DeploymentPhase;
+        use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
         for phase in [
             DeploymentPhase::Deployed,
             DeploymentPhase::ReloadFailed,
@@ -2046,6 +2246,8 @@ mod tests {
                     generation: Some("generation".into()),
                     phase,
                     attempts: 1,
+                    retry_failures: 0,
+                    retry_at: None,
                     last_error: None,
                 }],
             };
@@ -2106,9 +2308,8 @@ mod tests {
     #[test]
     fn automatic_deployment_uses_same_table_and_orders_events_after_certificate_summary() {
         use crate::commands::cert::report::{DeploymentEvent, DeploymentReport};
-        use aster_acme_cli_storage::issuance::{
-            DeploymentBinding, DeploymentPhase, DeploymentTarget,
-        };
+        use aster_acme::deployment::DeploymentPhase;
+        use aster_acme_cli_storage::issuance::{DeploymentBinding, DeploymentTarget};
         let record = detailed_record();
         let entry = DeploymentBinding {
             permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
@@ -2122,6 +2323,8 @@ mod tests {
             generation: Some("generation".into()),
             phase: DeploymentPhase::Deployed,
             attempts: 1,
+            retry_failures: 0,
+            retry_at: None,
             last_error: None,
         };
         let events = vec![DeploymentEvent {

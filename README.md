@@ -27,21 +27,24 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers and background scheduling are not implemented.
+**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. External DNS-01 automation is available through an ADPP executable; built-in DNS vendor adapters and public-CA/DNS acceptance remain separate.
 
 ## Capabilities
 
 - Named CA accounts: registration, recovery, contacts, key rotation, and deactivation.
 - Single-domain, multi-SAN, and wildcard certificates; independent account and certificate key choices.
-- Saved issuance recovery, ARI renewal plans, foreground single/batch renewal, and revocation.
+- Saved issuance recovery, ARI refresh, foreground single/batch renewal, and unattended maintenance for supported validation methods.
 - Multiple deployment targets per certificate, automatic deployment after renewal, and bounded reload commands with stdout/stderr output.
 - Interactive input, structured JSON, offline inspection, and optional debug diagnostics.
 
 | Validation | Implementation |
 | --- | --- |
-| DNS-01 | `manual_dns`: publish TXT records yourself; supports wildcards |
+| DNS-01 | `dns_external --provider NAME`: ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
+| DNS-PERSIST-01 (draft -02) | `dns_persist`: provision persistent TXT records manually, then reuse them for renewal; supports wildcards |
 | HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
 | TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
+
+`dns_persist` requires a CA implementing the [same draft revision](docs/rfc-reference.md#dns-persist-草案实现2026-11-14). Keep its TXT records for renewal. DNS provider writes and public-CA acceptance are separate capabilities.
 
 ## Quick start
 
@@ -69,7 +72,19 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`renew` runs when due; add `--now` to renew early. Scheduling these commands remains the caller's responsibility. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
+`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, `tls_alpn`, `dns_external`, or already provisioned `dns_persist`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
+
+The resident daemon holds an exclusive lock for its data directory. Set `daemon_interval = 60` in `config.toml` or override it with `daemon run --interval 60`. Human logs use the same timestamped levels as issuance; `--json` streams one JSON object per line.
+
+`renew` runs when due; add `--now` to renew early. Use resident `daemon run` or cron with `daemon run-once` for unattended maintenance using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
+
+## Certificate-key revocation
+
+```sh
+aster-acme cert revoke example-cert --sign-with certificate-key --reason key-compromise --yes
+```
+
+Use the selected managed generation's certificate private key without the original ACME account or CSR. The default `--sign-with account` uses the issuing account. Both modes retain local and deployed files and do not rotate keys or reload services. See the [revocation contract](docs/certificate-lifecycle.md#吊销).
 
 ## Deploy
 
@@ -91,8 +106,10 @@ Adding a binding deploys immediately; later successful renewals use it automatic
 - [Developer guide](docs/README.md): project contract, task routing, architecture, crate ownership, and tests.
 - [RFC reference](docs/rfc-reference.md) and [changelog](CHANGELOG.md).
 
-State is stored in the platform directory for `com.astercosm.acme`; pass `--data-dir PATH` to each command to use another root. `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
+State is stored in the platform directory for `com.astercosm.acme`; use `--data-dir PATH` or `ASTER_ACME_DATA_DIR` to select another root (`--data-dir` takes precedence). `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
 
 ## License
 
 [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Contributions are dual-licensed under the same terms unless explicitly stated otherwise.
+
+External DNS profile setup, sensitive custom values, CNAME delegation, propagation, and cleanup: [DNS providers](docs/dns-providers.md).

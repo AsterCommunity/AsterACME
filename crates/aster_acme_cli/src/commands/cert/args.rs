@@ -43,39 +43,66 @@ pub(crate) enum CertCommand {
         local: LocalArgs,
     },
     /// Permanently revoke one issued certificate at its CA; local files are retained.
-    Revoke {
-        #[command(flatten)]
-        target: SavedTargetArgs,
-        /// Permanent revocation reason; omitted by default, or retained from an unconfirmed request.
-        #[arg(long, value_parser = revocation_reason_parser())]
-        reason: Option<RevocationReason>,
-        /// Confirm revocation without an interactive prompt.
-        #[arg(short = 'y', long)]
-        yes: bool,
-        #[command(flatten)]
-        http: HttpArgs,
-        #[command(flatten)]
-        local: LocalArgs,
-    },
+    Revoke(RevokeArgs),
     /// Remove one local request, or explicitly select history/all; does not revoke certificates.
     Remove {
         #[command(flatten)]
         target: SavedTargetArgs,
         /// Remove every local request and key under this certificate name.
-        #[arg(long, conflicts_with_all = ["operation", "history", "revoked"])]
+        #[arg(long, conflicts_with_all = ["operation", "history", "revoked", "failed"])]
         all: bool,
         /// Remove issued historical versions; retain `in_use` and unfinished requests.
-        #[arg(long, conflicts_with_all = ["operation", "all", "revoked"])]
+        #[arg(long, conflicts_with_all = ["operation", "all", "revoked", "failed"])]
         history: bool,
         /// Remove versions with a saved CA revocation confirmation, including `in_use` if matched.
-        #[arg(long, conflicts_with_all = ["operation", "all", "history"])]
+        #[arg(long, conflicts_with_all = ["operation", "all", "history", "failed"])]
         revoked: bool,
+        /// Remove terminally failed, unissued requests that cannot resume; retain uncertain requests.
+        #[arg(long, conflicts_with_all = ["operation", "all", "history", "revoked"])]
+        failed: bool,
         /// Confirm deletion of local certificate material without prompting.
         #[arg(short = 'y', long)]
         yes: bool,
         #[command(flatten)]
         local: LocalArgs,
     },
+}
+
+/// Explicit revocation parameters; certificate-key authority never loads an account.
+#[derive(Args)]
+pub(crate) struct RevokeArgs {
+    #[command(flatten)]
+    pub target: SavedTargetArgs,
+    /// Signature authority; never inferred from missing or rejected account credentials.
+    #[arg(long="sign-with",value_parser=revocation_signing_parser(),default_value="account")]
+    pub sign_with: aster_acme::revocation::RevocationSigningMethod,
+    /// Revocation reason; omitted by default or retained from an unconfirmed request.
+    #[arg(long,value_parser=revocation_reason_parser())]
+    pub reason: Option<RevocationReason>,
+    /// Confirm revocation without a prompt.
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+    /// Overall operation budget in seconds; includes discovery and confirmation.
+    #[arg(long,value_parser=clap::value_parser!(u64).range(1..=86400))]
+    pub operation_timeout: Option<u64>,
+    #[command(flatten)]
+    pub http: HttpArgs,
+    #[command(flatten)]
+    pub local: LocalArgs,
+}
+
+fn revocation_signing_parser()
+-> impl clap::builder::TypedValueParser<Value = aster_acme::revocation::RevocationSigningMethod> {
+    use aster_acme::revocation::RevocationSigningMethod;
+    clap::builder::PossibleValuesParser::new(
+        RevocationSigningMethod::ALL.map(RevocationSigningMethod::name),
+    )
+    .try_map(|value: String| {
+        RevocationSigningMethod::ALL
+            .into_iter()
+            .find(|method| method.name() == value)
+            .ok_or_else(|| "unknown revocation signing method".to_owned())
+    })
 }
 
 /// One saved generation, shared by read-only inspection and revocation.
@@ -152,6 +179,9 @@ pub(crate) struct IssueArgs {
     /// Temporary validation listener socket: port 80 for standalone or 443 for `tls_alpn`; saved for resume/renew.
     #[arg(long, value_name = "IP:PORT", conflicts_with = "resume")]
     pub listen_address: Option<std::net::SocketAddr>,
+    /// DNS provider profile; valid only with `-c dns_external`.
+    #[arg(long, value_parser = parse_certificate_name, conflicts_with = "resume")]
+    pub provider: Option<String>,
     /// Resume a saved request; omit the name to choose unfinished requests interactively.
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
     pub resume: Option<ResumeTarget>,
@@ -216,11 +246,11 @@ impl CertCommand {
         match self {
             Self::Issue(args) => args.run.local.json,
             Self::Renew(args) => args.run.local.json,
-            Self::List { local, .. }
-            | Self::Show { local, .. }
-            | Self::Revoke { local, .. }
-            | Self::Remove { local, .. } => local.json,
+            Self::List { local, .. } | Self::Show { local, .. } | Self::Remove { local, .. } => {
+                local.json
+            }
             Self::Deploy(args) => args.local().json,
+            Self::Revoke(args) => args.local.json,
         }
     }
 }
@@ -250,6 +280,54 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn failed_cleanup_is_explicit_and_conflicts_with_other_scopes_and_operations() {
+        let parsed = crate::app::Args::try_parse_from([
+            "aster-acme",
+            "cert",
+            "remove",
+            "web",
+            "--failed",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            crate::app::Command::Cert {
+                command: crate::commands::cert::args::CertCommand::Remove {
+                    failed: true,
+                    yes: true,
+                    ..
+                }
+            }
+        ));
+        for other in ["--all", "--history", "--revoked"] {
+            assert!(
+                crate::app::Args::try_parse_from([
+                    "aster-acme",
+                    "cert",
+                    "remove",
+                    "web",
+                    "--failed",
+                    other
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            crate::app::Args::try_parse_from([
+                "aster-acme",
+                "cert",
+                "remove",
+                "web",
+                "--failed",
+                "--operation",
+                &"a".repeat(43)
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn revoke_supports_interaction_names_exact_requests_and_script_confirmation() {
         for target in [
             vec![],
@@ -276,11 +354,11 @@ mod tests {
             };
             assert!(matches!(
                 command,
-                CertCommand::Revoke {
+                CertCommand::Revoke(RevokeArgs {
                     yes: true,
                     reason: Some(RevocationReason::KeyCompromise),
                     ..
-                }
+                })
             ));
         }
         for args in [
@@ -433,7 +511,7 @@ mod tests {
             let Command::Cert { command } = args.command else {
                 panic!("certificate command expected")
             };
-            let CertCommand::Revoke { reason: actual, .. } = command else {
+            let CertCommand::Revoke(RevokeArgs { reason: actual, .. }) = command else {
                 panic!("revoke expected")
             };
             assert_eq!(actual, Some(reason));

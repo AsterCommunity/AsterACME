@@ -3,14 +3,13 @@ use crate::commands::cert::{
     deployment::record_event, progress::Progress, report::DeploymentEvent,
 };
 use crate::common::output::MessageKind;
-use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use std::fmt::Write as _;
 use std::{
     io,
-    process::{ExitStatus, Stdio},
+    process::ExitStatus,
+    sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::io::{AsyncRead, AsyncReadExt as _};
 
 const MAX_OUTPUT: usize = 64 * 1024;
 
@@ -18,13 +17,6 @@ pub(super) struct ReloadResult {
     pub(super) status: io::Result<ExitStatus>,
     pub(super) timed_out: bool,
     pub(super) started: bool,
-}
-
-struct ProcessTree(Box<dyn ChildWrapper>);
-impl Drop for ProcessTree {
-    fn drop(&mut self) {
-        let _ = self.0.start_kill();
-    }
 }
 
 pub(super) async fn run(
@@ -46,72 +38,40 @@ pub(super) async fn run(
             started: false,
         };
     }
-    let mut wrapped = CommandWrap::with_new(&command[0], |process| {
-        process
-            .args(&command[1..])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-    });
-    wrapped.wrap(KillOnDrop);
-    #[cfg(unix)]
-    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
-    #[cfg(windows)]
-    wrapped.wrap(process_wrap::tokio::JobObject);
-    let child = match wrapped.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            return ReloadResult {
-                status: Err(error),
-                timed_out: false,
-                started: false,
-            };
+    let mut spec = aster_acme_process::ProcessSpec::new(&command[0], timeout);
+    spec.args = command[1..].iter().cloned().map(Into::into).collect();
+    spec.stdout_limit = MAX_OUTPUT;
+    spec.stderr_limit = MAX_OUTPUT;
+    if let Some(deadline) = execution.and_then(|execution| execution.deadline) {
+        spec.timeout = spec
+            .timeout
+            .min(deadline.saturating_duration_since(std::time::Instant::now()));
+    }
+    let stdout_text = Arc::new(Mutex::new(StreamText::default()));
+    let stderr_text = Arc::new(Mutex::new(StreamText::default()));
+    let stdout_callback = stdout_text.clone();
+    let stderr_callback = stderr_text.clone();
+    let cancellation = execution
+        .map_or_else(tokio_util::sync::CancellationToken::new, |execution| {
+            execution.cancellation.clone()
+        });
+    let outcome = aster_acme_process::run(spec, &cancellation, |stream, bytes| {
+        let (text, name) = match stream {
+            aster_acme_process::ProcessStream::Stdout => (&stdout_callback, "stdout"),
+            aster_acme_process::ProcessStream::Stderr => (&stderr_callback, "stderr"),
+        };
+        if let Ok(mut text) = text.lock() {
+            stream_output(&text.push(bytes, false), id, attempt, name, progress);
         }
-    };
-    let mut child = ProcessTree(child);
-    let stdout = child.0.stdout().take();
-    let stderr = child.0.stderr().take();
-    let mut out = Captured::default();
-    let mut err = Captured::default();
-    let observe = tokio::time::timeout(timeout, async {
-        let (status, (), ()) = tokio::join!(
-            async {
-                // Observe the immediate process, then close inherited pipes by
-                // terminating owned descendants before waiting for capture EOF.
-                let status = child.0.inner_mut().wait().await;
-                let _ = child.0.start_kill();
-                status
-            },
-            capture(stdout, &mut out, id, attempt, "stdout", progress),
-            capture(stderr, &mut err, id, attempt, "stderr", progress)
-        );
-        status
-    });
-    // Cancellation belongs to the process owner. Before spawn it is a known
-    // non-operation; after spawn we stop/reap the tree and retain uncertainty.
-    let waited = match execution {
-        Some(execution) => tokio::select! {
-            biased;
-            () = execution.interrupted() => Err(()),
-            result = observe => result.map_err(|_| ()),
-        },
-        None => observe.await.map_err(|_| ()),
-    };
-    // Kill any remaining descendants even when the immediate process exited successfully.
-    let _ = child.0.start_kill();
-    let (status, timed_out) = if let Ok(status) = waited {
-        (status, false)
-    } else {
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.0.wait()).await;
-        (
-            Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "reload deadline exceeded",
-            )),
-            true,
-        )
-    };
-    for (stream, captured) in [("stdout", out), ("stderr", err)] {
+    })
+    .await;
+    for (text, name) in [(&stdout_text, "stdout"), (&stderr_text, "stderr")] {
+        if let Ok(mut text) = text.lock() {
+            stream_output(&text.push(&[], true), id, attempt, name, progress);
+        }
+    }
+    let (status, timed_out) = classify(outcome.status);
+    for (stream, captured) in [("stdout", outcome.stdout), ("stderr", outcome.stderr)] {
         if captured.truncated
             && let Some(progress) = progress
         {
@@ -120,7 +80,13 @@ pub(super) async fn run(
                 &format!("Deployment '{id}' reload {stream} output truncated at 64 KiB"),
             );
         }
-        let text = captured.text();
+        let mut text = String::from_utf8_lossy(&captured.bytes).into_owned();
+        if captured.truncated {
+            text.push_str("\n[output truncated at 64 KiB]");
+        }
+        if let Some(error) = captured.read_error {
+            let _ = write!(text, "\n[output read failed: {error}]");
+        }
         if !text.is_empty() {
             // The explicit command streamed these bytes already; automatic deployment
             // renders the same bounded capture after the issuance summary.
@@ -135,26 +101,40 @@ pub(super) async fn run(
     ReloadResult {
         status,
         timed_out,
-        started: true,
+        started: outcome.started,
     }
 }
 
-#[derive(Default)]
-struct Captured {
-    bytes: Vec<u8>,
-    truncated: bool,
-    error: Option<String>,
-}
-impl Captured {
-    fn text(self) -> String {
-        let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
-        if self.truncated {
-            text.push_str("\n[output truncated at 64 KiB]");
-        }
-        if let Some(error) = self.error {
-            let _ = write!(text, "\n[output read failed: {error}]");
-        }
-        text
+fn classify(
+    status: Result<ExitStatus, aster_acme_process::ProcessFailure>,
+) -> (io::Result<ExitStatus>, bool) {
+    match status {
+        Ok(status) => (Ok(status), false),
+        Err(
+            aster_acme_process::ProcessFailure::Spawn(error)
+            | aster_acme_process::ProcessFailure::Wait(error),
+        ) => (Err(error), false),
+        Err(aster_acme_process::ProcessFailure::CancelledBeforeStart) => (
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "reload cancelled before process startup",
+            )),
+            false,
+        ),
+        Err(aster_acme_process::ProcessFailure::Cancelled) => (
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "reload cancelled after process startup",
+            )),
+            true,
+        ),
+        Err(aster_acme_process::ProcessFailure::TimedOut) => (
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "reload deadline exceeded",
+            )),
+            true,
+        ),
     }
 }
 
@@ -205,40 +185,6 @@ fn stream_output(text: &str, id: &str, attempt: u8, stream: &str, progress: Opti
             &format!("Deployment '{id}' reload attempt {attempt} {stream}:"),
             &text.lines().map(str::to_owned).collect::<Vec<_>>(),
         );
-    }
-}
-
-async fn capture(
-    stream: Option<impl AsyncRead + Unpin>,
-    saved: &mut Captured,
-    id: &str,
-    attempt: u8,
-    stream_name: &str,
-    progress: Option<&Progress>,
-) {
-    let Some(mut stream) = stream else {
-        return;
-    };
-    let mut buffer = [0_u8; 4096];
-    let mut text = StreamText::default();
-    loop {
-        match stream.read(&mut buffer).await {
-            Ok(0) => {
-                stream_output(&text.push(&[], true), id, attempt, stream_name, progress);
-                break;
-            }
-            Ok(size) => {
-                let keep = size.min(MAX_OUTPUT.saturating_sub(saved.bytes.len()));
-                saved.bytes.extend_from_slice(&buffer[..keep]);
-                let chunk = text.push(&buffer[..keep], false);
-                stream_output(&chunk, id, attempt, stream_name, progress);
-                saved.truncated |= keep < size;
-            }
-            Err(error) => {
-                saved.error = Some(error.to_string());
-                break;
-            }
-        }
     }
 }
 

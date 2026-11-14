@@ -21,6 +21,8 @@ pub enum RemovalScope {
     Revoked,
     /// All requests and artifacts under this local name.
     All,
+    /// Unissued requests with terminal failure evidence; never uncertain results.
+    Failed,
 }
 
 /// Prepared removal retains the execution lease through confirmation and blocking cleanup.
@@ -131,6 +133,18 @@ impl CertificateRemoval {
     /// # Errors
     /// Failed cleanup keeps `.removing` to prevent reusing partial material after restart.
     pub async fn remove(self) -> Result<(), IssueError> {
+        if self.records.iter().any(|record| {
+            record.solver_id == "dns_external"
+                && record
+                    .authorizations
+                    .iter()
+                    .any(|auth| auth.cleanup_pending && auth.publication_plan.is_some())
+        }) {
+            return Err(failure(
+                "external DNS cleanup is pending; run provider cleanup before removing its journal",
+            ));
+        }
+
         tokio::task::spawn_blocking(move || {
             let _lease=self.lease;
             if self.records.is_empty() && !self.remove_catalog {return Ok(());}
@@ -178,6 +192,16 @@ fn select_records(
 ) -> Result<Vec<IssueRecord>, IssueError> {
     match scope {
         RemovalScope::All => Ok(records.to_vec()),
+        RemovalScope::Failed => {
+            let now = time::OffsetDateTime::now_utc();
+            Ok(records
+                .iter()
+                .filter(|record| {
+                    in_use != Some(record.operation_id.as_str()) && record.failed_unresumable(now)
+                })
+                .cloned()
+                .collect())
+        }
         RemovalScope::Revoked => Ok(records
             .iter()
             .filter(|record| {

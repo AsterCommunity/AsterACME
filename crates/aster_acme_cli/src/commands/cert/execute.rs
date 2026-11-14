@@ -94,7 +94,7 @@ async fn issue(
         &store,
         Start::Issue(input),
         &run,
-        RunMode::Single,
+        RunMode::Single(CancellationToken::new()),
         cli,
     )
     .await?;
@@ -203,13 +203,13 @@ pub(super) async fn transact(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<super::report::CertificateResult> {
     let progress = Arc::new(Progress::new(cli.output.clone()));
+    let data_dir = settings.data_dir.clone();
     let context = settings.account(&options).await?;
     let (operation_timeout, _, _) = run.limits(&context.config);
     let cancellation = match &mode {
-        RunMode::Single => CancellationToken::new(),
-        RunMode::Batch(token) => token.clone(),
+        RunMode::Single(token) | RunMode::Batch(token) => token.clone(),
     };
-    let _signal = matches!(mode, RunMode::Single)
+    let _signal = matches!(mode, RunMode::Single(_))
         .then(|| crate::common::signal::InterruptGuard::new(cancellation.clone()));
     let execution = ExecutionContext {
         cancellation,
@@ -222,19 +222,37 @@ pub(super) async fn transact(
             &context.name,
             aster_acme::storage::account::KeyAccess::Existing,
         )
-        .await?;
+        .await
+        .map_err(|error| match error.kind {
+            aster_acme::storage::account::AccountStoreErrorKind::LockUnavailable => {
+                IssueError::LeaseUnavailable("account", error.to_string())
+            }
+            aster_acme::storage::account::AccountStoreErrorKind::Other => IssueError::Store(error),
+        })?;
     let thumbprint = signer.jwk()?.thumbprint()?;
     // Lock order is account, then certificate. Rotation/deactivation/removal cannot
     // change the account identity during challenge material derivation or signing.
     let _account_lease = context
         .store
         .lock_account(&context.directory, &thumbprint)
-        .await?;
+        .await
+        .map_err(|error| match error.kind {
+            aster_acme::storage::account::AccountStoreErrorKind::LockUnavailable => {
+                IssueError::LeaseUnavailable("account", error.to_string())
+            }
+            aster_acme::storage::account::AccountStoreErrorKind::Other => IssueError::Store(error),
+        })?;
     let account = context
         .store
         .load(&context.directory, &thumbprint)
         .await?
         .ok_or("No registered account exists.")?;
+    let _providers = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        data_dir,
+        Duration::from_secs(5),
+    )
+    .lease()
+    .await?;
     let mut session = match start {
         Start::Issue(input) => prepare_session(store, input, &account, &progress).await?,
         Start::Renew {
@@ -271,31 +289,109 @@ pub(super) async fn transact(
     {
         Ok(outcome) => outcome,
         Err(error) => {
-            if matches!(
-                error.downcast_ref::<IssueError>(),
-                Some(IssueError::InvalidOrder { .. })
-            ) {
-                progress.output.progress(MessageKind::Warning, "Invalid order retained for inspection. Correct validation and start a new cert issue; this order cannot be resumed.");
-                return Err(error);
-            }
-            if matches!(
-                error.downcast_ref::<IssueError>(),
-                Some(IssueError::CreationUncertain)
-            ) {
-                progress.output.progress(MessageKind::Warning, "Order creation was interrupted before its URL was saved. Inspect the retained request before explicitly starting an independent one; repeating resume cannot recover a missing URL.");
-                return Err(error);
-            }
-            match session.record().await {
-                Ok(saved) if saved.creation_failure.is_some() => progress.output.progress(MessageKind::Warning, "newOrder error response retained for inspection; no order status was observed. Inspect cert show and the CA problem before explicitly starting a new request; this response cannot be resumed as an order."),
-                Ok(saved) if saved.authorization_failure().is_some() => progress.output.progress(MessageKind::Warning, "Failed authorization retained for inspection. Correct validation and start a new cert issue; this authorization cannot be resumed."),
-                Ok(saved) if saved.finalize_rejection.is_some() => progress.output.progress(MessageKind::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection."),
-                _ => progress.output.progress(MessageKind::Info,&format!("Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",record.name.as_str(),record.operation_id)),
-            }
-            return Err(error);
+            return report_issue_failure(session.as_mut(), &record, &progress, &execution, error)
+                .await;
         }
     };
     drop(session);
     Ok(attach_deployment_results(outcome, store, &execution).await)
+}
+
+async fn report_issue_failure(
+    session: &mut dyn IssueSession,
+    record: &IssueRecord,
+    progress: &Progress,
+    execution: &ExecutionContext,
+    error: Box<dyn std::error::Error>,
+) -> CliResult<super::report::CertificateResult> {
+    let saved = session.record().await?;
+    if saved.renewal_of.is_some() && saved.unfinished() && !execution.cancellation.is_cancelled() {
+        let blocked_reason = if saved.new_order_intent_saved
+            && saved.order_url.is_none()
+            && saved.creation_failure.is_none()
+        {
+            Some("newOrder may have been accepted but no Location was saved".into())
+        } else if saved
+            .creation_failure
+            .as_ref()
+            .is_some_and(|failure| failure.status == 408 || failure.status >= 500)
+        {
+            Some("newOrder response does not establish whether the CA accepted the order".into())
+        } else {
+            None
+        };
+        let ca_retry_at = saved
+            .creation_failure
+            .as_ref()
+            .and_then(|failure| failure.retry_at)
+            .or_else(|| {
+                (saved.poll_wait_source == Some(aster_acme::issuance::PollWaitSource::RetryAfter))
+                    .then_some(saved.next_poll_at)
+                    .flatten()
+            });
+        let retry = session
+            .record_renewal_failure(time::OffsetDateTime::now_utc(), ca_retry_at, blocked_reason)
+            .await?;
+        report_renewal_retry(progress, &saved, &retry);
+    }
+    if matches!(
+        error.downcast_ref::<IssueError>(),
+        Some(IssueError::InvalidOrder { .. })
+    ) {
+        progress.output.progress(MessageKind::Warning, "Invalid order retained for inspection. Correct validation and start a new cert issue; this order cannot be resumed.");
+    } else if matches!(
+        error.downcast_ref::<IssueError>(),
+        Some(IssueError::CreationUncertain)
+    ) {
+        progress.output.progress(MessageKind::Warning, "Order creation was interrupted before its URL was saved. Inspect the retained request before explicitly starting an independent one; repeating resume cannot recover a missing URL.");
+    } else if saved.creation_failure.is_some() {
+        progress.output.progress(MessageKind::Warning, "newOrder error response retained for inspection; no order status was observed. Inspect cert show and the CA problem before explicitly starting a new request; this response cannot be resumed as an order.");
+    } else if saved.authorization_failure().is_some() {
+        progress.output.progress(MessageKind::Warning, "Failed authorization retained for inspection. Correct validation and start a new cert issue; this authorization cannot be resumed.");
+    } else if saved.finalize_rejection.is_some() {
+        progress.output.progress(MessageKind::Warning, "The CA rejected this fixed CSR. Start a new cert issue with a supported --key-type; resume will retain this rejection.");
+    } else {
+        progress.output.progress(
+            MessageKind::Info,
+            &format!(
+                "Request retained. Resume with: aster-acme cert issue --resume '{}' --operation {}",
+                record.name.as_str(),
+                record.operation_id
+            ),
+        );
+    }
+    Err(error)
+}
+
+pub(super) fn report_renewal_retry(
+    progress: &Progress,
+    record: &IssueRecord,
+    retry: &aster_acme::issuance::RenewalRetryState,
+) {
+    match (&retry.blocked_reason, retry.retry_at) {
+        (Some(reason), _) => progress.output.progress(
+            MessageKind::Warning,
+            &format!("Automatic renewal blocked for {}: {reason}", record.name),
+        ),
+        (None, Some(at)) => progress.output.progress(
+            MessageKind::Info,
+            &format!(
+                "Automatic renewal retry after failure {} for {} scheduled at {}",
+                retry.failures,
+                record.name,
+                crate::common::time::timestamp(Some(
+                    retry.ca_retry_at.map_or(at, |ca_at| at.max(ca_at))
+                ))
+            ),
+        ),
+        (None, None) => progress.output.progress(
+            MessageKind::Warning,
+            &format!(
+                "Automatic renewal for {} has no safe retry deadline",
+                record.name
+            ),
+        ),
+    }
 }
 
 async fn attach_deployment_results(
@@ -366,7 +462,7 @@ fn report_material(
 
 /// Batch cancellation and prompt policy are explicit, never inferred from JSON styling.
 pub(super) enum RunMode {
-    Single,
+    Single(CancellationToken),
     Batch(CancellationToken),
 }
 
@@ -387,45 +483,56 @@ impl Foreground<'_> {
         session: &mut dyn IssueSession,
     ) -> CliResult<IssueOutcome> {
         let saved = session.record().await?;
-        tracing::debug!(operation_id = %saved.operation_id, phase = ?saved.phase, creation_submitted = saved.creation_submitted, has_order_url = saved.order_url.is_some(), "Checking saved request before CA discovery");
-        saved.check_recovery(time::OffsetDateTime::now_utc())?;
-        let solver = super::validation::adapter(
-            &saved,
-            matches!(self.mode, RunMode::Single) && terminal::interactive(self.options.json),
-            self.args.yes,
-            self.progress.clone(),
-        )?;
-        let solver = super::validation::with_http_precheck(
+        let solver = if saved.solver_id == "dns_external" {
+            super::validation::external_adapter(
+                &saved,
+                self.context
+                    .config_path
+                    .parent()
+                    .ok_or("Missing provider profile root.")?,
+                self.progress.clone(),
+            )
+            .await?
+        } else {
+            super::validation::adapter(
+                &saved,
+                matches!(self.mode, RunMode::Single(_)) && terminal::interactive(self.options.json),
+                self.args.yes,
+                self.progress.clone(),
+            )?
+        };
+        #[cfg(feature = "precheck")]
+        let solver = crate::commands::cert::precheck::with_validation(
             solver,
             self.cli.http.clone(),
             self.progress.clone(),
         );
-        self.progress.output.progress(
-            MessageKind::Info,
-            "Discovering ACME endpoints over verified TLS",
-        );
-        tracing::debug!("Discovering certificate issuance endpoints");
-        if self.execution.cancellation.is_cancelled() {
-            return Err(crate::common::terminal::Canceled.into());
-        }
-        self.execution
-            .check()
-            .map_err(|_| IssueError::Interrupted)?;
-        let client = tokio::select! {
-            biased;
-            () = self.execution.cancellation.cancelled() => return Err(crate::common::terminal::Canceled.into()),
-            result = tokio::time::timeout_at(tokio::time::Instant::from_std(self.execution.deadline), self.cli.http.discover(self.context.directory.clone(), self.context.transport_options(self.options)?)) => Arc::new(result.map_err(|_| IssueError::Interrupted)??),
-        };
-        self.progress
-            .protocol(client.directory(), &session.record().await?);
-        let service = IssueService::new(client, identity)?.with_observer(self.progress.clone());
+        let workflow = aster_acme::issuance::workflow::Workflow::new(
+            self.cli.http.clone(),
+            self.context.directory.clone(),
+            self.context.transport_options(self.options)?,
+        )?
+        .with_observer(self.progress.clone());
         let (_, max_polls, poll_interval) = self.args.limits(&self.context.config);
         let execution = IssueExecution {
             max_polls,
             context: self.execution.clone(),
             poll_interval: Duration::from_secs(poll_interval),
         };
-        let result = service.run(session, solver.as_ref(), &execution).await;
+        #[cfg(feature = "precheck")]
+        let result = {
+            let check = aster_acme_validation::caa::order::OrderCaa::default();
+            let observer =
+                crate::commands::cert::precheck::caa::Display::new(&saved, &self.progress);
+            let stage = aster_acme::precheck::order::Stage::new(&check).with_observer(&observer);
+            workflow
+                .run_with_precheck(identity, session, solver.as_ref(), &execution, &stage)
+                .await
+        };
+        #[cfg(not(feature = "precheck"))]
+        let result = workflow
+            .run(identity, session, solver.as_ref(), &execution)
+            .await;
         if matches!(result, Err(IssueError::Interrupted))
             && self.execution.cancellation.is_cancelled()
         {
@@ -450,16 +557,22 @@ pub(crate) async fn execute(
             all,
             history,
             revoked,
+            failed,
             yes,
             local,
         } => {
             use crate::commands::cert::removal::RemovalFilter;
-            let filter = match (all, history, revoked) {
-                (false, false, false) => RemovalFilter::Request,
-                (true, false, false) => RemovalFilter::All,
-                (false, true, false) => RemovalFilter::History,
-                (false, false, true) => RemovalFilter::Revoked,
-                _ => return Err("--all, --history and --revoked are mutually exclusive.".into()),
+            let filter = match (all, history, revoked, failed) {
+                (false, false, false, false) => RemovalFilter::Request,
+                (true, false, false, false) => RemovalFilter::All,
+                (false, true, false, false) => RemovalFilter::History,
+                (false, false, true, false) => RemovalFilter::Revoked,
+                (false, false, false, true) => RemovalFilter::Failed,
+                _ => {
+                    return Err(
+                        "--all, --history, --revoked and --failed are mutually exclusive.".into(),
+                    );
+                }
             };
             super::removal::execute(target, filter, yes, local, cli).await
         }
@@ -496,13 +609,7 @@ pub(crate) async fn execute(
             http,
             local,
         } => show(target, history, verify, http, local, cli).await,
-        CertCommand::Revoke {
-            target,
-            reason,
-            yes,
-            http,
-            local,
-        } => revoke(target, reason, yes, http, local, cli).await,
+        CertCommand::Revoke(args) => crate::commands::cert::revocation::execute(args, cli).await,
     }
 }
 
@@ -535,15 +642,7 @@ async fn show(
                 ..options
             })
             .await?;
-        record = remote_operation(
-            context,
-            &http,
-            &record,
-            &store,
-            RemoteOperation::Inspect,
-            cli,
-        )
-        .await?;
+        record = inspect_remote(context, &http, &record, &store, cli).await?;
     }
     let view = if history || target.operation.is_some() {
         render::DetailView::Version
@@ -557,45 +656,7 @@ async fn show(
     })
 }
 
-async fn revoke(
-    target: super::args::SavedTargetArgs,
-    reason: Option<aster_acme_protocol::revocation::RevocationReason>,
-    yes: bool,
-    http: HttpArgs,
-    local: LocalArgs,
-    cli: &crate::common::context::CommandContext,
-) -> CliResult<super::report::CertificateReport> {
-    let options = options(&local, &http, None);
-    let settings = CliSettings::load(&options).await?;
-    let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));
-    let record =
-        selected_record(&store, &target, cli, selection::RequestSelection::Completed).await?;
-    // A confirmed local outcome needs neither an account key nor HTTP.
-    let record = match record.revocation.state {
-        aster_acme_core::revocation::RevocationState::Confirmed => record,
-        aster_acme_core::revocation::RevocationState::NotRequested
-        | aster_acme_core::revocation::RevocationState::Pending => {
-            let context = settings
-                .account(&AccountArgs {
-                    name: Some(record.account_name.clone()),
-                    ..options
-                })
-                .await?;
-            remote_operation(
-                context,
-                &http,
-                &record,
-                &store,
-                RemoteOperation::Revoke { reason, yes },
-                cli,
-            )
-            .await?
-        }
-    };
-    Ok(super::report::CertificateReport::Revoked(Box::new(record)))
-}
-
-async fn selected_record(
+pub(super) async fn selected_record(
     store: &CliIssueStore,
     target: &super::args::SavedTargetArgs,
     cli: &crate::common::context::CommandContext,
@@ -637,20 +698,11 @@ async fn selected_record(
     selection::choose(records, &name, target.operation.as_deref(), &cli.output)
 }
 
-enum RemoteOperation {
-    Inspect,
-    Revoke {
-        reason: Option<aster_acme_protocol::revocation::RevocationReason>,
-        yes: bool,
-    },
-}
-
-async fn remote_operation(
+async fn inspect_remote(
     context: CliContext,
     http: &HttpArgs,
     record: &IssueRecord,
     store: &CliIssueStore,
-    operation: RemoteOperation,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<IssueRecord> {
     let signer = context
@@ -672,51 +724,6 @@ async fn remote_operation(
         .await?
         .ok_or("Account metadata missing.")?;
     let mut session = store.open(&record.name, &record.operation_id).await?;
-    match &operation {
-        RemoteOperation::Inspect => {}
-        RemoteOperation::Revoke { reason, yes } => {
-            use aster_acme_core::revocation::{RevocationAction, revocation_action};
-            let in_use = session.record().await?;
-            match revocation_action(
-                matches!(
-                    in_use.phase,
-                    aster_acme_core::workflow::IssuancePhase::Completed
-                ),
-                in_use.revocation.state,
-                in_use.revocation.reason == reason.or(in_use.revocation.reason),
-            ) {
-                RevocationAction::NotIssued => {
-                    return Err("Only an issued certificate can be revoked.".into());
-                }
-                RevocationAction::ReasonConflict => {
-                    return Err("An unconfirmed revocation must retain its original reason.".into());
-                }
-                RevocationAction::AlreadyConfirmed => return Ok(in_use),
-                RevocationAction::Submit => {}
-            }
-            let reason = reason
-                .or(in_use.revocation.reason)
-                .map_or_else(|| "not specified".into(), |reason| reason.to_string());
-            terminal::confirm_action(
-                &format!(
-                    "Permanently revoke certificate\n  Name: {}\n  Request: {}\n  Domains: {}\n  CA: {}\n  Reason: {}\n\nThis cannot be undone. Local certificate files will be retained.\nA deployed copy must be replaced separately.",
-                    in_use.name.as_str(),
-                    in_use.operation_id,
-                    in_use
-                        .identifiers
-                        .iter()
-                        .map(DnsIdentifier::value)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    in_use.directory.as_str(),
-                    reason
-                ),
-                "Revoke this certificate?",
-                *yes,
-                &cli.output,
-            )?;
-        }
-    }
     let transport = context.transport_options(&AccountArgs {
         user_agent: http.user_agent.clone(),
         request_timeout: http.request_timeout,
@@ -724,24 +731,20 @@ async fn remote_operation(
     })?;
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let identity = IssueIdentity { account, signer };
-    match operation {
-        RemoteOperation::Inspect => Ok(IssueService::new(client, identity)?
-            .inspect(session.as_mut())
-            .await?),
-        RemoteOperation::Revoke { reason, .. } => Ok(
-            aster_acme::revocation::RevocationService::new(client, identity)
-                .revoke(session.as_mut(), reason)
-                .await?,
-        ),
-    }
+    Ok(IssueService::new(client, identity)?
+        .inspect(session.as_mut())
+        .await?)
 }
 
 fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
     let method = args
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
-    let solver_config =
-        super::validation::configuration(method, args.webroot.as_deref(), args.listen_address)?;
+    let solver_config = if method == super::validation::ValidationMethod::DnsExternal {
+        super::validation::external_configuration(args.provider.as_deref())?
+    } else {
+        super::validation::configuration(method, args.webroot.as_deref(), args.listen_address)?
+    };
     let identifiers = args.domain.clone();
     let primary = identifiers
         .first()
@@ -853,6 +856,185 @@ async fn allocate_certificate(
 mod tests {
     use crate::commands::cert::execute::*;
 
+    #[tokio::test]
+    async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
+        use aster_acme_cli_storage::issuance::{
+            DeploymentDefinition, DeploymentPermissions, DeploymentTarget,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(2));
+        let account = allocation_account();
+        let request = IssueRequest {
+            name: CertificateName::new("dns-cert").unwrap(),
+            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            account_name: "default".into(),
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            challenge: aster_acme::challenge::ChallengeKind::Dns01,
+            solver_id: "dns_external".into(),
+            solver_config: crate::commands::cert::validation::external_configuration(Some("prod"))
+                .unwrap(),
+        };
+        let target = temp.path().join("published");
+        std::fs::create_dir(&target).unwrap();
+        let mut predecessor: Option<String> = None;
+        for renewal in [false, true] {
+            let session = if renewal {
+                store.renew(&request.name, &account).await.unwrap()
+            } else {
+                store.create(&request, &account).await.unwrap()
+            };
+            let mut record = session.record().await.unwrap();
+            if renewal {
+                assert_eq!(
+                    record.renewal_of.as_ref().unwrap().operation_id,
+                    predecessor.as_ref().unwrap().as_str()
+                );
+            }
+            let generation = temp
+                .path()
+                .join("certs/dns-cert")
+                .join(record.generation_name());
+            let key = rcgen::KeyPair::try_from(
+                std::fs::read(generation.join("private-key.pk8"))
+                    .unwrap()
+                    .as_slice(),
+            )
+            .unwrap();
+            let certificate = rcgen::CertificateParams::new(vec!["example.com".into()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap()
+                .pem();
+            record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+            let record = session
+                .complete(&record, certificate.as_bytes())
+                .await
+                .unwrap();
+            drop(session);
+            if renewal {
+                let result = attach_deployment_results(
+                    IssueOutcome::Completed {
+                        record: Box::new(record),
+                        cleanup: Vec::new(),
+                    },
+                    &store,
+                    &ExecutionContext {
+                        cancellation: CancellationToken::new(),
+                        deadline: Instant::now() + Duration::from_secs(10),
+                    },
+                )
+                .await;
+                let super::super::report::CertificateResult::Issued { deployments, .. } = result
+                else {
+                    panic!("renewal did not run configured deployments");
+                };
+                assert_eq!(deployments.len(), 1);
+                assert_eq!(
+                    deployments[0].phase,
+                    aster_acme::deployment::DeploymentPhase::Deployed
+                );
+                assert_eq!(
+                    std::fs::read(target.join("fullchain.pem")).unwrap(),
+                    std::fs::read(generation.join("fullchain.pem")).unwrap()
+                );
+                assert!(target.join("private-key.pem").is_file());
+            } else {
+                predecessor = Some(record.operation_id.clone());
+                store
+                    .add_deployment(
+                        &request.name,
+                        DeploymentDefinition {
+                            name: Some("web".into()),
+                            target: DeploymentTarget::Directory {
+                                path: target.clone(),
+                            },
+                            permissions: DeploymentPermissions::default(),
+                            reload_command: Vec::new(),
+                            timeout_seconds: 30,
+                            max_retries: 0,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn renewal_deadline_enters_backoff_but_user_cancellation_does_not() {
+        use rcgen::{CertificateParams, Issuer, KeyPair};
+        for cancelled in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
+            let account = allocation_account();
+            let request = IssueRequest {
+                name: CertificateName::new("deadline").unwrap(),
+                identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+                account_name: "default".into(),
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                challenge: aster_acme::challenge::ChallengeKind::Dns01,
+                solver_id: "manual_dns".into(),
+                solver_config: serde_json::json!({}),
+            };
+            let session = store.create(&request, &account).await.unwrap();
+            let mut current = session.record().await.unwrap();
+            let key = zeroize::Zeroizing::new(
+                std::fs::read(
+                    temp.path()
+                        .join("certs/deadline")
+                        .join(current.generation_name())
+                        .join("private-key.pk8"),
+                )
+                .unwrap(),
+            );
+            let key = KeyPair::try_from(key.as_slice()).unwrap();
+            let issuer = Issuer::new(
+                CertificateParams::new(Vec::<String>::new()).unwrap(),
+                KeyPair::generate().unwrap(),
+            );
+            let chain = CertificateParams::new(vec!["example.com".to_owned()])
+                .unwrap()
+                .signed_by(&key, &issuer)
+                .unwrap()
+                .pem();
+            current.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+            let current = session.complete(&current, chain.as_bytes()).await.unwrap();
+            drop(session);
+            let mut attempt = store.renew(&current.name, &account).await.unwrap();
+            let record = attempt.record().await.unwrap();
+            let execution = ExecutionContext {
+                cancellation: CancellationToken::new(),
+                deadline: Instant::now(),
+            };
+            if cancelled {
+                execution.cancellation.cancel();
+            }
+            let progress = Progress::new(crate::common::session::OutputSession::new(true));
+            let error = report_issue_failure(
+                attempt.as_mut(),
+                &record,
+                &progress,
+                &execution,
+                Box::new(IssueError::Interrupted),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(error.is::<IssueError>());
+            drop(attempt);
+            let saved = store
+                .open_observation(&current.name, &current.operation_id)
+                .await
+                .unwrap()
+                .record()
+                .await
+                .unwrap();
+            assert_eq!(saved.renewal_retry.is_some(), !cancelled);
+            if let Some(retry) = saved.renewal_retry {
+                assert_eq!(retry.failures, 1);
+            }
+        }
+    }
     fn allocation_account() -> aster_acme::account::AccountRecord {
         serde_json::from_value(serde_json::json!({
             "key_algorithm":"ecdsa-p256","account_id":"test-account","directory_url":"https://ca.example/directory","account_url":"https://ca.example/account",
@@ -894,6 +1076,7 @@ mod tests {
                 let session = store.create(&request, &allocation_account()).await.unwrap();
                 let mut record = session.record().await.unwrap();
                 record.renewal_of = Some(aster_acme::issuance::RenewalPredecessor {
+                    retained_validation: Vec::new(),
                     operation_id: "p".repeat(43),
                     certificate_id: None,
                 });

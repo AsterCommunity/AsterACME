@@ -4,7 +4,7 @@
 
 ## 账户注册实现
 
-账户能力已形成纵向链路：CLI → AccountService → JWS/transport → CA；文件实现由 `aster_acme_cli_storage` 提供。`AccountStore`、`AccountKeyStore`、`AccountSigner` 均对象安全并支持 dyn 注入；嵌入服务可直接使用自己的存储和签名器。core 未增加网络或文件依赖。
+账户能力已形成纵向链路：CLI → AccountService → JWS/transport → CA；文件实现由 `aster_acme_cli_storage` 提供。`AccountStore`、`AccountKeyStore`、`JwsSigner` 均对象安全并支持 dyn 注入；嵌入服务可直接使用自己的存储和签名器。core 未增加网络或文件依赖。
 
 先保存账户身份记录，再持久化具名私钥，之后保存注册意图并用 onlyReturnExisting 对账，只有明确 not-found 才创建。超时、取消及响应丢失保留原身份。Registered 表示已知账户 URL，不代表当前远端 valid；默认 show 离线，显式 --verify 才查询 CA。
 
@@ -58,7 +58,7 @@ Core 纯决策返回 SendKeyChange / ReconcileKeyChange / FinalizeKeyChange。�
 
 ## 账户多算法签名与轮换
 
-`crypto::key_algorithm::KeyAlgorithm` 统一账户和证书八种密钥选择及生成/恢复校验，但不把两者的算法配置绑定。`crypto::key::AccountKey` 按真实 PKCS#8 选择 AWS-LC EC、RSA 或 Ed25519 实现；`AccountSigner` 提供实际算法、公共 JWK 和可变长签名。协议层的 `SignatureAlgorithm` 枚举限制 ES256/ES384/ES512/EdDSA/RS256，JWS 不再硬编码 ES256。EC 签名为固定宽度 R||S（64/96/132 B），RSA 为 PKCS#1 v1.5/SHA-256，Ed25519 为 64 B 原始签名；无 CA 拒绝后的自动换算法。
+`crypto::key_algorithm::KeyAlgorithm` 统一账户和证书八种密钥选择及生成/恢复校验，但不把两者的算法配置绑定。`crypto::key::SoftwareSigningKey` 按真实 PKCS#8 选择 AWS-LC EC、RSA 或 Ed25519 实现；`JwsSigner` 提供实际算法、公共 JWK 和可变长签名。协议层的 `SignatureAlgorithm` 枚举限制 ES256/ES384/ES512/EdDSA/RS256，JWS 不再硬编码 ES256。EC 签名为固定宽度 R||S（64/96/132 B），RSA 为 PKCS#1 v1.5/SHA-256，Ed25519 为 64 B 原始签名；无 CA 拒绝后的自动换算法。
 
 `crypto::jwk` 对 EC/RSA/OKP 分型，按 RFC 7638/8037 仅序列化按字典排序的必需成员；RSA n/e 为最短无符号 base64url 整数，EC 坐标保留固定宽度。EAB 仍使用独立 HS256，对所选账户公钥绑定，不随账户 JWS 算法改变。
 

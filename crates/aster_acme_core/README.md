@@ -5,9 +5,10 @@
 - `account`：注册/复用、停用及可用账户选择的显式纯决策；本地注册与停用意图、CA 观察驱动的状态转换。
 - `protocol`：保留未知值的资源状态枚举，使用 Forge 的 `wire_enum!`。
 - `machine`：订单、授权及 challenge 的纯推进决策。未知和失败状态返回明确错误；processing 不重复提交 CSR。
+- `caa`：RFC8659/RFC8657的纯建议性策略评估，不进行DNS查询，不决定CA能否签发。
 - `workflow`：本地阶段，签发完成与清理完成分开记录。
 
-不认识 DNS-01/HTTP-01/TLS-ALPN-01，不处理域名、验证材料、密码学、网络、文件或运行时。生产依赖仅为 Forge 声明式宏、Serde 与 thiserror。
+不执行 DNS-01/HTTP-01/TLS-ALPN-01，不处理验证材料、密码学、网络、文件或运行时。生产依赖仅为 Forge 声明式宏、Serde 与 thiserror。
 
 ```rust
 use aster_acme_core::{machine::{order_action, OrderAction}, protocol::OrderStatus};
@@ -29,6 +30,6 @@ cargo test -p aster_acme_core --locked
 
 `SubmissionState::NotSubmitted/Submitted` 是本地持久化通知意图，区别于 CA 状态。order_action 接收 finalize 提交状态，ready + Submitted 返回 PollOrder；challenge_action 接收 acknowledgement 状态，pending + Submitted 返回 PollChallenge。只有未提交的动作允许上层保存意图后通知 CA，不能根据仍未变化的远端状态重放 mutation。
 
-续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI提供计划、显式刷新及由cron调用的`daemon run-once`；吊销保留本地文件，与订单状态独立。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；`daemon run-once`执行一次维护，`daemon run`以前台常驻方式按配置间隔循环，默认60秒，同一data-dir由跨进程租约限制为单实例。两种模式刷新ARI建议、自动续期到期的webroot/standalone/tls_alpn/dns_persist/dns_external证书并执行已配置部署；manual验证会跳过。本地 DNS 采用建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，外置锁 inode 保留。

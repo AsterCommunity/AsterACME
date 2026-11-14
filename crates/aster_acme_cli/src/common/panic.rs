@@ -158,6 +158,11 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
     };
     let explicit = match &args.command {
         Command::Version { .. } => return Ok(None),
+        Command::Provider { command } => &command.local().data_dir,
+        Command::Daemon { command } => match command {
+            crate::commands::daemon::DaemonCommand::RunOnce(args) => &args.local.data_dir,
+            crate::commands::daemon::DaemonCommand::Run { options, .. } => &options.local.data_dir,
+        },
         Command::Account { command } => match command {
             AccountCommand::List(args) => &args.local.data_dir,
             AccountCommand::Show { options, .. } | AccountCommand::Recover(options) => {
@@ -173,10 +178,10 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
         Command::Cert { command } => match command {
             CertCommand::Issue(args) => &args.run.local.data_dir,
             CertCommand::Renew(args) => &args.run.local.data_dir,
+            CertCommand::Revoke(args) => &args.local.data_dir,
             CertCommand::Deploy(args) => &args.local().data_dir,
             CertCommand::List { local, .. }
             | CertCommand::Show { local, .. }
-            | CertCommand::Revoke { local, .. }
             | CertCommand::Remove { local, .. } => &local.data_dir,
         },
     };

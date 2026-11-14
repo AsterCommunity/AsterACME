@@ -1,6 +1,6 @@
 //! Complete config presentation in human/JSON output, including partial targets and quoting.
 use crate::commands::cert::render::deployment::*;
-use aster_acme_cli_storage::issuance::DeploymentPhase;
+use aster_acme::deployment::DeploymentPhase;
 
 fn binding(target: DeploymentTarget) -> DeploymentBinding {
     DeploymentBinding {
@@ -17,6 +17,8 @@ fn binding(target: DeploymentTarget) -> DeploymentBinding {
         generation: Some("generation-one".into()),
         phase: DeploymentPhase::ReloadFailed,
         attempts: 5,
+        retry_failures: 0,
+        retry_at: None,
         last_error: Some("reload failed\ncheck service".into()),
     }
 }

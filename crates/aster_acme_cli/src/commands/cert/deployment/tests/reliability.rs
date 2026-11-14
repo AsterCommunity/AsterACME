@@ -94,9 +94,16 @@ async fn uncertain_reload_survives_configuration_update_and_a_new_generation() {
         fixture.complete(true).await;
         let automatic = fixture.automatic(&fixture.store).await;
         assert_eq!(automatic[0], patched);
-        let explicit = run_one(&fixture.store, &fixture.name, "barrier", true, None, None)
-            .await
-            .unwrap();
+        let explicit = run_one(
+            &fixture.store,
+            &fixture.name,
+            "barrier",
+            aster_acme::deployment::DeploymentIntent::Explicit,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(explicit.binding.phase, DeploymentPhase::Deployed);
     }
 }

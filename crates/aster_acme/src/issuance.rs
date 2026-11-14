@@ -1,8 +1,7 @@
 //! Persisted issuance contracts. Protocol effects belong to the service, files to adapters.
 use crate::storage::account::AccountStoreError;
 use crate::{
-    account::AccountRecord, crypto::AccountSigner, identifier::DnsIdentifier,
-    solver::ExecutionContext,
+    account::AccountRecord, crypto::JwsSigner, identifier::DnsIdentifier, solver::ExecutionContext,
 };
 use aster_acme_core::workflow::{IssuancePhase, SubmissionState};
 use aster_acme_protocol::{
@@ -13,10 +12,13 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
 
+mod authorization;
 pub mod certificate;
 
 pub mod progress;
+pub mod publication;
 pub mod service;
+pub mod workflow;
 
 /// Portable application-visible certificate name, independent of DNS wildcard syntax.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +145,13 @@ impl IssueRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "method")]
 pub enum ValidationRequirement {
+    /// Long-lived authorization; never returned as temporary cleanup instructions.
+    #[serde(rename = "dns-persist-01")]
+    DnsPersist01 {
+        /// Exact persistent TXT publication, independent of a challenge token.
+        #[serde(flatten)]
+        record: crate::challenge::dns_persist::DnsPersistRecord,
+    },
     /// All TXT values at a shared owner must coexist.
     #[serde(rename = "dns-01")]
     Dns01 {
@@ -178,39 +187,41 @@ impl ValidationRequirement {
         use crate::challenge::ChallengeKind;
         match self {
             Self::Dns01 { .. } => ChallengeKind::Dns01,
+            Self::DnsPersist01 { .. } => ChallengeKind::DnsPersist01,
             Self::Http01 { .. } => ChallengeKind::Http01,
             Self::TlsAlpn01 { .. } => ChallengeKind::TlsAlpn01,
+        }
+    }
+
+    pub(crate) fn same_publication_scope(&self, other: &Self) -> bool {
+        match self {
+            Self::DnsPersist01 { record } => match other {
+                Self::DnsPersist01 { record: other } => record.same_scope(other),
+                Self::Dns01 { .. } | Self::Http01 { .. } | Self::TlsAlpn01 { .. } => false,
+            },
+            Self::Dns01 { .. } | Self::Http01 { .. } | Self::TlsAlpn01 { .. } => false,
         }
     }
 
     fn from_material(material: crate::challenge::ChallengeMaterial) -> Self {
         use crate::challenge::ChallengeMaterial;
         match material {
-            ChallengeMaterial::Dns01 {
-                record_name,
-                txt_value,
-            } => Self::Dns01 {
-                name: record_name.as_str().into(),
-                value: txt_value,
+            ChallengeMaterial::DnsPersist01(record) => Self::DnsPersist01 { record },
+            ChallengeMaterial::Dns01(record) => Self::Dns01 {
+                name: record.record_name.as_str().into(),
+                value: record.txt_value,
             },
-            ChallengeMaterial::Http01 {
-                identifier,
-                token,
-                key_authorization,
-            } => {
-                let path = format!("/.well-known/acme-challenge/{}", token.as_str());
+            ChallengeMaterial::Http01(response) => {
+                let path = format!("/.well-known/acme-challenge/{}", response.token.as_str());
                 Self::Http01 {
-                    url: format!("http://{}{path}", identifier.value()),
+                    url: format!("http://{}{path}", response.identifier.value()),
                     path,
-                    content: key_authorization.as_str().into(),
+                    content: response.key_authorization.as_str().into(),
                 }
             }
-            ChallengeMaterial::TlsAlpn01 {
-                identifier,
-                authorization_digest,
-            } => Self::TlsAlpn01 {
-                domain: identifier.value(),
-                digest: authorization_digest,
+            ChallengeMaterial::TlsAlpn01(response) => Self::TlsAlpn01 {
+                domain: response.identifier.value(),
+                digest: response.authorization_digest,
             },
         }
     }
@@ -218,6 +229,7 @@ impl ValidationRequirement {
 
 /// Saved authorization observation and local publication receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorizationRecord {
     /// Exact discovered authorization URL.
     pub url: AcmeUrl,
@@ -226,7 +238,23 @@ pub struct AuthorizationRecord {
     /// Chosen challenge, kept stable across resume.
     pub challenge_url: Option<AcmeUrl>,
     /// Persisted public material; publication must not change on recovery.
-    pub validation: Option<ValidationRequirement>,
+    pub validation_requirement: Option<ValidationRequirement>,
+    /// Stable idempotency identity saved before invoking a publication solver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_id: Option<String>,
+    /// Exact provider receipt; never contains credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_receipt: Option<aster_acme_dns::PublicationReceipt>,
+    /// Exact DNS route saved before any provider mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_plan: Option<aster_acme_dns::DnsRecord>,
+    /// Provider retry lower bound, preserved through process restart.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub publication_retry_at: Option<time::OffsetDateTime>,
     /// Whether publication cleanup is still pending after CA validation ends.
     pub cleanup_pending: bool,
     /// Persisted before acknowledging the CA.
@@ -240,6 +268,11 @@ pub struct RenewalPredecessor {
     pub operation_id: String,
     /// RFC 9773 identifier, absent when the certificate cannot provide one.
     pub certificate_id: Option<String>,
+    /// Confirmed persistent records captured under the predecessor lease.
+    /// They retain historical-key binding across account rollover without
+    /// assuming that a freshly derived record has already been published.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_validation: Vec<ValidationRequirement>,
 }
 
 /// Why the next CA query must wait. This records the winning deadline, not an
@@ -314,8 +347,57 @@ impl RequestFailure {
     }
 }
 
+/// Automatic renewal retry state attached to the still-selected predecessor.
+/// Historical issue records remain the source of the failed attempt details.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenewalRetryState {
+    /// Consecutive failed attempts for this selected certificate generation.
+    pub failures: u32,
+    /// Earliest automatic retry; absent when the remote outcome needs inspection.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub retry_at: Option<time::OffsetDateTime>,
+    /// CA-provided minimum deadline; administrators cannot bypass this with `--now`.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub ca_retry_at: Option<time::OffsetDateTime>,
+    /// A mutation outcome that cannot safely be replayed automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+}
+
+impl RenewalRetryState {
+    /// Advance one failed invocation without erasing earlier CA deadlines or
+    /// uncertainty. All callers persist this while owning the certificate lease.
+    #[must_use]
+    pub fn after_failure(
+        previous: Option<&Self>,
+        now: time::OffsetDateTime,
+        ca_retry_at: Option<time::OffsetDateTime>,
+        blocked_reason: Option<String>,
+    ) -> Self {
+        let failures = previous.map_or(1, |state| state.failures.saturating_add(1));
+        let retry_at = now.checked_add(time::Duration::seconds(
+            aster_acme_core::renewal::renewal_retry_delay_seconds(failures),
+        ));
+        let blocked_reason = previous
+            .and_then(|state| state.blocked_reason.clone())
+            .or(blocked_reason)
+            .or_else(|| retry_at.is_none().then(|| "retry deadline overflow".into()));
+        Self {
+            failures,
+            retry_at: blocked_reason.is_none().then_some(retry_at).flatten(),
+            ca_retry_at: previous
+                .and_then(|state| state.ca_retry_at)
+                .into_iter()
+                .chain(ca_retry_at)
+                .max(),
+            blocked_reason,
+        }
+    }
+}
+
 /// A generation and its remote order, with no private keys or provider credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IssueRecord {
     /// Immutable selected ACME verification method.
     pub challenge: crate::challenge::ChallengeKind,
@@ -356,8 +438,9 @@ pub struct IssueRecord {
     pub identifiers: Vec<DnsIdentifier>,
     /// Local execution stage, independent of order status.
     pub phase: IssuancePhase,
-    /// Saved before newOrder; missing URL afterwards is an uncertain creation.
-    pub creation_submitted: bool,
+    /// `NewOrder` intent was durably saved before sending; without a Location the
+    /// remote outcome is uncertain, even if the process stopped before the POST.
+    pub new_order_intent_saved: bool,
     /// A complete newOrder error response; no Order status is inferred from it.
     pub creation_failure: Option<RequestFailure>,
     /// Actual RFC 9773 replaces value selected before newOrder; a refreshed directory
@@ -387,12 +470,55 @@ pub struct IssueRecord {
     /// Durable renewal schedule, available only after certificate validation.
     #[serde(default)]
     pub renewal: Option<crate::renewal::RenewalPlan>,
-    /// Leaf certificate expiry, distinct from order and authorization expiry.
-    #[serde(default, with = "time::serde::rfc3339::option")]
-    pub certificate_not_after: Option<time::OffsetDateTime>,
+    /// Backoff for renewal attempts against this generation while it remains in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewal_retry: Option<RenewalRetryState>,
 }
 
 impl IssueRecord {
+    /// Long-lived publication carried forward from the confirmed generation.
+    /// Current observations replace the same method-owned publication scope;
+    /// unrefreshed scopes survive CA authorization reuse without history growth.
+    #[must_use]
+    pub fn retained_validation_requirements(&self) -> Vec<ValidationRequirement> {
+        let retain = |requirement: &&ValidationRequirement| {
+            requirement.kind() == self.challenge
+                && requirement.kind().publication_lifetime()
+                    == crate::challenge::PublicationLifetime::Persistent
+        };
+        let current = self
+            .authorizations
+            .iter()
+            .filter_map(|auth| auth.validation_requirement.as_ref())
+            .filter(retain)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut retained = Vec::new();
+        for requirement in &current {
+            if !retained.contains(requirement) {
+                retained.push(requirement.clone());
+            }
+        }
+        if let Some(previous) = &self.renewal_of {
+            for requirement in previous.retained_validation.iter().filter(retain) {
+                if !current
+                    .iter()
+                    .any(|current| current.same_publication_scope(requirement))
+                    && !retained.contains(requirement)
+                {
+                    retained.push(requirement.clone());
+                }
+            }
+        }
+        retained
+    }
+
+    /// Expiration of the verified leaf certificate, recorded by its renewal plan.
+    #[must_use]
+    pub fn certificate_not_after(&self) -> Option<time::OffsetDateTime> {
+        self.renewal.as_ref().map(|plan| plan.not_after)
+    }
+
     /// Whether this completed local generation can be offered for deployment.
     /// The storage adapter must additionally verify it is still the selected version.
     #[must_use]
@@ -490,7 +616,7 @@ impl IssueRecord {
                 problem: self.failure_problem().cloned().map(Box::new),
             });
         }
-        if self.creation_submitted && self.order_url.is_none() {
+        if self.new_order_intent_saved && self.order_url.is_none() {
             return Err(IssueError::CreationUncertain);
         }
         if let Some(error) = self.authorization_failure() {
@@ -500,6 +626,31 @@ impl IssueRecord {
             return Err(IssueError::Expired);
         }
         Ok(())
+    }
+
+    /// An unissued request with affirmative, terminal failure evidence.
+    /// Unknown network outcomes and deferred 408/429/5xx responses are retained;
+    /// being absent from resume candidates alone never authorizes deletion.
+    #[must_use]
+    pub fn failed_unresumable(&self, now: time::OffsetDateTime) -> bool {
+        use aster_acme_core::protocol::OrderStatus;
+        self.unfinished()
+            && self.certificate_not_after().is_none()
+            && !self
+                .order
+                .as_ref()
+                .is_some_and(|order| matches!(order.status, OrderStatus::Valid))
+            && (self.creation_failure.as_ref().is_some_and(|failure| {
+                (400..500).contains(&failure.status) && !matches!(failure.status, 408 | 429)
+            }) || self.finalize_rejection.is_some()
+                || self.authorization_failure().is_some()
+                || self
+                    .order
+                    .as_ref()
+                    .is_some_and(|order| matches!(order.status, OrderStatus::Invalid))
+                || (self.expired(now)
+                    && !(self.finalize_submitted == SubmissionState::Submitted
+                        && self.finalize_rejection.is_none())))
     }
 
     /// Known terminal orders are retained for inspection but excluded from resume selection.
@@ -605,11 +756,38 @@ impl IssueRecord {
                 && order.expires.is_some_and(|expires| expires <= now)
         })
     }
+
+    /// Whether external temporary publications are safe to clean up without risking
+    /// an order that can still issue a certificate or has an unknown finalize result.
+    #[must_use]
+    pub fn publication_cleanup_eligible(&self, now: time::OffsetDateTime) -> bool {
+        self.phase == IssuancePhase::Completed
+            || self.finalize_rejection.is_some()
+            || self.authorization_failure().is_some()
+            || self.order.as_ref().is_some_and(|order| {
+                matches!(
+                    order.status,
+                    aster_acme_core::protocol::OrderStatus::Invalid
+                )
+            })
+            || (self.finalize_submitted != SubmissionState::Submitted
+                && self.expired(now)
+                && self.order.as_ref().is_some_and(|order| {
+                    matches!(
+                        order.status,
+                        aster_acme_core::protocol::OrderStatus::Pending
+                            | aster_acme_core::protocol::OrderStatus::Ready
+                    )
+                }))
+    }
 }
 
 /// Protocol/service failures without private key material.
 #[derive(Debug, Error)]
 pub enum IssueError {
+    /// Another process owns the execution lease; this is not a failed CA attempt.
+    #[error("{0} execution lock is unavailable: {1}")]
+    LeaseUnavailable(&'static str, String),
     /// Authorization or selected challenge reached a terminal failure independently of order status.
     #[error("CA authorization/challenge failed (authorization status: {status:?})")]
     AuthorizationFailed {
@@ -624,9 +802,29 @@ pub enum IssueError {
     /// Sanitized application publication failure; never include credentials or keys.
     #[error("validation publication failed: {0}")]
     Publication(String),
+    /// Structured DNS provider or external process failure.
+    #[error(transparent)]
+    DnsProvider(#[from] aster_acme_dns::ProviderFailure),
+    /// DNS route resolution/policy failure with resolver causes preserved.
+    #[error(transparent)]
+    DnsRouting(#[from] aster_acme_dns::routing::RouteError),
+    /// Expected TXT values were not observed under the propagation policy.
+    #[error(transparent)]
+    DnsPropagation(#[from] aster_acme_dns::propagation::PropagationError),
+    /// A saved provider rate limit forbids another invocation before this time.
+    #[error("DNS provider rate limited; retry no earlier than {0}")]
+    DnsRetryAt(time::OffsetDateTime),
     /// A managed certificate already owns this name; only automatic names may be retried.
     #[error("a managed certificate named '{0}' already exists")]
     NameAlreadyExists(CertificateName),
+    /// Invalid revocation material, authority or checkpoint; has no issuance recovery action.
+    #[error("{0}")]
+    RevocationInput(&'static str),
+    /// Revocation cancellation/deadline; its checkpoint determines whether submission was uncertain.
+    #[error(
+        "revocation interrupted; inspect its saved state before explicitly retrying the same certificate and reason"
+    )]
+    RevocationInterrupted,
     /// Remote order creation may already have happened; never create another automatically.
     #[error(
         "order creation outcome is uncertain; no saved Location URL is available; inspect this operation before creating a new request"
@@ -705,11 +903,12 @@ pub struct IssueIdentity {
     /// Account's latest persisted registration metadata.
     pub account: AccountRecord,
     /// Signing boundary; may be backed by an HSM or remote service.
-    pub signer: Arc<dyn AccountSigner>,
+    pub signer: Arc<dyn JwsSigner>,
 }
 
 #[cfg(test)]
 mod tests {
+    mod failed;
     use crate::issuance::*;
 
     #[test]

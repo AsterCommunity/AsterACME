@@ -12,4 +12,14 @@
     )
 )]
 
+#[cfg(any(feature = "dns01", feature = "precheck-caa"))]
+mod dns;
+#[cfg(feature = "dns01")]
 pub mod dns01;
+#[cfg(any(feature = "dns01", feature = "precheck-caa"))]
+pub mod resolver;
+
+#[cfg(feature = "precheck-caa")]
+pub mod caa;
+#[cfg(feature = "precheck-dns")]
+pub mod txt;

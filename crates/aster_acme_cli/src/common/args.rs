@@ -5,8 +5,13 @@ use std::path::PathBuf;
 
 #[derive(clap::Args, Default, Clone)]
 pub(crate) struct LocalArgs {
-    /// Unified state root (default: system directory for com.astercosm.acme).
-    #[arg(long, value_name = "PATH", help_heading = "Storage and output")]
+    /// Unified state root (env: `ASTER_ACME_DATA_DIR`; default: platform directory).
+    #[arg(
+        long,
+        env = "ASTER_ACME_DATA_DIR",
+        value_name = "PATH",
+        help_heading = "Storage and output"
+    )]
     pub(crate) data_dir: Option<PathBuf>,
     /// Structured JSON; disables interactive prompts and terminal styling.
     #[arg(long, help_heading = "Storage and output")]
@@ -15,7 +20,7 @@ pub(crate) struct LocalArgs {
 
 #[derive(clap::Args, Default, Clone)]
 pub(crate) struct HttpArgs {
-    /// HTTP User-Agent override; an explicit value during registration is saved for this account.
+    /// HTTP User-Agent override for this invocation; registration may save an explicit value.
     #[arg(long)]
     pub(crate) user_agent: Option<String>,
     /// Single HTTP request timeout in seconds (1–300); config `request_timeout`, default 30.
@@ -257,5 +262,22 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn data_directory_uses_the_documented_environment_variable() {
+        let command = Args::command();
+        let command = command
+            .find_subcommand("cert")
+            .and_then(|cert| cert.find_subcommand("list"))
+            .expect("cert list composes the shared local arguments");
+        let arg = command
+            .get_arguments()
+            .find(|argument| argument.get_long() == Some("data-dir"))
+            .expect("shared local arguments expose --data-dir");
+        assert_eq!(
+            arg.get_env(),
+            Some(std::ffi::OsStr::new("ASTER_ACME_DATA_DIR"))
+        );
     }
 }

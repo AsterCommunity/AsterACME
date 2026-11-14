@@ -25,7 +25,7 @@
 ## 配置、文件和安全
 
 - 统一 `--data-dir`；配置固定为根config.toml，无独立--config或配置内data_dir。根version=1，config.toml使用toml_edit定点修改保留用户注释，未知版本/损坏拒绝自动重置。
-- accounts/<name>保存account.toml与account-key.pk8；certs/<name>保存cert.toml和各操作世代。锁集中在根.locks，锁载体存在不代表持锁，不通过删除锁文件释放锁。
+- accounts/<name>保存account.toml与account-key.pk8；certs/<name>保存cert.toml和各操作世代。预发布operation journal保留version=1，但字段布局直接演进，不提供旧字段兼容或自动迁移；账户、证书及常驻daemon的进程锁集中在根.locks，锁载体存在不代表持锁，不通过删除锁文件释放锁。
 - 只有注册可创建账户身份；普通查看/恢复缺密钥时失败关闭。未知用户文件不参与托管删除，不递归清理未证明归属的内容。
 - Unix内部密钥/元数据使用私有权限；Windows继承权限并校验reparse/hard-link。Windows替换支持进程重启恢复，不承诺掉电rename目录项持久性。
 - 私钥、EAB、provider凭据不进入日志、错误或公开输出。外部reload输出按用户要求展示，不自动脱敏，也不持久化为账户/部署元数据。
@@ -33,8 +33,10 @@
 
 ## 验证、续期与部署
 
+- 各challenge子模块拥有具名材料、派生与约束；方法能力通过集中穷尽分发声明。通用订单/授权编排使用准入、账户证明和发布生命周期契约，存储携带类型化长期验证快照；TXT表示及范围解析留在材料所有者。
 - CLI和嵌入者注入ChallengeSolver。ACME拥有方法选择、材料推导、通知与轮询；solver拥有发布、ready、restore、shutdown和终态清理的实际副作用。
-- DNS/HTTP本地预检有界且建议性；不能绕过CA验证。取消/超时保留不确定材料；webroot只清理拥有且未修改的文件，实际移走对象再核验身份。
+- CAA/TXT/HTTP预检由库的可选feature显式提供，返回结构化观察；库默认关闭、CLI默认启用，IssueService不隐式运行预检。本地预检有界且建议性；不能绕过CA验证。取消/超时保留不确定材料；webroot只清理拥有且未修改的文件，实际移走对象再核验身份。
+- DNS Provider Profile分别保存在providers/<name>.toml；provider_custom全量敏感，仅通过stdin context交给可信外部executable，不继承宿主ENV，不进入日志/journal。Profile引用、schema、所有权与清理遵循[ADPP](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)。
 - 临时HTTP/TLS服务共享有界监听生命周期，不自动提权、停其他服务或修改用户网络环境。每个返回路径关闭，取消后不得遗留任务或终端raw mode。
 - 续期只调度in_use，沿用保存定义。ARI在窗口内随机选时且相同窗口不重抽，失败保留计划；证书过期后不查询ARI。回退依据实际有效期，短于10天用一半，其余2/3，并在有效窗口内随机提前。
 - deploy直接发布普通文件并保持目录路径，状态保存在检查点，不以链接存在推断状态。全部选定文件准备/设权/sync后逐文件替换；全部成功后才reload，不承诺整组原子事务、自动回滚或服务健康。

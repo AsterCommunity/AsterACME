@@ -29,6 +29,8 @@ CLI部署执行逐目标收集错误，库存/打开/锁失败不冒充空列表
 
 Windows状态写入只保证替换完成和进程重启恢复；临时文件先sync，但尚无持久化rename目录项的机制，不承诺掉电事务。账户删除和轮换确认以原账户身份/事务快照为条件，重新持锁复核。普通账户写任务共享操作租约，取消等待不提前放锁；同一换钥会话的stage/save/commit串行化。Confirmed换钥恢复只提交本地状态，不依赖directory。已保存签发以稳定账户ID、directory和kid匹配；历史指纹仅继续绑定原验证材料，不要求等于轮换后的签名器指纹。
 
-证书调用在CA发现前建立同一取消/deadline，自动部署继承剩余预算，取消后不启动部署；批量不从外层丢弃可能已经提交产物的事务。手动确认的终端轮询有界，shutdown等待读取结束并恢复raw mode；Esc/Ctrl-C作为CLI取消，终端IO失败独立报告。Webroot清理将路径实际对象移入私有临时目录再核验；身份改变则无覆盖恢复，恢复冲突保留隔离内容并报告位置。
+证书调用在CA发现前建立同一取消/deadline，自动部署继承剩余预算，取消后不启动部署；批量不从外层丢弃可能已经提交产物的事务。人工确认由inquire管理回显与终端状态，shutdown等待原生提示结束，随后复核取消/整体期限，不在控件阻塞时分离线程或跨线程恢复raw mode；Esc/Ctrl-C作为CLI取消，终端IO失败独立报告。Webroot清理将路径实际对象移入私有临时目录再核验；身份改变则无覆盖恢复，恢复冲突保留隔离内容并报告位置。
 
 新建账户/证书/锁目录及issuance generation在允许远端副作用前同步父目录项（Windows仍仅有进程恢复保证）。协议metadata保存必须匹配仍存在的初始化账户，不能重建已删除身份。Managed/当前查询若catalog所选generation缺失则报告不一致，不静默隐藏证书。
+
+ARI维护使用`IssueQuery::ari_due_at`和`IssueStore::open_observation`：先裁剪到当前世代并筛选期限，再获取证书锁重验。观察会话复用身份、catalog和journal校验，但不要求加载固定key/CSR；原`open`继续严格验证执行材料。计划写入仍由Session保留IO许可与租约，详情见[生命周期契约](../certificate-lifecycle.md)。

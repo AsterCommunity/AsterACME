@@ -38,6 +38,13 @@ pub struct IssueQuery {
     pub view: IssueView,
     /// Restrict to recoverable candidates; expiry is checked again at execution.
     pub resumable: Option<bool>,
+    /// Only unissued, terminally failed requests evaluated at this instant.
+    /// Uncertain outcomes and retry deferrals are excluded.
+    pub failed_at: Option<time::OffsetDateTime>,
+    /// Current issued certificates whose saved ARI recheck is due at this instant.
+    pub ari_due_at: Option<time::OffsetDateTime>,
+    /// Current completed, nonrevoked in-use certificates whose renewal time is due.
+    pub renewal_due_at: Option<time::OffsetDateTime>,
     /// Match a saved unfinished request against the full desired definition.
     pub similar: Option<SimilarIssue>,
     /// Restrict records to one managed certificate.
@@ -75,6 +82,15 @@ impl IssueQuery {
             && self
                 .resumable
                 .is_none_or(|value| record.resume_candidate() == value)
+            && self
+                .renewal_due_at
+                .is_none_or(|now| crate::renewal::renewal_due(record, now))
+            && self
+                .ari_due_at
+                .is_none_or(|now| crate::renewal::refresh_due(record, now))
+            && self
+                .failed_at
+                .is_none_or(|now| record.failed_unresumable(now))
             && self.similar.as_ref().is_none_or(|similar| {
                 record.matches_unfinished_request(&similar.request, &similar.account, similar.now)
             })

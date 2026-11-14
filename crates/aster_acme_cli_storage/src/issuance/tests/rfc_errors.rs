@@ -1,6 +1,6 @@
 //! RFC 8555 error responses are evidence, not synthesized order states.
 use crate::issuance::tests::*;
-use aster_acme::crypto::AccountSigner as _;
+use aster_acme::crypto::JwsSigner as _;
 use aster_acme_protocol::problem::ProblemKind;
 
 fn assert_saved_response(
@@ -462,7 +462,7 @@ async fn rejected_acknowledgement_is_retryable_but_server_errors_remain_submitte
                 SubmissionState::Submitted
             }
         );
-        let before = saved.authorizations[0].validation.clone();
+        let before = saved.authorizations[0].validation_requirement.clone();
         if status == 403 {
             // The next explicit invocation reaches acknowledgement again with unchanged material.
             assert!(
@@ -473,7 +473,7 @@ async fn rejected_acknowledgement_is_retryable_but_server_errors_remain_submitte
                     .is_err()
             );
             assert_eq!(
-                session.record().await.unwrap().authorizations[0].validation,
+                session.record().await.unwrap().authorizations[0].validation_requirement,
                 before
             );
             assert_eq!(
@@ -542,8 +542,9 @@ async fn rotated_account_signer_can_resume_saved_material_without_changing_its_t
         .unwrap();
     let before = session.record().await.unwrap();
     let old_material = serde_json::to_value(&before.authorizations).unwrap();
-    let new =
-        Arc::new(aster_acme::crypto::key::AccountKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
+    let new = Arc::new(
+        aster_acme::crypto::key::SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap(),
+    );
     let mut account = fixture.account.clone();
     account.key_thumbprint = new.jwk().unwrap().thumbprint().unwrap();
     let client = aster_acme::transport::HttpPool::default()

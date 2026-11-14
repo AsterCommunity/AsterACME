@@ -26,6 +26,7 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
     }];
     for yes in [false, true] {
         let manual = manual::Manual {
+            reusable: Vec::new(),
             prompt: std::sync::Mutex::new(None),
             method: ChallengeKind::Http01,
             saved: false,
@@ -33,9 +34,16 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
             yes,
             progress: progress(),
         };
-        assert!(!manual.ready(&requirements, &execution()).await.unwrap());
+        assert!(
+            !manual
+                .ready(&publications(&requirements), &execution())
+                .await
+                .unwrap()
+                .ready
+        );
     }
     let manual = manual::Manual {
+        reusable: Vec::new(),
         prompt: std::sync::Mutex::new(None),
         method: ChallengeKind::Http01,
         saved: true,
@@ -43,10 +51,21 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
         yes: true,
         progress: progress(),
     };
-    assert!(manual.ready(&requirements, &execution()).await.unwrap());
+    assert!(
+        manual
+            .ready(&publications(&requirements), &execution())
+            .await
+            .unwrap()
+            .ready
+    );
     let cancelled = execution();
     cancelled.cancellation.cancel();
-    assert!(manual.ready(&requirements, &cancelled).await.is_err());
+    assert!(
+        manual
+            .ready(&publications(&requirements), &cancelled)
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -155,16 +174,34 @@ async fn webroot_honors_cancellation_and_keeps_material_when_cleanup_cannot_fini
         path: "/.well-known/acme-challenge/abcdefghijklmnopqrstuvwxyz012345".into(),
         content: "key.authorization".into(),
     }];
-    assert!(handler.ready(&requirements, &execution()).await.unwrap());
+    assert!(
+        handler
+            .ready(&publications(&requirements), &execution())
+            .await
+            .unwrap()
+            .ready
+    );
     let cancelled = execution();
     cancelled.cancellation.cancel();
-    assert!(handler.cleanup(&requirements, &cancelled).await.is_err());
+    assert!(
+        handler
+            .cleanup(&publications(&requirements), &cancelled)
+            .await
+            .is_err()
+    );
     assert!(
         temp.path()
             .join(requirements_path(&requirements[0]))
             .is_file()
     );
-    assert!(handler.cleanup(&requirements, &execution()).await.unwrap());
+    assert!(
+        handler
+            .cleanup(&publications(&requirements), &execution())
+            .await
+            .unwrap()
+            .failure
+            .is_none()
+    );
 }
 fn requirements_path(requirement: &ValidationRequirement) -> &str {
     let ValidationRequirement::Http01 { path, .. } = requirement else {
@@ -317,6 +354,7 @@ fn standalone_configuration_defaults_persist_and_reject_irrelevant_flags() {
     );
     for method in [
         ValidationMethod::ManualDns,
+        ValidationMethod::DnsPersist,
         ValidationMethod::ManualHttp,
         ValidationMethod::Webroot,
     ] {
@@ -439,52 +477,6 @@ fn tls_alpn_configuration_defaults_to_public_port_443_and_is_immutable_on_resume
     );
 }
 
-#[tokio::test]
-async fn dns_precheck_missing_values_errors_and_short_timeout_are_advisory_but_cancellation_is_not()
-{
-    for result in [
-        Ok(true),
-        Ok(false),
-        Err(IssueError::InvalidInput(
-            "cannot load system DNS configuration",
-        )),
-    ] {
-        manual::dns_precheck(async { result }, &execution(), &progress())
-            .await
-            .unwrap();
-    }
-    let started = Instant::now();
-    manual::dns_precheck(
-        std::future::pending(),
-        &ExecutionContext {
-            deadline: Instant::now() + Duration::from_secs(10),
-            ..execution()
-        },
-        &progress(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(PRECHECK_TIMEOUT, Duration::from_secs(5));
-    assert!(started.elapsed() >= PRECHECK_TIMEOUT);
-    assert!(started.elapsed() < Duration::from_secs(8));
-    let cancelled = execution();
-    cancelled.cancellation.cancel();
-    assert!(
-        manual::dns_precheck(async { Ok(false) }, &cancelled, &progress())
-            .await
-            .is_err()
-    );
-    let expired = ExecutionContext {
-        deadline: Instant::now(),
-        ..execution()
-    };
-    assert!(
-        manual::dns_precheck(async { Ok(false) }, &expired, &progress())
-            .await
-            .is_err()
-    );
-}
-
 #[test]
 fn old_dns_bypass_flags_are_not_retained_as_compatibility_aliases() {
     for flag in ["--skip-dns-check", "--skip-local-dns", "--force", "-f"] {
@@ -548,12 +540,20 @@ async fn webroot_rejects_replaced_directory_components_and_removes_only_inside_p
         path: "/.well-known/acme-challenge/abcdefghijklmnopqrstuvwxyz012345".into(),
         content: "key.authorization".into(),
     }];
-    handler.ready(&requirement, &execution()).await.unwrap();
+    handler
+        .ready(&publications(&requirement), &execution())
+        .await
+        .unwrap();
     let pinned = temp.path().join(".well-known");
     let moved = temp.path().join("moved");
     std::fs::rename(&pinned, &moved).unwrap();
     std::os::unix::fs::symlink(outside.path(), &pinned).unwrap();
-    assert!(handler.cleanup(&requirement, &execution()).await.is_err());
+    assert!(
+        handler
+            .cleanup(&publications(&requirement), &execution())
+            .await
+            .is_err()
+    );
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
     assert!(
         moved
@@ -564,4 +564,129 @@ async fn webroot_rejects_replaced_directory_components_and_removes_only_inside_p
             )
             .is_file()
     );
+}
+
+#[test]
+fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renewal() {
+    for (method, eligible) in [
+        (ValidationMethod::Webroot, true),
+        (ValidationMethod::Standalone, true),
+        (ValidationMethod::TlsAlpn, true),
+        (ValidationMethod::DnsPersist, true),
+        (ValidationMethod::DnsExternal, true),
+        (ValidationMethod::ManualDns, false),
+        (ValidationMethod::ManualHttp, false),
+    ] {
+        assert_eq!(method.automatic(), eligible, "{}", method.id());
+    }
+    let mut record: aster_acme::issuance::IssueRecord = serde_json::from_value(serde_json::json!({
+        "key_algorithm":"ecdsa-p256","challenge":"dns-01","solver_config":{},"solver_id":"manual_dns","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"example.com",
+        "created_at":"2026-01-01T00:00:00Z","account_name":"default","account_id":"id","account_thumbprint":"key",
+        "directory":"https://ca.example/directory","account_url":"https://ca.example/account","identifiers":["example.com"],"phase":"completed","new_order_intent_saved":true,"authorizations":[],"finalize_submitted":"submitted"
+    })).unwrap();
+    for method in [
+        ValidationMethod::Webroot,
+        ValidationMethod::Standalone,
+        ValidationMethod::TlsAlpn,
+        ValidationMethod::ManualDns,
+        ValidationMethod::DnsPersist,
+        ValidationMethod::ManualHttp,
+    ] {
+        record.solver_id = method.id().into();
+        record.challenge = method.kind();
+        assert_eq!(
+            ValidationMethod::from_record(&record).unwrap().automatic(),
+            method.automatic()
+        );
+    }
+    record.solver_id = "future-dns-provider".into();
+    assert!(ValidationMethod::from_record(&record).is_err());
+}
+
+#[tokio::test]
+async fn retained_material_can_only_skip_confirmation_for_unchanged_persistent_publication() {
+    let temporary = ValidationRequirement::Http01 {
+        url: "http://example.com/.well-known/acme-challenge/token".into(),
+        path: "/.well-known/acme-challenge/token".into(),
+        content: "token.thumb".into(),
+    };
+    let persistent = ValidationRequirement::DnsPersist01 { record: aster_acme::challenge::dns_persist::DnsPersistRecord {
+        name:aster_acme::identifier::DnsName::new("_validation-persist.example.com").unwrap(),
+        value:"ca.example; accounturi=https://ca.example/hash/sha-256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+    }};
+    for (requirement, expected) in [(temporary, false), (persistent.clone(), true)] {
+        let solver = manual::Manual {
+            reusable: vec![requirement.clone()],
+            method: requirement.kind(),
+            saved: false,
+            interactive: false,
+            yes: false,
+            progress: progress(),
+            prompt: std::sync::Mutex::new(None),
+        };
+        assert_eq!(
+            solver
+                .ready(
+                    &publications(std::slice::from_ref(&requirement)),
+                    &execution()
+                )
+                .await
+                .unwrap()
+                .ready,
+            expected
+        );
+        let cancelled = execution();
+        cancelled.cancellation.cancel();
+        assert!(matches!(
+            solver
+                .ready(&publications(&[requirement]), &cancelled)
+                .await,
+            Err(IssueError::Interrupted)
+        ));
+        assert!(
+            !solver
+                .ready(&publications(&[]), &execution())
+                .await
+                .unwrap()
+                .ready
+        );
+    }
+    let mut changed = persistent.clone();
+    if let ValidationRequirement::DnsPersist01 { record } = &mut changed {
+        record.value.push_str("; policy=wildcard");
+    }
+    let solver = manual::Manual {
+        reusable: vec![persistent],
+        method: ChallengeKind::DnsPersist01,
+        saved: true,
+        interactive: false,
+        yes: false,
+        progress: progress(),
+        prompt: std::sync::Mutex::new(None),
+    };
+    assert!(
+        !solver
+            .ready(&publications(&[changed]), &execution())
+            .await
+            .unwrap()
+            .ready
+    );
+}
+
+/// Build receipt-free publication fixtures while keeping each test's material explicit.
+pub(crate) fn publications(
+    requirements: &[ValidationRequirement],
+) -> Vec<aster_acme::solver::ChallengePublication> {
+    requirements
+        .iter()
+        .enumerate()
+        .map(
+            |(index, requirement)| aster_acme::solver::ChallengePublication {
+                publication_id: format!("test-publication-{index}"),
+                requirement: requirement.clone(),
+                receipt: None,
+                plan: None,
+            },
+        )
+        .collect()
 }

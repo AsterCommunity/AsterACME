@@ -13,7 +13,7 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use crate::crypto::{AccountSigner, CryptoError, sign_request};
+use crate::crypto::{CryptoError, JwsSigner, sign_request};
 
 use aster_acme_protocol::{
     directory::Directory,
@@ -22,6 +22,7 @@ use aster_acme_protocol::{
     url::AcmeUrl,
 };
 
+#[cfg(feature = "precheck-http")]
 mod http_precheck;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -299,7 +300,7 @@ impl AcmeClient {
     pub(crate) async fn signed(
         &self,
         url: &AcmeUrl,
-        signer: &dyn AccountSigner,
+        signer: &dyn JwsSigner,
         kid: Option<&AcmeUrl>,
         payload: &[u8],
     ) -> Result<AcmeResponse, TransportError> {
@@ -317,7 +318,7 @@ impl AcmeClient {
     pub(crate) async fn signed_observed<F, Fut>(
         &self,
         url: &AcmeUrl,
-        signer: &dyn AccountSigner,
+        signer: &dyn JwsSigner,
         kid: Option<&AcmeUrl>,
         payload: &[u8],
         submitted: &std::sync::atomic::AtomicBool,

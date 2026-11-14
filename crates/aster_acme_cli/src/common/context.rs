@@ -1,6 +1,7 @@
 //! Resolve configuration and local storage once; HTTP is initialized only by remote commands.
 use aster_acme_protocol::url::AcmeUrl;
 
+use crate::common::args::HttpArgs;
 use crate::{
     commands::account::args::AccountArgs,
     common::error::CliResult,
@@ -110,24 +111,40 @@ impl CliContext {
 
     /// Network-only settings are validated only when a command actually requests HTTP.
     pub(crate) fn transport_options(&self, options: &AccountArgs) -> CliResult<TransportOptions> {
-        let request_timeout = options
-            .request_timeout
-            .or(self.config.request_timeout)
-            .unwrap_or(30);
-        if !(1..=300).contains(&request_timeout) {
-            return Err("Timeout must be between 1 and 300 seconds.".into());
-        }
-        let transport = TransportOptions {
-            request_timeout: Duration::from_secs(request_timeout),
-            user_agent: options
-                .user_agent
-                .clone()
-                .or_else(|| self.account_user_agent.clone()),
-            ..TransportOptions::default()
-        };
-        transport.validate()?;
-        Ok(transport)
+        http_options(
+            &self.config,
+            &HttpArgs {
+                user_agent: options.user_agent.clone(),
+                request_timeout: options.request_timeout,
+            },
+            self.account_user_agent.as_deref(),
+        )
     }
+}
+
+/// Resolve shared HTTP policy without requiring an account context.
+pub(crate) fn http_options(
+    config: &Config,
+    http: &HttpArgs,
+    account_user_agent: Option<&str>,
+) -> CliResult<TransportOptions> {
+    let request_timeout = http
+        .request_timeout
+        .or(config.request_timeout)
+        .unwrap_or(30);
+    if !(1..=300).contains(&request_timeout) {
+        return Err("Timeout must be between 1 and 300 seconds.".into());
+    }
+    let transport = TransportOptions {
+        request_timeout: Duration::from_secs(request_timeout),
+        user_agent: http
+            .user_agent
+            .clone()
+            .or_else(|| account_user_agent.map(str::to_owned)),
+        ..TransportOptions::default()
+    };
+    transport.validate()?;
+    Ok(transport)
 }
 
 #[cfg(test)]

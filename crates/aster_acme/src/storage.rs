@@ -3,3 +3,4 @@
 pub mod account;
 pub mod issuance;
 pub mod query;
+pub mod revocation;

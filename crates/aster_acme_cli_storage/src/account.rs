@@ -6,7 +6,7 @@ use aster_acme_protocol::url::AcmeUrl;
 
 use aster_acme::{
     account::AccountRecord,
-    crypto::{AccountSigner, CryptoError, key::AccountKey},
+    crypto::{CryptoError, JwsSigner, key::SoftwareSigningKey},
 };
 use std::{
     fs,
@@ -139,11 +139,12 @@ impl AccountStore for CliAccountStore {
         _directory: &AcmeUrl,
         _thumbprint: &str,
     ) -> Result<Arc<dyn AccountLease>, AccountStoreError> {
-        Ok(Arc::new(
-            self.acquire(self.lock_path()?)
-                .await
-                .map_err(|error| store_error(&error.to_string()))?,
-        ))
+        Ok(Arc::new(self.acquire(self.lock_path()?).await.map_err(
+            |error| match error {
+                StorageError::LockTimeout => AccountStoreError::lock_unavailable(error.to_string()),
+                other => store_error(&other.to_string()),
+            },
+        )?))
     }
 
     async fn load(
@@ -206,7 +207,7 @@ impl AccountKeyStore for CliAccountStore {
         directory: &AcmeUrl,
         name: &str,
         access: aster_acme::storage::account::KeyAccess,
-    ) -> Result<Arc<dyn AccountSigner>, AccountStoreError> {
+    ) -> Result<Arc<dyn JwsSigner>, AccountStoreError> {
         let create = matches!(access, aster_acme::storage::account::KeyAccess::Create(_));
         let requested = match access {
             aster_acme::storage::account::KeyAccess::Existing => None,
@@ -221,7 +222,10 @@ impl AccountKeyStore for CliAccountStore {
         let lease = self
             .acquire(self.lock_path()?)
             .await
-            .map_err(|error| store_error(&error.to_string()))?;
+            .map_err(|error| match error {
+                StorageError::LockTimeout => AccountStoreError::lock_unavailable(error.to_string()),
+                other => store_error(&other.to_string()),
+            })?;
         let directory = directory.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;
@@ -236,7 +240,7 @@ impl AccountKeyStore for CliAccountStore {
             let path = slot.join("account-key.pk8");
             match read_private(&path, MAX_KEY_FILE) {
                 Ok(bytes) => {
-                    let key = AccountKey::from_pkcs8(&zeroize::Zeroizing::new(bytes)).map_err(|_| store_error("account key is corrupt"))?;
+                    let key = SoftwareSigningKey::from_pkcs8(&zeroize::Zeroizing::new(bytes)).map_err(|_| store_error("account key is corrupt"))?;
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = previous.ok_or_else(|| store_error("account key exists without its identity record; refusing to guess its CA"))?;
                     verify_identity(&record, &directory, &thumbprint)?;
@@ -244,10 +248,10 @@ impl AccountKeyStore for CliAccountStore {
                         return Err(store_error("account key does not match the requested or saved algorithm"));
                     }
                     rotation::cleanup(&slot, &record)?;
-                    Ok(Arc::new(key) as Arc<dyn AccountSigner>)
+                    Ok(Arc::new(key) as Arc<dyn JwsSigner>)
                 }
                 Err(StorageError::NotFound) if create && previous.is_none() => {
-                    let key = AccountKey::generate(requested.unwrap_or_default()).map_err(|_| store_error("cannot generate account key"))?;
+                    let key = SoftwareSigningKey::generate(requested.unwrap_or_default()).map_err(|_| store_error("cannot generate account key"))?;
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = AccountRecord {
             key_algorithm: key.algorithm(),
@@ -263,7 +267,7 @@ deactivation: aster_acme_core::account::DeactivationState::NotRequested, key_rot
                     write_record(&metadata, &record)?;
                     atomic_write(&path, &key.to_pkcs8().map_err(|_| store_error("cannot encode account key"))?)
                         .map_err(|_| store_error("cannot persist account key"))?;
-                    Ok(Arc::new(key) as Arc<dyn AccountSigner>)
+                    Ok(Arc::new(key) as Arc<dyn JwsSigner>)
                 }
                 Err(StorageError::NotFound) if previous.is_some() => Err(store_error("account key is missing from an initialized account; refusing to replace it")),
                 Err(error) => Err(store_error(&error.to_string())),
@@ -328,6 +332,7 @@ fn local_account_id(directory: &AcmeUrl, thumbprint: &str) -> String {
 pub(crate) fn store_error(message: &str) -> AccountStoreError {
     AccountStoreError {
         message: message.to_owned(),
+        kind: aster_acme::storage::account::AccountStoreErrorKind::Other,
     }
 }
 

@@ -1,13 +1,13 @@
 # aster_acme
 
-面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户签名证书吊销；cert renew 单次执行已实现；自动 DNS 发布和 daemon 尚未实现。
+面向应用的 ACME 层。目前实现输入类型、验证方法选择、响应材料推导与可注入 solver 契约；已实现账户注册/找回/查看/停用、多算法 JWS 和账户所需 transport；已实现 manual DNS-01 签发与恢复；已实现 ARI 续期计划和账户／证书密钥签名吊销；cert renew 单次执行已实现；`maintenance::run_cycle`按序协调ARI刷新、到期续期和部署重试，由宿主注入续期与reload执行器；常驻调度由CLI宿主提供，ACME服务库不启动后台任务；已接入可注入DNS provider发布与逐授权回执检查点，CLI提供ADPP external adapter。
 
 - `account`：账户服务、注册恢复、不可恢复停用、条款/EAB。
 - `storage::{account,issuance}`：对象安全的账户/签名器/轮换与证书会话契约；`storage::query` 提供类型化查询及纯版本投影，库不依赖文件系统。
-- `crypto`：`dyn AccountSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
+- `crypto`：`dyn JwsSigner`、共享 KeyAlgorithm、EC/RSA/Ed25519 账户钥、EC/RSA/OKP JWK 与规范指纹、按算法生成 JWS 和 HS256 EAB。
 - `transport`：共享 `HttpPool`、HTTPS directory、nonce 池、POST-as-GET、badNonce 限次重签、1 MiB 响应限制、超时和结构化错误。
 - `identifier`：DNS/IDN 规范化、长度和通配符校验、wire identifier 与授权 wildcard 语义。
-- `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization 和三种验证材料。
+- `challenge`：已知与未知验证类型、Require/Prefer 策略、token/key authorization、DNS/HTTP/TLS材料；`challenge::dns_persist`实现草案-02长期TXT及预配置材料计算。
 - `solver`：Send + Sync 的异步 trait，可通过 dyn 注入；方法匹配、ready及cleanup；类型化材料先由ACME持久化。
 
 依赖方向：本 crate → protocol / core / Forge 宏；DNS 实现 → 本 crate。具体供应商代码不放在此处。
@@ -26,9 +26,13 @@ assert_eq!(method, ChallengeKind::Dns01);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+四种材料采用对称的子模块具名类型：`ChallengeMaterial::Dns01(dns01::Dns01Record)`、`DnsPersist01(dns_persist::DnsPersistRecord)`、`Http01(http01::Http01Response)`、`TlsAlpn01(tls_alpn01::TlsAlpn01Response)`。通过各类型的`derive`构造材料；未发布的聚合`ChallengeMaterial::derive`入口已移除，不保留透传兼容方法。`ChallengeKind`提供集中方法能力，订单/存储层通过`PublicationLifetime`及类型化长期快照使用这些能力。
+
 Prefer 只在开始验证时选择兼容方法，不代表失败后自动回退。未知 wire 方法保留用于诊断，不能执行。当前仅定义 solver 接口，并未内置任何可用验证实现。
 
 验证材料先保存到签发检查点，再调用 `ChallengeSolver::ready` 发布；恢复时通过 `restore` 重建运行期资源，并在终态调用 `cleanup` 清理自身材料，所有路径调用 `shutdown` 回收运行期任务。
+
+`ChallengeKind::DnsPersist01`不使用token；其`ValidationRequirement::DnsPersist01`由已发现directory、challenge issuer参数和当前账户身份派生，展示给solver前执行账户控制权证明。长期TXT永不交给临时cleanup。嵌入式存储应在续期时携带同一账户/定义的`RenewalPredecessor.retained_validation`确认快照，保持历史密钥记录复用；缺快照的材料仍需发布。`DnsPersistRecord::provision`只计算材料，独立预配置的账户POST-as-GET及安全交付由调用者负责。规范与限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。
 
 ```sh
 cargo test -p aster_acme --locked
@@ -39,7 +43,7 @@ cargo test -p aster_acme --locked
 
 ## 账户服务边界
 
-通过 `AccountService::new(Arc<AcmeClient>, Arc<dyn AccountStore>)` 注入存储；签名器为 `dyn AccountSigner`，具名密钥查询接口返回 `Arc<dyn AccountSigner>`。嵌入式服务可以提供数据库和外部签名器，不依赖 CLI 或文件系统。
+通过 `AccountService::new(Arc<AcmeClient>, Arc<dyn AccountStore>)` 注入存储；签名器为 `dyn JwsSigner`，具名密钥查询接口返回 `Arc<dyn JwsSigner>`。嵌入式服务可以提供数据库和外部签名器，不依赖 CLI 或文件系统。
 
 流程先保存注册意图，使用同一密钥查找已有账户，仅在明确 accountDoesNotExist 后创建；网络超时/取消保持 pending 供后续对账。已有注册元数据不代表服务端仍 valid，每次查看会读取真实远端状态。条款由调用者显式同意，服务保存当前 directory 公布的实际 URL，URL 变化后要求重新接受；HS256 EAB 的新账户响应必须反映原绑定才确认成功。
 
@@ -96,13 +100,13 @@ AccountTimes 通过 flatten 保存 registered_at、last_status_at、last_used_at
 
 CA 的订单/授权 expires 与证书 notAfter 分开处理；订单没有虚构的 expired wire 状态。恢复先观察，已过期申请不能继续验证/finalize；valid 订单允许取回已经签出的证书。newOrder 的 Location 丢失没有通用幂等恢复，不能自动再下单。challenge/finalize 的 Submitted 检查点令迟到的 pending/ready 只轮询，不自动重放。显式 fresh issue 才创建新操作。
 
-本地证书检查包括 PEM 语法、SAN 精确集合、公钥与保存密钥一致、叶子非 CA/有效期，以及提供的相邻证书链签名；不代表建立了公众信任链，尤其不安装 staging 根。当前支持独立的 ECDSA P-256/P-384/P-521、Ed25519、RSA 2048/3072/4096/8192 证书密钥，不导入外部 CSR；ARI 续期计划已实现；前台续期和多目标部署已实现；周期daemon调度与自动DNS provider未实现。
+本地证书检查包括 PEM 语法、SAN 精确集合、公钥与保存密钥一致、叶子非 CA/有效期，以及提供的相邻证书链签名；不代表建立了公众信任链，尤其不安装 staging 根。当前支持独立的 ECDSA P-256/P-384/P-521、Ed25519、RSA 2048/3072/4096/8192 证书密钥，不导入外部 CSR；ARI 续期计划、cron 触发的自动续期与多目标部署已实现；前台常驻维护已由CLI提供，外部DNS provider已通过ADPP接入，内置厂商实现与真实DNS/CA验收另计。自动续期准入和并发边界见生命周期契约。
 
-续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI 只提供计划及显式刷新，周期唤醒留给后续 daemon；吊销保留本地文件，与订单状态独立。
+续期计划和证书吊销的职责、持久化及失败边界见 [生命周期契约](../../docs/certificate-lifecycle.md)。ARI提供计划、显式刷新及由cron调用的`daemon run-once`；吊销保留本地文件，与订单状态独立。
 
 证书 key_algorithm 使用公共 KeyAlgorithm 枚举，CLI -k/--key-type 默认 ecdsa-p256；定义、版本、恢复和实际密钥保持一致。RevocationReason 统一 RFC 5280 已分配代码（无7），CA 自行决定接受范围；remove-from-crl 不代表 ACME 恢复。详见生命周期契约。
 
-0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；后台 daemon 未实现。本地 DNS 采用最多2秒的建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts 与 .locks/certificates，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
+0.1.0-alpha.1 提供 cert renew 单次到期/--now 提前续期，使用稳定定义、持久化 predecessor/replaces、未完成恢复和成功后 in_use 切换；常驻`daemon run`复用同一维护周期，默认60秒间隔，可由`config.daemon_interval`或`--interval`覆盖；`daemon run-once`刷新ARI建议，自动续期到期的webroot/standalone/tls_alpn/dns_persist/dns_external证书并执行已配置部署；manual验证会跳过。本地 DNS 采用建议性预检，不提供DNS跳过/force参数。对象锁集中于根 .locks/accounts、.locks/certificates与.locks/daemon，完整移除对象后清空无额外用户内容的目录，外置锁 inode 保留。
 
 cert renew --all 提供按托管身份顺序执行的批量入口，复用同一事务及类型化结果；失败继续、人工TXT待办保存、取消停止，JSON一次汇总。未扩展账户签名算法，也不启动daemon；见生命周期契约。
 
@@ -116,3 +120,21 @@ CLI已实现manual_dns、manual_http、webroot、HTTP standalone和TLS-ALPN。HT
 临时挑战服务可实现`ChallengeSolver::restore`重建已保存的pending授权响应，包括已经通知CA的挑战；该hook不重发ack。`IssueService::run`在所有返回路径调用有界`shutdown`，与终态持久化材料`cleanup`分开；嵌入者直接丢弃运行future时必须关闭或丢弃solver。CLI HTTP standalone使用该契约；TLS-ALPN复用同一生命周期并提供TLS监听实现。
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](../../docs/rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
+
+## 可选预检
+
+默认features为空。启用 `precheck` 获得 `precheck::Runner`、可注入的 `Check` 与结构化 `Report`；`precheck-http` 额外提供 `precheck::http::Http`。默认每阶段5秒，可用 `Runner::new(Duration)` 设置嵌入者预算；取消或整体执行期限到达返回中断。普通失败是报告项，本地超时保留已完成项并标记未检查项，不拒绝签发。
+
+`Runner::run(&checker, &inputs, &execution)` 是显式调用；`IssueService::run` 不自动执行预检。HTTP检查器复用调用方HttpPool；CAA/TXT检查器由aster_acme_validation的对应feature提供，避免协议库依赖DNS解析器或CLI。
+
+
+## 吊销与通用签名器
+
+`crypto::JwsSigner`/`crypto::key::SoftwareSigningKey`共用于账户与证书密钥JWS，不保留AccountSigner/AccountKey旧名。`RevocationService::new(client, authority)`接受`revocation::authority::RevocationAuthority::{Account,CertificateKey}`，`revoke(&mut dyn RevocationSession, reason, &ExecutionContext)`只依赖精确证书target和可持久化检查点；不要求IssueSession、CSR或证书私钥导出。嵌入者可提供硬件/远程签名器和外部证书会话。
+
+CertificateKey提交前比较签名器JWK与叶子SPKI，不以签发时的有效期/信任路径规则拒绝吊销。Account模式校验实际账户密钥/身份；外部target可无已知issuer约束，CA最终验证授权，托管CLI仍绑定原签发账户。nonce和签名准备后、发送前保存目标DER SHA-256、directory、原因及签名身份；取消/期限内未发送可恢复原检查点，发送后未知保留pending，显式重试不得改变目标/原因。完整RFC核对见[RFC参考](../../docs/rfc-reference.md#9-证书私钥吊销原文核对2026-11-14)。
+
+
+预检的`Failure::Unavailable { reason }`携带检查器提供的初始化/缺失配置原因；报告保留该文字供嵌入者处理，CLI负责安全展示。`Failure`因此实现Clone而非Copy；取消、阶段预算和CA最终决定的语义保持一致，库默认仍不启用预检。
+
+外部DNS自动发布使用 `-c dns_external --provider NAME`，Profile保存在`providers/<name>.toml`。发布计划、回执与传播等待分别推进；独立清理命令为`provider cleanup NAME`。详细配置、安全边界与恢复说明见[DNS Provider](../../docs/dns-providers.md)。
