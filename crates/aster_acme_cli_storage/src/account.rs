@@ -222,7 +222,10 @@ impl AccountKeyStore for CliAccountStore {
         let lease = self
             .acquire(self.lock_path()?)
             .await
-            .map_err(|error| store_error(&error.to_string()))?;
+            .map_err(|error| match error {
+                StorageError::LockTimeout => AccountStoreError::lock_unavailable(error.to_string()),
+                other => store_error(&other.to_string()),
+            })?;
         let directory = directory.clone();
         tokio::task::spawn_blocking(move || {
             let _lease = lease;

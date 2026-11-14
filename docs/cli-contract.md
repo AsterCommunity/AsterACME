@@ -140,7 +140,7 @@ aster-acme cert renew example-cert
 
 0 表示命令成功执行；cert issue 的 action_required 同样为 0，脚本必须检查 status，不能将其误认为 completed。一般错误为 1，Clap 解析错误沿用 2，交互取消为 130。远端查询失败不标为 verified。
 
-续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。`daemon run-once`执行一个非交互维护周期，`daemon run`在前台持续运行；仅`webroot`、`standalone`、`tls_alpn`自动准入，人工方法报告为跳过。常驻周期默认间隔60秒，可由`config.daemon_interval`或`--interval`覆盖（1–86400秒）。同一data-dir只允许一个常驻daemon，Unix支持Ctrl-C/SIGTERM协作退出；Windows使用Ctrl-C。人类日志沿用签发的带时间戳级别格式，常驻`--json`为JSON Lines，`run-once --json`仍为单份JSON。`run-once`仍可由cron触发。
+续期计划、ARI 查询/重试与吊销状态契约见 [证书生命周期](certificate-lifecycle.md)。`daemon run-once`执行一个非交互维护周期，`daemon run`在前台持续运行；`webroot`、`standalone`、`tls_alpn`、`dns_external`和`dns_persist`自动准入；`dns_persist`仅免确认复用前任相同记录，新材料仍返回待办，人工方法报告为跳过。常驻周期默认间隔60秒，可由`config.daemon_interval`或`--interval`覆盖（1–86400秒）。同一data-dir只允许一个常驻daemon，Unix支持Ctrl-C/SIGTERM协作退出；Windows使用Ctrl-C。人类日志沿用签发的带时间戳级别格式，常驻`--json`为JSON Lines，`run-once --json`仍为单份JSON。`run-once`仍可由cron触发。
 
 cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / authorizations_refreshed，吊销依据使用 revocation_source，不用整条记录 verified/source。人类输出为 CA query 与 Revocation source，不暗示此次执行已检查 OCSP/CRL。account show 同样使用 CA query，JSON 为 ca_query.account_refreshed；不将本地密钥、联系人或停用意图标为本次远端核验结果。
 
@@ -152,7 +152,7 @@ cert show 的核验按资源区分：JSON 使用 ca_query.order_refreshed / auth
 
 cert issue --resume缺省名称在终端选择未完成申请，显示名称/SAN摘要/UTC时间/状态；脚本提供名称或完整operation ID，不猜最新。完成版本不参与签发恢复选择，DNS预检仅建议，JSON不输出人类日志。
 
-新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/dns_persist/dns_external/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单提供 manual_dns 与 dns_persist，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
+新建 cert issue 在终端补全缺失域名、验证方式、方法配置：域名输入后选择 manual_dns/dns_persist/dns_external/manual_http/webroot/standalone/tls_alpn，webroot 询问现有目录，standalone/TLS-ALPN 询问带默认值的监听地址。通配符菜单提供 manual_dns、dns_persist 与 dns_external，显式 webroot/listen 参数约束可选方式，冲突参数直接拒绝。显式参数跳过对应询问；无效输入原地重试，取消在账户/配置/密钥/网络副作用前返回。脚本/JSON必须 -c 与 -d，webroot 必须 -w；listener 仍可使用默认80/443。--yes不默认选择验证方式，也不跳过输入。resume与challenge互斥，renew不暴露challenge覆盖，均沿用已保存方式。--yes在issue/renew中自动接受所有操作确认，并非manual_dns专用开关；独立ToS仍要求--accept-terms，名称选择/输入不属于肯定确认。
 
 仅在实际存在证书前台进度时与最终结果之间留一空行；无进度的全未到期批次及单次not_due不加开头空行（JSON不加分隔）；批量标题/计数使用INFO/WARN/ERROR标签，表格复用公共对齐和Style，待办/取消黄色、失败红色、完成绿色、未到期青色。
 

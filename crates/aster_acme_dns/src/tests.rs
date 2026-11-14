@@ -283,6 +283,41 @@ async fn propagation_requires_each_exact_logical_txt_value() {
         Err(PropagationError::InvalidPolicy)
     ));
 }
+
+struct AlternatingLookup(AtomicUsize);
+#[async_trait]
+impl DnsLookup for AlternatingLookup {
+    async fn cname(&self, _: &str) -> Result<Option<String>, LookupError> {
+        Ok(None)
+    }
+    async fn txt(&self, _: &str) -> Result<Vec<Vec<u8>>, LookupError> {
+        let value = if self.0.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+            b"first".to_vec()
+        } else {
+            b"second".to_vec()
+        };
+        Ok(vec![value])
+    }
+}
+
+#[tokio::test]
+async fn propagation_uses_one_dns_answer_for_all_values_at_the_same_owner() {
+    let policy = PropagationPolicy {
+        interval: Duration::from_millis(2),
+        timeout: Duration::from_millis(12),
+    };
+    let mut first = record();
+    first.value = "first".into();
+    let mut second = first.clone();
+    second.publication_id = "pub-2".into();
+    second.value = "second".into();
+    let lookup = AlternatingLookup(AtomicUsize::new(0));
+    assert!(matches!(
+        policy.wait(&lookup, &[first, second], &execution()).await,
+        Err(PropagationError::NotVisible)
+    ));
+    assert!(lookup.0.load(Ordering::SeqCst) > 1);
+}
 #[test]
 fn sensitive_context_does_not_leak_through_debug() {
     let context = ProviderContext {

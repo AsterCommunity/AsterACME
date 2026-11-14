@@ -222,17 +222,23 @@ impl ChallengeSolver for ExternalDns {
                 outcome.completed.push(publication.publication_id.clone());
                 continue;
             }
-            let plan = publication
-                .plan
-                .clone()
-                .ok_or(IssueError::InvalidInput("missing saved cleanup route"))?;
-            validate_chain(
+            let Some(plan) = publication.plan.clone() else {
+                if outcome.failure.is_none() {
+                    outcome.failure = Some(IssueError::InvalidInput("missing saved cleanup route"));
+                }
+                continue;
+            };
+            if let Err(error) = validate_chain(
                 &plan.challenge_name,
                 &plan.name,
                 &plan.cname_chain,
                 &self.allowed_zones,
-            )
-            .map_err(IssueError::from)?;
+            ) {
+                if outcome.failure.is_none() {
+                    outcome.failure = Some(IssueError::from(error));
+                }
+                continue;
+            }
             records.push(CleanupRequest {
                 publication_id: publication.publication_id.clone(),
                 receipt: receipt.clone(),

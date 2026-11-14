@@ -194,8 +194,11 @@
       {
         "label": "Risk: High",
         "paths": [
+          "crates/aster_acme/src/crypto.rs",
           "crates/aster_acme/src/crypto/**",
+          "crates/aster_acme/src/transport.rs",
           "crates/aster_acme/src/transport/**",
+          "crates/aster_acme/src/storage.rs",
           "crates/aster_acme/src/storage/**",
           "**/revocation/**",
           "**/revocation*",

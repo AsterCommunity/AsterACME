@@ -6,8 +6,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: repository-reconciliation
+  # Reconciliation also replaces complete label sets; share the writers' queue.
+  group: aster-repository-label-writers
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read

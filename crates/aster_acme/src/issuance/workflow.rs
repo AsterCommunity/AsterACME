@@ -140,7 +140,11 @@ impl Workflow {
         // A previously submitted newOrder is not a new request. Do not add DNS
         // dependencies or rerun advice when reconciling its remote outcome.
         if !saved.new_order_intent_saved && saved.order_url.is_none() {
-            before_order(client.directory(), &saved, &execution.context).await?;
+            tokio::select! {
+                biased;
+                () = execution.context.cancellation.cancelled() => return Err(IssueError::Interrupted),
+                result = tokio::time::timeout_at(execution.context.deadline.into(), before_order(client.directory(), &saved, &execution.context)) => result.map_err(|_| IssueError::Interrupted)??,
+            };
         }
         execution
             .context

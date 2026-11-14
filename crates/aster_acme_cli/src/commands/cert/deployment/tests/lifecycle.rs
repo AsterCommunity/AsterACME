@@ -511,3 +511,52 @@ async fn explicit_retry_retains_uncertainty_through_publication_and_cancellation
         }
     }
 }
+
+#[tokio::test]
+async fn reload_failure_during_backoff_is_checkpointed_before_deadline_return() {
+    let fixture = Fixture::new().await;
+    fixture.add("backoff", child_command("failure"), 3).await;
+    let mut failed = fixture
+        .store
+        .open_deployment(&fixture.name, "backoff")
+        .await
+        .unwrap();
+    failed
+        .save_state(
+            DeploymentPhase::ReloadFailed,
+            1,
+            Some("previous failure".into()),
+        )
+        .await
+        .unwrap();
+    failed
+        .record_failure(
+            DeploymentPhase::ReloadFailed,
+            1,
+            "previous failure".into(),
+            time::OffsetDateTime::now_utc() - time::Duration::minutes(30),
+        )
+        .await
+        .unwrap();
+    let retry_snapshot = failed.definition().clone();
+    drop(failed);
+    let mut session = fixture
+        .store
+        .open_deployment(&fixture.name, "backoff")
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    record_reload_failure(&mut session, &mut events, None)
+        .await
+        .unwrap();
+    drop(session);
+    let saved = fixture.status("backoff").await;
+    assert_eq!(saved.phase, DeploymentPhase::ReloadFailed);
+    assert_eq!(saved.attempts, retry_snapshot.attempts);
+    assert_eq!(saved.retry_failures, retry_snapshot.retry_failures + 1);
+    assert!(
+        saved
+            .retry_at
+            .is_some_and(|retry_at| retry_at > time::OffsetDateTime::now_utc())
+    );
+}

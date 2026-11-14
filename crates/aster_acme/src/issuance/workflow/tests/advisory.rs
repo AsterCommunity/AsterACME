@@ -143,3 +143,49 @@ async fn invalid_identity_or_execution_never_runs_advice_or_new_order() {
         assert_eq!(solver.0.load(Ordering::SeqCst), 1);
     }
 }
+
+struct Uncooperative(tokio::sync::Notify);
+#[async_trait]
+impl BeforeOrder for Uncooperative {
+    type Output = bool;
+    async fn check(
+        &self,
+        _: &Directory,
+        _: &IssueRecord,
+        _: &ExecutionContext,
+    ) -> Result<Report<bool>, precheck::Error> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
+}
+#[tokio::test]
+async fn uncooperative_advice_is_bounded_by_cancellation_and_operation_deadline() {
+    for cancel in [false, true] {
+        let mut f = Fixture::new().await;
+        let solver = Solver::default();
+        let advice = Uncooperative(tokio::sync::Notify::new());
+        let stage = Stage::new(&advice);
+        let mut scope = execution();
+        scope.context.deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let signal = scope.context.cancellation.clone();
+        let workflow = f.workflow();
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            let task =
+                workflow.run_with_precheck(f.identity(), &mut f.session, &solver, &scope, &stage);
+            tokio::pin!(task);
+            tokio::select! {
+                result=&mut task => result,
+                ()=advice.0.notified() => {
+                    if cancel { signal.cancel(); }
+                    task.await
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(IssueError::Interrupted)));
+        assert_eq!(solver.0.load(Ordering::SeqCst), 1);
+        assert_eq!(f.count("/create").await, 0);
+        assert!(!f.session.record().await.unwrap().new_order_intent_saved);
+    }
+}

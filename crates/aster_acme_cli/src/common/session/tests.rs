@@ -319,3 +319,40 @@ fn diagnostic_flush_failure_is_retained_and_prevents_a_success_report() {
         assert_eq!(stdout.text(), if json { "success\n" } else { "" });
     }
 }
+
+#[test]
+fn failed_stream_still_delivers_exit_diagnostic_once_without_retrying_stdout() {
+    for channel in [FinalChannel::Result, FinalChannel::Diagnostic] {
+        let stderr = Buffer::default();
+        let output = OutputSession::with_writers(
+            Box::new(Failing),
+            Box::new(stderr.clone()),
+            Format::plain(true),
+            Format::plain(true),
+        );
+        assert!(
+            output
+                .stream_json(&serde_json::json!({"event":"cycle"}))
+                .is_err()
+        );
+        assert!(output.check_health().is_err());
+        let error = output
+            .finish("{\"error\":\"stream failed\"}", channel)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(
+            stderr.text(),
+            if matches!(channel, FinalChannel::Diagnostic) {
+                "{\"error\":\"stream failed\"}\n"
+            } else {
+                ""
+            }
+        );
+        assert!(
+            output
+                .finish("duplicate", FinalChannel::Diagnostic)
+                .is_err()
+        );
+        assert!(!stderr.text().contains("duplicate"));
+    }
+}

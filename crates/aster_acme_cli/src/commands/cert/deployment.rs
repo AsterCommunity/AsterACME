@@ -627,6 +627,7 @@ async fn prepare_publication(
 ) -> CliResult<()> {
     // An explicit retry does not itself resolve the previous reload. Keep
     // its durable barrier throughout publication, cancellation and crashes.
+    let previous = session.definition().clone();
     if !uncertain(session.definition()) {
         session
             .save_state(DeploymentPhase::Publishing, 0, None)
@@ -636,9 +637,11 @@ async fn prepare_publication(
         if !uncertain(session.definition()) {
             session
                 .save_state(
-                    DeploymentPhase::Configured,
-                    0,
-                    Some("deployment cancelled before file publication".into()),
+                    previous.phase,
+                    previous.attempts,
+                    previous
+                        .last_error
+                        .or_else(|| Some("deployment cancelled before file publication".into())),
                 )
                 .await?;
         }
@@ -785,6 +788,9 @@ async fn reload_with_retries(
     let attempts_allowed = binding.max_retries.saturating_add(1);
     for attempt in 1..=attempts_allowed {
         if execution.is_some_and(|execution| execution.check().is_err()) {
+            if attempt > 1 && session.definition().phase == DeploymentPhase::ReloadFailed {
+                record_reload_failure(session, events, progress).await?;
+            }
             return Err(
                 "issuance was cancelled or its execution deadline expired before reload".into(),
             );
@@ -826,6 +832,15 @@ async fn reload_with_retries(
         ),
         progress,
     );
+    record_reload_failure(session, events, progress).await?;
+    Ok(())
+}
+
+async fn record_reload_failure(
+    session: &mut aster_acme_cli_storage::issuance::DeploymentSession,
+    events: &mut Vec<DeploymentEvent>,
+    progress: Option<&Progress>,
+) -> CliResult<()> {
     if session.definition().phase == DeploymentPhase::ReloadFailed {
         let previous = session.definition().clone();
         let retry = session

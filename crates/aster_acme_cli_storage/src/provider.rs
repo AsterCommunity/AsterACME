@@ -62,6 +62,9 @@ pub struct ProviderLease {
 }
 
 impl ProviderProfile {
+    /// Current provider profile schema version used by persisted references.
+    pub const CURRENT_VERSION: u32 = PROFILE_VERSION;
+
     /// Construct a new profile with the current profile schema version.
     /// # Errors
     /// Rejects unsupported schemas, relative executables and invalid profile limits.

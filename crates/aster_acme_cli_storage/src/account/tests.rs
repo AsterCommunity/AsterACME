@@ -453,6 +453,12 @@ async fn locks_timeout_release_and_allow_waiting_contenders() {
         .expect("held lock must time out");
     assert_eq!(error.kind, AccountStoreErrorKind::LockUnavailable);
     assert!(start.elapsed() >= Duration::from_millis(60));
+    let signer_error = store
+        .signer(&directory, "default", KeyAccess::Existing)
+        .await
+        .err()
+        .expect("signer lock must time out before reading the key");
+    assert_eq!(signer_error.kind, AccountStoreErrorKind::LockUnavailable);
     drop(held);
     let held = store.lock_account(&directory, &thumb).await.unwrap();
     drop(held);

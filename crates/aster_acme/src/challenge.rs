@@ -111,8 +111,16 @@ impl ChallengeKind {
             && known_method(&observed.kind) == Some(self)
             && match self {
                 Self::DnsPersist01 => {
-                    observed.parameters.get("issuerDomainNames")
-                        == expected.parameters.get("issuerDomainNames")
+                    match (
+                        expected.dns_persist_parameters(),
+                        observed.dns_persist_parameters(),
+                    ) {
+                        (Ok(expected), Ok(observed)) => dns_persist::issuer::same_set(
+                            &expected.issuer_domain_names,
+                            &observed.issuer_domain_names,
+                        ),
+                        _ => false,
+                    }
                 }
                 Self::Dns01 | Self::Http01 | Self::TlsAlpn01 => {
                     observed.parameters.get("token") == expected.parameters.get("token")

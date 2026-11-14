@@ -227,6 +227,44 @@ async fn uncertain_creation_fails_offline_and_cancelled_expired_inputs_never_dis
         assert_eq!(solver.0.load(Ordering::SeqCst), 1);
     }
 }
+
+#[tokio::test]
+async fn expired_pending_order_can_cleanup_publication_before_finalize_was_submitted() {
+    let fixture = Fixture::new().await;
+    let mut record = fixture.session.record().await.unwrap();
+    record.phase = aster_acme_core::workflow::IssuancePhase::Authorizing;
+    record.order = Some(
+        serde_json::from_value(serde_json::json!({
+            "status":"pending",
+            "expires":"2000-01-01T00:00:00Z",
+            "identifiers":[{"type":"dns","value":"example.com"}],
+            "authorizations":[format!("{}/auth", fixture.server.uri())],
+            "finalize":format!("{}/finalize", fixture.server.uri())
+        }))
+        .unwrap(),
+    );
+    record.authorizations = serde_json::from_value(serde_json::json!([{
+        "url":format!("{}/auth", fixture.server.uri()),
+        "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
+        "challenge_url":null,
+        "validation_requirement":{"method":"dns-01","name":"_acme-challenge.example.com","value":"expected"},
+        "publication_id":"publication-1",
+        "cleanup_pending":true,
+        "acknowledgement":"not_submitted"
+    }]))
+    .unwrap();
+    fixture.session.save(&record).await.unwrap();
+    let result = crate::issuance::publication::cleanup(
+        &fixture.session,
+        &Solver::default(),
+        &execution().context,
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "expired pending order cleanup was rejected: {result:?}"
+    );
+}
 #[tokio::test]
 async fn discovery_failure_and_deadline_keep_checkpoint_and_shutdown() {
     for status in [500, 200] {

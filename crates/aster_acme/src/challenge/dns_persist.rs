@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) mod account_uri;
-mod issuer;
+pub(crate) mod issuer;
 
 /// Public persistent publication. Keep it until the operator revokes DNS authorization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

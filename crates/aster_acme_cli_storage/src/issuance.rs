@@ -481,7 +481,10 @@ impl CliIssueStore {
 mod tests;
 
 /// Inspect immutable certificate definitions while the provider registry is exclusively locked.
-pub(crate) fn provider_referenced(root: &Path, provider: &str) -> std::io::Result<bool> {
+///
+/// # Errors
+/// Returns an error when the inventory is unsafe, unreadable or malformed.
+pub fn provider_referenced(root: &Path, provider: &str) -> std::io::Result<bool> {
     let directory = root.join("certs");
     if !directory.exists() {
         return Ok(false);

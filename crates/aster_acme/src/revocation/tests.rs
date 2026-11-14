@@ -682,25 +682,29 @@ async fn local_signing_failure_creates_no_intent_and_confirmed_result_needs_no_s
 
 #[tokio::test]
 async fn unexpected_success_redirects_nonproblem_errors_and_server_errors_stay_pending() {
-    for response in [
-        ResponseTemplate::new(201),
-        ResponseTemplate::new(204),
-        ResponseTemplate::new(302),
-        ResponseTemplate::new(403).set_body_string("not a problem"),
-        problem(500, "serverInternal"),
-        problem(429, "rateLimited"),
+    for (response, definite_rejection) in [
+        (ResponseTemplate::new(201), false),
+        (ResponseTemplate::new(204), false),
+        (ResponseTemplate::new(302), false),
+        (
+            ResponseTemplate::new(403).set_body_string("not a problem"),
+            false,
+        ),
+        (problem(500, "serverInternal"), false),
+        (problem(429, "rateLimited"), true),
     ] {
         let mut f = Fixture::new().await;
         f.reply(response).await;
         let service = f.service(RevocationSigningMethod::CertificateKey);
         let result = service.revoke(&mut f.session, None, &execution()).await;
-        if matches!(
-            result,
-            Err(IssueError::Transport(TransportError::Problem {
-                status: 429,
-                ..
-            }))
-        ) {
+        if definite_rejection {
+            assert!(matches!(
+                result,
+                Err(IssueError::Transport(TransportError::Problem {
+                    status: 429,
+                    ..
+                }))
+            ));
             assert_eq!(
                 f.session.revocation().await.unwrap().state,
                 RevocationState::NotRequested

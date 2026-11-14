@@ -5,10 +5,7 @@ use crate::{
     solver::{ChallengePublication, ChallengeSolver},
     storage::issuance::IssueSession,
 };
-use aster_acme_core::{
-    protocol::OrderStatus,
-    workflow::{IssuancePhase, SubmissionState},
-};
+use aster_acme_core::workflow::SubmissionState;
 
 pub(super) async fn prepare(
     session: &dyn IssueSession,
@@ -164,12 +161,7 @@ pub async fn cleanup(
 ) -> Result<IssueRecord, IssueError> {
     let mut record = session.record().await?;
     if solver.kind() != record.challenge
-        || !(record.phase == IssuancePhase::Completed
-            || record
-                .order
-                .as_ref()
-                .is_some_and(|order| order.status == OrderStatus::Invalid)
-            || record.authorization_failure().is_some())
+        || !record.publication_cleanup_eligible(time::OffsetDateTime::now_utc())
     {
         return Err(IssueError::InvalidInput(
             "cleanup requires a terminal CA outcome and the saved solver",
@@ -217,6 +209,7 @@ pub(super) async fn cleanup_saved(
             if let Some(error) = result.failure {
                 return Err(error);
             }
+            check_retry(record)?;
         }
     }
     let pending = record

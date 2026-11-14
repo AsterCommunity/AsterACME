@@ -43,7 +43,8 @@ pub(crate) fn cycle(
     let at = time::OffsetDateTime::now_utc();
     match result {
         Ok(report) => {
-            let failed = super::exit_status(report) == crate::common::session::ExitStatus::Failed;
+            let exit_status = super::exit_status(report);
+            let failed = exit_status == crate::common::session::ExitStatus::Failed;
             if output_session.is_json() {
                 let rendered = render(report, Format::plain(true))?;
                 let value: serde_json::Value = serde_json::from_str(&rendered)?;
@@ -51,7 +52,11 @@ pub(crate) fn cycle(
                     "event": "cycle",
                     "at": rfc3339(at)?,
                     "cycle": cycle,
-                    "status": if failed { "failed" } else if report.ari.cancelled { "cancelled" } else { "completed" },
+                    "status": match exit_status {
+                        crate::common::session::ExitStatus::Failed => "failed",
+                        crate::common::session::ExitStatus::Cancelled => "cancelled",
+                        crate::common::session::ExitStatus::Success => "completed",
+                    },
                     "report": value,
                 }))?;
             } else {

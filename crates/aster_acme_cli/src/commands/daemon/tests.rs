@@ -302,3 +302,22 @@ fn maintenance_lists_use_shared_header_status_and_diagnostic_styles() {
         assert_eq!(value["renewal"]["results"], serde_json::json!([]));
     }
 }
+
+#[test]
+fn streamed_cycle_status_reflects_cancellation_in_any_stage() {
+    for source in ["ari", "deployment"] {
+        let mut report = daemon_report(Report {
+            entries: Vec::new(),
+            cancelled: source == "ari",
+        });
+        if source == "deployment" {
+            report.deployment_cancelled = true;
+        }
+        let (output, stdout, stderr) = crate::common::session::tests::session(true);
+        render::cycle(&output, 1, &Ok(report)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(stdout.text().trim()).unwrap();
+        assert_eq!(json["status"], "cancelled", "{source}");
+        assert_eq!(json["report"]["cancelled"], true);
+        assert_eq!(stderr.text(), "");
+    }
+}

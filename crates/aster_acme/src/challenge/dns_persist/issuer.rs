@@ -64,3 +64,11 @@ fn normalized_caa(names: &[String]) -> Option<Vec<String>> {
         })
         .collect()
 }
+
+/// Compare validated issuer sets; draft-02 section 7.6 makes order insignificant.
+pub(crate) fn same_set(left: &[String], right: &[String]) -> bool {
+    valid_issuers(left)
+        && valid_issuers(right)
+        && left.iter().collect::<std::collections::BTreeSet<_>>()
+            == right.iter().collect::<std::collections::BTreeSet<_>>()
+}

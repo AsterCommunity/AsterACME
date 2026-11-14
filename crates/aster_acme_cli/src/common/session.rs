@@ -227,6 +227,9 @@ impl OutputSession {
         }
         state.finished = true;
         if let Some(error) = state.error.take() {
+            if matches!(channel, FinalChannel::Diagnostic) {
+                let _ = writeln!(state.stderr, "{text}").and_then(|()| state.stderr.flush());
+            }
             return Err(error);
         }
         if state.progress && !self.is_json() {

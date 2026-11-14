@@ -132,7 +132,7 @@ aster-acme cert renew web --yes --json
 
 renew 只接受托管名称（位置 NAME / -n 互斥），缺省在终端选择。不能覆盖域名、账户、算法、验证实现或指定历史版本；使用稳定 cert.toml。默认只到期执行，未到期返回成功的 status=not_due，不创建版本、密钥、订单或发 CA 请求。--now仅提前续期；--yes确认操作，不补填输入或条款。DNS预检建议性且有界，CA仍决定授权，取消/总期限不变，无DNS跳过或force参数。
 
-名称选择后按账户→证书锁序取得租约，锁内再次验证 expected_in_use 和计划；已变更 in_use 拒绝，pending 吊销不能绕过，confirmed revoked 仅显式 --now 才允许替换。已存在同一 predecessor 的未完成续期时恢复它，不重复生成 CSR/密钥或新订单。首次自动化续期仍先返回新 TXT，后续 cert renew NAME 或精确 issue --resume NAME --operation ID 继续；多个未完成候选不猜测。
+名称选择后按账户→证书锁序取得租约，锁内再次验证 expected_in_use 和计划；已变更 in_use 拒绝，pending 吊销不能绕过，confirmed revoked 仅显式 --now 才允许替换。已存在同一 predecessor 的未完成续期时恢复它，不重复生成 CSR/密钥或新订单。首次续期若需要人工发布新材料会先返回 TXT 待办；`dns_external` 自动发布，`dns_persist` 复用已确认的长期记录，只有记录材料变化时才需重新确认。后续 cert renew NAME 或精确 issue --resume NAME --operation ID 继续；多个未完成候选不猜测。
 
 每次新续期固定新密钥和 CSR，沿用域名/账户/算法，保存 renewal_of.operation_id/certificate_id。CA 公布 renewalInfo 且旧证书有 ARI 标识时发送 replaces；否则走纯 RFC8555 newOrder，不发 replaces。实际提交值保存为 submitted_replaces，恢复不因目录变动改变含义；要求 CA 后续订单回显一致，否则保存 Location 并拒绝继续，不悄悄降级重下单。成功完整校验和落盘后才切 in_use，新计划属于新 in_use，旧版本保留。旧续期结果不允许覆盖后来改变的 in_use。
 

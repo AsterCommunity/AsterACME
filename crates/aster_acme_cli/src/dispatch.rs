@@ -31,6 +31,7 @@ impl CommandReport {
     }
     pub(crate) fn exit_status(&self) -> ExitStatus {
         match self {
+            Self::Provider(report) if report.is_cancelled() => ExitStatus::Cancelled,
             Self::Provider(report) if report.has_failures() => ExitStatus::Failed,
             Self::Account(report) if report.has_failures() => ExitStatus::Failed,
             Self::Account(_) | Self::DaemonStopped(_) | Self::Provider(_) | Self::Version => {

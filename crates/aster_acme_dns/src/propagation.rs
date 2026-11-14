@@ -47,17 +47,24 @@ impl PropagationPolicy {
                 );
             }
             let mut all = true;
+            let mut groups = std::collections::BTreeMap::<&str, Vec<&[u8]>>::new();
             for record in records {
+                groups
+                    .entry(&record.challenge_name)
+                    .or_default()
+                    .push(record.value.as_bytes());
+            }
+            for (owner, expected_values) in groups {
                 let result = tokio::select! {
                     biased;
                     () = execution.cancellation.cancelled() => return Err(PropagationError::Interrupted),
-                    result = tokio::time::timeout_at(deadline.into(), lookup.txt(&record.challenge_name)) => result,
+                    result = tokio::time::timeout_at(deadline.into(), lookup.txt(owner)) => result,
                 };
                 match result {
                     Ok(Ok(values))
-                        if values
-                            .iter()
-                            .any(|value| value.as_slice() == record.value.as_bytes()) => {}
+                        if expected_values.iter().all(|expected| {
+                            values.iter().any(|value| value.as_slice() == *expected)
+                        }) => {}
                     Ok(Err(error)) => {
                         last_error = Some(error);
                         all = false;

@@ -288,11 +288,11 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 
 ## DNS Persist（实验性草案）
 
-`cert issue -c dns_persist -n example-cert -a default -d example.com`按`draft-ietf-acme-dns-persist-02`展示长期`_validation-persist` TXT，首次由人工发布，再使用`cert issue --resume example-cert --yes`确认。记录长期保留，完成后不提示清理；`cert renew`及daemon只对前任已确认的相同记录自动就绪，换钥时保留仍适用的旧hash，改变或新增的值继续返回待办。它不写入DNS，也不自动兼容旧草案格式。要求CA支持精确版本；当前真实CA状态和参数限制见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)及[CLI契约](../../docs/cli-contract.md#持久dns验证草案)。
+实验性DNS-PERSIST-01支持首次人工配置与已确认记录复用。协议版本见[RFC参考](../../docs/rfc-reference.md#dns-persist-草案实现2026-11-14)，操作与限制见[CLI契约](../../docs/cli-contract.md#持久dns验证草案)。
 
 
 ## 显式吊销签名方式
 
-`cert revoke NAME --sign-with certificate-key --reason key-compromise --yes`使用保存的该世代PKCS#8密钥，无需原ACME账户或CSR。默认`--sign-with account`保持账户路径，`--operation ID`继续精确选历史版本；方法缺凭据时失败，不自动回退另一身份。确认、单请求/整体期限、错误/JSON和签名身份展示遵循[CLI契约](../../docs/cli-contract.md#吊销签名身份)。服务端吊销、账户停用、本地删除和部署替换分别处理。
+证书吊销支持账户或证书私钥签名。权限、确认与恢复见[CLI契约](../../docs/cli-contract.md)和[证书生命周期](../../docs/certificate-lifecycle.md#吊销)。
 
 外部DNS自动发布使用 `-c dns_external --provider NAME`，Profile保存在`providers/<name>.toml`。发布计划、回执与传播等待分别推进；独立清理命令为`provider cleanup NAME`。详细配置、安全边界与恢复说明见[DNS Provider](../../docs/dns-providers.md)。

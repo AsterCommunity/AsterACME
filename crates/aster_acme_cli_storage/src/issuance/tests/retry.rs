@@ -166,3 +166,62 @@ async fn preparation_failure_respects_normal_schedule_backoff_and_ca_deadline() 
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn expired_early_renewal_does_not_override_future_renewal_schedule() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let child = f.store.renew(&current.name, &f.account).await.unwrap();
+    let mut saved = child.record().await.unwrap();
+    saved.order_url =
+        Some(aster_acme_protocol::url::AcmeUrl::new("https://ca.example/order/early").unwrap());
+    saved.order=Some(serde_json::from_value(serde_json::json!({"status":"pending","expires":"2000-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[],"finalize":"https://ca.example/finalize"})).unwrap());
+    child.save(&saved).await.unwrap();
+    drop(child);
+    let result = f
+        .store
+        .prepare_renewal(&current.name, &current.operation_id, false, &f.account)
+        .await
+        .unwrap();
+    assert!(matches!(
+        result,
+        crate::issuance::RenewalPreparation::NotDue(_)
+    ));
+    assert_eq!(
+        f.store
+            .query(aster_acme::storage::query::IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn finalize_rejection_retry_after_blocks_new_generation_even_with_now() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let child = f.store.renew(&current.name, &f.account).await.unwrap();
+    let mut saved = child.record().await.unwrap();
+    saved.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+        status: 429,
+        problem: None,
+        retry_at: Some(OffsetDateTime::now_utc() + time::Duration::hours(1)),
+    });
+    child.save(&saved).await.unwrap();
+    drop(child);
+    assert!(matches!(
+        f.store
+            .prepare_renewal(&current.name, &current.operation_id, true, &f.account)
+            .await,
+        Err(aster_acme::issuance::IssueError::Transport(_))
+    ));
+    assert_eq!(
+        f.store
+            .query(aster_acme::storage::query::IssueQuery::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}

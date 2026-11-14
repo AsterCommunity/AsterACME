@@ -161,6 +161,7 @@ pub(super) fn check_renewal_schedule(
     }
     let pending = records.iter().any(|record| {
         record.resume_candidate()
+            && !record.expired(now)
             && record
                 .renewal_of
                 .as_ref()
@@ -263,6 +264,11 @@ fn existing_renewal(
         .iter()
         .filter(|record| record.unfinished() && record.renewal_of.as_ref() == Some(previous))
     {
+        if let Some(response) = &record.finalize_rejection
+            && response.retry_at.is_some_and(|at| at > now)
+        {
+            return Err(response.error());
+        }
         if let Some(response) = &record.creation_failure {
             if !(400..500).contains(&response.status) || response.status == 408 {
                 return Err(IssueError::MutationUncertain(

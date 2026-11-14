@@ -130,11 +130,17 @@ pub(crate) struct ProviderReport {
     removed: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     cleanup: Vec<CleanupView>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    cancelled: bool,
 }
 
 impl ProviderReport {
     pub(crate) fn has_failures(&self) -> bool {
         self.cleanup.iter().any(|item| !item.completed)
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 }
 
@@ -162,6 +168,7 @@ pub(crate) async fn execute(
                 profiles: vec![view(args.name, profile)],
                 removed: None,
                 cleanup: Vec::new(),
+                cancelled: false,
             })
         }
         ProviderCommand::List(_) => {
@@ -175,6 +182,7 @@ pub(crate) async fn execute(
                 profiles,
                 removed: None,
                 cleanup: Vec::new(),
+                cancelled: false,
             })
         }
         ProviderCommand::Show(args) => Ok(ProviderReport {
@@ -182,6 +190,7 @@ pub(crate) async fn execute(
             profiles: vec![view(args.name.clone(), store.get(args.name).await?)],
             removed: None,
             cleanup: Vec::new(),
+            cancelled: false,
         }),
         ProviderCommand::Update(args) => {
             if let Some(executable) = &args.exec {
@@ -210,40 +219,21 @@ pub(crate) async fn execute(
                 profiles: vec![view(args.name, profile)],
                 removed: None,
                 cleanup: Vec::new(),
+                cancelled: false,
             })
         }
         ProviderCommand::Cleanup(args) => {
             cleanup_profile(args, &settings.data_dir, &store, cli).await
         }
-        ProviderCommand::Remove(args) => {
-            remove_profile(args, &settings.data_dir, &store, cli).await
-        }
+        ProviderCommand::Remove(args) => remove_profile(args, &store, cli).await,
     }
 }
 
 async fn remove_profile(
     args: RemoveArgs,
-    root: &std::path::Path,
     store: &aster_acme_cli_storage::provider::ProviderProfileStore,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<ProviderReport> {
-    let records = aster_acme_cli_storage::issuance::CliIssueStore::new(
-        root.to_path_buf(),
-        Duration::from_secs(5),
-    )
-    .query(aster_acme::storage::query::IssueQuery::default())
-    .await?;
-    let referenced = records.iter().any(|record| {
-        record.solver_id == "dns_external"
-            && record
-                .solver_config
-                .get("provider_instance_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(args.name.as_str())
-    });
-    if referenced {
-        return Err("Provider profile is referenced by a retained certificate request; update or remove those requests first.".into());
-    }
     let profile = store.get(args.name.clone()).await?;
     terminal::confirm_action(
         &format!(
@@ -261,6 +251,7 @@ async fn remove_profile(
         profiles: Vec::new(),
         removed: Some(args.name),
         cleanup: Vec::new(),
+        cancelled: false,
     })
 }
 
@@ -271,7 +262,6 @@ async fn cleanup_profile(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<ProviderReport> {
     let _lease = store.lease().await?;
-    store.get(args.name.clone()).await?;
     let issues = aster_acme_cli_storage::issuance::CliIssueStore::new(
         root.to_path_buf(),
         Duration::from_secs(5),
@@ -297,15 +287,11 @@ async fn cleanup_profile(
                 .authorizations
                 .iter()
                 .any(|auth| auth.cleanup_pending)
-            && (record.phase == aster_acme_core::workflow::IssuancePhase::Completed
-                || record.authorization_failure().is_some()
-                || record.order.as_ref().is_some_and(|order| {
-                    order.status == aster_acme_core::protocol::OrderStatus::Invalid
-                }))
+            && record.publication_cleanup_eligible(time::OffsetDateTime::now_utc())
     }) {
-        execution
-            .check()
-            .map_err(|_| "Provider cleanup interrupted; saved state retained.")?;
+        if execution.check().is_err() {
+            break;
+        }
         let session = issues
             .open_observation(&record.name, &record.operation_id)
             .await?;
@@ -333,6 +319,7 @@ async fn cleanup_profile(
         profiles: Vec::new(),
         removed: None,
         cleanup,
+        cancelled: execution.cancellation.is_cancelled(),
     })
 }
 
@@ -421,7 +408,7 @@ pub(crate) fn render(report: &ProviderReport, format: Format) -> CliResult<Strin
         if !profile.args.is_empty() {
             lines.push(format!(
                 "Arguments:        {}",
-                safe(&profile.args.join(" "))
+                safe(&serde_json::to_string(&profile.args).unwrap_or_default())
             ));
         }
         if report.operation != "listed" {
@@ -452,6 +439,38 @@ mod tests {
         };
         command
     }
+    #[tokio::test]
+    async fn cleanup_command_is_offline_and_reports_all_terminal_results() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_str().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let cli = CommandContext::new(true);
+        execute(
+            command(&[
+                "add",
+                "prod",
+                "--exec",
+                executable.to_str().unwrap(),
+                "--allow-zone",
+                "validation.net",
+                "--data-dir",
+                root,
+                "--json",
+            ]),
+            &cli,
+        )
+        .await
+        .unwrap();
+        let report = execute(
+            command(&["cleanup", "prod", "--data-dir", root, "--json"]),
+            &cli,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.operation, "cleanup");
+        assert!(report.cleanup.is_empty());
+    }
+
     #[tokio::test]
     async fn provider_crud_outputs_are_redacted_and_no_binary_is_executed() {
         let temp = tempfile::tempdir().unwrap();

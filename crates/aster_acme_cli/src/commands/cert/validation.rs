@@ -283,7 +283,8 @@ pub(super) fn external_configuration(
     }
     serde_json::to_value(DnsExternalConfig {
         provider_instance_id: provider_instance_id.to_owned(),
-        provider_profile_version: 1,
+        provider_profile_version:
+            aster_acme_cli_storage::provider::ProviderProfile::CURRENT_VERSION,
     })
     .map_err(|_| IssueError::InvalidInput("cannot encode DNS provider configuration"))
 }

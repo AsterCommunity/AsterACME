@@ -10,7 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 fn main() {
-    if let Some(mode) = std::env::args().nth(1) {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--adpp-fixture") {
+        let mode = args.next().expect("fixture mode");
         fixture(&mode);
         return;
     }
@@ -72,7 +74,7 @@ fn record(id: &str) -> DnsRecord {
 fn provider(mode: &str) -> AdppProvider {
     AdppProvider::new(Executable {
         program: std::env::current_exe().unwrap(),
-        args: vec![mode.into()],
+        args: vec!["--adpp-fixture".into(), mode.into()],
         timeout: Duration::from_secs(2),
     })
 }

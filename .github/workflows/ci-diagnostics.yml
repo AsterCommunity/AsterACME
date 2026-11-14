@@ -15,8 +15,10 @@ on:
     types: [completed]
 
 concurrency:
-  group: ci-diagnostics-${{ github.event.workflow_run.head_sha }}
+  # Keep each source-run event and serialize full-label replacements.
+  group: aster-repository-label-writers
   cancel-in-progress: false
+  queue: max
 
 permissions:
   actions: read

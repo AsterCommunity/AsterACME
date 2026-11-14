@@ -648,7 +648,9 @@ impl IssueRecord {
                     .order
                     .as_ref()
                     .is_some_and(|order| matches!(order.status, OrderStatus::Invalid))
-                || self.expired(now))
+                || (self.expired(now)
+                    && !(self.finalize_submitted == SubmissionState::Submitted
+                        && self.finalize_rejection.is_none())))
     }
 
     /// Known terminal orders are retained for inspection but excluded from resume selection.
@@ -753,6 +755,30 @@ impl IssueRecord {
             !matches!(order.status, aster_acme_core::protocol::OrderStatus::Valid)
                 && order.expires.is_some_and(|expires| expires <= now)
         })
+    }
+
+    /// Whether external temporary publications are safe to clean up without risking
+    /// an order that can still issue a certificate or has an unknown finalize result.
+    #[must_use]
+    pub fn publication_cleanup_eligible(&self, now: time::OffsetDateTime) -> bool {
+        self.phase == IssuancePhase::Completed
+            || self.finalize_rejection.is_some()
+            || self.authorization_failure().is_some()
+            || self.order.as_ref().is_some_and(|order| {
+                matches!(
+                    order.status,
+                    aster_acme_core::protocol::OrderStatus::Invalid
+                )
+            })
+            || (self.finalize_submitted != SubmissionState::Submitted
+                && self.expired(now)
+                && self.order.as_ref().is_some_and(|order| {
+                    matches!(
+                        order.status,
+                        aster_acme_core::protocol::OrderStatus::Pending
+                            | aster_acme_core::protocol::OrderStatus::Ready
+                    )
+                }))
     }
 }
 

@@ -10,7 +10,7 @@
 
 - **外部 DNS Provider（ADPP）** — `provider add/list/show/update/remove`管理私有独立Profile，`-c dns_external --provider NAME`支持签发与续期，`provider cleanup NAME`重试终态清理。默认允许全部合法发布域，可用`--allow-zone`增强限制并用`--clear-zones`清除；变更前固定CNAME路由，CA ack前保存逐记录回执与限流下限；保留预存TXT、部分成功和未知结果。custom值全量敏感，仅经stdin传递并从报告隐藏；子进程不继承环境。部署reload与ADPP共用独立进程crate的进程树/有界IO机制。内置厂商客户端和真实DNS/staging验收另计。
 
-- **DNS Persist（实验性）**：通过 `-c dns_persist` 支持 `draft-ietf-acme-dns-persist-02`，校验issuer元数据，以签名POST-as-GET证明账户控制权，派生绑定域名/账户密钥/账户URL的SHA-256哈希TXT，支持通配符范围与多字符串展示。首次人工发布，验证后长期保留；重启、续期、账户换钥及无人值守维护只复用确认过且未改变的记录，新值仍需人工发布。旧草案拼写仅保留不执行；DNS provider自动写入和公网CA验收仍独立。
+- **DNS Persist（实验性）**：通过 `-c dns_persist` 支持 `draft-ietf-acme-dns-persist-02`，校验issuer元数据，按无序集合比较`issuerDomainNames`，以签名POST-as-GET证明账户控制权，派生绑定域名/账户密钥/账户URL的SHA-256哈希TXT，支持通配符范围与多字符串展示。首次人工发布，验证后长期保留；重启、续期、账户换钥及无人值守维护只复用确认过且未改变的记录，新值仍需人工发布。旧草案拼写仅保留不执行；DNS provider自动写入和公网CA验收仍独立。
 
 - **账户管理**：具名 CA 账户的注册、按密钥找回、联系人更新、换钥、停用及本地删除。支持 Let's Encrypt、ZeroSSL、Google、自定义 directory、明确条款同意、EAB，以及账户／证书独立密钥选择。
 - **证书签发**：单域名、SAN、通配符申请，支持人工 DNS-01、人工／webroot／standalone HTTP-01 与 standalone TLS-ALPN-01。持久化固定密钥、CSR、挑战材料和 CA 提交证据，恢复时不静默另建订单。
@@ -22,11 +22,12 @@
 - **CAA 预检**：issue/renew 在新订单前按 CA 广告身份、父域 CAA、通配符及账户／验证方式约束给出建议。不匹配、未知扩展、DNS 失败和超时不阻断 CA 验证。CAA／TXT／HTTP 以feature按需启用，由可嵌入Runner显式执行，共用默认5秒阶段预算与取消策略，结构化报告保留部分观察，并在CAA/TXT诊断中保留系统解析器初始化阶段和底层原因，区分CA身份缺失与本地初始化失败。不修改系统DNS或Hickory，不增加回退解析器。库默认关闭预检，CLI默认启用。
 - **协议诊断**：类型化 ACME 资源与 IANA 全部 32 种错误类型，附 RFC／草案出处；保留未知扩展、标识符子问题、ARI explanationURL 精确映射、跨到期时刻窗口截断及拒绝／不确定证据，每周在线核对 IANA 注册表。
 - **嵌入与文档**：对象安全的 signer/store/solver/observer 契约、按方法划分的具名材料模块、集中方法准入与发布策略、类型化长期验证快照，项目及 CLI 契约、任务路由、模块设计、RFC 索引，以及分开的本地／staging 验证记录。
-- **仓库治理自动化**：采用组织共享、固定 SHA 的 `AsterCommunity/aster-automation` Action 与仓库自有的 `.github/aster-automation.json`：按变更文件确定性维护路径标签（`Rust`、`Python`、`Documentation`、`Dependencies`、`Scope: Core|Protocol|Client|Crypto|Challenges|Storage|CLI|Deployment`、`Risk: High`），维护关联 Issue 生命周期（`Priority:*`、`Status:*`、`Wait For PR`、`Merged`），聚合 `PR Gate` 与 CI 生命周期标签并原地更新诊断评论，为默认分支及定时任务失败维护带 fingerprint 的故障 Issue（含 flaky 与基础设施分类），每小时 reconcile 并同步标签定义，issue 模板预置新报告标签，维护 release readiness dashboard。自动化配置或 workflow 变更由 `Repository Automation` 校验配置 schema 与仓库静态契约。
+- **仓库治理自动化**：采用组织共享、固定 SHA 的 `AsterCommunity/aster-automation` Action 与仓库自有的 `.github/aster-automation.json`：按变更文件确定性维护路径标签（`Rust`、`Python`、`Documentation`、`Dependencies`、`Scope: Core|Protocol|Client|Crypto|Challenges|Storage|CLI|Deployment`、`Risk: High`覆盖`crypto.rs`、`transport.rs`、`storage.rs`入口及对应目录），维护关联 Issue 生命周期（`Priority:*`、`Status:*`、`Wait For PR`、`Merged`），聚合 `PR Gate` 与 CI 生命周期标签并原地更新诊断评论，为默认分支及定时任务失败维护带 fingerprint 的故障 Issue（含 flaky 与基础设施分类），每小时 reconcile 并同步标签定义，issue 模板预置新报告标签，维护 release readiness dashboard。多个全量写入标签的 workflow 共享 FIFO 队列；同 SHA 的不同CI workflow run分别处理。`Repository Automation`校验配置、路径规则和并发契约。
 
 ### 变更
 
-- **恢复与并发**：账户写入显式携带共享租约到阻塞任务结束，换钥 IO 串行，提交任务保留租约并完成取消后的结果分类，确认绑定已检查身份；Confirmed 换钥仅本地提交。账户换钥保留旧挑战材料，证书视图按持久化 catalog 恢复，拒绝过时提升。ARI、到期续期和部署重试由库级维护协调器按阶段运行；文件租约留在 storage，reload 执行留在宿主。CA 发现与自动部署共用取消／期限，批次保留已提交结果。
+- **DNS 清理与传播**：每轮对每个 TXT owner 只查询一次，并要求该份应答包含全部预期值。外部 Provider 清理保留逐条成功结果；receipt 恢复后仍遵守持久化重试下限。仅在 CA 结果已确定终结，或已过期且从未提交 finalize 的 pending/ready 订单下清理；确定性 CSR 拒绝也可清理。finalize 结果未知时继续禁止 DNS 清理和 journal 删除。
+- **恢复与并发**：账户写入显式携带共享租约到阻塞任务结束，signer阶段和执行阶段的账户锁竞争采用相同分类，不增加续期失败退避；换钥 IO 串行，提交任务保留租约并完成取消后的结果分类，确认绑定已检查身份；Confirmed 换钥仅本地提交。账户换钥保留旧挑战材料，证书视图按持久化 catalog 恢复，拒绝过时提升。可选下单前预检受取消信号和操作期限约束。保留finalize结果未确认的过期请求，创建新续期世代前遵守已保存的finalize拒绝Retry-After。ARI、到期续期和部署重试由库级维护协调器按阶段运行；文件租约留在storage，reload执行留在宿主。CA发现与自动部署共用取消／期限；两次reload之间取消仍保存已知失败的重试退避；批次保留已提交结果。
 - **发布与清理**：部署直接使用普通文件和稳定目录路径，不使用链接、目录交换或承诺整组原子事务。Webroot 固定目录身份，Windows 使用参与重命名共享检查的目录访问权，新目录权限同步后发布；shutdown 回收阻塞 worker；HTTP 建议性预检复用连接池，遵循用户代理并允许内网目标，DNS/HTTP共用专用预检时限，固定最多5秒，并接受HTTP-01响应末尾ASCII空白。Webroot 核验实际隔离的对象后再清理，保留用户替换文件。人工验证确认恢复原生inquire，支持可见输入/编辑与默认否；提示线程结束后复核取消／期限，由库恢复终端模式；诊断写入或 flush 失败不会报告成功。
 - **存储与跨平台**：版本化 TOML、有界类型化查询、标准库锁及平台文件校验。Unix 使用私有权限和内部 in_use 相对链接；Windows 使用继承权限及可恢复完整目录副本。Unix 新建目录项在远端操作前同步，metadata 保存不能重建已删除账户。Windows 进程重启恢复不等同掉电后 rename 目录项持久性；无关用户文件保留。
 - **运行时与依赖**：复用惰性 HTTP 连接池，隔离账户策略与 nonce；依赖版本／features 归根 workspace，限定 rustls/AWS-LC。优化 release 体积，仅可执行入口安装 Forge panic hook，私有报告脱敏且不重放 mutation。

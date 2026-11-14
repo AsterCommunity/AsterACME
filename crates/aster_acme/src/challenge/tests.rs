@@ -130,3 +130,30 @@ fn retained_snapshots_filter_temporary_wrong_method_and_duplicate_material() {
         Vec::<ValidationRequirement>::new()
     );
 }
+
+#[test]
+fn persist_ack_issuers_are_validated_as_order_independent_sets() {
+    let mut expected = challenge(ChallengeKind::DnsPersist01);
+    expected.parameters.insert(
+        "issuerDomainNames".into(),
+        json!(["one.example", "two.example"]),
+    );
+    let mut observed = expected.clone();
+    observed.parameters.insert(
+        "issuerDomainNames".into(),
+        json!(["two.example", "one.example"]),
+    );
+    assert!(ChallengeKind::DnsPersist01.matches_response(&expected, &observed));
+    for values in [
+        json!([]),
+        json!(["One.example", "two.example"]),
+        json!(["one.example.", "two.example"]),
+        json!(["other.example", "one.example"]),
+        json!([12, "one.example"]),
+    ] {
+        observed
+            .parameters
+            .insert("issuerDomainNames".into(), values);
+        assert!(!ChallengeKind::DnsPersist01.matches_response(&expected, &observed));
+    }
+}

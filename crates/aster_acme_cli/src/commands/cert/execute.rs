@@ -203,12 +203,7 @@ pub(super) async fn transact(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<super::report::CertificateResult> {
     let progress = Arc::new(Progress::new(cli.output.clone()));
-    let _providers = aster_acme_cli_storage::provider::ProviderProfileStore::new(
-        settings.data_dir.clone(),
-        Duration::from_secs(5),
-    )
-    .lease()
-    .await?;
+    let data_dir = settings.data_dir.clone();
     let context = settings.account(&options).await?;
     let (operation_timeout, _, _) = run.limits(&context.config);
     let cancellation = match &mode {
@@ -227,7 +222,13 @@ pub(super) async fn transact(
             &context.name,
             aster_acme::storage::account::KeyAccess::Existing,
         )
-        .await?;
+        .await
+        .map_err(|error| match error.kind {
+            aster_acme::storage::account::AccountStoreErrorKind::LockUnavailable => {
+                IssueError::LeaseUnavailable("account", error.to_string())
+            }
+            aster_acme::storage::account::AccountStoreErrorKind::Other => IssueError::Store(error),
+        })?;
     let thumbprint = signer.jwk()?.thumbprint()?;
     // Lock order is account, then certificate. Rotation/deactivation/removal cannot
     // change the account identity during challenge material derivation or signing.
@@ -246,6 +247,12 @@ pub(super) async fn transact(
         .load(&context.directory, &thumbprint)
         .await?
         .ok_or("No registered account exists.")?;
+    let _providers = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        data_dir,
+        Duration::from_secs(5),
+    )
+    .lease()
+    .await?;
     let mut session = match start {
         Start::Issue(input) => prepare_session(store, input, &account, &progress).await?,
         Start::Renew {

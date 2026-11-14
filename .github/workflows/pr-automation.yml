@@ -11,8 +11,11 @@ on:
         type: string
 
 concurrency:
-  group: pr-automation-${{ github.event.pull_request.number || inputs.pull_request_number }}
-  cancel-in-progress: true
+  # The shared Action replaces the complete PR label set. Serialize every
+  # repository label writer so concurrent modes cannot overwrite each other.
+  group: aster-repository-label-writers
+  cancel-in-progress: false
+  queue: max
 
 permissions:
   checks: write

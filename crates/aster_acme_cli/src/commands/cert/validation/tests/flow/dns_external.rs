@@ -6,8 +6,11 @@ use crate::commands::cert::validation::{
     tests::{execution, progress},
 };
 use aster_acme::{
-    issuance::{IssueError, IssueExecution, IssueOutcome},
-    solver::{ChallengeSolver, ExecutionContext},
+    issuance::{IssueError, IssueExecution, IssueOutcome, ValidationRequirement},
+    solver::{
+        ChallengePublication, ChallengeSolver, CleanupResult as SolverCleanupResult,
+        ExecutionContext, PublicationReceiptUpdate, ReadyResult,
+    },
 };
 use aster_acme_dns::{
     CleanupRequest, CleanupResult, CleanupStatus, DnsProvider, DnsRecord, HostErrorCode,
@@ -277,6 +280,181 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
         fixture.server.received_requests().await.unwrap().len()
     );
     assert!(dns.records.lock().unwrap().is_empty());
+}
+
+struct ReceiptRecovery {
+    cleanup_calls: Arc<AtomicUsize>,
+}
+#[async_trait]
+impl ChallengeSolver for ReceiptRecovery {
+    fn kind(&self) -> aster_acme::challenge::ChallengeKind {
+        aster_acme::challenge::ChallengeKind::Dns01
+    }
+    fn requires_receipt(&self) -> bool {
+        true
+    }
+    async fn ready(
+        &self,
+        publications: &[ChallengePublication],
+        _: &ExecutionContext,
+    ) -> Result<ReadyResult, IssueError> {
+        let receipts = publications
+            .iter()
+            .map(|publication| {
+                let plan = publication.plan.as_ref().unwrap();
+                PublicationReceiptUpdate {
+                    publication_id: publication.publication_id.clone(),
+                    receipt: PublicationReceipt {
+                        record_id: format!("recovered-{}", publication.publication_id),
+                        ownership: RecordOwnership::Created,
+                        record_name: plan.name.clone(),
+                        cname_chain: plan.cname_chain.clone(),
+                    },
+                }
+            })
+            .collect();
+        Ok(ReadyResult {
+            ready: true,
+            receipts,
+            retry_at: Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(1)),
+            ..ReadyResult::default()
+        })
+    }
+    async fn cleanup(
+        &self,
+        publications: &[ChallengePublication],
+        _: &ExecutionContext,
+    ) -> Result<SolverCleanupResult, IssueError> {
+        self.cleanup_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(SolverCleanupResult {
+            completed: publications
+                .iter()
+                .map(|publication| publication.publication_id.clone())
+                .collect(),
+            ..SolverCleanupResult::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn recovered_receipt_retry_checkpoint_blocks_provider_cleanup() {
+    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let dns = Arc::new(Dns::default());
+    let solver = solver(dns.clone());
+    let IssueOutcome::Completed { .. } = run(&mut fixture, &solver, &controls()).await.unwrap()
+    else {
+        panic!("issuance did not complete");
+    };
+    let session = fixture.session.as_ref().unwrap();
+    let mut saved = session.record().await.unwrap();
+    let auth = &mut saved.authorizations[0];
+    auth.cleanup_pending = true;
+    auth.publication_receipt = None;
+    auth.publication_retry_at = None;
+    session.save(&saved).await.unwrap();
+    let cleanup_calls = Arc::new(AtomicUsize::new(0));
+    let recovery = ReceiptRecovery {
+        cleanup_calls: cleanup_calls.clone(),
+    };
+    let result =
+        aster_acme::issuance::publication::cleanup(session.as_ref(), &recovery, &execution()).await;
+    assert!(matches!(result, Err(IssueError::DnsRetryAt(_))));
+    assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        session.record().await.unwrap().authorizations[0]
+            .publication_receipt
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn deterministic_bad_csr_rejection_allows_dns_cleanup() {
+    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let dns = Arc::new(Dns::default());
+    let solver = solver(dns);
+    let IssueOutcome::Completed { .. } = run(&mut fixture, &solver, &controls()).await.unwrap()
+    else {
+        panic!("issuance did not complete");
+    };
+    let session = fixture.session.as_ref().unwrap();
+    let mut saved = session.record().await.unwrap();
+    saved.phase = aster_acme_core::workflow::IssuancePhase::Finalizing;
+    saved.order.as_mut().unwrap().status = aster_acme_core::protocol::OrderStatus::Ready;
+    saved.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+        status: 400,
+        problem: None,
+        retry_at: None,
+    });
+    saved.authorizations[0].cleanup_pending = true;
+    session.save(&saved).await.unwrap();
+    assert!(saved.publication_cleanup_eligible(time::OffsetDateTime::now_utc()));
+    let cleaned =
+        aster_acme::issuance::publication::cleanup(session.as_ref(), &solver, &execution())
+            .await
+            .unwrap();
+    assert!(!cleaned.authorizations[0].cleanup_pending);
+}
+
+#[tokio::test]
+async fn cleanup_keeps_processing_later_records_after_invalid_saved_routes() {
+    let dns = Arc::new(Dns::default());
+    let solver = solver(dns.clone());
+    let make_publication = |id: &str, plan: Option<DnsRecord>| {
+        let (name, value) = ("_acme-challenge.example.com", "expected");
+        let receipt = PublicationReceipt {
+            record_id: format!("record-{id}"),
+            ownership: RecordOwnership::Created,
+            record_name: plan
+                .as_ref()
+                .map_or_else(|| "target.validation.net.".into(), |p| p.name.clone()),
+            cname_chain: plan.as_ref().map_or_else(
+                || vec!["_acme-challenge.example.com.".into()],
+                |p| p.cname_chain.clone(),
+            ),
+        };
+        ChallengePublication {
+            publication_id: id.into(),
+            requirement: ValidationRequirement::Dns01 {
+                name: name.into(),
+                value: value.into(),
+            },
+            receipt: Some(receipt),
+            plan,
+        }
+    };
+    let mut invalid_chain = DnsRecord {
+        publication_id: "invalid-chain".into(),
+        challenge_name: "_acme-challenge.example.com.".into(),
+        cname_chain: vec![
+            "_acme-challenge.example.com.".into(),
+            "target.attacker.test.".into(),
+        ],
+        name: "target.attacker.test.".into(),
+        value: "expected".into(),
+        ttl_seconds: Some(120),
+    };
+    let mut valid = invalid_chain.clone();
+    valid.publication_id = "valid".into();
+    valid.cname_chain = vec![
+        "_acme-challenge.example.com.".into(),
+        "delegated.validation.net.".into(),
+    ];
+    valid.name = "delegated.validation.net.".into();
+    invalid_chain.publication_id = "invalid-chain".into();
+    let outcome = solver
+        .cleanup(
+            &[
+                make_publication("missing-plan", None),
+                make_publication("invalid-chain", Some(invalid_chain)),
+                make_publication("valid", Some(valid)),
+            ],
+            &execution(),
+        )
+        .await
+        .unwrap();
+    assert!(outcome.failure.is_some());
+    assert_eq!(outcome.completed, ["valid"]);
+    assert_eq!(dns.cleanups.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn preexisting_txt_is_retained_without_calling_provider_cleanup() {
