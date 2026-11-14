@@ -8,6 +8,7 @@
 | ACME wire/JWS/transport/Problem | [RFC](rfc-reference.md)、[运行时设计](design/runtime.md) | protocol、aster_acme/transport、crypto | 精确URL/签名、nonce、明确未发送与结果未知、未知扩展 |
 | 签发/恢复/验证材料 | [签发设计](design/issuance.md) | aster_acme/issuance、core/machine、CLI cert/validation | 固定key/CSR、终态problem、ack/finalize重放边界 |
 | DNS Persist草案/持久TXT | [签发设计](design/issuance.md)、[RFC草案版本](rfc-reference.md#dns-persist-草案实现2026-11-14) | protocol/{directory,order}、aster_acme/challenge/dns_persist、issuance/{authorization,service}、cli_storage/issuance/generation、CLI cert/validation | 无token、账户控制权证明、长期保留、换钥/续期复用、旧草案拒绝 |
+| DNS provider / ADPP | [Provider操作](dns-providers.md)、[RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)、[签发设计](design/issuance.md)、[RFC参考](rfc-reference.md#dns-01-自动化) | aster_acme_dns、dns_adpp、dns_resolver、process、issuance/publication、cli_storage/provider、CLI provider/validation | 幂等publication ID、逐记录回执落盘、DNS TXT所有权清理、CNAME允许策略、子进程取消/期限 |
 | CAA/TXT/HTTP建议性预检 | [签发设计](design/issuance.md)、[RFC](rfc-reference.md) | core/caa、aster_acme/precheck、validation/{caa,txt}、CLI cert/precheck | CA身份任选、父域/别名、通配符、DNS失败与空集、建议性预算/取消 |
 | HTTP/webroot/standalone/TLS-ALPN | [签发设计](design/issuance.md)、[CLI](cli-contract.md) | CLI cert/validation/{webroot,listener,standalone,tls_alpn,manual} | 所有权、取消/期限、线程/终端恢复、清理用户替换文件 |
 | 续期/ARI/吊销/删除 | [生命周期](certificate-lifecycle.md) | aster_acme/{renewal,renewal_calculation,revocation}、cli_storage/issuance、CLI cert | 过期边界、时间窗口、旧in_use保留、批量已提交结果 |

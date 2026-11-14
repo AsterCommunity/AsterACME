@@ -17,6 +17,11 @@ impl CliIssueStore {
         account: &AccountRecord,
     ) -> Result<RenewalPreparation, IssueError> {
         validate_initialization(&input, account)?;
+        let provider_registry =
+            crate::provider::ProviderProfileStore::new(self.root.clone(), self.timeout)
+                .lease()
+                .await
+                .map_err(|_| failure("provider registry is busy or unsafe"))?;
         let name = match &input {
             Initialization::New(request) => &request.name,
             Initialization::Renewal(name) | Initialization::Scheduled { name, .. } => name,
@@ -25,6 +30,7 @@ impl CliIssueStore {
         let slot = self.slot(name);
         let account = account.clone();
         tokio::task::spawn_blocking(move || {
+            let _provider_registry = provider_registry;
             if let Initialization::Scheduled {
                 expected_in_use,
                 immediate,

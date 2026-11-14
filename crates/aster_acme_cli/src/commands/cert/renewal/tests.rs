@@ -700,6 +700,7 @@ async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_tra
     for method in [
         ValidationMethod::ManualDns,
         ValidationMethod::DnsPersist,
+        ValidationMethod::DnsExternal,
         ValidationMethod::ManualHttp,
         ValidationMethod::Webroot,
         ValidationMethod::Standalone,
@@ -789,16 +790,35 @@ impl LocalFixture {
                 8080
             },
         ));
-        let config = super::super::validation::configuration(
-            method,
-            (method == ValidationMethod::Webroot).then_some(root.as_path()),
-            matches!(
-                method,
-                ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+        let config = if method == ValidationMethod::DnsExternal {
+            aster_acme_cli_storage::provider::ProviderProfileStore::new(
+                self.settings.data_dir.clone(),
+                Duration::from_secs(2),
             )
-            .then_some(listen),
-        )
-        .unwrap();
+            .add(
+                "test-provider".into(),
+                aster_acme_cli_storage::provider::ProviderProfile::new(
+                    std::env::current_exe().unwrap(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            super::super::validation::external_configuration(Some("test-provider")).unwrap()
+        } else {
+            super::super::validation::configuration(
+                method,
+                (method == ValidationMethod::Webroot).then_some(root.as_path()),
+                matches!(
+                    method,
+                    ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+                )
+                .then_some(listen),
+            )
+            .unwrap()
+        };
         let req = IssueRequest {
             challenge: method.kind(),
             solver_id: method.id().into(),

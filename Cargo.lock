@@ -124,6 +124,7 @@ name = "aster_acme"
 version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme_core",
+ "aster_acme_dns",
  "aster_acme_protocol",
  "aster_forge_http",
  "aster_forge_utils",
@@ -157,6 +158,10 @@ dependencies = [
  "aster_acme",
  "aster_acme_cli_storage",
  "aster_acme_core",
+ "aster_acme_dns",
+ "aster_acme_dns_adpp",
+ "aster_acme_dns_resolver",
+ "aster_acme_process",
  "aster_acme_protocol",
  "aster_acme_validation",
  "aster_forge_panic",
@@ -170,7 +175,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "inquire",
- "process-wrap",
  "rcgen",
  "rustls",
  "serde",
@@ -228,6 +232,53 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "aster_acme_dns"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "aster_acme_dns_adpp"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "aster_acme_dns",
+ "aster_acme_process",
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "aster_acme_dns_resolver"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "aster_acme_dns",
+ "async-trait",
+ "hickory-resolver",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "aster_acme_process"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "process-wrap",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

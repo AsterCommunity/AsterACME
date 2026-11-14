@@ -1,5 +1,8 @@
 //! RFC 8555 issuance orchestration. All mutations follow durable checkpoints.
 use crate::issuance::progress::{IssueEvent, IssueObserver};
+use crate::issuance::publication::{
+    checkpoint, cleanup_saved, outstanding_publications, publication,
+};
 use crate::issuance::{
     AuthorizationRecord, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
     ValidationRequirement,
@@ -132,7 +135,8 @@ impl IssueService {
         tracing::debug!(operation_id = %record.operation_id, phase = ?record.phase, new_order_intent_saved = record.new_order_intent_saved, has_order_url = record.order_url.is_some(), finalize = ?record.finalize_submitted, method = record.challenge.name(), "Loaded issuance checkpoint");
 
         self.check_execution(&record, solver, execution)?;
-        self.restore_publication(&record, solver, execution).await?;
+        self.restore_publication(session, &mut record, solver, execution)
+            .await?;
         let mut last_order_status = None;
         let mut polls = 0_u32;
         if matches!(record.phase, IssuancePhase::Completed) {
@@ -231,26 +235,45 @@ impl IssueService {
     /// orders no longer need a listener, and acknowledged challenges are not acked again.
     async fn restore_publication(
         &self,
-        record: &IssueRecord,
+        session: &dyn IssueSession,
+        record: &mut IssueRecord,
         solver: &dyn ChallengeSolver,
         execution: &IssueExecution,
     ) -> Result<(), IssueError> {
+        if !record
+            .order
+            .as_ref()
+            .is_some_and(|order| order.status == OrderStatus::Pending)
+        {
+            return Ok(());
+        }
+        crate::issuance::publication::prepare(session, record, solver, &execution.context).await?;
         let pending = record
             .authorizations
             .iter()
             .filter(|auth| matches!(auth.resource.status, AuthorizationStatus::Pending))
-            .filter_map(|auth| auth.validation_requirement.clone())
-            .filter(|requirement| {
-                requirement.kind().publication_lifetime() == PublicationLifetime::Temporary
+            .filter(|auth| {
+                auth.validation_requirement
+                    .as_ref()
+                    .is_some_and(|requirement| {
+                        requirement.kind().publication_lifetime() == PublicationLifetime::Temporary
+                    })
             })
-            .collect::<Vec<_>>();
+            .map(publication)
+            .collect::<Result<Vec<_>, _>>()?;
         if !pending.is_empty()
             && record
                 .order
                 .as_ref()
                 .is_some_and(|order| matches!(order.status, OrderStatus::Pending))
         {
-            bounded(execution, solver.restore(&pending, &execution.context)).await?;
+            let result = solver.restore(&pending, &execution.context).await?;
+            if checkpoint(record, &result.receipts, result.retry_at)? {
+                session.save(record).await?;
+            }
+            if let Some(error) = result.failure {
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -356,33 +379,11 @@ impl IssueService {
         solver: &dyn ChallengeSolver,
         execution: &IssueExecution,
     ) {
-        let pending = record
-            .authorizations
-            .iter()
-            .filter(|auth| auth.cleanup_pending)
-            .filter_map(|auth| auth.validation_requirement.clone())
-            .filter(|requirement| {
-                requirement.kind().publication_lifetime() == PublicationLifetime::Temporary
-            })
-            .collect::<Vec<_>>();
-        if !pending.is_empty() {
-            match bounded(execution, solver.cleanup(&pending, &execution.context)).await {
-                Ok(true) => {
-                    let mut cleaned = record.clone();
-                    for auth in &mut cleaned.authorizations {
-                        auth.cleanup_pending = false;
-                    }
-                    // The protocol outcome is already durable; retain the durable
-                    // pending state if cleanup checkpointing fails.
-                    if session.save(&cleaned).await.is_ok() {
-                        *record = cleaned;
-                    } else {
-                        self.observe(&IssueEvent::CleanupPending);
-                    }
-                }
-                Ok(false) => {}
-                Err(_) => self.observe(&IssueEvent::CleanupPending),
-            }
+        if cleanup_saved(session, record, solver, &execution.context)
+            .await
+            .is_err()
+        {
+            self.observe(&IssueEvent::CleanupPending);
         }
     }
 
@@ -592,6 +593,10 @@ impl IssueService {
                 resource,
                 challenge_url: None,
                 validation_requirement: None,
+                publication_id: None,
+                publication_receipt: None,
+                publication_plan: None,
+                publication_retry_at: None,
                 cleanup_pending: false,
                 acknowledgement: SubmissionState::NotSubmitted,
             }),
@@ -655,9 +660,30 @@ impl IssueService {
                 method: record.challenge,
                 count: outstanding.len(),
             });
-            if !bounded(execution, solver.ready(&outstanding, &execution.context)).await? {
+            crate::issuance::publication::prepare(session, record, solver, &execution.context)
+                .await?;
+            let publications = outstanding_publications(record, &outstanding)?;
+            let result = solver.ready(&publications, &execution.context).await?;
+            if checkpoint(record, &result.receipts, result.retry_at)? {
+                session.save(record).await?;
+            }
+            if let Some(error) = result.failure {
+                return Err(error);
+            }
+            if !result.ready {
                 return Ok(Some(outstanding));
             }
+            let publications = outstanding_publications(record, &outstanding)?;
+            if solver.requires_receipt()
+                && publications
+                    .iter()
+                    .any(|publication| publication.receipt.is_none())
+            {
+                return Err(IssueError::InvalidInput(
+                    "publication did not return all required receipts",
+                ));
+            }
+            solver.wait_ready(&publications, &execution.context).await?;
             self.observe(&IssueEvent::PublicationReady {
                 method: record.challenge,
             });

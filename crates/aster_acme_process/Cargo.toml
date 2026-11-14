@@ -1,0 +1,23 @@
+[package]
+name = "aster_acme_process"
+version = "0.1.0-alpha.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded child-process lifecycle management for AsterACME."
+publish.workspace = true
+
+[dependencies]
+process-wrap.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "process"
+path = "tests/process.rs"
+harness = false

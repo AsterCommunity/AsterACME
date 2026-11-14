@@ -36,6 +36,7 @@
 - 各challenge子模块拥有具名材料、派生与约束；方法能力通过集中穷尽分发声明。通用订单/授权编排使用准入、账户证明和发布生命周期契约，存储携带类型化长期验证快照；TXT表示及范围解析留在材料所有者。
 - CLI和嵌入者注入ChallengeSolver。ACME拥有方法选择、材料推导、通知与轮询；solver拥有发布、ready、restore、shutdown和终态清理的实际副作用。
 - CAA/TXT/HTTP预检由库的可选feature显式提供，返回结构化观察；库默认关闭、CLI默认启用，IssueService不隐式运行预检。本地预检有界且建议性；不能绕过CA验证。取消/超时保留不确定材料；webroot只清理拥有且未修改的文件，实际移走对象再核验身份。
+- DNS Provider Profile分别保存在providers/<name>.toml；provider_custom全量敏感，仅通过stdin context交给可信外部executable，不继承宿主ENV，不进入日志/journal。Profile引用、schema、所有权与清理遵循[ADPP](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)。
 - 临时HTTP/TLS服务共享有界监听生命周期，不自动提权、停其他服务或修改用户网络环境。每个返回路径关闭，取消后不得遗留任务或终端raw mode。
 - 续期只调度in_use，沿用保存定义。ARI在窗口内随机选时且相同窗口不重抽，失败保留计划；证书过期后不查询ARI。回退依据实际有效期，短于10天用一半，其余2/3，并在有效窗口内随机提前。
 - deploy直接发布普通文件并保持目录路径，状态保存在检查点，不以链接存在推断状态。全部选定文件准备/设权/sync后逐文件替换；全部成功后才reload，不承诺整组原子事务、自动回滚或服务健康。

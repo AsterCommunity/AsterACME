@@ -3,7 +3,10 @@ use crate::commands::cert::validation::{
     Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
 };
 use crate::common::output::MessageKind;
-use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
+use aster_acme::{
+    issuance::ValidationRequirement,
+    solver::{ChallengePublication, ExecutionContext, ReadyResult},
+};
 use async_trait::async_trait;
 
 pub(super) struct Manual {
@@ -43,10 +46,14 @@ impl ChallengeSolver for Manual {
     }
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<ReadyResult, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
         if requirements
             .iter()
             .any(|requirement| requirement.kind() != self.method)
@@ -64,12 +71,14 @@ impl ChallengeSolver for Manual {
                     && self.reusable.contains(requirement)
             });
         match (reused, self.saved, self.interactive, self.yes) {
-            (false, false, _, true) | (false, _, false, false) => return Ok(false),
+            (false, false, _, true) | (false, _, false, false) => {
+                return Ok(ReadyResult::default());
+            }
             _ => {}
         }
         if !reused && self.interactive && !self.yes {
             let progress = self.progress.clone();
-            let details = super::super::render::requirement_lines(requirements);
+            let details = super::super::render::requirement_lines(&requirements);
             let message = match self.method {
                 ChallengeKind::Dns01 => {
                     "Action required: add all TXT values; keep unrelated values"
@@ -124,11 +133,16 @@ impl ChallengeSolver for Manual {
                 .map_err(|_| IssueError::Publication("confirmation reader stopped".into()))??;
             self.shutdown().await;
             if !confirmed {
-                return Ok(false);
+                return Ok(ReadyResult::default());
             }
         }
         match self.method {
-            ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 | ChallengeKind::Http01 => Ok(true),
+            ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 | ChallengeKind::Http01 => {
+                Ok(ReadyResult {
+                    ready: true,
+                    ..ReadyResult::default()
+                })
+            }
             ChallengeKind::TlsAlpn01 => Err(IssueError::InvalidInput(
                 "manual TLS-ALPN is not implemented",
             )),
@@ -182,6 +196,7 @@ fn confirm(
 #[cfg(test)]
 mod tests {
     use crate::commands::cert::validation::manual::*;
+    use crate::commands::cert::validation::tests::publications;
 
     #[tokio::test]
     #[ignore = "PTY fixture for confirmation cancellation/deadline and raw-mode restoration"]
@@ -211,14 +226,14 @@ mod tests {
         }];
         let result = tokio::time::timeout_at(
             tokio::time::Instant::from_std(execution.deadline),
-            solver.ready(&requirements, &execution),
+            solver.ready(&publications(&requirements), &execution),
         )
         .await;
         solver.shutdown().await;
         assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
         match mode.as_str() {
-            "yes" | "yes-word" | "replace" => assert!(result.unwrap().unwrap()),
-            "no" | "no-word" | "default" | "erase" => assert!(!result.unwrap().unwrap()),
+            "yes" | "yes-word" | "replace" => assert!(result.unwrap().unwrap().ready),
+            "no" | "no-word" | "default" | "erase" => assert!(!result.unwrap().unwrap().ready),
             _ => assert!(result.is_err() || result.unwrap().is_err()),
         }
         assert_eq!(

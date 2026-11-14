@@ -16,6 +16,7 @@ mod authorization;
 pub mod certificate;
 
 pub mod progress;
+pub mod publication;
 pub mod service;
 pub mod workflow;
 
@@ -238,6 +239,22 @@ pub struct AuthorizationRecord {
     pub challenge_url: Option<AcmeUrl>,
     /// Persisted public material; publication must not change on recovery.
     pub validation_requirement: Option<ValidationRequirement>,
+    /// Stable idempotency identity saved before invoking a publication solver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_id: Option<String>,
+    /// Exact provider receipt; never contains credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_receipt: Option<aster_acme_dns::PublicationReceipt>,
+    /// Exact DNS route saved before any provider mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_plan: Option<aster_acme_dns::DnsRecord>,
+    /// Provider retry lower bound, preserved through process restart.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub publication_retry_at: Option<time::OffsetDateTime>,
     /// Whether publication cleanup is still pending after CA validation ends.
     pub cleanup_pending: bool,
     /// Persisted before acknowledging the CA.
@@ -759,6 +776,18 @@ pub enum IssueError {
     /// Sanitized application publication failure; never include credentials or keys.
     #[error("validation publication failed: {0}")]
     Publication(String),
+    /// Structured DNS provider or external process failure.
+    #[error(transparent)]
+    DnsProvider(#[from] aster_acme_dns::ProviderFailure),
+    /// DNS route resolution/policy failure with resolver causes preserved.
+    #[error(transparent)]
+    DnsRouting(#[from] aster_acme_dns::routing::RouteError),
+    /// Expected TXT values were not observed under the propagation policy.
+    #[error(transparent)]
+    DnsPropagation(#[from] aster_acme_dns::propagation::PropagationError),
+    /// A saved provider rate limit forbids another invocation before this time.
+    #[error("DNS provider rate limited; retry no earlier than {0}")]
+    DnsRetryAt(time::OffsetDateTime),
     /// A managed certificate already owns this name; only automatic names may be retried.
     #[error("a managed certificate named '{0}' already exists")]
     NameAlreadyExists(CertificateName),

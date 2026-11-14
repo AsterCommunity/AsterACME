@@ -131,27 +131,30 @@ impl ChallengeSolver for Dns {
     }
     async fn ready(
         &self,
-        records: &[ValidationRequirement],
+        records: &[aster_acme::solver::ChallengePublication],
         _execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
         assert_eq!(records.len(), 2);
         let ValidationRequirement::Dns01 {
             name: first_name,
             value: first_value,
-        } = &records[0]
+        } = &records[0].requirement
         else {
             panic!("expected DNS");
         };
         let ValidationRequirement::Dns01 {
             name: second_name,
             value: second_value,
-        } = &records[1]
+        } = &records[1].requirement
         else {
             panic!("expected DNS");
         };
         assert_eq!(first_name, second_name);
         assert_ne!(first_value, second_value);
-        Ok(self.0)
+        Ok(aster_acme::solver::ReadyResult {
+            ready: self.0,
+            ..Default::default()
+        })
     }
 }
 
@@ -901,12 +904,15 @@ impl ChallengeSolver for DelayedPublication {
     }
     async fn ready(
         &self,
-        _records: &[ValidationRequirement],
+        _records: &[aster_acme::solver::ChallengePublication],
         _execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
         self.0.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(2100)).await;
-        Ok(true)
+        Ok(aster_acme::solver::ReadyResult {
+            ready: true,
+            ..Default::default()
+        })
     }
 }
 

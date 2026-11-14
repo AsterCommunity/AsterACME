@@ -21,14 +21,14 @@ def main():
         if feature:
             command += ["--features", feature]
         subprocess.run(command, cwd=ROOT, check=True)
-    for package in ("aster_acme", "aster_acme_validation", "aster_acme_cli"):
+    for package in ("aster_acme", "aster_acme_validation"):
         tree = subprocess.run(
             ["cargo", "tree", "-p", package, "--no-default-features", "--locked", "--edges", "normal", "--prefix", "none", "--format", "{p}"],
             cwd=ROOT, check=True, text=True, encoding="utf-8", capture_output=True,
         ).stdout
         if any(line.split()[0] == "hickory-resolver" for line in tree.splitlines()):
             raise SystemExit(f"{package}: disabled prechecks must not include the DNS resolver")
-    print("Optional precheck features: all configurations compile; disabled builds exclude Hickory")
+    print("Optional precheck features: all configurations compile; disabled libraries exclude Hickory; CLI resolver supports external DNS independently")
 
 
 if __name__ == "__main__":

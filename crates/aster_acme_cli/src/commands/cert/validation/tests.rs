@@ -34,7 +34,13 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
             yes,
             progress: progress(),
         };
-        assert!(!manual.ready(&requirements, &execution()).await.unwrap());
+        assert!(
+            !manual
+                .ready(&publications(&requirements), &execution())
+                .await
+                .unwrap()
+                .ready
+        );
     }
     let manual = manual::Manual {
         reusable: Vec::new(),
@@ -45,10 +51,21 @@ async fn manual_http_scripts_first_expose_material_then_confirm_without_dns_bypa
         yes: true,
         progress: progress(),
     };
-    assert!(manual.ready(&requirements, &execution()).await.unwrap());
+    assert!(
+        manual
+            .ready(&publications(&requirements), &execution())
+            .await
+            .unwrap()
+            .ready
+    );
     let cancelled = execution();
     cancelled.cancellation.cancel();
-    assert!(manual.ready(&requirements, &cancelled).await.is_err());
+    assert!(
+        manual
+            .ready(&publications(&requirements), &cancelled)
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -157,16 +174,34 @@ async fn webroot_honors_cancellation_and_keeps_material_when_cleanup_cannot_fini
         path: "/.well-known/acme-challenge/abcdefghijklmnopqrstuvwxyz012345".into(),
         content: "key.authorization".into(),
     }];
-    assert!(handler.ready(&requirements, &execution()).await.unwrap());
+    assert!(
+        handler
+            .ready(&publications(&requirements), &execution())
+            .await
+            .unwrap()
+            .ready
+    );
     let cancelled = execution();
     cancelled.cancellation.cancel();
-    assert!(handler.cleanup(&requirements, &cancelled).await.is_err());
+    assert!(
+        handler
+            .cleanup(&publications(&requirements), &cancelled)
+            .await
+            .is_err()
+    );
     assert!(
         temp.path()
             .join(requirements_path(&requirements[0]))
             .is_file()
     );
-    assert!(handler.cleanup(&requirements, &execution()).await.unwrap());
+    assert!(
+        handler
+            .cleanup(&publications(&requirements), &execution())
+            .await
+            .unwrap()
+            .failure
+            .is_none()
+    );
 }
 fn requirements_path(requirement: &ValidationRequirement) -> &str {
     let ValidationRequirement::Http01 { path, .. } = requirement else {
@@ -505,12 +540,20 @@ async fn webroot_rejects_replaced_directory_components_and_removes_only_inside_p
         path: "/.well-known/acme-challenge/abcdefghijklmnopqrstuvwxyz012345".into(),
         content: "key.authorization".into(),
     }];
-    handler.ready(&requirement, &execution()).await.unwrap();
+    handler
+        .ready(&publications(&requirement), &execution())
+        .await
+        .unwrap();
     let pinned = temp.path().join(".well-known");
     let moved = temp.path().join("moved");
     std::fs::rename(&pinned, &moved).unwrap();
     std::os::unix::fs::symlink(outside.path(), &pinned).unwrap();
-    assert!(handler.cleanup(&requirement, &execution()).await.is_err());
+    assert!(
+        handler
+            .cleanup(&publications(&requirement), &execution())
+            .await
+            .is_err()
+    );
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
     assert!(
         moved
@@ -530,6 +573,7 @@ fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renew
         (ValidationMethod::Standalone, true),
         (ValidationMethod::TlsAlpn, true),
         (ValidationMethod::DnsPersist, true),
+        (ValidationMethod::DnsExternal, true),
         (ValidationMethod::ManualDns, false),
         (ValidationMethod::ManualHttp, false),
     ] {
@@ -582,18 +626,30 @@ async fn retained_material_can_only_skip_confirmation_for_unchanged_persistent_p
         };
         assert_eq!(
             solver
-                .ready(std::slice::from_ref(&requirement), &execution())
+                .ready(
+                    &publications(std::slice::from_ref(&requirement)),
+                    &execution()
+                )
                 .await
-                .unwrap(),
+                .unwrap()
+                .ready,
             expected
         );
         let cancelled = execution();
         cancelled.cancellation.cancel();
         assert!(matches!(
-            solver.ready(&[requirement], &cancelled).await,
+            solver
+                .ready(&publications(&[requirement]), &cancelled)
+                .await,
             Err(IssueError::Interrupted)
         ));
-        assert!(!solver.ready(&[], &execution()).await.unwrap());
+        assert!(
+            !solver
+                .ready(&publications(&[]), &execution())
+                .await
+                .unwrap()
+                .ready
+        );
     }
     let mut changed = persistent.clone();
     if let ValidationRequirement::DnsPersist01 { record } = &mut changed {
@@ -608,5 +664,29 @@ async fn retained_material_can_only_skip_confirmation_for_unchanged_persistent_p
         progress: progress(),
         prompt: std::sync::Mutex::new(None),
     };
-    assert!(!solver.ready(&[changed], &execution()).await.unwrap());
+    assert!(
+        !solver
+            .ready(&publications(&[changed]), &execution())
+            .await
+            .unwrap()
+            .ready
+    );
+}
+
+/// Build receipt-free publication fixtures while keeping each test's material explicit.
+pub(crate) fn publications(
+    requirements: &[ValidationRequirement],
+) -> Vec<aster_acme::solver::ChallengePublication> {
+    requirements
+        .iter()
+        .enumerate()
+        .map(
+            |(index, requirement)| aster_acme::solver::ChallengePublication {
+                publication_id: format!("test-publication-{index}"),
+                requirement: requirement.clone(),
+                receipt: None,
+                plan: None,
+            },
+        )
+        .collect()
 }

@@ -88,7 +88,17 @@ pub(super) fn complete(
                 "Specify -d/--domain <DOMAIN> (repeat for SANs), or --resume <CERTIFICATE>.".into(),
             );
         }
-        configuration(method, args.webroot.as_deref(), args.listen_address)?;
+        if method == ValidationMethod::DnsExternal {
+            if args.webroot.is_some() || args.listen_address.is_some() {
+                return Err("DNS external does not use --webroot or --listen-address.".into());
+            }
+            super::validation::external_configuration(args.provider.as_deref())?;
+        } else {
+            if args.provider.is_some() {
+                return Err("--provider is only valid with -c dns_external.".into());
+            }
+            configuration(method, args.webroot.as_deref(), args.listen_address)?;
+        }
         validate_domains(args, method)?;
         return Ok(());
     }
@@ -105,7 +115,8 @@ pub(super) fn complete(
         .iter()
         .copied()
         .filter(|method| {
-            (args.webroot.is_none() || *method == ValidationMethod::Webroot)
+            (args.provider.is_none() || *method == ValidationMethod::DnsExternal)
+                && (args.webroot.is_none() || *method == ValidationMethod::Webroot)
                 && (args.listen_address.is_none()
                     || matches!(
                         method,
@@ -123,19 +134,31 @@ pub(super) fn complete(
     }
     let method = args.challenge.ok_or("Missing validation method.")?;
     validate_domains(args, method)?;
+    if method == ValidationMethod::DnsExternal && args.provider.is_none() {
+        args.provider = Some(prompts.text("DNS provider profile:", None)?);
+    }
+    if method == ValidationMethod::DnsExternal {
+        super::validation::external_configuration(args.provider.as_deref())?;
+    } else if args.provider.is_some() {
+        return Err("--provider is only valid with -c dns_external.".into());
+    }
     // Reject conflicting explicit options before asking for unrelated missing input.
     if args.webroot.is_some() || args.listen_address.is_some() {
         configuration(method, args.webroot.as_deref(), args.listen_address)?;
     }
     complete_method(args, method, prompts)?;
-    configuration(method, args.webroot.as_deref(), args.listen_address)?;
+    if method == ValidationMethod::DnsExternal {
+        super::validation::external_configuration(args.provider.as_deref())?;
+    } else {
+        configuration(method, args.webroot.as_deref(), args.listen_address)?;
+    }
     Ok(())
 }
 
 fn validate_domains(args: &IssueArgs, method: ValidationMethod) -> CliResult<()> {
     if args.domain.iter().any(DnsIdentifier::is_wildcard) && !method.kind().supports_wildcards() {
         return Err(
-            "Wildcard domains require DNS-01 or DNS-PERSIST-01; choose manual_dns or dns_persist."
+            "Wildcard domains require DNS-01 or DNS-PERSIST-01; choose manual_dns, dns_external or dns_persist."
                 .into(),
         );
     }
@@ -180,6 +203,7 @@ fn complete_method(
         }
         ValidationMethod::ManualDns
         | ValidationMethod::DnsPersist
+        | ValidationMethod::DnsExternal
         | ValidationMethod::ManualHttp
         | ValidationMethod::Webroot
         | ValidationMethod::Standalone

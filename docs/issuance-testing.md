@@ -257,3 +257,18 @@ CLI/文件集成回归使用生产preparation事务和真实journal：删除整�
 回归测试注入相同配置错误，验证共享初始化入口保留底层source且不继续build，构造阶段错误与配置读取分开；CAA报告每个SAN保留相同原因，未广告caaIdentities是独立原因；Runner保留配置错误并继续其他输入。CLI验证警告包含阶段/具体原因，普通失败仍允许CA验证，取消/整体期限返回中断，人类输出转义换行/ANSI，JSON模式不输出人类诊断。原有TXT与CAA loopback查询测试保持通过；无公网订单、DNS写入或吊销操作。
 
 最终本地验证：全workspace测试721项通过、0失败、10个专用fixture按原配置忽略；严格Clippy、独立feature矩阵、rustdoc、fmt、文档/import/dependency/TLS策略和11项Python单测通过。未升级Hickory，根Cargo.toml/Cargo.lock未变；未重新申请或吊销公网证书。
+
+
+## ADPP 外部 DNS 自动发布本地验收（2026-11-14）
+
+范围：基于 `244c40b` 的本轮未提交工作区，macOS / Darwin 27.0.0 arm64。本记录证明本地实现与受控mock/loopback行为，不代表该HEAD本身已经包含改动，也不是公网DNS/CA或其他原生平台验收。
+
+- `cargo test --workspace --locked`：主单元测试套件合计 **757 passed、0 failed、10 ignored**。统计排除主测试内部再次启动的子fixture结果，避免重复计数。另有两个harness-free真实子进程契约可执行测试通过，分别覆盖ADPP与公共进程runner。
+- 新增覆盖：冻结CNAME路由、恰好8跳/超深/循环/zone标签边界、传播取消与期限、同owner多TXT与分片；ADPP关联ID/action/逐记录集合、必填字段/重复键/错误码/回执长度与TTL/批次数上界、部分失败和自定义值直接回显脱敏；并校验RFC全部7个JSON示例与wire类型一致。
+- 真实本地进程覆盖：不继承ENV、并行排空stdout/stderr、超量输出、非UTF-8字节捕获、完整stdin与断管、启动失败、启动前/启动后取消、期限、非零退出。现有reload回归继续验证本地Unix进程组、继承pipe的后代终止与流式UTF-8处理；Windows Job Object沿用原机制，但本轮没有Windows原生运行证据。
+- loopback CA覆盖：路由保存失败时零DNS写入；回执保存失败时零ack；provider响应丢失后重用同一publication ID及路由，零重复newOrder/DNS创建；取消传播前保存回执；精确预存TXT保留；清理失败保留已签发证书，离线重试无CA调用；provider限流下限跨resume保留。
+- 可选zone策略与maintenance补充：省略或空allowed_zones默认允许全部合法发布域，非空列表限制最终TXT owner，`--clear-zones`可清除；覆盖跨域CNAME默认放行、显式限制仍拒绝、Profile缺省字段及CLI添加/清除限制。daemon准入回归纳入dns_external，续期后统一部署入口实际发布新一代fullchain/私钥的测试通过。
+- Profile与CLI覆盖：独立私有TOML、敏感Debug与人类/JSON视图、原子失败不抹掉custom、坏版本/名称/zone/路径/尺寸/权限/链接拒绝、registry共享租约与引用事务拒删，以及`registry` Profile名称不与锁载体冲突。`provider --help`已用真实CLI入口核对六个子命令。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked`通过。独立feature矩阵通过；关闭预检的库不引入Hickory，CLI external DNS独立使用resolver。workspace/import/TLS/生产feature策略、11项Python测试、本地文档链接及`git diff HEAD --check`通过。
+
+没有读取或写入真实DNS凭据、修改系统DNS、调用公网provider API、新建staging订单或执行证书吊销。未执行Linux/Windows原生测试，未vendor、patch或升级Hickory。真实provider/域名/CA staging的发布、续期、预存TXT保留、故障恢复和清理仍需分别验收；RFC维持Accepted，不将本地实现状态冒充Implemented验收。

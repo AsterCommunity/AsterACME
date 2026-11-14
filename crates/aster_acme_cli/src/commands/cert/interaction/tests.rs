@@ -56,7 +56,10 @@ fn args(words: &[&str]) -> IssueArgs {
 #[test]
 fn bare_issue_collects_domains_and_each_methods_required_inputs() {
     let root = tempfile::tempdir().unwrap();
-    for method in ValidationMethod::value_variants() {
+    for method in ValidationMethod::value_variants()
+        .iter()
+        .filter(|method| **method != ValidationMethod::DnsExternal)
+    {
         let mut args = args(&[]);
         let mut inputs = Inputs {
             selected: Some(*method),
@@ -70,7 +73,8 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
             ValidationMethod::Standalone | ValidationMethod::TlsAlpn => {
                 inputs.answers.push_back(String::new());
             }
-            ValidationMethod::ManualDns
+            ValidationMethod::DnsExternal
+            | ValidationMethod::ManualDns
             | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp => {}
         }
@@ -92,13 +96,14 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
                 assert_eq!(args.listen_address.unwrap().to_string(), "0.0.0.0:443");
             }
             ValidationMethod::Webroot => assert_eq!(args.webroot.as_deref(), Some(root.path())),
-            ValidationMethod::ManualDns
+            ValidationMethod::DnsExternal
+            | ValidationMethod::ManualDns
             | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp => {
                 assert_eq!(inputs.asked.len(), 1);
             }
         }
-        assert_eq!(inputs.choices.len(), 6);
+        assert_eq!(inputs.choices.len(), 7);
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }
@@ -106,7 +111,10 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
 #[test]
 fn explicit_input_skips_every_prompt_and_resume_never_asks() {
     let root = tempfile::tempdir().unwrap();
-    for method in ValidationMethod::value_variants() {
+    for method in ValidationMethod::value_variants()
+        .iter()
+        .filter(|method| **method != ValidationMethod::DnsExternal)
+    {
         let mut words = vec!["-c", method.id(), "-d", "example.com"];
         if *method == ValidationMethod::Webroot {
             words.extend(["-w", root.path().to_str().unwrap()]);
@@ -138,7 +146,11 @@ fn method_choices_respect_wildcards_and_supplied_configuration() {
     for (words, expected) in [
         (
             vec!["-d", "*.example.com"],
-            vec![ValidationMethod::ManualDns, ValidationMethod::DnsPersist],
+            vec![
+                ValidationMethod::ManualDns,
+                ValidationMethod::DnsPersist,
+                ValidationMethod::DnsExternal,
+            ],
         ),
         (
             vec!["-d", "example.com", "-w", root.path().to_str().unwrap()],

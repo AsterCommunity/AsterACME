@@ -9,6 +9,10 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 | `aster_acme_core` | 账户、订单、授权、challenge、续期和吊销的纯状态决策 | HTTP、文件、运行时、交互 |
 | `aster_acme_protocol` | 具名wire模型、directory与Provider、精确URL、Problem、JWS结构 | HTTP执行、签名、CLI输出DTO |
 | `aster_acme` | ACME编排、JWS签名、transport、证书校验、材料推导、对象安全存储/solver契约、维护周期编排与重试准入策略 | 文件布局、终端、部署进程 |
+| `aster_acme_dns` | DNS发布记录/回执、provider端口、CNAME/传播策略 | 具体resolver、进程、凭据解释和CA推进 |
+| `aster_acme_dns_adpp` | ADPP wire、外部provider适配、响应校验和错误分类 | 终端、文件布局、ACME推进 |
+| `aster_acme_dns_resolver` | Hickory系统查询adapter，保留初始化/查询原因 | vendor/修补依赖、公共DNS回退、DNS写入 |
+| `aster_acme_process` | 进程组/Job Object、stdin、有界输出、取消/期限和退出观察 | reload/ADPP业务重试与错误策略 |
 | `aster_acme_validation` | 验证方法实现，目前DNS可见性检查 | ACME协议推进、CLI选择 |
 | `aster_acme_cli_storage` | 账户/证书文件、查询、租约、恢复、部署文件发布 | CLI配置schema、CA请求、reload进程 |
 | `aster_acme_cli` | 参数/配置、交互、solver适配、维护任务执行器、报告、reload | 重新实现协议状态机、维护候选筛选或重试准入 |
@@ -36,7 +40,7 @@ CLI app / dispatch
 
 已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户／证书私钥签名吊销和多目标文件部署/reload。
 
-`daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。自动DNS provider尚未实现；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
+`daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。外部DNS provider经`dns_external`接入，Profile与操作见[DNS Provider](dns-providers.md)；内置厂商adapter尚未提供，真实DNS/CA验收另行进行；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 
 ## 详细设计入口
 

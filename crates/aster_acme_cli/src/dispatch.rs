@@ -1,7 +1,7 @@
 //! Root command execution returns one typed report; the session alone writes the final document.
 use crate::{
     app::{Args, Command},
-    commands::{account, cert, daemon},
+    commands::{account, cert, daemon, provider},
     common::{
         context::CommandContext,
         error::CliResult,
@@ -15,6 +15,7 @@ pub(crate) enum CommandReport {
     Certificate(cert::report::CertificateReport),
     Maintenance(daemon::DaemonReport),
     DaemonStopped(daemon::DaemonStopped),
+    Provider(provider::ProviderReport),
     Version,
 }
 impl CommandReport {
@@ -24,13 +25,17 @@ impl CommandReport {
             Self::Certificate(report) => cert::render::render(report, format),
             Self::Maintenance(report) => daemon::render::render(report, format),
             Self::DaemonStopped(report) => daemon::render::render_stopped(report, format),
+            Self::Provider(report) => provider::render(report, format),
             Self::Version => crate::commands::build_info::render(format.json),
         }
     }
     pub(crate) fn exit_status(&self) -> ExitStatus {
         match self {
+            Self::Provider(report) if report.has_failures() => ExitStatus::Failed,
             Self::Account(report) if report.has_failures() => ExitStatus::Failed,
-            Self::Account(_) | Self::DaemonStopped(_) | Self::Version => ExitStatus::Success,
+            Self::Account(_) | Self::DaemonStopped(_) | Self::Provider(_) | Self::Version => {
+                ExitStatus::Success
+            }
             Self::Certificate(report) => report.exit_status(),
             Self::Maintenance(report) => daemon::exit_status(report),
         }
@@ -57,6 +62,9 @@ pub(crate) async fn execute(args: Args, cli: &CommandContext) -> CliResult<Comma
             account::execute::execute(command, cli).await?,
         ))),
         Command::Version { .. } => Ok(CommandReport::Version),
+        Command::Provider { command } => Ok(CommandReport::Provider(
+            provider::execute(command, cli).await?,
+        )),
         Command::Daemon { command } => match daemon::execute(command, cli).await? {
             daemon::DaemonExecution::Cycle(report) => Ok(CommandReport::Maintenance(report)),
             daemon::DaemonExecution::Stopped(report) => Ok(CommandReport::DaemonStopped(report)),

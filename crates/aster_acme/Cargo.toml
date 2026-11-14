@@ -24,6 +24,7 @@ time.workspace = true
 aster_acme_protocol.workspace = true
 aster_forge_utils.workspace = true
 aster_acme_core.workspace = true
+aster_acme_dns.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

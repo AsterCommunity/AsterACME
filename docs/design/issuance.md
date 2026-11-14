@@ -4,7 +4,7 @@
 
 ## 一个状态机，多种发布方式
 
-IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、dns_persist、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
+IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、dns_persist、dns_external、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
 
 四种`ChallengeMaterial`均为具名子模块类型：`dns01::Dns01Record`、`dns_persist::DnsPersistRecord`、`http01::Http01Response`和`tls_alpn01::TlsAlpn01Response`；各模块拥有材料定义、派生和方法约束，公共`KeyAuthorization`只拥有token与账户绑定及共享摘要。DNS Persist的`issuer`与`account_uri`子模块分别拥有issuer集合规则和哈希URI规则，记录本身拥有TXT格式及复用范围。
 
@@ -65,3 +65,13 @@ listener统一TCP绑定、最多64条连接、每连接5秒期限、任务回收
 TLS-ALPN默认0.0.0.0:443，复用rustls/AWS-LC与同一listener。每DNS标识符独立P-256挑战证书，单一SAN、critical acmeIdentifier（DER OCTET STRING中的32字节摘要）；仅SNI匹配且客户端提供acme-tls/1时选择，不复用证书私钥，不支持通配符/IP。
 
 restore只重建临时响应服务，不重发ack；run每个返回路径await有界shutdown。宿主直接丢弃future时仍须关闭或丢弃solver，Drop负责兜底。公网端口、A/AAAA、Host/SNI转发由用户负责，不自动提权或停其他服务。
+
+## 外部 DNS 发布检查点
+
+`issuance::publication`拥有发布计划、逐授权回执、限流下限及终态清理的持久化顺序；`IssueService`不解析provider JSON。`ChallengeSolver`只有一套带`ChallengePublication`的prepare/restore/ready/wait_ready/cleanup契约：prepare只读，返回的最终DNS路由先保存，再允许ready产生副作用。ready逐条返回回执和部分错误，先保存成功回执与provider retry_at，再运行独立wait_ready。外部DNS要求全部回执齐全才允许ack；manual/HTTP/TLS不生成DNS回执。
+
+DNS solver的正常取消由拥有子进程的runner处理，服务不从外层丢弃正在终止/回收子进程的future。HTTP/webroot/manual保持各自的shutdown与worker/终端恢复约束。返回后服务仍检查同一执行期限，CA提交规则不变。
+
+`dns_external`使用命名Profile与ADPP adapter；路由和receipt都不含provider_custom。恢复沿用已保存CNAME目标；响应丢失时只以同一publication_id重试对账。provider原始错误码、无副作用/未知副作用及本地process/protocol错误分开，DNS路由错误保留resolver原因。CNAME与传播的具体策略、Profile存储和独立清理入口见[Provider操作](../dns-providers.md)。
+
+`issuance::publication::cleanup`可在无ACME客户端/账户密钥时重试已确认终态的清理；逐条保存成功结果，保留失败条目。尚无回执但有保存计划时按原ID对账再清理；未知CA结果禁止调用。它不把本地文件删除当DNS清理。

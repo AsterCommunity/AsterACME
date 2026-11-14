@@ -133,6 +133,18 @@ impl CertificateRemoval {
     /// # Errors
     /// Failed cleanup keeps `.removing` to prevent reusing partial material after restart.
     pub async fn remove(self) -> Result<(), IssueError> {
+        if self.records.iter().any(|record| {
+            record.solver_id == "dns_external"
+                && record
+                    .authorizations
+                    .iter()
+                    .any(|auth| auth.cleanup_pending && auth.publication_plan.is_some())
+        }) {
+            return Err(failure(
+                "external DNS cleanup is pending; run provider cleanup before removing its journal",
+            ));
+        }
+
         tokio::task::spawn_blocking(move || {
             let _lease=self.lease;
             if self.records.is_empty() && !self.remove_catalog {return Ok(());}

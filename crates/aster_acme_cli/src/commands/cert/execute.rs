@@ -203,6 +203,12 @@ pub(super) async fn transact(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<super::report::CertificateResult> {
     let progress = Arc::new(Progress::new(cli.output.clone()));
+    let _providers = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        settings.data_dir.clone(),
+        Duration::from_secs(5),
+    )
+    .lease()
+    .await?;
     let context = settings.account(&options).await?;
     let (operation_timeout, _, _) = run.limits(&context.config);
     let cancellation = match &mode {
@@ -470,12 +476,24 @@ impl Foreground<'_> {
         session: &mut dyn IssueSession,
     ) -> CliResult<IssueOutcome> {
         let saved = session.record().await?;
-        let solver = super::validation::adapter(
-            &saved,
-            matches!(self.mode, RunMode::Single(_)) && terminal::interactive(self.options.json),
-            self.args.yes,
-            self.progress.clone(),
-        )?;
+        let solver = if saved.solver_id == "dns_external" {
+            super::validation::external_adapter(
+                &saved,
+                self.context
+                    .config_path
+                    .parent()
+                    .ok_or("Missing provider profile root.")?,
+                self.progress.clone(),
+            )
+            .await?
+        } else {
+            super::validation::adapter(
+                &saved,
+                matches!(self.mode, RunMode::Single(_)) && terminal::interactive(self.options.json),
+                self.args.yes,
+                self.progress.clone(),
+            )?
+        };
         #[cfg(feature = "precheck")]
         let solver = crate::commands::cert::precheck::with_validation(
             solver,
@@ -715,8 +733,11 @@ fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
     let method = args
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
-    let solver_config =
-        super::validation::configuration(method, args.webroot.as_deref(), args.listen_address)?;
+    let solver_config = if method == super::validation::ValidationMethod::DnsExternal {
+        super::validation::external_configuration(args.provider.as_deref())?
+    } else {
+        super::validation::configuration(method, args.webroot.as_deref(), args.listen_address)?
+    };
     let identifiers = args.domain.clone();
     let primary = identifiers
         .first()
@@ -827,6 +848,110 @@ async fn allocate_certificate(
 #[cfg(test)]
 mod tests {
     use crate::commands::cert::execute::*;
+
+    #[tokio::test]
+    async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
+        use aster_acme_cli_storage::issuance::{
+            DeploymentDefinition, DeploymentPermissions, DeploymentTarget,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(2));
+        let account = allocation_account();
+        let request = IssueRequest {
+            name: CertificateName::new("dns-cert").unwrap(),
+            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            account_name: "default".into(),
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            challenge: aster_acme::challenge::ChallengeKind::Dns01,
+            solver_id: "dns_external".into(),
+            solver_config: crate::commands::cert::validation::external_configuration(Some("prod"))
+                .unwrap(),
+        };
+        let target = temp.path().join("published");
+        std::fs::create_dir(&target).unwrap();
+        let mut predecessor: Option<String> = None;
+        for renewal in [false, true] {
+            let session = if renewal {
+                store.renew(&request.name, &account).await.unwrap()
+            } else {
+                store.create(&request, &account).await.unwrap()
+            };
+            let mut record = session.record().await.unwrap();
+            if renewal {
+                assert_eq!(
+                    record.renewal_of.as_ref().unwrap().operation_id,
+                    predecessor.as_ref().unwrap().as_str()
+                );
+            }
+            let generation = temp
+                .path()
+                .join("certs/dns-cert")
+                .join(record.generation_name());
+            let key = rcgen::KeyPair::try_from(
+                std::fs::read(generation.join("private-key.pk8"))
+                    .unwrap()
+                    .as_slice(),
+            )
+            .unwrap();
+            let certificate = rcgen::CertificateParams::new(vec!["example.com".into()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap()
+                .pem();
+            record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+            let record = session
+                .complete(&record, certificate.as_bytes())
+                .await
+                .unwrap();
+            drop(session);
+            if renewal {
+                let result = attach_deployment_results(
+                    IssueOutcome::Completed {
+                        record: Box::new(record),
+                        cleanup: Vec::new(),
+                    },
+                    &store,
+                    &ExecutionContext {
+                        cancellation: CancellationToken::new(),
+                        deadline: Instant::now() + Duration::from_secs(10),
+                    },
+                )
+                .await;
+                let super::super::report::CertificateResult::Issued { deployments, .. } = result
+                else {
+                    panic!("renewal did not run configured deployments");
+                };
+                assert_eq!(deployments.len(), 1);
+                assert_eq!(
+                    deployments[0].phase,
+                    aster_acme::deployment::DeploymentPhase::Deployed
+                );
+                assert_eq!(
+                    std::fs::read(target.join("fullchain.pem")).unwrap(),
+                    std::fs::read(generation.join("fullchain.pem")).unwrap()
+                );
+                assert!(target.join("private-key.pem").is_file());
+            } else {
+                predecessor = Some(record.operation_id.clone());
+                store
+                    .add_deployment(
+                        &request.name,
+                        DeploymentDefinition {
+                            name: Some("web".into()),
+                            target: DeploymentTarget::Directory {
+                                path: target.clone(),
+                            },
+                            permissions: DeploymentPermissions::default(),
+                            reload_command: Vec::new(),
+                            timeout_seconds: 30,
+                            max_retries: 0,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    }
 
     #[tokio::test]
     async fn renewal_deadline_enters_backoff_but_user_cancellation_does_not() {

@@ -5,7 +5,6 @@ use crate::{
     crypto::{JwsSigner, key::SoftwareSigningKey, key_algorithm::KeyAlgorithm},
     issuance::{
         IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
-        ValidationRequirement,
         workflow::{Workflow, WorkflowObserver},
     },
     solver::{ChallengeSolver, ExecutionContext},
@@ -63,10 +62,10 @@ impl ChallengeSolver for Solver {
     }
     async fn ready(
         &self,
-        _: &[ValidationRequirement],
+        _: &[crate::solver::ChallengePublication],
         _: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
-        Ok(false)
+    ) -> Result<crate::solver::ReadyResult, IssueError> {
+        Ok(crate::solver::ReadyResult::default())
     }
     async fn shutdown(&self) {
         self.0.fetch_add(1, Ordering::SeqCst);

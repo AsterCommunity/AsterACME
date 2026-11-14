@@ -30,6 +30,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: crate::commands::daemon::DaemonCommand,
     },
+    /// Manage DNS provider profiles.
+    Provider {
+        #[command(subcommand)]
+        command: crate::commands::provider::ProviderCommand,
+    },
     /// Show version, revision, target, profile, enabled features and build time.
     Version {
         /// Structured JSON build metadata.
@@ -55,6 +60,7 @@ impl Args {
                 crate::commands::daemon::DaemonCommand::Run { options, .. } => options.local.json,
             },
             Command::Account { command } => command.json(),
+            Command::Provider { command } => command.local().json,
         }
     }
 }

@@ -27,7 +27,7 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. Automated DNS providers are not implemented.
+**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. External DNS-01 automation is available through an ADPP executable; built-in DNS vendor adapters and public-CA/DNS acceptance remain separate.
 
 ## Capabilities
 
@@ -39,7 +39,7 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 | Validation | Implementation |
 | --- | --- |
-| DNS-01 | `manual_dns`: publish TXT records yourself; supports wildcards |
+| DNS-01 | `dns_external --provider NAME`: ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
 | DNS-PERSIST-01 (draft -02) | `dns_persist`: provision persistent TXT records manually, then reuse them for renewal; supports wildcards |
 | HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
 | TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
@@ -72,7 +72,7 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, `tls_alpn`, or already provisioned `dns_persist`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
+`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, `tls_alpn`, `dns_external`, or already provisioned `dns_persist`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
 
 The resident daemon holds an exclusive lock for its data directory. Set `daemon_interval = 60` in `config.toml` or override it with `daemon run --interval 60`. Human logs use the same timestamped levels as issuance; `--json` streams one JSON object per line.
 
@@ -111,3 +111,5 @@ State is stored in the platform directory for `com.astercosm.acme`; use `--data-
 ## License
 
 [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Contributions are dual-licensed under the same terms unless explicitly stated otherwise.
+
+External DNS profile setup, sensitive custom values, CNAME delegation, propagation, and cleanup: [DNS providers](docs/dns-providers.md).

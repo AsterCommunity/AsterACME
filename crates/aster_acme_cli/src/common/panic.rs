@@ -158,6 +158,7 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
     };
     let explicit = match &args.command {
         Command::Version { .. } => return Ok(None),
+        Command::Provider { command } => &command.local().data_dir,
         Command::Daemon { command } => match command {
             crate::commands::daemon::DaemonCommand::RunOnce(args) => &args.local.data_dir,
             crate::commands::daemon::DaemonCommand::Run { options, .. } => &options.local.data_dir,

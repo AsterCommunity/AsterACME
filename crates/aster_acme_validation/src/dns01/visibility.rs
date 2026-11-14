@@ -1,6 +1,6 @@
 //! Hickory-based DNS TXT visibility checks without publication or deletion.
 
-use aster_acme::solver::ChallengeSolver;
+use aster_acme::solver::{ChallengePublication, ChallengeSolver, ReadyResult};
 use aster_acme::{
     issuance::{IssueError, ValidationRequirement},
     solver::ExecutionContext,
@@ -18,13 +18,14 @@ impl ChallengeSolver for DnsVisibility {
     }
     async fn ready(
         &self,
-        records: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<ReadyResult, IssueError> {
         execution.check().map_err(|_| IssueError::Interrupted)?;
         let resolver = crate::resolver::system()
             .map_err(|error| IssueError::Publication(error.to_string()))?;
-        for requirement in records {
+        for publication in publications {
+            let requirement = &publication.requirement;
             let ValidationRequirement::Dns01 { name, value } = requirement else {
                 return Err(IssueError::InvalidInput(
                     "DNS visibility received another validation method",
@@ -36,10 +37,13 @@ impl ChallengeSolver for DnsVisibility {
                 result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::Interrupted)?,
             };
             if !observe_lookup(lookup, value)? {
-                return Ok(false);
+                return Ok(ReadyResult::default());
             }
         }
-        Ok(true)
+        Ok(ReadyResult {
+            ready: true,
+            ..ReadyResult::default()
+        })
     }
 }
 

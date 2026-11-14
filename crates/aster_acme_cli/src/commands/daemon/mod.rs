@@ -32,7 +32,7 @@ Scheduling (cron example, every 15 minutes):
   */15 * * * * /absolute/path/to/aster-acme daemon run-once --data-dir /absolute/path/to/state
 
 Use absolute paths and the same --data-dir as issue/renew. Quote paths containing spaces.
-Refreshes ARI advice, renews due webroot/standalone/tls_alpn certificates, retries due known deployment failures, and runs configured deployments. Manual validation is skipped. Uncertain ACME submissions and reloads are never replayed automatically. Commands do not install cron jobs or system services.";
+Refreshes ARI advice, renews due webroot/standalone/tls_alpn/dns_persist/dns_external certificates, retries due known deployment failures, and runs configured deployments. Manual validation is skipped. Uncertain ACME submissions and reloads are never replayed automatically. Commands do not install cron jobs or system services.";
 
 #[derive(clap::Subcommand)]
 #[command(after_help = SCHEDULING_HELP)]

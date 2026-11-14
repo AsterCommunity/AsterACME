@@ -33,6 +33,6 @@ python3 scripts/check-precheck-features.py
 
 以上是带日期的验收记录，旧结果不证明当前checkout。新增测试结论注明revision/命令、平台、本地mock或外部系统边界；契约变化更新owner文档，不把每轮日志追加到架构。
 
-预检feature矩阵独立按包构建，避免workspace feature合并隐藏缺失依赖：库默认关闭、仅runner、HTTP、DNS solver、CAA、TXT，以及CLI关闭预检均检查。脚本还验证关闭预检的生产依赖图不包含Hickory；Linux专用CI执行该矩阵，其他平台仍运行默认完整产品测试。
+预检feature矩阵独立按包构建，避免workspace feature合并隐藏缺失依赖：库默认关闭、仅runner、HTTP、DNS solver、CAA、TXT，以及CLI关闭预检均检查。脚本还验证关闭预检的库生产依赖图不包含Hickory；CLI的external DNS发布仍通过独立resolver crate使用Hickory，不受建议性precheck开关影响；Linux专用CI执行该矩阵，其他平台仍运行默认完整产品测试。
 
 Unix原生确认终端回归：`python3 scripts/test-confirmation-terminal.py` 在PTY中验证提示/输入同一行、inquire可见答案、替换/退格、默认否，以及Esc/Ctrl-C/输入后期限校验和完整termios恢复。Linux/macOS CI执行；Windows保留原生编译和普通测试。

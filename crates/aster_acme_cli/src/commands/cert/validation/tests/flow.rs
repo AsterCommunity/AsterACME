@@ -26,6 +26,7 @@ use wiremock::{
     matchers::{method, path},
 };
 
+mod dns_external;
 mod dns_persist;
 
 const TOKEN: &str = "opaque-HTTP-token-with-enough-entropy";
@@ -98,24 +99,28 @@ impl Fixture {
             account_name: "default".into(),
             challenge: implementation.kind(),
             solver_id: implementation.id().into(),
-            solver_config: configuration(
-                implementation,
-                if implementation == ValidationMethod::Webroot {
-                    Some(root.as_path())
-                } else {
-                    None
-                },
-                if matches!(
+            solver_config: if implementation == ValidationMethod::DnsExternal {
+                external_configuration(Some("test-provider")).unwrap()
+            } else {
+                configuration(
                     implementation,
-                    ValidationMethod::Standalone | ValidationMethod::TlsAlpn
-                ) {
-                    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                    Some(reservation.local_addr().unwrap())
-                } else {
-                    None
-                },
-            )
-            .unwrap(),
+                    if implementation == ValidationMethod::Webroot {
+                        Some(root.as_path())
+                    } else {
+                        None
+                    },
+                    if matches!(
+                        implementation,
+                        ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+                    ) {
+                        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                        Some(reservation.local_addr().unwrap())
+                    } else {
+                        None
+                    },
+                )
+                .unwrap()
+            },
         };
         let session = store.create(&request, &account).await.unwrap();
         let record = session.record().await.unwrap();
@@ -233,6 +238,7 @@ impl Fixture {
         let (challenge_kind, challenge_path) = match implementation {
             ValidationMethod::TlsAlpn => ("tls-alpn-01", "/tls-challenge"),
             ValidationMethod::DnsPersist => ("dns-persist-01", "/persist-challenge"),
+            ValidationMethod::DnsExternal => ("dns-01", "/dns-challenge"),
             ValidationMethod::ManualDns
             | ValidationMethod::ManualHttp
             | ValidationMethod::Webroot
@@ -935,9 +941,9 @@ impl ChallengeSolver for CancelAfterPublication {
 
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        requirements: &[aster_acme::solver::ChallengePublication],
         context: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
         let ready = self.0.ready(requirements, context).await?;
         context.cancellation.cancel();
         Ok(ready)

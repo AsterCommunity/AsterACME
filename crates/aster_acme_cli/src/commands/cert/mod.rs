@@ -13,4 +13,4 @@ pub(crate) mod report;
 mod revocation;
 mod selection;
 mod similar;
-mod validation;
+pub(crate) mod validation;

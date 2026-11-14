@@ -72,6 +72,9 @@ pub(super) fn prepare(
                 }
                 auth.challenge_url = Some(challenge.url.clone());
                 auth.validation_requirement = Some(requirement.clone());
+                if auth.publication_id.is_none() {
+                    auth.publication_id = Some(publication_id(&record.operation_id, &auth.url));
+                }
                 auth.cleanup_pending =
                     requirement.kind().publication_lifetime() == PublicationLifetime::Temporary;
                 match &challenge.status {
@@ -96,6 +99,13 @@ pub(super) fn prepare(
     }
 
     Ok(outstanding)
+}
+
+fn publication_id(operation_id: &str, authorization_url: &AcmeUrl) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sha2::{Digest as _, Sha256};
+    let input = format!("{operation_id}\0{}", authorization_url.as_str());
+    URL_SAFE_NO_PAD.encode(Sha256::digest(input.as_bytes()))
 }
 
 /// Immutable protocol inputs shared by every authorization in this order.

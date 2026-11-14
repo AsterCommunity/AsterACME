@@ -391,24 +391,24 @@ impl ChallengeSolver for PublicationLifecycle {
     }
     async fn restore(
         &self,
-        requirements: &[ValidationRequirement],
+        requirements: &[aster_acme::solver::ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<(), IssueError> {
+    ) -> Result<aster_acme::solver::RestoreResult, IssueError> {
         self.restored.fetch_add(1, Ordering::SeqCst);
         self.inner.restore(requirements, execution).await
     }
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        requirements: &[aster_acme::solver::ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
         self.inner.ready(requirements, execution).await
     }
     async fn cleanup(
         &self,
-        requirements: &[ValidationRequirement],
+        requirements: &[aster_acme::solver::ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
+    ) -> Result<aster_acme::solver::CleanupResult, IssueError> {
         self.cleaned.fetch_add(1, Ordering::SeqCst);
         self.inner.cleanup(requirements, execution).await
     }

@@ -112,13 +112,15 @@ CLI 使用 `cert issue -c dns_persist`，首次人工发布并确认，后续 `r
 ### DNS-01 自动化
 
 - `_acme-challenge` TXT 内容来自 key authorization 的 SHA-256 摘要及 base64url 编码，遵守 RFC 8555 §8.4。
-- 处理 zone 发现及 DNS 委托；不要假定最后两个域名标签就是 zone，也不要盲目写入未经配置允许的 CNAME 目标。
+- 处理 zone 发现及 DNS 委托；不要假定最后两个域名标签就是 zone。CNAME须检查语法、环与深度；默认允许任意合法发布目标，配置了非空allowed_zones时按完整DNS标签限制最终TXT owner。
 - 同名 TXT 值允许并存，裸域名与通配符可能同时使用同一 challenge 名称。
 - 记录创建结果和所有权；清理仅删除本次创建的记录，不能清空整个 TXT RRset，也不能删除预先存在的共享记录。
 - 检查预期 TXT 值而非答案一致率；考虑权威 DNS、递归缓存、负缓存、超时和取消。
 - 本地传播检查通过不代表 CA 验证成功；以授权与订单状态作为签发进度依据。
 
 ## 6. DNS provider 复用来源
+
+外部命令接口草案：[RFC 0001：AsterACME DNS Provider Protocol (ADPP)](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)。该RFC已接受；实现、测试和真实DNS/CA互操作证据仍分别记录。
 
 参考 [AptS-1547/dns-orchestrator](https://github.com/AptS-1547/dns-orchestrator) 中独立的 `dns-orchestrator-provider` crate。调查时本地 manifest 为 0.1.2、MIT，支持 Cloudflare、阿里云、DNSPod 和华为云，并提供记录查询、创建、删除等接口。
 
@@ -174,14 +176,14 @@ CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取
 | 账户 | 注册、找回、EAB、联系人更新、查看、停用及跨算法换钥 | HSM/外部签名器具体适配由嵌入者提供 |
 | 订单/授权/签发 | newOrder、挑战选择/材料/ack/轮询、固定CSR finalize、下载及终态错误；取消与不确定提交可恢复 | 可选预授权/newAuthz、授权停用没有独立产品入口 |
 | HTTP/TLS验证 | HTTP-01人工/webroot/standalone，TLS-ALPN-01 standalone | 各部署环境的公网80/443与真实CA验收仍独立 |
-| DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | DNS provider自动写入、zone/委托路由、创建对账及所有权清理仍排期；DNS Persist尚无真实CA签发验收 |
+| DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | ADPP external provider、受限CNAME路由、创建对账和所有权清理已接入；内置厂商adapter、各provider真实DNS/CA验收及DNS Persist真实CA签发验收仍待补齐 |
 | 标识符/证书材料 | DNS/IDN、SAN、通配符、多种密钥、CSR/私钥固定、SAN/公钥/有效期/相邻链签名检查 | IP标识符、外部CSR及候选证书链选择未实现；相邻签名检查不是系统信任路径验证 |
-| 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | DNS-01无人值守续期仍依赖排期中的provider；人工方式不自动猜测已发布 |
+| 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | dns_external可无人值守续期；真实provider凭据/权限/传播验收仍独立，人工方式不猜测已发布 |
 | 吊销 | 账户kid／证书私钥jwk签名、原因代码、alreadyRevoked及精确目标/不确定结果保存 | CLI目前管理已托管证书；库支持外部target/session，任意文件导入和其他已获全部标识符授权的账户选择入口尚未提供 |
 | 文件和部署 | 私有状态、跨进程租约、多世代与in_use、多目标发布、自动部署/reload与结果记录 | 不承诺整组原子替换或服务健康；真实断电及服务更新需另验 |
 | 扩展与运维成熟度 | 本表已列RFC8737、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | Profiles、STAR、IP、S/MIME等未普遍实现；Pebble、公网CA和各原生平台验收分别报告 |
 
-按“常规域名证书客户端”的功能目标作工程估算，当前约 **85%–90%**：主协议、账户、签发/恢复、续期/常驻维护、吊销和部署链路已经形成，最明显的主流缺口是DNS provider自动化；候选链选择等属于后续补齐。这个区间没有按RFC章节或测试数量机械计分，也不意味着整个ACME扩展家族已完成相同比例。生产可用性应逐项看真实CA、真实DNS与部署证据，不另造一个看似精确的“生产完成百分比”。
+按“常规域名证书客户端”的功能目标作工程估算，当前约 **85%–90%**：主协议、账户、签发/恢复、续期/常驻维护、吊销和部署链路已经形成，ADPP external DNS已补充自动发布入口；内置DNS厂商adapter、候选链选择等仍待补齐。这个区间没有按RFC章节或测试数量机械计分，也不意味着整个ACME扩展家族已完成相同比例。生产可用性应逐项看真实CA、真实DNS与部署证据，不另造一个看似精确的“生产完成百分比”。
 
 
 ## 9. 证书私钥吊销原文核对（2026-11-14）

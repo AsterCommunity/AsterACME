@@ -479,3 +479,43 @@ impl CliIssueStore {
 
 #[cfg(test)]
 mod tests;
+
+/// Inspect immutable certificate definitions while the provider registry is exclusively locked.
+pub(crate) fn provider_referenced(root: &Path, provider: &str) -> std::io::Result<bool> {
+    let directory = root.join("certs");
+    if !directory.exists() {
+        return Ok(false);
+    }
+    crate::state_file::ensure_directory(&directory)?;
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if CertificateName::new(name).is_err() {
+            continue;
+        }
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let slot = entry.path();
+        let path = slot.join("cert.toml");
+        if !path.try_exists()? {
+            continue;
+        }
+        let config = selection(&slot)
+            .map_err(|_| std::io::Error::other("cannot verify certificate provider references"))?;
+        if config.cert.solver_id == "dns_external"
+            && config
+                .cert
+                .solver_config
+                .get("provider_instance_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(provider)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

@@ -2,8 +2,12 @@
 use crate::commands::cert::progress::Progress;
 use crate::common::output::MessageKind;
 use aster_acme::precheck::{Runner, http::Http};
-use aster_acme::{challenge::ChallengeKind, issuance::IssueError, solver::ChallengeSolver};
-use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext, transport::HttpPool};
+use aster_acme::{
+    challenge::ChallengeKind,
+    issuance::IssueError,
+    solver::{ChallengePublication, ChallengeSolver, CleanupResult, ReadyResult, RestoreResult},
+};
+use aster_acme::{solver::ExecutionContext, transport::HttpPool};
 use async_trait::async_trait;
 use std::sync::Arc;
 #[cfg(test)]
@@ -23,48 +27,70 @@ impl ChallengeSolver for Checked {
     }
     async fn restore(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<(), IssueError> {
-        self.inner.restore(requirements, execution).await
+    ) -> Result<RestoreResult, IssueError> {
+        self.inner.restore(publications, execution).await
     }
     async fn shutdown(&self) {
         self.inner.shutdown().await;
     }
+    fn requires_receipt(&self) -> bool {
+        self.inner.requires_receipt()
+    }
+    async fn prepare(
+        &self,
+        publications: &[ChallengePublication],
+        execution: &ExecutionContext,
+    ) -> Result<Vec<aster_acme::solver::PublicationPlanUpdate>, IssueError> {
+        self.inner.prepare(publications, execution).await
+    }
     async fn ready(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
-        if !self.inner.ready(requirements, execution).await? {
-            return Ok(false);
-        }
+    ) -> Result<ReadyResult, IssueError> {
+        self.inner.ready(publications, execution).await
+    }
+    async fn wait_ready(
+        &self,
+        publications: &[ChallengePublication],
+        execution: &ExecutionContext,
+    ) -> Result<(), IssueError> {
+        self.inner.wait_ready(publications, execution).await?;
         execution.check().map_err(|_| IssueError::Interrupted)?;
+        let requirements = publications
+            .iter()
+            .map(|publication| publication.requirement.clone())
+            .collect::<Vec<_>>();
         match self.kind() {
             ChallengeKind::Dns01 | ChallengeKind::DnsPersist01 => {
-                crate::commands::cert::precheck::dns::run(requirements, execution, &self.progress)
+                if !self.requires_receipt() {
+                    crate::commands::cert::precheck::dns::run(
+                        &requirements,
+                        execution,
+                        &self.progress,
+                    )
                     .await?;
-                return Ok(true);
+                }
+                return Ok(());
             }
-            ChallengeKind::TlsAlpn01 => return Ok(true),
+            ChallengeKind::TlsAlpn01 => return Ok(()),
             ChallengeKind::Http01 => {}
         }
         self.progress.output.progress(
             MessageKind::Info,
-            &format!(
-                "Checking public HTTP challenge files (advisory, up to {} seconds)",
-                Runner::default().timeout().as_secs()
-            ),
+            "Checking public HTTP challenge files (advisory, up to 5 seconds)",
         );
         let report = Runner::default()
-            .run(&Http::new(&self.pool), requirements, execution)
+            .run(&Http::new(&self.pool), &requirements, execution)
             .await
             .map_err(|_| IssueError::Interrupted)?;
-        let matches = report
+        if report
             .observations
             .iter()
-            .all(|observation| matches!(observation.result, Ok(true)));
-        if matches {
+            .all(|observation| matches!(observation.result, Ok(true)))
+        {
             self.progress.output.progress(
                 MessageKind::Success,
                 "HTTP files match locally; the CA will independently verify public access",
@@ -72,20 +98,22 @@ impl ChallengeSolver for Checked {
         } else {
             self.progress.output.progress(MessageKind::Warning, "HTTP files could not be confirmed locally (content, network or redirect); continuing to CA validation");
         }
-        Ok(true)
+        Ok(())
     }
     async fn cleanup(
         &self,
-        requirements: &[ValidationRequirement],
+        publications: &[ChallengePublication],
         execution: &ExecutionContext,
-    ) -> Result<bool, IssueError> {
-        self.inner.cleanup(requirements, execution).await
+    ) -> Result<CleanupResult, IssueError> {
+        self.inner.cleanup(publications, execution).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::commands::cert::precheck::validation::*;
+    use crate::commands::cert::validation::tests::publications;
+    use aster_acme::issuance::ValidationRequirement;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -99,17 +127,13 @@ mod tests {
         }
         async fn ready(
             &self,
-            _: &[ValidationRequirement],
+            _: &[aster_acme::solver::ChallengePublication],
             _: &ExecutionContext,
-        ) -> Result<bool, IssueError> {
-            Ok(true)
-        }
-        async fn cleanup(
-            &self,
-            _: &[ValidationRequirement],
-            _: &ExecutionContext,
-        ) -> Result<bool, IssueError> {
-            Ok(true)
+        ) -> Result<aster_acme::solver::ReadyResult, IssueError> {
+            Ok(aster_acme::solver::ReadyResult {
+                ready: true,
+                ..Default::default()
+            })
         }
     }
 
@@ -141,7 +165,10 @@ mod tests {
             path: "/challenge".into(),
             content: "token.thumb".into(),
         }];
-        assert!(checked.ready(&requirements, &context).await.unwrap());
+        checked
+            .wait_ready(&publications(&requirements), &context)
+            .await
+            .unwrap();
         assert_eq!(Runner::default().timeout(), Duration::from_secs(5));
         assert!(diagnostics.text().contains("up to 5 seconds"));
         assert!(diagnostics.text().contains("HTTP files match locally"));
@@ -171,7 +198,7 @@ mod tests {
                 context.cancellation.cancel();
             }
             assert!(matches!(
-                checked.ready(&[], &context).await,
+                checked.wait_ready(&publications(&[]), &context).await,
                 Err(IssueError::Interrupted)
             ));
         }
@@ -206,9 +233,11 @@ mod tests {
                 deadline: Instant::now() + operation_budget,
             };
             let started = Instant::now();
-            let result = checked.ready(&requirements, &context).await;
+            let result = checked
+                .wait_ready(&publications(&requirements), &context)
+                .await;
             if operation_budget > Runner::default().timeout() {
-                assert!(result.unwrap());
+                result.unwrap();
                 assert!(started.elapsed() >= Runner::default().timeout());
                 assert!(started.elapsed() < Duration::from_secs(8));
                 assert!(diagnostics.text().contains("could not be confirmed"));
