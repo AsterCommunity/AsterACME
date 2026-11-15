@@ -222,18 +222,19 @@ fn platform_snapshot() -> String {
     for (label, entry) in &mut expected {
         let output = entry["output"].as_str().unwrap();
         let mut output = output.to_owned();
-        let root = "/data/certs/example.com/in_use";
-        let native = std::path::Path::new("/data")
-            .join("certs")
-            .join("example.com")
-            .join("in_use")
-            .to_string_lossy()
-            .into_owned();
-        output = output.replace(root, &native);
         for file in ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pem"] {
-            let original = format!("/certificates/{file}");
-            let native = std::path::Path::new("/certificates").join(file);
-            output = output.replace(&original, &native.display().to_string());
+            for root in ["/data/certs/example.com/in_use", "/certificates"] {
+                let original = format!("{root}/{file}");
+                let native = std::path::Path::new(root).join(file);
+                if label.ends_with("/json") {
+                    output = output.replace(
+                        &serde_json::to_string(&original).unwrap(),
+                        &serde_json::to_string(&native).unwrap(),
+                    );
+                } else {
+                    output = output.replace(&original, &native.display().to_string());
+                }
+            }
         }
         if !label.ends_with("/json") {
             output = output
