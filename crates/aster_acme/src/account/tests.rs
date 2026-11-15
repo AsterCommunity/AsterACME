@@ -1,15 +1,15 @@
 //! Account registration, persisted-intent and failure/recovery contract tests.
-use crate::crypto::key_algorithm::KeyAlgorithm;
-use aster_acme_protocol::jws::FlattenedJws;
-mod deactivation;
-mod timestamps;
-mod update;
 use crate::account::*;
+use crate::crypto::JwsSigner;
+use crate::crypto::key_algorithm::KeyAlgorithm;
 use crate::storage::account::AccountLease;
 use crate::{
     crypto::key::SoftwareSigningKey,
     transport::tests::{local_options, server},
 };
+use aster_acme_core::account::KeyRotationPhase;
+use aster_acme_protocol::jws::FlattenedJws;
+use aster_acme_protocol::problem::ProblemKind;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +18,10 @@ use wiremock::{
     Mock, ResponseTemplate,
     matchers::{method, path},
 };
+
+mod deactivation;
+mod timestamps;
+mod update;
 
 #[derive(Default)]
 struct MemoryStore {
@@ -121,7 +125,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
             key_algorithm: KeyAlgorithm::EcdsaP256,
             user_agent: None,
             times: crate::account::AccountTimes::default(),
-            account_id: account_id(&directory, &thumbprint),
+            account_id: AccountRecord::stable_id(&directory, &thumbprint),
             directory_url: directory,
             key_thumbprint: thumbprint,
             account_url: None,
@@ -659,4 +663,13 @@ async fn cancellation_leaves_intent_and_no_retry_and_corrupt_identity_never_post
         Err(AccountError::IdentityMismatch)
     ));
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[test]
+fn stable_account_id_retains_the_existing_directory_key_hash_bytes() {
+    let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+    assert_eq!(
+        AccountRecord::stable_id(&directory, "thumb"),
+        "bIHJHv1zk8CzrEg6s-_hP1oLiy_wdMdUxd8CEf2komo"
+    );
 }

@@ -37,21 +37,14 @@ impl CliIssueStore {
             // same failed invocation twice or overwrite another worker's result.
             if current.operation_id != snapshot.operation_id
                 || current.renewal_retry != snapshot.renewal_retry
-                || !current.deployment_eligible()
-                || current
-                    .renewal
-                    .as_ref()
-                    .is_none_or(|plan| !immediate && plan.renew_at > now)
-                || current.renewal_retry.as_ref().is_some_and(|state| {
-                    state.blocked_reason.is_some()
-                        || state.ca_retry_at.is_some_and(|at| at > now)
-                        || (!immediate && state.retry_at.is_some_and(|at| at > now))
-                })
             {
                 return Ok(None);
             }
-            let state =
-                RenewalRetryState::after_failure(current.renewal_retry.as_ref(), now, None, None);
+            let Some(state) =
+                aster_acme::renewal::admission::preparation_failure(&current, immediate, now)
+            else {
+                return Ok(None);
+            };
             current.renewal_retry = Some(state.clone());
             write_journal(
                 &slot.join(current.generation_name()).join("operation.toml"),

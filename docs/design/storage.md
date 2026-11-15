@@ -36,3 +36,9 @@ Windows状态写入只保证替换完成和进程重启恢复；临时文件先s
 新建账户/证书/锁目录及issuance generation在允许远端副作用前同步父目录项（Windows仍仅有进程恢复保证）。协议metadata保存必须匹配仍存在的初始化账户，不能重建已删除身份。Managed/当前查询若catalog所选generation缺失则报告不一致，不静默隐藏证书。
 
 ARI维护使用`IssueQuery::ari_due_at`和`IssueStore::open_observation`：先裁剪到当前世代并筛选期限，再获取证书锁重验。观察会话复用身份、catalog和journal校验，但不要求加载固定key/CSR；原`open`继续严格验证执行材料。计划写入仍由Session保留IO许可与租约，详情见[生命周期契约](../certificate-lifecycle.md)。
+
+## 续期与部署检查点的条件写入
+
+`aster_acme::renewal::admission` 拥有续期时间、失败退避资格和历史子请求的提交证据判断；generation 适配器仅在租约内加载 catalog／journal、核验 `in_use` 与材料后调用它。准备失败的写入先比较原 operation 和 retry 快照，避免同一失败重复计数或覆盖并发成功；准入不读取私钥。CA Retry-After 与未知结果屏障由库统一解释。
+
+部署文件 schema 保持原字段；`DeploymentBinding::checkpoint` 显式转换为库的 `DeploymentCheckpoint`，库负责 pending-generation、重试和阶段转换。配置、材料会话和条件写入分别归 `deployment/{configuration,session,checkpoint}`，实际逐文件发布仍归 `deployment/publication`。所有检查点写入共用完整绑定快照及实际所选 operation 的比较，重试记账还要求 attempted generation 匹配会话材料；不把旧世代的失败归到新证书。阻塞写任务持续持有租约，取消等待不提前解锁。

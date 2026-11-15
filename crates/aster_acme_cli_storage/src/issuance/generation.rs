@@ -1,7 +1,7 @@
 //! Managed-definition creation, scheduled renewal and restart-safe generation preparation.
 use crate::account::StorageError;
 use crate::issuance::{
-    AccountRecord, Arc, CertificateConfig, CertificateName, CertificateSelection, CliIssueStore,
+    AccountRecord, CertificateConfig, CertificateName, CertificateSelection, CliIssueStore,
     IssuancePhase, IssueError, IssueRecord, IssueRequest, RenewalPreparation, Session,
     SubmissionState, atomic_write, certificate, check_material, failure, fs, material_digest,
     new_operation_id, private_dir, read_generations, selection, write_journal, write_selection,
@@ -43,16 +43,19 @@ impl CliIssueStore {
             let renewal_of = prepare_initialization(&slot, &input, &account)?;
             let request = initialize_definition(&slot, input, &account)?;
             let generations = read_generations(&slot, &request.name)?;
-            if let Some(record) = existing_renewal(&generations, renewal_of.as_ref())? {
+            if let Some(record) = aster_acme::renewal::admission::existing(
+                &generations,
+                renewal_of.as_ref(),
+                time::OffsetDateTime::now_utc(),
+            )? {
                 let generation = slot.join(record.generation_name());
-                check_material(&generation, &record)?;
-                return Ok(RenewalPreparation::Ready(Box::new(Session {
+                check_material(&generation, record)?;
+                return Ok(RenewalPreparation::Ready(Box::new(Session::new(
                     slot,
                     generation,
                     lease,
-                    initial: record,
-                    io: Arc::new(tokio::sync::Mutex::new(())),
-                })));
+                    record.clone(),
+                ))));
             }
             if generations.len() >= 1024 {
                 return Err(failure("certificate generation limit reached"));
@@ -104,13 +107,9 @@ impl CliIssueStore {
             crate::state_file::sync_directory(&slot)
                 .map_err(|_| failure("cannot sync issuance generation parent"))?;
             write_journal(&generation.join("operation.toml"), &record)?;
-            Ok(RenewalPreparation::Ready(Box::new(Session {
-                slot,
-                generation,
-                lease,
-                initial: record,
-                io: Arc::new(tokio::sync::Mutex::new(())),
-            })))
+            Ok(RenewalPreparation::Ready(Box::new(Session::new(
+                slot, generation, lease, record,
+            ))))
         })
         .await
         .map_err(|_| failure("issuance initialization worker failed"))?
@@ -135,7 +134,7 @@ pub(super) fn check_renewal_schedule(
     expected_in_use: &str,
     immediate: bool,
 ) -> Result<Option<IssueRecord>, IssueError> {
-    use aster_acme_core::renewal::{RenewalDecision, renewal_decision};
+    use aster_acme::renewal::admission::RenewalAdmission;
     removal::ensure_idle(slot)?;
     let config = selection(slot)?;
     if config.cert.in_use.as_deref() != Some(expected_in_use) {
@@ -156,56 +155,10 @@ pub(super) fn check_renewal_schedule(
     }
     in_use.is_in_use = true;
     let now = time::OffsetDateTime::now_utc();
-    if retry_not_due(&in_use, immediate, now)? {
-        return Ok(Some(in_use));
+    match aster_acme::renewal::admission::request(&in_use, &records, immediate, now)? {
+        RenewalAdmission::NotDue => Ok(Some(in_use)),
+        RenewalAdmission::Start | RenewalAdmission::Resume => Ok(None),
     }
-    let pending = records.iter().any(|record| {
-        record.resume_candidate()
-            && !record.expired(now)
-            && record
-                .renewal_of
-                .as_ref()
-                .is_some_and(|previous| previous.operation_id == expected_in_use)
-    });
-    let due = in_use
-        .renewal
-        .as_ref()
-        .map(|plan| plan.renew_at)
-        .ok_or_else(|| failure("in_use certificate has no renewal plan"))?;
-    match renewal_decision(
-        pending,
-        in_use.revocation.state,
-        due.unix_timestamp(),
-        now.unix_timestamp(),
-        immediate,
-    ) {
-        RenewalDecision::NotDue => Ok(Some(in_use)),
-        RenewalDecision::Start | RenewalDecision::Resume => Ok(None),
-        RenewalDecision::RevocationUncertain => Err(failure(
-            "certificate revocation is unconfirmed; resolve it before renewing",
-        )),
-    }
-}
-
-fn retry_not_due(
-    record: &IssueRecord,
-    immediate: bool,
-    now: time::OffsetDateTime,
-) -> Result<bool, IssueError> {
-    let Some(retry) = &record.renewal_retry else {
-        return Ok(false);
-    };
-    if let Some(reason) = &retry.blocked_reason {
-        return Err(failure(&format!(
-            "automatic renewal is blocked by an uncertain prior result: {reason}"
-        )));
-    }
-    if retry.ca_retry_at.is_some_and(|retry_at| retry_at > now) {
-        return Err(failure(
-            "CA Retry-After has not elapsed; --now cannot bypass it",
-        ));
-    }
-    Ok(!immediate && retry.retry_at.is_some_and(|retry_at| retry_at > now))
 }
 
 // Validate the live selection under the object lease before key generation.
@@ -248,52 +201,6 @@ fn write_material(
     )
     .map_err(|_| failure("cannot persist key/CSR manifest"))?;
     Ok(())
-}
-
-fn existing_renewal(
-    generations: &[IssueRecord],
-    previous: Option<&aster_acme::issuance::RenewalPredecessor>,
-) -> Result<Option<IssueRecord>, IssueError> {
-    let Some(previous) = previous else {
-        return Ok(None);
-    };
-    let now = time::OffsetDateTime::now_utc();
-    // A crash may precede the retry checkpoint on the predecessor. Remote
-    // submission evidence in the child must still prevent another newOrder.
-    for record in generations
-        .iter()
-        .filter(|record| record.unfinished() && record.renewal_of.as_ref() == Some(previous))
-    {
-        if let Some(response) = &record.finalize_rejection
-            && response.retry_at.is_some_and(|at| at > now)
-        {
-            return Err(response.error());
-        }
-        if let Some(response) = &record.creation_failure {
-            if !(400..500).contains(&response.status) || response.status == 408 {
-                return Err(IssueError::MutationUncertain(
-                    "previous newOrder outcome is unconfirmed",
-                ));
-            }
-            if response.retry_at.is_some_and(|at| at > now) {
-                return Err(response.error());
-            }
-        } else if record.new_order_intent_saved && record.order_url.is_none() {
-            return Err(IssueError::CreationUncertain);
-        }
-    }
-    let mut pending = generations.iter().filter(|record| {
-        record.resume_candidate()
-            && !record.expired(now)
-            && record.renewal_of.as_ref() == Some(previous)
-    });
-    let first = pending.next();
-    if pending.next().is_some() {
-        return Err(failure(
-            "several unfinished renewals match in_use; select an exact operation",
-        ));
-    }
-    Ok(first.cloned())
 }
 
 fn predecessor(

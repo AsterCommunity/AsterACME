@@ -203,6 +203,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme",
  "aster_acme_core",
+ "aster_acme_dns",
  "aster_acme_protocol",
  "aster_forge_utils",
  "async-trait",

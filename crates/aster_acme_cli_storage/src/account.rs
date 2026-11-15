@@ -255,7 +255,7 @@ impl AccountKeyStore for CliAccountStore {
                     let thumbprint = key.jwk().and_then(|jwk| jwk.thumbprint()).map_err(|_| store_error("cannot identify account key"))?;
                     let record = AccountRecord {
             key_algorithm: key.algorithm(),
-            user_agent: None, times: aster_acme::account::AccountTimes::default(),                        account_id: local_account_id(&directory, &thumbprint), directory_url: directory,
+            user_agent: None, times: aster_acme::account::AccountTimes::default(),                        account_id: AccountRecord::stable_id(&directory, &thumbprint), directory_url: directory,
                         key_thumbprint: thumbprint, account_url: None, contacts: Vec::new(),
                         server_contacts: None,
 last_status: None,
@@ -319,14 +319,6 @@ fn write_record(path: &Path, record: &AccountRecord) -> Result<(), AccountStoreE
     }
     toml_file::write_text(path, &text, 256 * 1024)
         .map_err(|_| store_error("cannot persist account metadata"))
-}
-
-fn local_account_id(directory: &AcmeUrl, thumbprint: &str) -> String {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use sha2::{Digest as _, Sha256};
-    URL_SAFE_NO_PAD.encode(Sha256::digest(
-        format!("{}\0{thumbprint}", directory.as_str()).as_bytes(),
-    ))
 }
 
 pub(crate) fn store_error(message: &str) -> AccountStoreError {

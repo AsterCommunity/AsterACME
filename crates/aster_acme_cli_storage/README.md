@@ -121,7 +121,7 @@ Windows 继承目录权限，不管理 ACL。in_use 使用四份完整 PEM 副�
 
 ## 查询与源码所有权
 
-`account.rs` / `account/{rotation,removal}` 拥有账户文件实现；`inventory.rs` 拥有轻量账户查询。`issuance/generation.rs` 拥有生成和续期准备，`issuance/session.rs` 拥有持锁会话与提交，`issuance/query.rs` 拥有证书文件查询，`issuance/deployment.rs` 拥有发布及检查点。上层契约在 `aster_acme::storage`，不做旧导入路径转发。
+`account.rs` / `account/{rotation,removal}` 拥有账户文件实现；`inventory.rs` 拥有轻量账户查询。`issuance/generation.rs` 拥有生成和续期准备，`issuance/session.rs` 拥有持锁会话与提交，`issuance/query.rs` 拥有证书文件查询，`issuance/deployment.rs` 拥有文件 schema 与库检查点的转换，`deployment/{configuration,session,checkpoint,publication}` 分别拥有绑定配置、持锁材料会话、检查点条件写入与文件发布。续期准入及历史子请求选择由 `aster_acme::renewal::admission` 提供；部署准入、状态转换与退避由 `aster_acme::deployment::DeploymentCheckpoint` 提供。存储在对象租约内重新读取并比较完整绑定／前一检查点与实际所选世代，再保存库返回的状态，不维护第二套期限或重试规则。上层契约在 `aster_acme::storage`，不做旧导入路径转发。
 
 `query_accounts(root, AccountQuery)` 返回 `Vec<LocalAccount>`，按 name/directory/state/usable/operation 做 AND 筛选；明确 name 时直接读该账户，列表不加载密钥或查询 CA。`IssueStore::query(IssueQuery)` 返回 `Vec<IssueRecord>`；默认枚举所有版本，支持 name/operation/in_use/phase/unfinished/revocation/resumable/similar。`IssueView::{All,Managed,CurrentOrUnfinished}` 先选择版本，再应用状态谓词。Managed 选 in_use，否则最新未完成，否则最新历史；不会把历史标成当前使用。
 

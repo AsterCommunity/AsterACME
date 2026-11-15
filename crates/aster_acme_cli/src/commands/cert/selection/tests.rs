@@ -1,4 +1,5 @@
 //! Recovery ambiguity and primary-domain command contracts.
+
 use crate::app::Args;
 use clap::Parser;
 
@@ -129,11 +130,11 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
         )
         .is_err()
     );
-    let text = crate::commands::cert::render::show(
+    let text = crate::commands::cert::render::inspection::show(
         std::slice::from_ref(&first),
         crate::common::session::Format::plain(false),
         false,
-        crate::commands::cert::render::DetailView::InUse,
+        crate::commands::cert::render::inspection::DetailView::InUse,
     )
     .unwrap();
     assert!(
@@ -144,11 +145,11 @@ fn recovery_uses_exact_request_when_ambiguous_and_does_not_guess_newest() {
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
-            &crate::commands::cert::render::show(
+            &crate::commands::cert::render::inspection::show(
                 &[first],
                 crate::common::session::Format::plain(true),
                 false,
-                crate::commands::cert::render::DetailView::InUse
+                crate::commands::cert::render::inspection::DetailView::InUse
             )
             .unwrap()
         )
@@ -218,7 +219,7 @@ fn manual_action_is_a_warning_but_json_retains_a_typed_action_result() {
         }],
     };
     let root = std::path::Path::new("/private/tmp/fixture");
-    let text = crate::commands::cert::render::outcome(
+    let text = crate::commands::cert::render::outcome::outcome(
         &outcome,
         crate::common::session::Format::plain(false),
         root,
@@ -227,7 +228,7 @@ fn manual_action_is_a_warning_but_json_retains_a_typed_action_result() {
     assert!(text.starts_with("[WARN] Action required for example.com"));
     assert!(text.contains("opaque-TXT-value"));
     assert!(text.contains("--resume 'example.com'"));
-    let json = crate::commands::cert::render::outcome(
+    let json = crate::commands::cert::render::outcome::outcome(
         &outcome,
         crate::common::session::Format::plain(true),
         root,
@@ -248,7 +249,7 @@ fn issued_certificate_has_a_done_summary_and_independent_manual_cleanup() {
             value: "manual-value".into(),
         }],
     };
-    let text = crate::commands::cert::render::outcome(
+    let text = crate::commands::cert::render::outcome::outcome(
         &outcome,
         crate::common::session::Format::plain(false),
         std::path::Path::new("/private/tmp/fixture"),
@@ -258,7 +259,7 @@ fn issued_certificate_has_a_done_summary_and_independent_manual_cleanup() {
     assert!(text.contains("manual-value"));
     assert!(text.contains("fullchain.pem"));
     assert!(text.contains("private-key.pem"));
-    let json = crate::commands::cert::render::outcome(
+    let json = crate::commands::cert::render::outcome::outcome(
         &outcome,
         crate::common::session::Format::plain(true),
         std::path::Path::new("/private/tmp/fixture"),
@@ -276,7 +277,7 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
     let mut first = record('a', "2026-01-01T00:00:00Z");
     let second = record('b', "2026-02-01T00:00:00Z");
     first.name = aster_acme::issuance::CertificateName::new("long.example.com").unwrap();
-    let text = crate::commands::cert::render::list(
+    let text = crate::commands::cert::render::inspection::list(
         &[first.clone(), second.clone()],
         crate::common::session::Format::plain(false),
     )
@@ -288,16 +289,16 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
     assert!(!text.contains(&first.operation_id));
     assert!(!text.contains("  Request:"));
     assert!(
-        crate::commands::cert::render::show(
+        crate::commands::cert::render::inspection::show(
             std::slice::from_ref(&first),
             crate::common::session::Format::plain(false),
             false,
-            crate::commands::cert::render::DetailView::InUse
+            crate::commands::cert::render::inspection::DetailView::InUse
         )
         .unwrap()
         .contains(&first.operation_id)
     );
-    let json = crate::commands::cert::render::list(
+    let json = crate::commands::cert::render::inspection::list(
         &[first, second],
         crate::common::session::Format::plain(true),
     )
@@ -308,8 +309,11 @@ fn order_list_is_a_compact_aligned_table_and_show_keeps_full_details() {
             .is_array()
     );
     assert_eq!(
-        crate::commands::cert::render::list(&[], crate::common::session::Format::plain(false))
-            .unwrap(),
+        crate::commands::cert::render::inspection::list(
+            &[],
+            crate::common::session::Format::plain(false)
+        )
+        .unwrap(),
         "No saved certificate requests."
     );
 }
@@ -483,11 +487,11 @@ fn verification_source_is_explicit_in_text_and_json() {
     ] {
         record.revocation.state = state;
         for verified in [false, true] {
-            let text = crate::commands::cert::render::show(
+            let text = crate::commands::cert::render::inspection::show(
                 std::slice::from_ref(&record),
                 crate::common::session::Format::plain(false),
                 verified,
-                crate::commands::cert::render::DetailView::InUse,
+                crate::commands::cert::render::inspection::DetailView::InUse,
             )
             .unwrap();
             let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -506,11 +510,11 @@ fn verification_source_is_explicit_in_text_and_json() {
             };
             assert!(normalized.contains(label));
             assert!(!text.contains("verified with CA"));
-            let json = crate::commands::cert::render::show(
+            let json = crate::commands::cert::render::inspection::show(
                 std::slice::from_ref(&record),
                 crate::common::session::Format::plain(true),
                 verified,
-                crate::commands::cert::render::DetailView::InUse,
+                crate::commands::cert::render::inspection::DetailView::InUse,
             )
             .unwrap();
             let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -578,7 +582,7 @@ fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_ret
     assert!(label.contains("example.com, *.example.com, api.example.com, +2"));
     assert!(label.ends_with(" | in use"));
     assert!(!label.contains("unrelated.example.net"));
-    let table = crate::commands::cert::render::list(
+    let table = crate::commands::cert::render::inspection::list(
         std::slice::from_ref(&request),
         crate::common::session::Format::plain(false),
     )
@@ -586,21 +590,21 @@ fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_ret
     assert!(table.contains("DOMAINS"));
     assert!(!table.contains("IN_USE"));
     assert!(table.contains("example.com, *.example.com, api.example.com, +2"));
-    let details = crate::commands::cert::render::show(
+    let details = crate::commands::cert::render::inspection::show(
         std::slice::from_ref(&request),
         crate::common::session::Format::plain(false),
         false,
-        crate::commands::cert::render::DetailView::InUse,
+        crate::commands::cert::render::inspection::DetailView::InUse,
     )
     .unwrap();
     assert!(details.contains("unrelated.example.net"));
     assert!(details.contains("extra.example.org"));
     let machine: serde_json::Value = serde_json::from_str(
-        &crate::commands::cert::render::show(
+        &crate::commands::cert::render::inspection::show(
             &[request],
             crate::common::session::Format::plain(true),
             false,
-            crate::commands::cert::render::DetailView::InUse,
+            crate::commands::cert::render::inspection::DetailView::InUse,
         )
         .unwrap(),
     )
@@ -725,22 +729,22 @@ fn stored_csr_rejection_stays_visible_even_when_order_observation_later_becomes_
             extensions: serde_json::Map::new(),
         }),
     });
-    let text = crate::commands::cert::render::show(
+    let text = crate::commands::cert::render::inspection::show(
         std::slice::from_ref(&request),
         crate::common::session::Format::plain(false),
         true,
-        crate::commands::cert::render::DetailView::InUse,
+        crate::commands::cert::render::inspection::DetailView::InUse,
     )
     .unwrap();
     assert!(text.contains("CSR rejected"));
     assert!(text.contains("ECDSA curve P-521 not allowed"));
     assert!(crate::commands::cert::selection::choice_label(&request).contains("CSR rejected"));
     let json: serde_json::Value = serde_json::from_str(
-        &crate::commands::cert::render::show(
+        &crate::commands::cert::render::inspection::show(
             &[request],
             crate::common::session::Format::plain(true),
             true,
-            crate::commands::cert::render::DetailView::InUse,
+            crate::commands::cert::render::inspection::DetailView::InUse,
         )
         .unwrap(),
     )
@@ -756,19 +760,19 @@ fn selected_version_details_show_in_use_only_when_explicitly_requested() {
     let mut saved = record('a', "2026-01-01T00:00:00Z");
     for selected in [false, true] {
         saved.is_in_use = selected;
-        let ordinary = crate::commands::cert::render::show(
+        let ordinary = crate::commands::cert::render::inspection::show(
             std::slice::from_ref(&saved),
             crate::common::session::Format::plain(false),
             false,
-            crate::commands::cert::render::DetailView::InUse,
+            crate::commands::cert::render::inspection::DetailView::InUse,
         )
         .unwrap();
         assert!(!ordinary.contains("In use:"));
-        let history = crate::commands::cert::render::show(
+        let history = crate::commands::cert::render::inspection::show(
             std::slice::from_ref(&saved),
             crate::common::session::Format::plain(false),
             false,
-            crate::commands::cert::render::DetailView::Version,
+            crate::commands::cert::render::inspection::DetailView::Version,
         )
         .unwrap();
         let normalized = history.split_whitespace().collect::<Vec<_>>().join(" ");

@@ -1,5 +1,6 @@
 //! RFC 9773 renewal planning. No background task or certificate issuance is started here.
 
+pub mod admission;
 pub mod refresh;
 
 use crate::storage::issuance::IssueSession;
@@ -26,13 +27,7 @@ pub fn renewal_due(record: &IssueRecord, now: OffsetDateTime) -> bool {
         && !record.unfinished()
         && record.revocation.state == aster_acme_core::revocation::RevocationState::NotRequested
         && record.renewal_retry.as_ref().is_none_or(|retry| {
-            retry.blocked_reason.is_none()
-                && retry
-                    .retry_at
-                    .into_iter()
-                    .chain(retry.ca_retry_at)
-                    .max()
-                    .is_some_and(|at| now >= at)
+            retry.admission(now, false) == aster_acme_core::renewal::RetryAdmission::Ready
         })
         && record
             .renewal

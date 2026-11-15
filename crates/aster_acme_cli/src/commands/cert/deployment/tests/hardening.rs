@@ -1,10 +1,23 @@
 //! Failure isolation, configuration patches, permission policy and destination ownership.
+
+use crate::commands::cert::deployment::publication::run_one;
+use crate::commands::cert::deployment::publication::run_target;
+use crate::commands::cert::deployment::{automatic::after_issuance, event};
 use crate::commands::cert::{
     deployment::tests::{Fixture, assert_descendant_exited, child_command, manage_binding},
-    deployment::*,
     report::{CertificateReport, CertificateResult},
 };
+use crate::common::output::MessageKind;
 use aster_acme::issuance::IssueOutcome;
+use aster_acme::{
+    deployment::DeploymentPhase,
+    issuance::CertificateName,
+    storage::{issuance::IssueStore as _, query::IssueQuery},
+};
+use aster_acme_cli_storage::issuance::{
+    CliIssueStore, DeploymentDefinition, DeploymentPatch, DeploymentPermissions, DeploymentTarget,
+};
+use std::time::Duration;
 
 #[tokio::test]
 async fn reload_observes_complete_files_and_failed_publication_never_reloads() {

@@ -1,4 +1,5 @@
 //! Real journals, absent accounts/CSR, and the production CLI preparation transaction.
+
 use crate::{
     app::{Args, Command},
     commands::cert::{
@@ -456,14 +457,14 @@ async fn pending_revocation_survives_reopen_keeps_reason_and_reports_actual_sign
         .unwrap();
     assert_eq!(record.revocation.state, RevocationState::Confirmed);
     assert_eq!(record.revocation.requested_at, pending.requested_at);
-    let text = crate::commands::cert::render::revoked(
+    let text = crate::commands::cert::render::lifecycle::revoked(
         &record,
         crate::common::session::Format::plain(false),
     )
     .unwrap();
     assert!(text.contains("certificate-key"));
     let json: serde_json::Value = serde_json::from_str(
-        &crate::commands::cert::render::revoked(
+        &crate::commands::cert::render::lifecycle::revoked(
             &record,
             crate::common::session::Format::plain(true),
         )

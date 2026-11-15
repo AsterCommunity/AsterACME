@@ -1,5 +1,6 @@
 //! Automatic admission is rechecked after acquiring a process-shared certificate lease.
-use crate::commands::cert::deployment::run_target;
+
+use crate::commands::cert::deployment::publication::run_target;
 use crate::commands::cert::deployment::tests::Fixture;
 use aster_acme::deployment::{DeploymentIntent, DeploymentPhase};
 use aster_acme_cli_storage::issuance::{CliIssueStore, DeploymentBinding, DeploymentPatch};

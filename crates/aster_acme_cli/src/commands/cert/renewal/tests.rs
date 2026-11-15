@@ -1,4 +1,5 @@
 //! Batch outcomes and cancellation are independent of transport timing and terminal state.
+
 use crate::commands::cert::render;
 use crate::commands::cert::renewal::*;
 use crate::commands::cert::validation::ValidationMethod;
@@ -82,7 +83,7 @@ async fn batch_continues_after_failure_and_manual_action_without_treating_either
         }
     );
     let json: serde_json::Value = serde_json::from_str(
-        &render::batch(
+        &render::batch::batch(
             &report,
             crate::common::session::Format::plain(true),
             std::path::Path::new("/data"),
@@ -101,7 +102,7 @@ async fn batch_continues_after_failure_and_manual_action_without_treating_either
     assert_eq!(json["results"][4]["result"]["status"], "completed");
     assert!(json["results"][1]["result"].get("artifacts").is_none());
     assert!(json["results"][4]["result"].get("resume").is_none());
-    let text = render::batch(
+    let text = render::batch::batch(
         &report,
         crate::common::session::Format::plain(false),
         std::path::Path::new("/data"),
@@ -140,7 +141,7 @@ async fn cancellation_stops_in_flight_work_and_marks_remaining_items_unattempted
         RenewalResult::Skipped(SkipReason::BatchCancelled)
     ));
     let json: serde_json::Value = serde_json::from_str(
-        &render::batch(
+        &render::batch::batch(
             &report,
             crate::common::session::Format::plain(true),
             std::path::Path::new("/data"),
@@ -162,7 +163,7 @@ async fn empty_inventory_and_pre_cancelled_batches_do_not_execute() {
         empty.summary(),
         crate::commands::cert::report::RenewalSummary::default()
     );
-    let human = render::batch(
+    let human = render::batch::batch(
         &empty,
         crate::common::session::Format::plain(false),
         std::path::Path::new("/data"),
@@ -427,7 +428,7 @@ async fn manual_only_batch_reports_action_required_and_pre_cancelled_batch_repor
     let token = CancellationToken::new();
     let report = run_batch(vec![record("manual")], &executor, &token).await;
     let json: serde_json::Value = serde_json::from_str(
-        &render::batch(
+        &render::batch::batch(
             &report,
             crate::common::session::Format::plain(true),
             std::path::Path::new("/data"),
@@ -440,7 +441,7 @@ async fn manual_only_batch_reports_action_required_and_pre_cancelled_batch_repor
     token.cancel();
     let report = run_batch(vec![record("later")], &executor, &token).await;
     let json: serde_json::Value = serde_json::from_str(
-        &render::batch(
+        &render::batch::batch(
             &report,
             crate::common::session::Format::plain(true),
             std::path::Path::new("/data"),
@@ -480,7 +481,7 @@ async fn completed_result_is_not_discarded_when_cancellation_arrives_after_commi
     assert_eq!(report.summary().skipped, 1);
     assert!(report.was_cancelled());
     let json: serde_json::Value = serde_json::from_str(
-        &render::batch(
+        &render::batch::batch(
             &report,
             crate::common::session::Format::plain(true),
             std::path::Path::new("/data"),
@@ -670,7 +671,7 @@ async fn all_not_due_report_has_one_table_and_one_sentence_without_zero_counters
         &CancellationToken::new(),
     )
     .await;
-    let human = render::batch(
+    let human = render::batch::batch(
         &report,
         crate::common::session::Format::plain(false),
         std::path::Path::new("/data"),
@@ -681,7 +682,7 @@ async fn all_not_due_report_has_one_table_and_one_sentence_without_zero_counters
     assert!(!human.contains("Completed: 0"));
     assert!(!human.contains("failed: 0"));
     let machine: serde_json::Value = serde_json::from_str(
-        &render::batch(
+        &render::batch::batch(
             &report,
             crate::common::session::Format::plain(true),
             std::path::Path::new("/data"),

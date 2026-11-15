@@ -1,4 +1,5 @@
 //! Loopback CA exercises real journals, fixed CSR and restartable foreground execution.
+mod deployment_checkpoint;
 mod failed_removal;
 mod maintenance;
 mod query;

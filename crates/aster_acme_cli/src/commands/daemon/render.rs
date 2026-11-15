@@ -1,4 +1,5 @@
 //! One final maintenance document, using shared time/table/error policies.
+
 use crate::common::{
     error::{CliResult, diagnostic},
     output::{self, MessageKind, Style},
@@ -60,7 +61,7 @@ pub(crate) fn cycle(
                     "report": value,
                 }))?;
             } else {
-                let logs = crate::commands::cert::render::maintenance_log_events(
+                let logs = crate::commands::cert::render::maintenance::maintenance_log_events(
                     &report.ari,
                     &report.renewals,
                     &report.deployment_retries,
@@ -186,7 +187,7 @@ pub(crate) fn render(
         let ari_value: serde_json::Value =
             serde_json::from_str(&render_ari(&report.ari, Format::plain(true))?)?;
         let renewal_value: serde_json::Value =
-            serde_json::from_str(&crate::commands::cert::render::batch(
+            serde_json::from_str(&crate::commands::cert::render::batch::batch(
                 &report.renewals,
                 Format::plain(true),
                 &report.data_dir,
@@ -195,8 +196,11 @@ pub(crate) fn render(
             .deployment_retries
             .iter()
             .map(|deployment| {
-                crate::commands::cert::render::deployment_report(deployment, Format::plain(true))
-                    .and_then(|json| serde_json::from_str(&json).map_err(Into::into))
+                crate::commands::cert::render::deployment::deployment_report(
+                    deployment,
+                    Format::plain(true),
+                )
+                .and_then(|json| serde_json::from_str(&json).map_err(Into::into))
             })
             .collect::<CliResult<Vec<serde_json::Value>>>()?;
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
@@ -231,16 +235,16 @@ pub(crate) fn render(
         sections.push(render_ari(&report.ari, format)?);
     }
     if !report.renewals.is_empty() {
-        sections.push(crate::commands::cert::render::batch(
+        sections.push(crate::commands::cert::render::batch::batch(
             &report.renewals,
             format,
             &report.data_dir,
         )?);
     }
     for deployment in &report.deployment_retries {
-        sections.push(crate::commands::cert::render::deployment_report(
-            deployment, format,
-        )?);
+        sections.push(
+            crate::commands::cert::render::deployment::deployment_report(deployment, format)?,
+        );
     }
     Ok(sections.join("\n\n"))
 }

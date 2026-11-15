@@ -1,8 +1,9 @@
 //! Explicit authority selection and confirmation around the shared library revocation transaction.
+
 use crate::{
     commands::cert::{
         args::RevokeArgs,
-        execute::{options, selected_record},
+        execute::{inspection::selected_record, options},
         report::CertificateReport,
         selection::RequestSelection,
     },

@@ -1,7 +1,8 @@
 //! Complete missing add inputs before any binding or file is written.
+
 use crate::commands::cert::{
     args::deployment::{DeployAddArgs, parse_deployment_id},
-    deployment::{directory, parse_command},
+    deployment::configuration::{directory, parse_command},
 };
 use crate::common::{error::CliResult, session::OutputSession, terminal};
 use aster_acme_cli_storage::issuance::DeploymentBinding;
