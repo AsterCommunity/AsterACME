@@ -50,9 +50,13 @@ publication plan is saved before an adapter may mutate DNS. The concrete
 Hickory adapter lives in the separate `aster_acme_dns_resolver` crate, so using
 this contract does not pull a DNS resolver into an embedded ACME client.
 
-`propagation::PropagationPolicy` waits for every expected logical TXT value at
-its original challenge owner. Default interval/wait are 5/120 seconds; caller
-cancellation and deadline always apply. API success, local visibility, and CA
+`propagation::PropagationPolicy` waits 5 seconds after publication receipts are
+saved, then checks each original challenge owner once with a default 5-second
+probe budget. All expected values at one owner must coexist in the same answer.
+A matching answer proceeds immediately; missing values, resolver errors or probe
+timeout add a 10-second grace period before proceeding to the CA. Local visibility
+is advisory. `PropagationEvent` reports delays without exposing TXT values.
+Caller cancellation and operation deadline always interrupt checks and waits. API success, local visibility, and CA
 validation are three distinct observations. Cleanup uses the saved route and
 receipt, never a freshly retargeted CNAME.
 

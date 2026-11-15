@@ -184,9 +184,11 @@ a JSON `provider_custom` object. Custom values may change without changing this
 schema version. Current profile files are limited to 64 KiB, with at most
 32 KiB of serialized custom JSON. TOML custom values must be JSON-compatible
 strings, booleans, finite numbers, arrays or tables; null and native TOML
-datetime values are not part of this profile schema. Default propagation wait
-is 120 seconds with a 5-second interval; profile limits are 1–3600 and 1–60
-seconds respectively, both within the operation budget. A saved issuance records the profile ID and schema version;
+datetime values are not part of this profile schema. `propagation_timeout` is
+the single advisory DNS probe budget (default 5 seconds; range 1–3600), while
+`propagation_interval` is the delay before that probe (default 5 seconds; range
+1–60). Existing explicit values are retained without migration. Both remain
+bounded by the operation budget. A saved issuance records the profile ID and schema version;
 later runs use the current values for that profile. Profile updates therefore
 affect resume, renewal, and pending cleanup invocations. Removing a profile
 referenced by a retained certificate or pending cleanup MUST be rejected.
@@ -419,9 +421,13 @@ No legacy format reader, migration, or old-policy compatibility path is defined.
 
 Propagation waiting is an independent AsterACME DNS policy, not an ADPP action
 or provider responsibility. A successful `present` only confirms provider
-reconciliation. AsterACME waits for every expected TXT value at the original challenge owner
-according to its configured propagation policy before acknowledging the ACME challenge; the CA
-still makes the final validation decision.
+reconciliation. After saving receipts, AsterACME waits 5 seconds by default,
+then queries each original challenge owner once. All expected TXT values for an
+owner must match in the same answer. A confirmed local observation proceeds
+immediately; missing values, resolver errors and probe timeout add a 10-second
+grace period before acknowledging the ACME challenge. Local visibility is
+advisory; the CA makes the final decision. Cancellation or the overall operation
+deadline still prevents acknowledgement.
 
 ### Errors and partial results
 

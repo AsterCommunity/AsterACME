@@ -334,8 +334,9 @@ pub(super) async fn external_adapter(
         lookup: Arc::new(lookup),
         allowed_zones: profile.allowed_zones,
         propagation: aster_acme_dns::propagation::PropagationPolicy {
-            interval: std::time::Duration::from_secs(profile.propagation_interval),
+            initial_delay: std::time::Duration::from_secs(profile.propagation_interval),
             timeout: std::time::Duration::from_secs(profile.propagation_timeout),
+            ..aster_acme_dns::propagation::PropagationPolicy::default()
         },
         progress,
     }))

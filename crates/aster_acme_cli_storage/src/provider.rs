@@ -19,10 +19,10 @@ pub struct ProviderProfile {
     /// Per-process timeout (1..=300 seconds).
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
-    /// Total DNS propagation wait (1..=3600 seconds), within the operation budget.
+    /// Advisory DNS observation budget (1..=3600 seconds), within the operation budget.
     #[serde(default = "default_propagation_timeout")]
     pub propagation_timeout: u64,
-    /// Delay between observations (1..=60 seconds).
+    /// Delay before the single advisory DNS observation (1..=60 seconds).
     #[serde(default = "default_propagation_interval")]
     pub propagation_interval: u64,
     /// Absolute executable path.
@@ -42,7 +42,7 @@ fn default_timeout() -> u64 {
     30
 }
 fn default_propagation_timeout() -> u64 {
-    120
+    5
 }
 fn default_propagation_interval() -> u64 {
     5
@@ -217,6 +217,13 @@ impl ProviderProfileStore {
         tokio::task::spawn_blocking(move || list_names(&root))
             .await
             .map_err(|_| io::Error::other("provider profile list worker failed"))?
+    }
+
+    /// Return the validated profile's TOML location without reading custom values.
+    /// # Errors
+    /// Rejects invalid profile names.
+    pub fn path(&self, name: &str) -> io::Result<PathBuf> {
+        profile_path(&self.root, name)
     }
 
     /// Replace one profile atomically, preserving the stable profile ID.

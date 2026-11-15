@@ -14,7 +14,14 @@ struct Inputs {
     asked: Vec<String>,
     invalid: Vec<String>,
 }
+#[async_trait::async_trait(?Send)]
 impl Prompts for Inputs {
+    async fn provider(&mut self, _: Option<&std::path::Path>) -> CliResult<String> {
+        self.asked.push("provider selection".into());
+        self.answers
+            .pop_front()
+            .ok_or_else(|| Box::new(terminal::Canceled) as Box<dyn std::error::Error>)
+    }
     fn text(&mut self, message: &str, default: Option<&str>) -> CliResult<String> {
         self.asked.push(message.into());
         let value = self
@@ -53,8 +60,32 @@ fn args(words: &[&str]) -> IssueArgs {
     args
 }
 
-#[test]
-fn bare_issue_collects_domains_and_each_methods_required_inputs() {
+#[tokio::test]
+async fn external_dns_selects_a_profile_only_when_missing_and_interactive() {
+    let mut options = args(&["-c", "dns_external", "-d", "example.com"]);
+    let mut prompts = Inputs {
+        answers: ["cloudflare".into()].into(),
+        ..Inputs::default()
+    };
+    complete(&mut options, true, &mut prompts).await.unwrap();
+    assert_eq!(options.provider.as_deref(), Some("cloudflare"));
+    assert_eq!(prompts.asked, ["provider selection"]);
+    let mut prompts = Inputs::default();
+    complete(&mut options, true, &mut prompts).await.unwrap();
+    assert_eq!(prompts.asked, Vec::<String>::new());
+    let mut options = args(&["-c", "dns_external", "-d", "example.com"]);
+    assert!(complete(&mut options, false, &mut prompts).await.is_err());
+    assert_eq!(prompts.asked, Vec::<String>::new());
+    assert!(
+        complete(&mut options, true, &mut prompts)
+            .await
+            .unwrap_err()
+            .is::<terminal::Canceled>()
+    );
+}
+
+#[tokio::test]
+async fn bare_issue_collects_domains_and_each_methods_required_inputs() {
     let root = tempfile::tempdir().unwrap();
     for method in ValidationMethod::value_variants()
         .iter()
@@ -78,7 +109,7 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
             | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp => {}
         }
-        complete(&mut args, true, &mut inputs).unwrap();
+        complete(&mut args, true, &mut inputs).await.unwrap();
         assert_eq!(args.challenge, Some(*method));
         assert_eq!(
             args.domain
@@ -108,8 +139,8 @@ fn bare_issue_collects_domains_and_each_methods_required_inputs() {
     }
 }
 
-#[test]
-fn explicit_input_skips_every_prompt_and_resume_never_asks() {
+#[tokio::test]
+async fn explicit_input_skips_every_prompt_and_resume_never_asks() {
     let root = tempfile::tempdir().unwrap();
     for method in ValidationMethod::value_variants()
         .iter()
@@ -128,7 +159,9 @@ fn explicit_input_skips_every_prompt_and_resume_never_asks() {
         for interactive in [false, true] {
             let mut args = args(&words);
             let mut prompts = Inputs::default();
-            complete(&mut args, interactive, &mut prompts).unwrap();
+            complete(&mut args, interactive, &mut prompts)
+                .await
+                .unwrap();
             assert_eq!(prompts.asked, [] as [&str; 0]);
             assert_eq!(prompts.choices, [] as [ValidationMethod; 0]);
         }
@@ -136,12 +169,14 @@ fn explicit_input_skips_every_prompt_and_resume_never_asks() {
     for interactive in [false, true] {
         let mut args = args(&["--resume"]);
         assert_eq!(args.resume, Some(ResumeTarget::Choose));
-        complete(&mut args, interactive, &mut Inputs::default()).unwrap();
+        complete(&mut args, interactive, &mut Inputs::default())
+            .await
+            .unwrap();
     }
 }
 
-#[test]
-fn method_choices_respect_wildcards_and_supplied_configuration() {
+#[tokio::test]
+async fn method_choices_respect_wildcards_and_supplied_configuration() {
     let root = tempfile::tempdir().unwrap();
     for (words, expected) in [
         (
@@ -166,7 +201,7 @@ fn method_choices_respect_wildcards_and_supplied_configuration() {
             selected: Some(expected[0]),
             ..Inputs::default()
         };
-        complete(&mut args, true, &mut prompts).unwrap();
+        complete(&mut args, true, &mut prompts).await.unwrap();
         assert_eq!(prompts.choices, expected);
     }
     for words in [
@@ -182,13 +217,17 @@ fn method_choices_respect_wildcards_and_supplied_configuration() {
         ],
     ] {
         let mut prompts = Inputs::default();
-        assert!(complete(&mut args(&words), true, &mut prompts).is_err());
+        assert!(
+            complete(&mut args(&words), true, &mut prompts)
+                .await
+                .is_err()
+        );
         assert_eq!(prompts.asked, [] as [&str; 0]);
     }
 }
 
-#[test]
-fn invalid_domains_directories_and_addresses_retry_with_no_publication() {
+#[tokio::test]
+async fn invalid_domains_directories_and_addresses_retry_with_no_publication() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("file");
     std::fs::write(&file, "keep").unwrap();
@@ -206,21 +245,21 @@ fn invalid_domains_directories_and_addresses_retry_with_no_publication() {
         .into(),
         ..Inputs::default()
     };
-    complete(&mut webroot, true, &mut prompts).unwrap();
+    complete(&mut webroot, true, &mut prompts).await.unwrap();
     assert_eq!(prompts.invalid.len(), 5);
     let mut standalone = args(&["-c", "standalone", "-d", "example.com"]);
     let mut prompts = Inputs {
         answers: ["invalid".into(), "127.0.0.1:0".into(), "[::]:8080".into()].into(),
         ..Inputs::default()
     };
-    complete(&mut standalone, true, &mut prompts).unwrap();
+    complete(&mut standalone, true, &mut prompts).await.unwrap();
     assert_eq!(prompts.invalid.len(), 2);
     assert_eq!(standalone.listen_address.unwrap().to_string(), "[::]:8080");
     assert_eq!(std::fs::read_to_string(file).unwrap(), "keep");
 }
 
-#[test]
-fn scripts_reject_missing_inputs_without_asking_and_listener_defaults_still_apply() {
+#[tokio::test]
+async fn scripts_reject_missing_inputs_without_asking_and_listener_defaults_still_apply() {
     for words in [
         vec![],
         vec!["-d", "example.com", "--yes"],
@@ -228,7 +267,11 @@ fn scripts_reject_missing_inputs_without_asking_and_listener_defaults_still_appl
         vec!["-c", "webroot", "-d", "example.com"],
     ] {
         let mut prompts = Inputs::default();
-        assert!(complete(&mut args(&words), false, &mut prompts).is_err());
+        assert!(
+            complete(&mut args(&words), false, &mut prompts)
+                .await
+                .is_err()
+        );
         assert_eq!(prompts.asked, [] as [&str; 0]);
         assert_eq!(prompts.choices, [] as [ValidationMethod; 0]);
     }
@@ -238,12 +281,13 @@ fn scripts_reject_missing_inputs_without_asking_and_listener_defaults_still_appl
             false,
             &mut Inputs::default(),
         )
+        .await
         .unwrap();
     }
 }
 
-#[test]
-fn cancellation_at_domains_method_or_method_configuration_is_preserved() {
+#[tokio::test]
+async fn cancellation_at_domains_method_or_method_configuration_is_preserved() {
     for (words, prompts) in [
         (vec![], Inputs::default()),
         (vec!["-d", "example.com"], Inputs::default()),
@@ -261,7 +305,9 @@ fn cancellation_at_domains_method_or_method_configuration_is_preserved() {
         ),
     ] {
         let mut prompts = prompts;
-        let error = complete(&mut args(&words), true, &mut prompts).unwrap_err();
+        let error = complete(&mut args(&words), true, &mut prompts)
+            .await
+            .unwrap_err();
         assert!(error.is::<terminal::Canceled>());
     }
     for value in [
@@ -272,26 +318,6 @@ fn cancellation_at_domains_method_or_method_configuration_is_preserved() {
     ] {
         assert!(parse_domains(value).is_err());
     }
-}
-
-#[test]
-#[ignore = "PTY completion fixture only; never contacts a CA"]
-fn interactive_issue_child() {
-    let root = tempfile::tempdir().unwrap();
-    println!("TEST_WEBROOT={}", root.path().display());
-    let mut args = args(&[]);
-    let output = OutputSession::new(false);
-    match complete(&mut args, true, &mut TerminalPrompts(&output)) {
-        Ok(()) => {
-            let method = args.challenge.unwrap();
-            let config =
-                configuration(method, args.webroot.as_deref(), args.listen_address).unwrap();
-            println!("INPUTS_COMPLETE method={} config={config}", method.id());
-        }
-        Err(error) if error.is::<terminal::Canceled>() => println!("INPUTS_CANCELLED"),
-        Err(error) => panic!("unexpected completion failure: {error}"),
-    }
-    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
 
 #[test]
