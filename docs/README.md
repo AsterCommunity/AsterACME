@@ -9,6 +9,7 @@
 - 查协议：[RFC参考与接入边界](rfc-reference.md)。
 - 查架构与协议提案：[RFC索引](rfc/README.md)、[RFC参考与接入边界](rfc-reference.md)。
 - 查验证：[测试入口](testing.md)。
+- 查发布打包：[Release 打包](release-packaging.md)。
 
 ## 文档职责
 
@@ -30,6 +31,7 @@
 | rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md | AsterACME DNS Provider Protocol（ADPP）RFC草案 |
 | rfc-reference.md | 权威来源、扩展实现与缺口 |
 | testing.md | 按风险选择检查和执行命令 |
+| release-packaging.md | 发布二进制、符号归档及跨平台边界 |
 | github-automation.md | GitHub 标签体系、自动化 workflow 入口及权限边界 |
 | *-testing.md | 有日期及平台范围的测试证据 |
 
