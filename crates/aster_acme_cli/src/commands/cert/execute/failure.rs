@@ -19,13 +19,7 @@ pub(super) async fn report_issue_failure(
     if !execution.cancellation.is_cancelled()
         && let Some(failure) = saved.renewal_failure(time::OffsetDateTime::now_utc())
     {
-        let retry = session
-            .record_renewal_failure(
-                failure.occurred_at,
-                failure.ca_retry_at,
-                failure.blocked_reason,
-            )
-            .await?;
+        let retry = session.record_renewal_failure(failure).await?;
         report_renewal_retry(progress, &saved, &retry);
     }
     if matches!(

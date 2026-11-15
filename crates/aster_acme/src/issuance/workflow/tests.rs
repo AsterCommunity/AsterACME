@@ -44,9 +44,7 @@ impl IssueSession for Session {
     }
     async fn record_renewal_failure(
         &self,
-        _: time::OffsetDateTime,
-        _: Option<time::OffsetDateTime>,
-        _: Option<String>,
+        _: crate::renewal::admission::RenewalFailure,
     ) -> Result<crate::issuance::RenewalRetryState, IssueError> {
         Err(IssueError::InvalidInput(
             "renewal retry checkpoint not used",

@@ -4,7 +4,7 @@ use crate::issuance::{
 };
 use crate::renewal::{
     RenewalPlan, RenewalSource,
-    admission::{self, RenewalAdmission},
+    admission::{self, AdmissionError, RenewalAdmission},
 };
 use aster_acme_core::revocation::RevocationState;
 use time::{Duration, OffsetDateTime};
@@ -70,9 +70,7 @@ fn exact_due_time_and_only_local_backoff_are_overridable() {
     for immediate in [false, true] {
         assert!(matches!(
             admission::request(&current, &[], immediate, now),
-            Err(IssueError::InvalidInput(
-                "CA Retry-After has not elapsed; --now cannot bypass it"
-            ))
+            Err(IssueError::RenewalAdmission(AdmissionError::CaBackoff))
         ));
         assert!(admission::preparation_failure(&current, immediate, now).is_none());
     }
@@ -81,7 +79,7 @@ fn exact_due_time_and_only_local_backoff_are_overridable() {
     current.renewal_retry.as_mut().unwrap().blocked_reason = Some("unknown outcome".into());
     assert!(matches!(
         admission::request(&current, &[], true, now),
-        Err(IssueError::Publication(_))
+        Err(IssueError::RenewalAdmission(AdmissionError::Uncertain(_)))
     ));
     assert!(admission::preparation_failure(&current, true, now).is_none());
 }
@@ -93,8 +91,8 @@ fn missing_plans_and_revocation_never_turn_into_storage_failures() {
     current.revocation.state = RevocationState::Pending;
     assert!(matches!(
         admission::request(&current, &[], true, now),
-        Err(IssueError::InvalidInput(
-            "certificate revocation is unconfirmed; resolve it before renewing"
+        Err(IssueError::RenewalAdmission(
+            AdmissionError::RevocationUncertain
         ))
     ));
     current.revocation.state = RevocationState::Confirmed;
@@ -110,9 +108,7 @@ fn missing_plans_and_revocation_never_turn_into_storage_failures() {
     current.renewal = None;
     assert!(matches!(
         admission::request(&current, &[], true, now),
-        Err(IssueError::InvalidInput(
-            "in_use certificate has no renewal plan"
-        ))
+        Err(IssueError::RenewalAdmission(AdmissionError::MissingPlan))
     ));
 }
 
@@ -169,9 +165,7 @@ fn retained_children_block_replay_before_parent_retry_checkpoint_and_select_exac
     child.finalize_rejection = None;
     assert!(matches!(
         admission::existing(&[child.clone(), child.clone()], Some(&previous), now),
-        Err(IssueError::InvalidInput(
-            "several unfinished renewals match in_use; select an exact operation"
-        ))
+        Err(IssueError::RenewalAdmission(AdmissionError::Ambiguous))
     ));
     child.renewal_of.as_mut().unwrap().operation_id = "other".into();
     assert!(

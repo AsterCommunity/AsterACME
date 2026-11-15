@@ -50,11 +50,11 @@ pub const fn renewal_retry_delay_seconds(failure_count: u32) -> i64 {
 /// Resume a durable renewal before considering a new one; --now never bypasses an
 /// uncertain revocation. Confirmed revoked certificates require an explicit early request.
 #[must_use]
-pub fn renewal_decision(
+pub fn renewal_decision<T: Ord + Copy>(
     pending: bool,
     revocation: crate::revocation::RevocationState,
-    renew_at: i64,
-    now: i64,
+    renew_at: T,
+    now: T,
     immediate: bool,
 ) -> RenewalDecision {
     use crate::revocation::RevocationState;

@@ -47,9 +47,7 @@ impl IssueSession for Session {
 
     async fn record_renewal_failure(
         &self,
-        now: time::OffsetDateTime,
-        ca_retry_at: Option<time::OffsetDateTime>,
-        blocked_reason: Option<String>,
+        retry_evidence: aster_acme::renewal::admission::RenewalFailure,
     ) -> Result<RenewalRetryState, IssueError> {
         let child = self.record().await?;
         let predecessor = child
@@ -81,9 +79,9 @@ impl IssueSession for Session {
             }
             let state = RenewalRetryState::after_failure(
                 previous.renewal_retry.as_ref(),
-                now,
-                ca_retry_at,
-                blocked_reason,
+                retry_evidence.occurred_at,
+                retry_evidence.ca_retry_at,
+                retry_evidence.blocked_reason,
             );
             previous.renewal_retry = Some(state.clone());
             write_journal(&generation.join("operation.toml"), &previous)?;

@@ -772,7 +772,11 @@ async fn cross_process_renewal_retry_child() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             session
-                .record_renewal_failure(OffsetDateTime::now_utc(), None, None)
+                .record_renewal_failure(aster_acme::renewal::admission::RenewalFailure {
+                    occurred_at: OffsetDateTime::now_utc(),
+                    ca_retry_at: None,
+                    blocked_reason: None,
+                })
                 .await
                 .unwrap();
             drop(session);
@@ -898,7 +902,11 @@ async fn renewal_failure_backoff_persists_on_predecessor_and_admin_now_only_bypa
     };
     let attempt_id = attempt.record().await.unwrap().operation_id;
     let first = attempt
-        .record_renewal_failure(now, None, None)
+        .record_renewal_failure(aster_acme::renewal::admission::RenewalFailure {
+            occurred_at: now,
+            ca_retry_at: None,
+            blocked_reason: None,
+        })
         .await
         .unwrap();
     assert_eq!(first.failures, 1);
@@ -945,7 +953,11 @@ async fn renewal_failure_backoff_persists_on_predecessor_and_admin_now_only_bypa
     };
     assert_eq!(manual.record().await.unwrap().operation_id, attempt_id);
     let second = manual
-        .record_renewal_failure(now + time::Duration::minutes(11), None, None)
+        .record_renewal_failure(aster_acme::renewal::admission::RenewalFailure {
+            occurred_at: now + time::Duration::minutes(11),
+            ca_retry_at: None,
+            blocked_reason: None,
+        })
         .await
         .unwrap();
     assert_eq!(second.failures, 2);
@@ -972,7 +984,11 @@ async fn ca_retry_after_is_not_bypassed_by_manual_now() {
         OffsetDateTime::from_unix_timestamp((now + time::Duration::minutes(10)).unix_timestamp())
             .unwrap();
     let state = attempt
-        .record_renewal_failure(now, Some(ca_retry_at), None)
+        .record_renewal_failure(aster_acme::renewal::admission::RenewalFailure {
+            occurred_at: now,
+            ca_retry_at: Some(ca_retry_at),
+            blocked_reason: None,
+        })
         .await
         .unwrap();
     assert!(state.retry_at.is_some_and(|at| at < ca_retry_at));
@@ -1015,11 +1031,11 @@ async fn uncertain_new_order_outcome_blocks_automatic_and_manual_new_attempts() 
         panic!("renewal expected")
     };
     let state = attempt
-        .record_renewal_failure(
-            OffsetDateTime::now_utc(),
-            None,
-            Some("newOrder outcome is uncertain".into()),
-        )
+        .record_renewal_failure(aster_acme::renewal::admission::RenewalFailure {
+            occurred_at: OffsetDateTime::now_utc(),
+            ca_retry_at: None,
+            blocked_reason: Some("newOrder outcome is uncertain".into()),
+        })
         .await
         .unwrap();
     assert!(state.retry_at.is_none());
