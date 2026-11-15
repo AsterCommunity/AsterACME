@@ -11,7 +11,7 @@
 
 ## Cargo 发布冷却期
 
-[`.cargo/config.toml`](../.cargo/config.toml) 配置 `registry.global-min-publish-age = "7 days"`。Cargo 默认拒绝发布年龄不满足该下限的新解析版本；带 `pubtime` 的 registry 版本须发布满 7 天，没有发布时间元数据的 registry 版本不受该策略保证，path/git 依赖也不受 registry 冷却期约束。`Cargo.lock` 中已有版本继续可用，不会因冷却期自动降级或阻断锁定构建。
+[`.cargo/config.toml`](../.cargo/config.toml) 配置 `registry.global-min-publish-age = "7 days"`。Cargo 默认拒绝发布年龄不满足该下限的新解析版本；带 `pubtime` 的 registry 版本须发布满 7 天，没有发布时间元数据的 registry 版本不受该策略保证，path/git 依赖也不受 registry 冷却期约束。`Cargo.lock` 中已有版本继续可用，不会因冷却期自动降级或阻断锁定构建。`cargo install` 明确不应用此冷却期，直接从 registry 安装 CLI 不受该保护。
 
 经核对必须立即采用的安全修复，可用 `cargo --config 'resolver.incompatible-publish-age="allow"' update -p PACKAGE --precise VERSION` 做单次显式覆盖并审查 lockfile diff；该次解析的传递依赖同样不受冷却期限制，不把覆盖写入项目配置。
 
