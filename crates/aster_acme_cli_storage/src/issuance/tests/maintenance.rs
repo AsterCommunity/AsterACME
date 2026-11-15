@@ -351,13 +351,15 @@ async fn per_certificate_deadline_retains_saved_retry_and_continues() {
     let a = completed(&f, "a").await;
     let b = completed(&f, "b").await;
     directory(&f, true).await;
-    ari(&f, &a, response().set_delay(Duration::from_secs(5))).await;
+    // Real filesystem syncs and loopback HTTP need room on a loaded Windows
+    // runner. Keep the stalled response well beyond each fresh item budget.
+    ari(&f, &a, response().set_delay(Duration::from_secs(30))).await;
     ari(&f, &b, response()).await;
     let report = maintenance::run_once(
         &f.store,
         &HttpPool::default(),
         &Options {
-            certificate_timeout: Duration::from_millis(500),
+            certificate_timeout: Duration::from_secs(5),
             ..options()
         },
         &CancellationToken::new(),
@@ -366,12 +368,19 @@ async fn per_certificate_deadline_retains_saved_retry_and_continues() {
     .await
     .unwrap();
     assert!(!report.cancelled);
-    assert!(matches!(
-        report.entries[0].outcome,
-        Outcome::Failed(IssueError::Interrupted)
-    ));
+    assert!(
+        matches!(
+            report.entries[0].outcome,
+            Outcome::Failed(IssueError::Interrupted)
+        ),
+        "first certificate must time out: {report:?}"
+    );
     assert!(report.entries[0].next_check_at.is_some());
-    assert!(matches!(report.entries[1].outcome, Outcome::Refreshed));
+    assert!(
+        matches!(report.entries[1].outcome, Outcome::Refreshed),
+        "second certificate must have its own execution budget: {report:?}"
+    );
+    assert_eq!(count(&f, "/ari/").await, 2);
 }
 
 #[tokio::test]
