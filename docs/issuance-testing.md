@@ -22,7 +22,7 @@ CLI 解析/选择测试验证 -d/-a/-n/-c/-f、resume 与新申请参数互斥�
 
 ## 尚未验收
 
-未执行真实 CA staging 证书签发、Pebble、DNS provider 自动写入、完整公网传播、真实断电注入、Windows ACL 或硬件密钥。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；自动DNS provider和外部CSR尚未实现；周期调度的当前契约见[生命周期](certificate-lifecycle.md)。
+未执行 Pebble、真实断电注入、Windows ACL 或硬件密钥。真实 CA staging 签发、Cloudflare provider 自动写入与完整公网传播已有用户实测验收（见[Cloudflare ADPP 实测验收](#cloudflare-adpp-实测staging签发验收2026-11-16)）；provider 中断恢复、preexisting TXT 保留、dns_external 续期、CNAME 委派与其他厂商 provider 仍单独验收。相邻证书签名验证不代表公众信任路径验证；客户端不会将 staging 根加入系统。ARI续期计划、TLS-ALPN-01和账户签名吊销有本地mock/存储/loopback TLS验收；周期调度的当前契约见[生命周期](certificate-lifecycle.md)。
 
 部署专项使用临时目录、真实证书产物与 Rust 测试子进程，覆盖当前版本发布、同版本幂等跳过、续期后新版本/密钥发布及绑定保留、多目标失败继续、非零退出有界重试、启动失败、超时/取消检查点和不自动重放、发布失败后显式恢复、租约与续期/移除互斥、移除绑定保留发布文件。渲染测试覆盖空列表、全部状态配色与可见宽度对齐、控制字符转义、单次及批量 JSON/退出码和命令参数不回显；存储测试覆盖目录/精确路径、非法参数和链接拒绝。PTY 另验证无名称选择（Enter）和取消（Escape）；这些均不代表真实 nginx/systemd 或 Windows 服务 reload 验收。
 
@@ -272,3 +272,13 @@ CLI/文件集成回归使用生产preparation事务和真实journal：删除整�
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked`通过。独立feature矩阵通过；关闭预检的库不引入Hickory，CLI external DNS独立使用resolver。workspace/import/TLS/生产feature策略、12项Python测试、workflow concurrency/path契约、本地文档链接及`git diff HEAD --check`通过。
 
 没有读取或写入真实DNS凭据、修改系统DNS、调用公网provider API、新建staging订单或执行证书吊销。未执行Linux/Windows原生测试，未vendor、patch或升级Hickory。真实provider/域名/CA staging的发布、续期、预存TXT保留、故障恢复和清理仍需分别验收；RFC维持Accepted，不将本地实现状态冒充Implemented验收。
+
+## Cloudflare ADPP 实测staging签发验收（2026-11-16）
+
+来源为用户终端执行记录，与本页 loopback/本地证据分开。环境：macOS，`test.849239.xyz` 托管于 Cloudflare，Let's Encrypt staging directory，一方示例 provider `examples/dns-providers/cloudflare_adpp.py`（标准库 Python，`/usr/bin/python3` 绝对解释器直执行），Profile `cf-test`，证书 `cf-e2e`，SAN 为 `test.849239.xyz` 与 `*.test.849239.xyz`。
+
+2026-11-15 21:09–21:10 UTC 实际完成完整链路：staging 订单创建 → 两条 DNS-01 要求（apex 与 wildcard 共用同一 owner，多值并存）→ provider `present` 发布、准备到本地可见共 10 秒 → challenge ack → CA 验证 valid → finalize → 链下载/校验 → in_use 保存。两域名的建议性 CAA 预检各超 5 秒以 WARN 未知继续，CA 正常接受，符合建议性语义。
+
+清理验收：签发成功后在 zone 权威 NS 查询 `_acme-challenge.test.849239.xyz` 的 TXT 为空，终态自动清理无残留；一方 Cloudflare provider 的 present→传播→CA 验证→精确清理在真实环境闭环。
+
+本轮未覆盖：provider 中断后同 publication_id 恢复对账、preexisting TXT 保留、dns_external 续期、CNAME 委派、生产 CA、其他 DNS provider 与 Linux/Windows 平台。

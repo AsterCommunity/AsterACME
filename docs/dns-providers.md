@@ -1,6 +1,6 @@
 # DNS Provider 配置与自动发布
 
-本页描述 CLI 的外部 DNS-01 自动化入口。协议定义见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，签发状态与持久化顺序见[签发设计](design/issuance.md)。内置云厂商 adapter 尚未提供；外部 executable 由用户安装并负责实际 DNS API 通信。
+本页描述 CLI 的外部 DNS-01 自动化入口。协议定义见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，签发状态与持久化顺序见[签发设计](design/issuance.md)。内置云厂商 adapter 尚未提供；外部 executable 由用户安装并负责实际 DNS API 通信。仓库提供一个 Cloudflare 示例 executable：[examples/dns-providers](../examples/dns-providers/README.md)。
 
 ## 创建和选择 Profile
 

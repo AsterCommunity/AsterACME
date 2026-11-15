@@ -8,6 +8,8 @@
 
 ### 新增
 
+- **Cloudflare ADPP 示例 Provider** — 新增`examples/dns-providers/cloudflare_adpp.py`：仅用标准库的 Python 3.9 外部 provider，实现 ADPP v1 `present`/`cleanup` 对接 Cloudflare。按最长后缀发现 zone（可用`zone_id`固定）；record `comment`记录`publication_id`实现幂等重发布；同值预存记录标为`preexisting`且永不删除；清理按 record ID 与精确值核对后才删除，不一致时失败关闭保留记录；错误映射`authentication_failed`/`authorization_denied`/`rate_limited`/`provider_unavailable`。凭据经`provider_custom`传入（`api_token`或`token_file`，可选`zone_id`与仅测试用的`api_base`）；本地 mock 测试不联网，已接入 CI。
+
 - **外部 DNS Provider（ADPP）** — `provider add/list/show/update/remove`管理私有独立Profile，`-c dns_external --provider NAME`支持签发与续期，`provider cleanup NAME`重试终态清理。默认允许全部合法发布域，可用`--allow-zone`增强限制并用`--clear-zones`清除；变更前固定CNAME路由，CA ack前保存逐记录回执与限流下限；保留预存TXT、部分成功和未知结果。custom值全量敏感，仅经stdin传递并从报告隐藏；子进程不继承环境。部署reload与ADPP共用独立进程crate的进程树/有界IO机制。内置厂商客户端和真实DNS/staging验收另计。
 
 - **DNS Persist（实验性）**：通过 `-c dns_persist` 支持 `draft-ietf-acme-dns-persist-02`，校验issuer元数据，按无序集合比较`issuerDomainNames`，以签名POST-as-GET证明账户控制权，派生绑定域名/账户密钥/账户URL的SHA-256哈希TXT，支持通配符范围与多字符串展示。首次人工发布，验证后长期保留；重启、续期、账户换钥及无人值守维护只复用确认过且未改变的记录，新值仍需人工发布。旧草案拼写仅保留不执行；DNS provider自动写入和公网CA验收仍独立。
