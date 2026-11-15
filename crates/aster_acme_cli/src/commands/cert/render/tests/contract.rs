@@ -223,7 +223,12 @@ fn platform_snapshot() -> String {
         let output = entry["output"].as_str().unwrap();
         let mut output = output.to_owned();
         let root = "/data/certs/example.com/in_use";
-        let native = std::path::Path::new(root).to_string_lossy().into_owned();
+        let native = std::path::Path::new("/data")
+            .join("certs")
+            .join("example.com")
+            .join("in_use")
+            .to_string_lossy()
+            .into_owned();
         output = output.replace(root, &native);
         for file in ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pem"] {
             let original = format!("/certificates/{file}");
