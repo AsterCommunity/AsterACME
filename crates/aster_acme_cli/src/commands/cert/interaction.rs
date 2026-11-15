@@ -8,15 +8,24 @@ use aster_acme::identifier::DnsIdentifier;
 use clap::ValueEnum as _;
 use std::{net::SocketAddr, path::PathBuf};
 
+#[async_trait::async_trait(?Send)]
 pub(super) trait Prompts {
     fn text(&mut self, message: &str, default: Option<&str>) -> CliResult<String>;
     fn method(&mut self, choices: &[ValidationMethod]) -> CliResult<ValidationMethod>;
     fn invalid(&mut self, message: &str);
+    async fn provider(&mut self, data_dir: Option<&std::path::Path>) -> CliResult<String>;
 }
 
 pub(super) struct TerminalPrompts<'a>(pub(super) &'a OutputSession);
 
+#[async_trait::async_trait(?Send)]
 impl Prompts for TerminalPrompts<'_> {
+    async fn provider(&mut self, data_dir: Option<&std::path::Path>) -> CliResult<String> {
+        let root = data_dir.map_or_else(crate::config::default_data_dir, |root| {
+            Ok(root.to_path_buf())
+        })?;
+        crate::commands::provider::select(&root, self.0).await
+    }
     fn text(&mut self, message: &str, default: Option<&str>) -> CliResult<String> {
         self.0.interaction_started();
         let prompt = inquire::Text::new(message).with_render_config(terminal::prompt_style(
@@ -73,7 +82,7 @@ fn parse_domains(value: &str) -> CliResult<Vec<DnsIdentifier>> {
     Ok(domains)
 }
 
-pub(super) fn complete(
+pub(super) async fn complete(
     args: &mut IssueArgs,
     interactive: bool,
     prompts: &mut dyn Prompts,
@@ -135,7 +144,7 @@ pub(super) fn complete(
     let method = args.challenge.ok_or("Missing validation method.")?;
     validate_domains(args, method)?;
     if method == ValidationMethod::DnsExternal && args.provider.is_none() {
-        args.provider = Some(prompts.text("DNS provider profile:", None)?);
+        args.provider = Some(prompts.provider(args.run.local.data_dir.as_deref()).await?);
     }
     if method == ValidationMethod::DnsExternal {
         crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;

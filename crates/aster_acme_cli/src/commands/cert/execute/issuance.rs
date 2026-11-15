@@ -24,7 +24,8 @@ pub(super) async fn issue(
         &mut args,
         interactive,
         &mut crate::commands::cert::interaction::TerminalPrompts(&cli.output),
-    )?;
+    )
+    .await?;
     let mut options = options(&args.run.local, &args.run.http, args.account.clone());
     let settings = CliSettings::load(&options).await?;
     let store = CliIssueStore::new(settings.data_dir.clone(), Duration::from_secs(5));

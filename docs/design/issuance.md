@@ -68,7 +68,7 @@ restore只重建临时响应服务，不重发ack；run每个返回路径await�
 
 ## 外部 DNS 发布检查点
 
-`issuance::publication`拥有发布计划、逐授权回执、限流下限及终态清理的持久化顺序；`IssueService`不解析provider JSON。`ChallengeSolver`只有一套带`ChallengePublication`的prepare/restore/ready/wait_ready/cleanup契约：prepare只读，返回的最终DNS路由先保存，再允许ready产生副作用。ready逐条返回回执和部分错误，先保存成功回执与provider retry_at，再运行独立wait_ready。外部DNS要求全部回执齐全才允许ack；manual/HTTP/TLS不生成DNS回执。
+`issuance::publication`拥有发布计划、逐授权回执、限流下限及终态清理的持久化顺序；`IssueService`不解析provider JSON。`ChallengeSolver`只有一套带`ChallengePublication`的prepare/restore/ready/wait_ready/cleanup契约：prepare只读，返回的最终DNS路由先保存，再允许ready产生副作用。ready逐条返回回执和部分错误，先保存成功回执与provider retry_at，再运行独立wait_ready。外部DNS要求全部回执齐全才允许ack；本地TXT检查仅作建议，发布后等5秒检查一次，未确认时额外等10秒再交给CA验证，具体可配预算见[Provider操作](../dns-providers.md)。manual/HTTP/TLS不生成DNS回执。
 
 DNS solver的正常取消由拥有子进程的runner处理，服务不从外层丢弃正在终止/回收子进程的future。HTTP/webroot/manual保持各自的shutdown与worker/终端恢复约束。返回后服务仍检查同一执行期限，CA提交规则不变。
 

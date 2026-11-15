@@ -11,6 +11,8 @@ aster-acme provider show dns-prod
 aster-acme cert issue -a default -d example.com -d '*.example.com' -c dns_external --provider dns-prod
 ```
 
+终端可直接运行 `provider add`，交互输入名称与 executable 路径；`provider show`、`provider cleanup`、`provider remove` 缺少名称时交互选择已有 Profile。`cert issue -c dns_external` 缺少 `--provider` 时也使用同一选择器。`remove` 选择后仍须确认（默认否），`--yes` 仅跳过确认，不跳过选择；`provider update` 未带变更参数时进入编辑菜单，可修改 executable、逐项增删 argv/zone 或明确清空，最后保存；子菜单提供返回选项，Esc 返回上一级并保留草稿，Ctrl-C 或主菜单取消才丢弃草稿且不写入。保存时在锁内复核完整 Profile 快照，有并发变化则拒绝覆盖。携带变更参数时直接应用参数，不额外弹编辑菜单。JSON/非 TTY 不提示，必须明确名称及必要参数（update 还须提供变更）。`provider list` 使用与 account/cert 一致的紧凑表格；`provider show` 展示完整脱敏字段及 Profile TOML 路径。
+
 `--exec` 是存在且可执行的绝对文件路径；可重复使用 `--arg=VALUE` 设置独立 argv 值。进程直接启动，不经过 shell，不解析 shell 引号、变量展开、管道或重定向。Profile 名称使用 1–64 位 ASCII 字母、数字、下划线和连字符。不同云账号/区域/租户应使用不同 Profile。
 
 Profile 固定保存在 `<data-dir>/providers/<name>.toml`，不是根 `config.toml` 的子表。首次 add 创建类似以下文件：
@@ -21,8 +23,8 @@ executable = "/absolute/path/my-dns-provider"
 args = []
 allowed_zones = [] # 默认不限制；例如 ["example.com"] 可启用附加限制
 timeout_seconds = 30
-propagation_timeout = 120
-propagation_interval = 5
+propagation_timeout = 5 # 本地建议性检查的预算
+propagation_interval = 5 # 发布成功后、首次检查前的等待
 
 [provider_custom]
 credential_profile = "production"
@@ -57,7 +59,9 @@ _acme-challenge.example.com. CNAME acme.validation.net.
 
 首次解析后的完整路径在 provider 调用前写入申请 journal。恢复和清理使用同一路径，不根据后来变化的 CNAME 改写发布目标。Profile 的当前允许 zone 仍会重新校验，配置缩窄后可能需要操作者恢复旧 zone 权限才能清理。
 
-provider `present` 成功只表示 DNS API 操作已完成或完成对账。保存回执后，AsterACME 单独等待原始 challenge owner 返回每个期望 TXT 值；默认最多 120 秒、每 5 秒查询，仍受 `--operation-timeout` 限制。`timeout_seconds` 为每次 provider 进程 1–300 秒；`propagation_timeout` 为 1–3600 秒；`propagation_interval` 为 1–60 秒。传播失败或取消保留记录与回执，不 ack；本地可见性始终不代表 CA 已通过验证。
+provider `present` 成功只表示 DNS API 操作已完成或完成对账。保存回执后默认等 5 秒，再对原始 challenge owner 做一次本地 TXT 建议性检查，默认检查预算为 5 秒；同名的全部预期值必须出现在同一份应答中。全部匹配立即请求 CA 验证；缺值、解析错误或本地检查超时仅警告，再等 10 秒后请求 CA，不循环等待本地可见。本地可见性不代表 CA 已通过验证。等待、检查和 CA 请求始终受取消及 `--operation-timeout` 限制；取消/整体超时仍保留记录与回执且不 ack。
+
+`timeout_seconds` 为每次 provider 进程 1–300 秒；`propagation_timeout` 现在表示单次本地检查预算（1–3600 秒）；`propagation_interval` 现在表示检查前等待（1–60 秒），不再表示轮询间隔。已有 Profile 使用文件中明确保存的数值，不自动重写；例如旧文件的 `propagation_timeout = 120` 会给单次检查最多 120 秒，可手动改为 5。额外等待固定为 10 秒。共享策略位于 `aster_acme_dns`，供外部及后续内置 adapter 复用。
 
 ## 恢复、所有权和清理
 
@@ -67,7 +71,7 @@ AsterACME 保存逐记录回执后才运行传播策略和 challenge ack。部�
 
 只有 CA 订单完成或已保存终态失败后才清理临时材料。精确同值、事先已存在的 TXT 标为 `preexisting` 并保留；`created` 只允许删除回执指向的未变对象，不清空 RRset。取消、整体超时、轮询上限和未知 CA 结果保留 TXT。DNS Persist 不通过这个临时 DNS-01 adapter 清理。
 
-清理失败不抹掉已签发证书或原 CA 错误。可单独重试：
+人类进度日志显示清理开始、已确认完成数、保留预存记录，以及失败后待重试状态；JSON 不混入日志。清理失败不抹掉已签发证书或原 CA 错误，也不阻止后续正常流程；待清理状态保留供重试。可单独重试：
 
 ```sh
 aster-acme provider cleanup dns-prod

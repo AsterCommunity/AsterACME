@@ -58,6 +58,17 @@ pub(crate) fn select_index(
     default: usize,
     output: &crate::common::session::OutputSession,
 ) -> CliResult<usize> {
+    select_index_or_back(message, choices, default, output)?
+        .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
+}
+
+/// Editor navigation distinguishes Esc (back) from Ctrl-C (cancel the operation).
+pub(crate) fn select_index_or_back(
+    message: &str,
+    choices: &[String],
+    default: usize,
+    output: &crate::common::session::OutputSession,
+) -> CliResult<Option<usize>> {
     output.interaction_started();
     let items = choices
         .iter()
@@ -67,13 +78,14 @@ pub(crate) fn select_index(
             label: label.clone(),
         })
         .collect();
-    let chosen = prompt_result(
-        inquire::Select::new(message, items)
-            .with_starting_cursor(default)
-            .with_render_config(prompt_style(output.diagnostic_format().color, false))
-            .prompt(),
-    )?;
-    Ok(chosen.index)
+    let result = inquire::Select::new(message, items)
+        .with_starting_cursor(default)
+        .with_render_config(prompt_style(output.diagnostic_format().color, false))
+        .prompt();
+    match result {
+        Err(inquire::InquireError::OperationCanceled) => Ok(None),
+        result => prompt_result(result).map(|chosen| Some(chosen.index)),
+    }
 }
 
 // Keep UI identity separate from labels: two requests may display the same domain,

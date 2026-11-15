@@ -1,5 +1,6 @@
 //! ADPP solver: frozen routes, checkpointed receipts, separate propagation policy.
 use crate::commands::cert::progress::Progress;
+use crate::common::output::MessageKind;
 use aster_acme::{
     challenge::ChallengeKind,
     issuance::{IssueError, ValidationRequirement},
@@ -10,7 +11,7 @@ use aster_acme::{
 };
 use aster_acme_dns::{
     CleanupRequest, DnsProvider, ProviderContext, ProviderExecution, RecordOwnership,
-    propagation::PropagationPolicy,
+    propagation::{PropagationError, PropagationEvent, PropagationPolicy},
     routing::{DnsLookup, absolute_name, resolve, validate_chain},
 };
 use async_trait::async_trait;
@@ -31,6 +32,32 @@ fn scope(execution: &ExecutionContext) -> ProviderExecution {
     }
 }
 impl ExternalDns {
+    fn report_cleanup(&self, count: usize, outcome: &CleanupResult) {
+        self.progress.output.details(
+            if outcome.failure.is_some() {
+                MessageKind::Warning
+            } else {
+                MessageKind::Success
+            },
+            &format!(
+                "DNS TXT cleanup: {}/{} publication(s) confirmed complete{}",
+                outcome.completed.len(),
+                count,
+                if outcome.failure.is_some() {
+                    "; cleanup remains pending for retry; the saved CA outcome is retained"
+                } else {
+                    " (pre-existing records retained)"
+                },
+            ),
+            &outcome
+                .failure
+                .as_ref()
+                .map(ToString::to_string)
+                .into_iter()
+                .collect::<Vec<_>>(),
+        );
+    }
+
     async fn present(
         &self,
         publications: &[ChallengePublication],
@@ -172,18 +199,28 @@ impl ChallengeSolver for ExternalDns {
                     .ok_or(IssueError::InvalidInput("missing propagation route"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.propagation
-            .wait(self.lookup.as_ref(), &records, &scope(execution))
+        let visible = self.propagation
+            .wait(self.lookup.as_ref(), &records, &scope(execution), |event| {
+                let (kind, message) = match event {
+                    PropagationEvent::WaitingToCheck(delay) => (MessageKind::Wait,
+                        format!("DNS provider records published; waiting {:.1}s before the advisory TXT check", delay.as_secs_f64())),
+                    PropagationEvent::WaitingForCa(delay) => (MessageKind::Warning,
+                        format!("Local DNS could not confirm all TXT values; waiting {:.1}s before requesting CA validation", delay.as_secs_f64())),
+                };
+                self.progress.output.progress(kind, &message);
+            })
             .await
             .map_err(|error| match error {
-                aster_acme_dns::propagation::PropagationError::Interrupted => {
-                    IssueError::Interrupted
-                }
-                error => IssueError::DnsPropagation(error),
+                aster_acme_dns::propagation::PropagationError::Interrupted => IssueError::Interrupted,
+                error @ PropagationError::InvalidPolicy => IssueError::DnsPropagation(error),
             })?;
         self.progress.output.progress(
-            crate::common::output::MessageKind::Success,
-            "DNS provider records are published and expected TXT values are visible locally",
+            if visible { MessageKind::Success } else { MessageKind::Info },
+            if visible {
+                "Expected DNS TXT values are visible locally; continuing to CA validation"
+            } else {
+                "DNS propagation grace period finished; continuing to CA validation with local visibility unconfirmed"
+            },
         );
         Ok(())
     }
@@ -204,6 +241,10 @@ impl ChallengeSolver for ExternalDns {
         publications: &[ChallengePublication],
         execution: &ExecutionContext,
     ) -> Result<CleanupResult, IssueError> {
+        self.progress.output.progress(
+            MessageKind::Info,
+            &format!("Cleaning up {} DNS TXT publication(s)", publications.len()),
+        );
         execution.check().map_err(|_| IssueError::Interrupted)?;
         let mut outcome = CleanupResult::default();
         let mut records = Vec::new();
@@ -219,6 +260,13 @@ impl ChallengeSolver for ExternalDns {
                 continue;
             };
             if receipt.ownership == RecordOwnership::Preexisting {
+                self.progress.output.progress(
+                    MessageKind::Info,
+                    &format!(
+                        "Preserving pre-existing DNS TXT record at {}",
+                        receipt.record_name
+                    ),
+                );
                 outcome.completed.push(publication.publication_id.clone());
                 continue;
             }
@@ -282,6 +330,7 @@ impl ChallengeSolver for ExternalDns {
                 }
             }
         }
+        self.report_cleanup(publications.len(), &outcome);
         Ok(outcome)
     }
 }

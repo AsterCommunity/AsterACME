@@ -41,6 +41,7 @@ struct Dns {
     fail_cleanup: AtomicBool,
     cancel_after_present: AtomicBool,
     preexisting: AtomicBool,
+    hide_txt: AtomicBool,
 }
 #[async_trait]
 impl DnsLookup for Dns {
@@ -49,6 +50,9 @@ impl DnsLookup for Dns {
         Ok((name == "_acme-challenge.example.com.").then(|| "delegated.validation.net.".into()))
     }
     async fn txt(&self, _: &str) -> Result<Vec<Vec<u8>>, LookupError> {
+        if self.hide_txt.load(Ordering::SeqCst) {
+            return Ok(Vec::new());
+        }
         Ok(self
             .records
             .lock()
@@ -169,7 +173,8 @@ fn solver(dns: Arc<Dns>) -> ExternalDns {
         lookup: dns,
         allowed_zones: vec!["validation.net".into()],
         propagation: PropagationPolicy {
-            interval: Duration::from_millis(5),
+            initial_delay: Duration::from_millis(5),
+            fallback_delay: Duration::from_millis(10),
             timeout: Duration::from_secs(1),
         },
         progress: progress(),
@@ -257,7 +262,9 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
     let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
     let dns = Arc::new(Dns::default());
     dns.fail_cleanup.store(true, Ordering::SeqCst);
-    let solver = solver(dns.clone());
+    let mut solver = solver(dns.clone());
+    let (output, _, diagnostics) = crate::common::session::tests::session(false);
+    solver.progress = Arc::new(crate::commands::cert::progress::Progress::new(output));
     let IssueOutcome::Completed { record, cleanup } =
         run(&mut fixture, &solver, &controls()).await.unwrap()
     else {
@@ -265,6 +272,16 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
     };
     assert_eq!(cleanup.len(), 1);
     assert!(record.authorizations[0].cleanup_pending);
+    assert!(
+        diagnostics
+            .text()
+            .contains("Cleaning up 1 DNS TXT publication(s)")
+    );
+    assert!(
+        diagnostics
+            .text()
+            .contains("cleanup remains pending for retry")
+    );
     let before = fixture.server.received_requests().await.unwrap().len();
     dns.fail_cleanup.store(false, Ordering::SeqCst);
     let cleaned = aster_acme::issuance::publication::cleanup(
@@ -280,6 +297,38 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
         fixture.server.received_requests().await.unwrap().len()
     );
     assert!(dns.records.lock().unwrap().is_empty());
+    assert!(
+        diagnostics
+            .text()
+            .contains("1/1 publication(s) confirmed complete")
+    );
+}
+
+#[tokio::test]
+async fn unconfirmed_local_txt_still_requests_ca_after_grace_period_and_cleans_up() {
+    for json in [false, true] {
+        let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+        let dns = Arc::new(Dns::default());
+        dns.hide_txt.store(true, Ordering::SeqCst);
+        let mut solver = solver(dns.clone());
+        let (output, _, diagnostics) = crate::common::session::tests::session(json);
+        solver.progress = Arc::new(crate::commands::cert::progress::Progress::new(output));
+        assert!(matches!(
+            run(&mut fixture, &solver, &controls()).await.unwrap(),
+            IssueOutcome::Completed { .. }
+        ));
+        assert_eq!(fixture.count("/dns-challenge").await, 1);
+        assert!(dns.records.lock().unwrap().is_empty());
+        if json {
+            assert_eq!(diagnostics.text(), "");
+        } else {
+            let text = diagnostics.text();
+            assert!(text.contains("before the advisory TXT check"));
+            assert!(text.contains("Local DNS could not confirm all TXT values"));
+            assert!(text.contains("continuing to CA validation with local visibility unconfirmed"));
+            assert!(text.contains("1/1 publication(s) confirmed complete"));
+        }
+    }
 }
 
 struct ReceiptRecovery {

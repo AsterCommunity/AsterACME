@@ -29,7 +29,9 @@ jobs:
       - run: cargo check --workspace --locked
       - run: cargo test --workspace --locked
       - if: runner.os != 'Windows'
-        run: python3 scripts/test-confirmation-terminal.py
+        run: |
+          python3 scripts/test-confirmation-terminal.py
+          python3 scripts/test-provider-terminal.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   precheck-features:
