@@ -320,58 +320,6 @@ async fn cancellation_at_domains_method_or_method_configuration_is_preserved() {
     }
 }
 
-#[tokio::test]
-#[ignore = "PTY completion fixture only; never contacts a CA"]
-async fn interactive_issue_child() {
-    let root = tempfile::tempdir().unwrap();
-    if std::env::var("ASTER_PROVIDER_TEST_MODE").as_deref() == Ok("issue") {
-        let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
-            root.path().into(),
-            std::time::Duration::from_secs(1),
-        );
-        for name in ["alpha", "cf-test"] {
-            store
-                .add(
-                    name.into(),
-                    aster_acme_cli_storage::provider::ProviderProfile::new(
-                        std::env::current_exe().unwrap(),
-                        Vec::new(),
-                        Vec::new(),
-                    )
-                    .unwrap(),
-                )
-                .await
-                .unwrap();
-        }
-        let mut options = args(&["-c", "dns_external", "-d", "example.com"]);
-        options.run.local.data_dir = Some(root.path().into());
-        let output = OutputSession::new(false);
-        match complete(&mut options, true, &mut TerminalPrompts(&output)).await {
-            Ok(()) => println!(
-                "REPORT_BEGIN\nSELECTED={}\nREPORT_END",
-                options.provider.unwrap()
-            ),
-            Err(error) if error.is::<terminal::Canceled>() => println!("INPUT_CANCELLED"),
-            Err(error) => panic!("unexpected provider selection failure: {error}"),
-        }
-        return;
-    }
-    println!("TEST_WEBROOT={}", root.path().display());
-    let mut args = args(&[]);
-    let output = OutputSession::new(false);
-    match complete(&mut args, true, &mut TerminalPrompts(&output)).await {
-        Ok(()) => {
-            let method = args.challenge.unwrap();
-            let config =
-                configuration(method, args.webroot.as_deref(), args.listen_address).unwrap();
-            println!("INPUTS_COMPLETE method={} config={config}", method.id());
-        }
-        Err(error) if error.is::<terminal::Canceled>() => println!("INPUTS_CANCELLED"),
-        Err(error) => panic!("unexpected completion failure: {error}"),
-    }
-    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
-}
-
 #[test]
 fn complete_rejects_noninteractive_missing_inputs_before_initializing_the_data_directory() {
     use crate::common::context::CommandContext;

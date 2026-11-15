@@ -815,6 +815,41 @@ mod tests {
             .unwrap()
             .starts_with("\x1b[33m[WARN]")
         );
+        report.cleanup[0].completed = true;
+        report.cleanup[0].error = None;
+        let complete = render(&report, Format::plain(false)).unwrap();
+        assert!(complete.contains("cleanup complete"));
+        assert!(!complete.contains("cleanup pending"));
+        report.cleanup.clear();
+        assert!(
+            render(&report, Format::plain(false))
+                .unwrap()
+                .contains("No terminal DNS publication cleanup is pending")
+        );
+        report.incomplete = true;
+        assert!(
+            render(&report, Format::plain(false))
+                .unwrap()
+                .contains("deadline expired")
+        );
+        report.operation = "listed";
+        report.profiles.clear();
+        assert!(
+            render(&report, Format::plain(false))
+                .unwrap()
+                .contains("No DNS provider profiles configured")
+        );
+        report.removed = Some("prod\nunsafe".into());
+        report.operation = "removed";
+        let removed = render(
+            &report,
+            Format {
+                json: false,
+                color: true,
+            },
+        )
+        .unwrap();
+        assert!(removed.contains("Removed provider profile prod\\nunsafe"));
     }
 
     #[tokio::test]
@@ -908,68 +943,6 @@ mod tests {
         assert!(!json.contains("secret-sentinel"));
         assert!(!json.contains('\x1b'));
         assert!(store.path("../escape").is_err());
-    }
-
-    #[tokio::test]
-    #[ignore = "Native PTY fixture; never executes a provider or contacts a CA"]
-    async fn provider_selection_child() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
-            temp.path().into(),
-            std::time::Duration::from_secs(1),
-        );
-        for name in ["alpha", "cf-test"] {
-            let mut profile = aster_acme_cli_storage::provider::ProviderProfile::new(
-                std::env::current_exe().unwrap(),
-                Vec::new(),
-                Vec::new(),
-            )
-            .unwrap();
-            profile
-                .provider_custom
-                .insert("token".into(), serde_json::json!("secret-sentinel"));
-            store.add(name.into(), profile).await.unwrap();
-        }
-        let mode = std::env::var("ASTER_PROVIDER_TEST_MODE").unwrap();
-        let cli = CommandContext::new(false);
-        let result = execute(
-            command(&[&mode, "--data-dir", temp.path().to_str().unwrap()]),
-            &cli,
-        )
-        .await
-        .and_then(|report| render(&report, cli.output.format()));
-        if mode == "remove" {
-            assert_eq!(
-                store.names().await.unwrap().contains(&"cf-test".into()),
-                result.is_err()
-            );
-        } else if mode == "add" {
-            assert_eq!(
-                store.names().await.unwrap().contains(&"cf-new".into()),
-                result.is_ok()
-            );
-        } else if mode == "update" {
-            let saved = store.get("cf-test".into()).await.unwrap();
-            assert_eq!(
-                saved.args,
-                if result.is_ok() {
-                    vec!["--label=hello world".to_owned()]
-                } else {
-                    Vec::new()
-                }
-            );
-            assert_eq!(
-                saved.provider_custom.get("token"),
-                Some(&serde_json::json!("secret-sentinel"))
-            );
-        }
-        match result {
-            Ok(text) => println!("REPORT_BEGIN\n{text}\nREPORT_END"),
-            Err(error) if error.is::<crate::common::terminal::Canceled>() => {
-                println!("INPUT_CANCELLED");
-            }
-            Err(error) => panic!("unexpected provider prompt error: {error}"),
-        }
     }
 
     #[test]
@@ -1124,6 +1097,83 @@ mod tests {
         .await
         .unwrap();
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn explicit_update_replaces_and_clears_fields_and_duplicate_add_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_str().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let cli = CommandContext::new(true);
+        execute(
+            command(&[
+                "add",
+                "prod",
+                "--exec",
+                executable.to_str().unwrap(),
+                "--arg=old",
+                "--allow-zone",
+                "old.example",
+                "--data-dir",
+                root,
+                "--json",
+            ]),
+            &cli,
+        )
+        .await
+        .unwrap();
+        assert!(
+            execute(
+                command(&[
+                    "add",
+                    "prod",
+                    "--exec",
+                    executable.to_str().unwrap(),
+                    "--data-dir",
+                    root,
+                    "--json",
+                ]),
+                &cli
+            )
+            .await
+            .is_err()
+        );
+        let updated = execute(
+            command(&[
+                "update",
+                "prod",
+                "--exec",
+                executable.to_str().unwrap(),
+                "--arg=--label=hello world",
+                "--allow-zone",
+                "updated.example",
+                "--data-dir",
+                root,
+                "--json",
+            ]),
+            &cli,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.profiles[0].args, ["--label=hello world"]);
+        assert_eq!(updated.profiles[0].allowed_zones, ["updated.example"]);
+        assert_eq!(updated.profiles[0].executable, executable);
+        let cleared = execute(
+            command(&[
+                "update",
+                "prod",
+                "--clear-args",
+                "--clear-zones",
+                "--data-dir",
+                root,
+                "--json",
+            ]),
+            &cli,
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.profiles[0].args, Vec::<String>::new());
+        assert_eq!(cleared.profiles[0].allowed_zones, Vec::<String>::new());
     }
     #[tokio::test]
     async fn zone_restriction_is_optional_and_can_be_added_or_cleared() {

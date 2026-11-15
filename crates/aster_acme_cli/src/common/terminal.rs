@@ -78,13 +78,15 @@ pub(crate) fn select_index_or_back(
             label: label.clone(),
         })
         .collect();
-    let result = inquire::Select::new(message, items)
+    match inquire::Select::new(message, items)
         .with_starting_cursor(default)
         .with_render_config(prompt_style(output.diagnostic_format().color, false))
-        .prompt();
-    match result {
+        .prompt()
+    {
         Err(inquire::InquireError::OperationCanceled) => Ok(None),
-        result => prompt_result(result).map(|chosen| Some(chosen.index)),
+        Err(inquire::InquireError::OperationInterrupted) => Err(Box::new(Canceled)),
+        Err(error) => Err(Box::new(error)),
+        Ok(chosen) => Ok(Some(chosen.index)),
     }
 }
 
