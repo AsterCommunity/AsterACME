@@ -61,6 +61,40 @@ impl DeploymentPhase {
     }
 }
 
+/// Minimal saved state used by embedders to decide whether a deployment retry is due.
+#[derive(Debug, Clone, Copy)]
+pub struct DeploymentRetryState<'a> {
+    /// Generation on which this binding last attempted deployment.
+    pub generation: Option<&'a str>,
+    /// Durable execution phase.
+    pub phase: DeploymentPhase,
+    /// Earliest automatic retry deadline.
+    pub retry_at: Option<time::OffsetDateTime>,
+}
+
+impl DeploymentRetryState<'_> {
+    /// A known retryable failure is due only for the still-current generation.
+    #[must_use]
+    pub fn due(self, current_generation: &str, now: time::OffsetDateTime) -> bool {
+        self.generation == Some(current_generation)
+            && self.phase.automatically_retryable()
+            && self.retry_at.is_none_or(|deadline| deadline <= now)
+    }
+}
+
+/// Decide whether a fresh issuance may deploy this generation automatically.
+#[must_use]
+pub fn admits_after_issuance(
+    state: DeploymentRetryState<'_>,
+    current_generation: &str,
+    now: time::OffsetDateTime,
+) -> bool {
+    !state.phase.reload_uncertain()
+        && (state.generation != Some(current_generation)
+            || (state.phase != DeploymentPhase::Deployed
+                && state.retry_at.is_none_or(|deadline| deadline <= now)))
+}
+
 mod checkpoint;
 pub use checkpoint::DeploymentCheckpoint;
 

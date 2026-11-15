@@ -1,5 +1,8 @@
 //! Deployment policy boundaries, independent of a filesystem or process executor.
-use crate::deployment::{DeploymentCheckpoint, DeploymentIntent, DeploymentPhase};
+use crate::deployment::{
+    DeploymentCheckpoint, DeploymentIntent, DeploymentPhase, DeploymentRetryState,
+    admits_after_issuance,
+};
 use time::{Duration, OffsetDateTime};
 
 fn state() -> DeploymentCheckpoint {
@@ -157,4 +160,18 @@ fn observations_and_configuration_changes_preserve_only_their_owned_state() {
         checkpoint.phase = phase;
         assert_eq!(checkpoint.reconfigured(), checkpoint);
     }
+}
+
+#[test]
+fn prior_public_retry_policy_entrypoints_remain_the_policy_used_by_checkpoints() {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let old_surface = DeploymentRetryState {
+        generation: Some("current"),
+        phase: DeploymentPhase::ReloadFailed,
+        retry_at: Some(now),
+    };
+    assert!(old_surface.due("current", now));
+    assert!(!old_surface.due("other", now));
+    assert!(admits_after_issuance(old_surface, "current", now));
+    assert_eq!(state().due("current", now), old_surface.due("current", now));
 }

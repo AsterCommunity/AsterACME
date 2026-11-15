@@ -41,7 +41,9 @@ pub trait IssueSession: Send + Sync {
     /// Rejects non-renewal sessions, stale predecessors and journal write failures.
     async fn record_renewal_failure(
         &self,
-        failure: crate::renewal::admission::RenewalFailure,
+        now: time::OffsetDateTime,
+        ca_retry_at: Option<time::OffsetDateTime>,
+        blocked_reason: Option<String>,
     ) -> Result<RenewalRetryState, IssueError>;
 }
 

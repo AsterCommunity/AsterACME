@@ -223,18 +223,25 @@ fn platform_snapshot() -> String {
         let output = entry["output"].as_str().unwrap();
         let mut output = output.to_owned();
         for file in ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pem"] {
-            for root in ["/data/certs/example.com/in_use", "/certificates"] {
-                let original = format!("{root}/{file}");
-                let native = std::path::Path::new(root).join(file);
-                if label.ends_with("/json") {
-                    output = output.replace(
-                        &serde_json::to_string(&original).unwrap(),
-                        &serde_json::to_string(&native).unwrap(),
-                    );
-                } else {
-                    output = output.replace(&original, &native.display().to_string());
-                }
+            let original = format!("/data/certs/example.com/in_use/{file}");
+            let native = std::path::Path::new("/data")
+                .join("certs")
+                .join("example.com")
+                .join("in_use")
+                .join(file);
+            if label.ends_with("/json") {
+                output = output.replace(
+                    &serde_json::to_string(&original).unwrap(),
+                    &serde_json::to_string(&native).unwrap(),
+                );
+            } else {
+                output = output.replace(&original, &native.display().to_string());
             }
+        }
+        for file in ["cert.pem", "private-key.pem", "ca.pem", "fullchain.pem"] {
+            let original = format!("/certificates/{file}");
+            let native = std::path::Path::new("/certificates").join(file);
+            output = output.replace(&original, &native.display().to_string());
         }
         if !label.ends_with("/json") {
             output = output

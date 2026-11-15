@@ -15,7 +15,7 @@
 
 经核对必须立即采用的安全修复，可用 `cargo --config 'resolver.incompatible-publish-age="allow"' update -p PACKAGE --precise VERSION` 做单次显式覆盖并审查 lockfile diff；该次解析的传递依赖同样不受冷却期限制，不把覆盖写入项目配置。
 
-该 Cargo 配置项从 Cargo 1.100 开始生效；使用更旧 Cargo 执行新的依赖解析时，发布冷却期不受保证。现有项目 MSRV 不因该 resolver 策略改变。配置语义见 [Cargo 发布冷却期](https://doc.rust-lang.org/cargo/reference/config.html#registryglobal-min-publish-age)。
+该 Cargo 配置项从 Cargo 1.100 开始生效；使用更旧 Cargo 执行新的依赖解析时，发布冷却期不受保证。现有项目 MSRV 不因该 resolver 策略改变。`cargo install` 不使用此 resolver 冷却期，包和其依赖直接安装时不受该保护。配置语义见 [Cargo 发布冷却期](https://doc.rust-lang.org/cargo/reference/config.html#registryglobal-min-publish-age)。
 
 ## 源码组织与排版
 

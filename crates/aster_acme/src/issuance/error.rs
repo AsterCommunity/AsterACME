@@ -6,9 +6,6 @@ use thiserror::Error;
 /// Protocol/service failures without private key material.
 #[derive(Debug, Error)]
 pub enum IssueError {
-    /// Renewal policy denied another attempt; this is not a filesystem failure.
-    #[error(transparent)]
-    RenewalAdmission(#[from] crate::renewal::admission::AdmissionError),
     /// Another process owns the execution lease; this is not a failed CA attempt.
     #[error("{0} execution lock is unavailable: {1}")]
     LeaseUnavailable(&'static str, String),

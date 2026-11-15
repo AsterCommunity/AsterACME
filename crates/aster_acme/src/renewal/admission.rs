@@ -57,26 +57,6 @@ impl IssueRecord {
     }
 }
 
-/// A renewal admission failure, independent of storage and publication adapters.
-#[derive(Debug, thiserror::Error)]
-pub enum AdmissionError {
-    /// An earlier attempt may have changed the CA and needs explicit reconciliation.
-    #[error("automatic renewal is blocked by an uncertain prior result: {0}")]
-    Uncertain(String),
-    /// Operator intent cannot override a CA-imposed minimum deadline.
-    #[error("CA Retry-After has not elapsed; --now cannot bypass it")]
-    CaBackoff,
-    /// The selected certificate does not carry an issuance-owned renewal plan.
-    #[error("in_use certificate has no renewal plan")]
-    MissingPlan,
-    /// Revocation must be reconciled before another issuance is admitted.
-    #[error("certificate revocation is unconfirmed; resolve it before renewing")]
-    RevocationUncertain,
-    /// Choosing between saved requests requires explicit operator input.
-    #[error("several unfinished renewals match in_use; select an exact operation")]
-    Ambiguous,
-}
-
 /// An admitted foreground action; refusals are returned as typed errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenewalAdmission {
@@ -102,13 +82,15 @@ pub fn request(
     if let Some(retry) = &current.renewal_retry {
         match retry.admission(now, immediate) {
             RetryAdmission::Uncertain => {
-                return Err(AdmissionError::Uncertain(
-                    retry.blocked_reason.clone().unwrap_or_default(),
-                )
-                .into());
+                return Err(IssueError::Publication(format!(
+                    "automatic renewal is blocked by an uncertain prior result: {}",
+                    retry.blocked_reason.as_deref().unwrap_or_default()
+                )));
             }
             RetryAdmission::CaBackoff => {
-                return Err(AdmissionError::CaBackoff.into());
+                return Err(IssueError::InvalidInput(
+                    "CA Retry-After has not elapsed; --now cannot bypass it",
+                ));
             }
             RetryAdmission::LocalBackoff => return Ok(RenewalAdmission::NotDue),
             RetryAdmission::Ready => {}
@@ -122,19 +104,25 @@ pub fn request(
                 .as_ref()
                 .is_some_and(|previous| previous.operation_id == current.operation_id)
     });
-    let due = current
-        .renewal
-        .as_ref()
-        .ok_or(AdmissionError::MissingPlan)?;
+    let due = current.renewal.as_ref().ok_or(IssueError::InvalidInput(
+        "in_use certificate has no renewal plan",
+    ))?;
     let decision = renewal_decision(
         pending,
         current.revocation.state,
-        due.renew_at,
-        now,
+        due.renew_at.unix_timestamp(),
+        now.unix_timestamp(),
         immediate,
     );
+    // Preserve the public seconds-based core API while checking the exact saved
+    // subsecond boundary before reporting a renewal as due.
+    if decision == RenewalDecision::Start && !immediate && now < due.renew_at {
+        return Ok(RenewalAdmission::NotDue);
+    }
     match decision {
-        RenewalDecision::RevocationUncertain => Err(AdmissionError::RevocationUncertain.into()),
+        RenewalDecision::RevocationUncertain => Err(IssueError::InvalidInput(
+            "certificate revocation is unconfirmed; resolve it before renewing",
+        )),
         RenewalDecision::NotDue => Ok(RenewalAdmission::NotDue),
         RenewalDecision::Start => Ok(RenewalAdmission::Start),
         RenewalDecision::Resume => Ok(RenewalAdmission::Resume),
@@ -211,7 +199,9 @@ pub fn existing<'a>(
     });
     let first = pending.next();
     if pending.next().is_some() {
-        return Err(AdmissionError::Ambiguous.into());
+        return Err(IssueError::InvalidInput(
+            "several unfinished renewals match in_use; select an exact operation",
+        ));
     }
     Ok(first)
 }

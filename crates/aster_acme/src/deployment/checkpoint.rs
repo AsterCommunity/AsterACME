@@ -37,9 +37,12 @@ impl DeploymentCheckpoint {
         if self.pending_generation.as_deref() == Some(current) {
             return !self.phase.reload_uncertain() && self.retry_at.is_none_or(|at| at <= now);
         }
-        self.generation.as_deref() == Some(current)
-            && self.phase.automatically_retryable()
-            && self.retry_at.is_none_or(|at| at <= now)
+        super::DeploymentRetryState {
+            generation: self.generation.as_deref(),
+            phase: self.phase,
+            retry_at: self.retry_at,
+        }
+        .due(current, now)
     }
 
     /// Admission after the adapter has compared the complete configuration snapshot.
@@ -55,10 +58,15 @@ impl DeploymentCheckpoint {
             DeploymentIntent::Explicit => true,
             DeploymentIntent::AfterIssuance { generation } => {
                 generation == current
-                    && !self.phase.reload_uncertain()
-                    && (self.generation.as_deref() != Some(current)
-                        || (self.phase != DeploymentPhase::Deployed
-                            && self.retry_at.is_none_or(|at| at <= now)))
+                    && super::admits_after_issuance(
+                        super::DeploymentRetryState {
+                            generation: self.generation.as_deref(),
+                            phase: self.phase,
+                            retry_at: self.retry_at,
+                        },
+                        current,
+                        now,
+                    )
             }
             DeploymentIntent::Retry { generation, .. } => {
                 generation == current && snapshot_matches && self.due(current, now)
