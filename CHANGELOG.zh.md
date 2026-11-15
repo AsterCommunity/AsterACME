@@ -31,7 +31,7 @@
 - **发布与清理**：部署直接使用普通文件和稳定目录路径，不使用链接、目录交换或承诺整组原子事务。Webroot 固定目录身份，Windows 使用参与重命名共享检查的目录访问权，新目录权限同步后发布；shutdown 回收阻塞 worker；HTTP 建议性预检复用连接池，遵循用户代理并允许内网目标，DNS/HTTP共用专用预检时限，固定最多5秒，并接受HTTP-01响应末尾ASCII空白。Webroot 核验实际隔离的对象后再清理，保留用户替换文件。人工验证确认支持可见输入/编辑与默认否；独立读取线程在终端空闲时仍轮询取消、shutdown与操作期限，自行恢复终端模式后回收；诊断写入或 flush 失败不会报告成功。
 - **存储与跨平台**：版本化 TOML、有界类型化查询、标准库锁及平台文件校验。Unix 使用私有权限和内部 in_use 相对链接；Windows 使用继承权限及可恢复完整目录副本。Unix 新建目录项在远端操作前同步，metadata 保存不能重建已删除账户。Windows 进程重启恢复不等同掉电后 rename 目录项持久性；无关用户文件保留。
 - **运行时与依赖**：复用惰性 HTTP 连接池，隔离账户策略与 nonce；依赖版本／features 归根 workspace，限定 rustls/AWS-LC。优化 release 体积，仅可执行入口安装 Forge panic hook，私有报告脱敏且不重放 mutation。
-- **构建与 CI**：覆盖 Linux、macOS、Windows，检查导入归属、依赖 features、本地文档链接及独立预检feature组合，并验证库关闭预检时不引入DNS解析器；CLI的external DNS使用独立resolver。源码、清单和 Cargo 输出显式按 UTF-8 解码，不依赖 Windows 默认编码。构建信息不借用无关父仓库 revision，也不监视不存在的压缩分支引用；dirty 只包含已跟踪变更。Linux CI 追加覆盖率任务，收集 `cargo-llvm-cov` 的 LCOV 输出，发布运行摘要并上传 Codecov。
+- **构建与 CI**：最低要求 Rust/Cargo 1.100+，通过 Cargo 原生 lint 拒绝未使用的生产／构建依赖；新解析的 registry 版本须满足七天发布冷却期，已有 lockfile 版本继续可用。覆盖 Linux、macOS、Windows，检查导入归属、依赖 features、本地文档链接及独立预检feature组合，并验证库关闭预检时不引入DNS解析器；CLI的external DNS使用独立resolver。源码、清单和 Cargo 输出显式按 UTF-8 解码，不依赖 Windows 默认编码。构建信息不借用无关父仓库 revision，也不监视不存在的压缩分支引用；dirty 只包含已跟踪变更。Linux CI 追加覆盖率任务，收集 `cargo-llvm-cov` 的 LCOV 输出，发布运行摘要并上传 Codecov。
 
 交叉编译及本地 mock 不代表原生平台或公网 CA 验收。
 

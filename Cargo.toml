@@ -7,7 +7,7 @@ authors = [
     "AsterCommunity Contributors <contributors@astercosm.com>",
 ]
 edition = "2024"
-rust-version = "1.99.1"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/AsterCommunity/AsterACME"
 publish = false
@@ -71,6 +71,9 @@ tempfile = "3"
 rustix = { version = "1.1", features = ["fs", "process"] }
 wiremock = "0.6"
 winapi-util = "0.1.11"
+
+[workspace.lints.cargo]
+unused_dependencies = "deny"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
