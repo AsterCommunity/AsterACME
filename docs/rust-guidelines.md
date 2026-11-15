@@ -19,7 +19,7 @@
 
 经核对必须立即采用的安全修复，可用 `cargo --config 'resolver.incompatible-publish-age="allow"' update -p PACKAGE --precise VERSION` 做单次显式覆盖并审查 lockfile diff；该次解析的传递依赖同样不受冷却期限制，不把覆盖写入项目配置。
 
-配置和 lint 的官方语义见 [Cargo 发布冷却期](https://doc.rust-lang.org/cargo/reference/config.html#registryglobal-min-publish-age)与 [unused_dependencies](https://doc.rust-lang.org/cargo/reference/lints.html#unused_dependencies)。冷却期配置要求 Cargo 1.100+，根 `rust-version` 同步该最低版本，防止旧工具链忽略策略。
+配置和 lint 的官方语义见 [Cargo 发布冷却期](https://doc.rust-lang.org/cargo/reference/config.html#registryglobal-min-publish-age)与 [unused_dependencies](https://doc.rust-lang.org/cargo/reference/lints.html#unused_dependencies)。冷却期配置要求 Cargo 1.100+，根 `rust-version` 同步该最低版本，防止旧工具链忽略策略。CI 的构建、feature 矩阵与覆盖率任务均显式安装更新 stable，不依赖 runner 镜像预装版本。
 
 ## 源码组织与排版
 
