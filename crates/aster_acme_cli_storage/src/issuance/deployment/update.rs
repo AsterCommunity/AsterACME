@@ -1,11 +1,8 @@
 //! Atomic patch of binding configuration; updates never publish files or execute reload.
-use crate::issuance::deployment::{
-    DeploymentBinding, DeploymentPatch, targets, validate_binding, validate_id,
-};
+use crate::issuance::deployment::{DeploymentBinding, DeploymentPatch, targets, validate_id};
 use crate::issuance::{
     CertificateName, CliIssueStore, IssueError, failure, selection, write_selection,
 };
-use aster_acme::deployment::DeploymentPhase;
 
 impl CliIssueStore {
     /// Update selected configuration fields under certificate and destination ownership leases.
@@ -56,13 +53,8 @@ impl CliIssueStore {
             }
             validate_binding(binding)?;
             targets::check_conflicts(&root, &name, binding)?;
-            // Configuration changes do not confirm an earlier process outcome.
-            if *binding != old && !old.phase.reload_uncertain() {
-                binding.phase = DeploymentPhase::Configured;
-                binding.generation = None;
-                binding.pending_generation = None;
-                binding.attempts = 0;
-                binding.last_error = None;
+            if *binding != old {
+                binding.apply_checkpoint(old.checkpoint().reconfigured());
             }
             let updated = binding.clone();
             write_selection(&slot, &config)?;
@@ -72,3 +64,5 @@ impl CliIssueStore {
         .map_err(|_| failure("deployment update worker failed"))?
     }
 }
+
+use crate::issuance::deployment::configuration::validate_binding;

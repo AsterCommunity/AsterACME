@@ -106,6 +106,22 @@ pub struct RenewalRetryState {
 }
 
 impl RenewalRetryState {
+    /// Classify persisted barriers without reducing the timestamp precision.
+    #[must_use]
+    pub fn admission(
+        &self,
+        now: time::OffsetDateTime,
+        immediate: bool,
+    ) -> aster_acme_core::renewal::RetryAdmission {
+        aster_acme_core::renewal::retry_admission(
+            self.blocked_reason.is_some(),
+            self.retry_at,
+            self.ca_retry_at,
+            now,
+            immediate,
+        )
+    }
+
     /// Advance one failed invocation without erasing earlier CA deadlines or
     /// uncertainty. All callers persist this while owning the certificate lease.
     #[must_use]

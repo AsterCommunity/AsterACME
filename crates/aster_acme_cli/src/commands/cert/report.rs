@@ -49,7 +49,9 @@ pub(crate) struct DeploymentReport {
 
 impl DeploymentReport {
     pub(crate) fn has_failures(&self) -> bool {
-        self.entries.iter().any(|entry| !entry.is_deployed())
+        self.entries
+            .iter()
+            .any(|entry| !entry.checkpoint().is_deployed())
             || self
                 .events
                 .iter()
@@ -93,7 +95,10 @@ impl CertificateReport {
                         .events
                         .iter()
                         .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                        || report.entries.iter().any(|entry| !entry.is_deployed())) =>
+                        || report
+                            .entries
+                            .iter()
+                            .any(|entry| !entry.checkpoint().is_deployed())) =>
             {
                 ExitStatus::Failed
             }
@@ -108,7 +113,9 @@ impl CertificateReport {
             } if deployment_events
                 .iter()
                 .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                || deployments.iter().any(|entry| !entry.is_deployed()) =>
+                || deployments
+                    .iter()
+                    .any(|entry| !entry.checkpoint().is_deployed()) =>
             {
                 ExitStatus::Failed
             }
@@ -195,32 +202,16 @@ impl RenewalWork {
         immediate: bool,
         now: time::OffsetDateTime,
     ) -> Self {
-        use aster_acme_core::renewal::{RenewalDecision, renewal_decision};
+        use aster_acme::renewal::admission::RenewalAdmission;
         let mut work = Self {
             scheduled: 0,
             not_due: 0,
         };
         for record in records.iter().filter(|record| record.is_in_use) {
-            let Some(plan) = &record.renewal else {
-                continue;
-            };
-            let pending = records.iter().any(|candidate| {
-                candidate.unfinished()
-                    && candidate
-                        .renewal_of
-                        .as_ref()
-                        .is_some_and(|previous| previous.operation_id == record.operation_id)
-            });
-            match renewal_decision(
-                pending,
-                record.revocation.state,
-                plan.renew_at.unix_timestamp(),
-                now.unix_timestamp(),
-                immediate,
-            ) {
-                RenewalDecision::Start | RenewalDecision::Resume => work.scheduled += 1,
-                RenewalDecision::NotDue => work.not_due += 1,
-                RenewalDecision::RevocationUncertain => {}
+            match aster_acme::renewal::admission::request(record, records, immediate, now) {
+                Ok(RenewalAdmission::Start | RenewalAdmission::Resume) => work.scheduled += 1,
+                Ok(RenewalAdmission::NotDue) => work.not_due += 1,
+                Err(_) => {}
             }
         }
         work
@@ -305,7 +296,9 @@ impl RenewalBatch {
                 }) if deployment_events
                     .iter()
                     .any(|event| event.kind == crate::common::output::MessageKind::Error)
-                    || deployments.iter().any(|entry| !entry.is_deployed()) =>
+                    || deployments
+                        .iter()
+                        .any(|entry| !entry.checkpoint().is_deployed()) =>
                 {
                     summary.failed += 1;
                 }

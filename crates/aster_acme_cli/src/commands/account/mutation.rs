@@ -129,16 +129,13 @@ pub(super) async fn rotate_key(
     if expected.key_rotation.as_ref().is_some_and(|rotation| {
         rotation.phase == aster_acme_core::account::KeyRotationPhase::Confirmed
     }) {
-        let session = context.store.rotation(&context.directory).await?;
-        if session.record() != expected {
-            return Err(AccountError::IdentityMismatch.into());
-        }
-        let new = session.stage(args.key_algorithm).await?;
-        session.commit(&expected).await?;
-        let mut record = expected;
-        record.key_thumbprint = new.jwk()?.thumbprint()?;
-        record.key_algorithm = new.algorithm();
-        record.key_rotation = None;
+        let record = AccountService::finalize_confirmed_rotation(
+            context.store.as_ref(),
+            &context.directory,
+            &expected,
+            args.key_algorithm,
+        )
+        .await?;
         return Ok(AccountReport::KeyRotated {
             name: context.name,
             record,

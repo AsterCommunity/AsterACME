@@ -314,27 +314,9 @@ fn validate_name(name: &str) -> io::Result<()> {
 }
 
 fn validate_zone(zone: &str) -> io::Result<()> {
-    let value = zone.strip_suffix('.').unwrap_or(zone);
-    if value.is_empty()
-        || value.len() > 253
-        || value.starts_with('.')
-        || value.ends_with('.')
-        || value.split('.').any(|label| {
-            label.is_empty()
-                || label.len() > 63
-                || label.starts_with('-')
-                || label.ends_with('-')
-                || !label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid allowed DNS zone",
-        ));
-    }
-    Ok(())
+    aster_acme_dns::routing::absolute_name(zone)
+        .map(|_| ())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid allowed DNS zone"))
 }
 
 fn profile_path(root: &Path, name: &str) -> io::Result<PathBuf> {
@@ -432,6 +414,40 @@ mod tests {
             vec!["example.net".into()],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn allowed_zones_use_dns_owner_syntax_including_service_labels() {
+        let profile = ProviderProfile::new(
+            std::env::current_exe().unwrap(),
+            Vec::new(),
+            vec!["_acme-challenge.example.com".into(), "example.net.".into()],
+        )
+        .unwrap();
+        assert_eq!(profile.allowed_zones[0], "_acme-challenge.example.com");
+        assert!(profile.validate().is_ok());
+        assert!(
+            ProviderProfile::new(
+                std::env::current_exe().unwrap(),
+                Vec::new(),
+                vec!["bad..zone".into()]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn allowed_zone_validation_matches_dns_routing_normalization() {
+        for value in ["_acme-challenge.example.com", "Example.COM."] {
+            assert_eq!(
+                validate_zone(value).is_ok(),
+                aster_acme_dns::routing::absolute_name(value).is_ok(),
+                "zone syntax drifted for {value}"
+            );
+        }
+        for value in ["", "bad..zone", "-invalid.example", "invalid-.example"] {
+            assert!(validate_zone(value).is_err(), "accepted {value:?}");
+        }
     }
 
     #[tokio::test]

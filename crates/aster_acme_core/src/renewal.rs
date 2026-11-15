@@ -50,11 +50,11 @@ pub const fn renewal_retry_delay_seconds(failure_count: u32) -> i64 {
 /// Resume a durable renewal before considering a new one; --now never bypasses an
 /// uncertain revocation. Confirmed revoked certificates require an explicit early request.
 #[must_use]
-pub fn renewal_decision(
+pub fn renewal_decision<T: Ord + Copy>(
     pending: bool,
     revocation: crate::revocation::RevocationState,
-    renew_at: i64,
-    now: i64,
+    renew_at: T,
+    now: T,
     immediate: bool,
 ) -> RenewalDecision {
     use crate::revocation::RevocationState;
@@ -70,6 +70,35 @@ pub fn renewal_decision(
             RenewalDecision::Start
         }
         RevocationState::NotRequested | RevocationState::Confirmed => RenewalDecision::NotDue,
+    }
+}
+
+/// Independent barriers to another renewal attempt, in precedence order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryAdmission {
+    Ready,
+    LocalBackoff,
+    CaBackoff,
+    Uncertain,
+}
+
+/// An explicit early request bypasses only the local delay, never CA or uncertainty barriers.
+#[must_use]
+pub fn retry_admission<T: Ord + Copy>(
+    uncertain: bool,
+    local_deadline: Option<T>,
+    ca_deadline: Option<T>,
+    now: T,
+    immediate: bool,
+) -> RetryAdmission {
+    if uncertain {
+        RetryAdmission::Uncertain
+    } else if ca_deadline.is_some_and(|at| at > now) {
+        RetryAdmission::CaBackoff
+    } else if !immediate && local_deadline.is_some_and(|at| at > now) {
+        RetryAdmission::LocalBackoff
+    } else {
+        RetryAdmission::Ready
     }
 }
 

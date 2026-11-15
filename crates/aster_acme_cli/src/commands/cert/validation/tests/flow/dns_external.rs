@@ -533,13 +533,9 @@ impl aster_acme::storage::issuance::IssueSession for FailSave<'_> {
     }
     async fn record_renewal_failure(
         &self,
-        now: time::OffsetDateTime,
-        ca_retry_at: Option<time::OffsetDateTime>,
-        blocked_reason: Option<String>,
+        retry_evidence: aster_acme::renewal::admission::RenewalFailure,
     ) -> Result<aster_acme::issuance::RenewalRetryState, IssueError> {
-        self.inner
-            .record_renewal_failure(now, ca_retry_at, blocked_reason)
-            .await
+        self.inner.record_renewal_failure(retry_evidence).await
     }
 }
 #[tokio::test]

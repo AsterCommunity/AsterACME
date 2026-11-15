@@ -22,7 +22,7 @@ pub(super) async fn fixture(
         key_algorithm: KeyAlgorithm::EcdsaP256,
         user_agent: None,
         times: crate::account::AccountTimes::default(),
-        account_id: account_id(&directory, &thumbprint),
+        account_id: AccountRecord::stable_id(&directory, &thumbprint),
         directory_url: directory,
         key_thumbprint: thumbprint,
         account_url: Some(AcmeUrl::new(&format!("{}/account/1", server.uri())).unwrap()),

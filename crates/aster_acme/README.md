@@ -138,3 +138,9 @@ CertificateKey提交前比较签名器JWK与叶子SPKI，不以签发时的有�
 预检的`Failure::Unavailable { reason }`携带检查器提供的初始化/缺失配置原因；报告保留该文字供嵌入者处理，CLI负责安全展示。`Failure`因此实现Clone而非Copy；取消、阶段预算和CA最终决定的语义保持一致，库默认仍不启用预检。
 
 外部DNS自动发布使用 `-c dns_external --provider NAME`，Profile保存在`providers/<name>.toml`。发布计划、回执与传播等待分别推进；独立清理命令为`provider cleanup NAME`。详细配置、安全边界与恢复说明见[DNS Provider](../../docs/dns-providers.md)。
+
+## 续期与部署策略所有权
+
+`renewal::admission::{request,existing,preparation_failure}` 统一前台续期、历史子请求恢复和失败记账资格，保留纳秒级期限；拒绝返回类型化 `AdmissionError`，不伪装成文件存储故障。`--now` 只绕过本地计划／退避，CA Retry-After、未知提交结果和待对账吊销继续阻止执行。`renewal_due` 为后台查询提供非交互候选谓词，使用相同退避准入。
+
+`deployment::DeploymentCheckpoint` 统一普通／pending-generation 重试、配置变更、阶段观察与有界退避计算。宿主提供真实副作用观察，storage 将检查点映射到自己的 schema，并在租约内重验绑定快照及当前世代后条件写入。旧的 `DeploymentRetryState`／`admits_after_issuance` 接口已由完整检查点取代，调用方直接使用实际所有者，不保留转发入口。

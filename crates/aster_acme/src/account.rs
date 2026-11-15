@@ -81,6 +81,17 @@ pub struct AccountRecord {
 }
 
 impl AccountRecord {
+    /// Derive the stable local account ID for an exact directory and key identity.
+    /// Storage adapters call this instead of maintaining a parallel hash scheme.
+    #[must_use]
+    pub fn stable_id(directory: &AcmeUrl, thumbprint: &str) -> String {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use sha2::{Digest as _, Sha256};
+        URL_SAFE_NO_PAD.encode(Sha256::digest(
+            format!("{}\0{thumbprint}", directory.as_str()).as_bytes(),
+        ))
+    }
+
     /// Whether local metadata permits selecting this account for active use. This is
     /// a local eligibility check, not a fresh assertion that the CA still accepts it.
     #[must_use]
@@ -265,14 +276,6 @@ fn validate_contacts(contacts: &[String]) -> Result<(), AccountError> {
         }
     }
     Ok(())
-}
-
-fn account_id(directory: &AcmeUrl, thumbprint: &str) -> String {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use sha2::{Digest as _, Sha256};
-    URL_SAFE_NO_PAD.encode(Sha256::digest(
-        format!("{}\0{thumbprint}", directory.as_str()).as_bytes(),
-    ))
 }
 
 #[cfg(test)]

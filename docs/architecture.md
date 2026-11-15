@@ -14,7 +14,7 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 | `aster_acme_dns_resolver` | Hickory系统查询adapter，保留初始化/查询原因 | vendor/修补依赖、公共DNS回退、DNS写入 |
 | `aster_acme_process` | 进程组/Job Object、stdin、有界输出、取消/期限和退出观察 | reload/ADPP业务重试与错误策略 |
 | `aster_acme_validation` | 验证方法实现，目前DNS可见性检查 | ACME协议推进、CLI选择 |
-| `aster_acme_cli_storage` | 账户/证书文件、查询、租约、恢复、部署文件发布 | CLI配置schema、CA请求、reload进程 |
+| `aster_acme_cli_storage` | 账户/证书文件、查询、租约、恢复、部署文件发布及检查点的条件写入 | 续期/部署准入、退避计算、CLI配置schema、CA请求、reload进程 |
 | `aster_acme_cli` | 参数/配置、交互、solver适配、维护任务执行器、报告、reload | 重新实现协议状态机、维护候选筛选或重试准入 |
 
 依赖由外向内。Forge提供产品无关机制；不要因为潜在复用就迁移ACME领域语义。具体文件/锁留在CLI storage，嵌入者可替换为数据库或远程签名器。
@@ -37,6 +37,12 @@ CLI app / dispatch
 账户公共契约和服务构造留在 `account`，协议操作按 `account/{registration,rotation,lifecycle}` 分开。签发公共类型仍从 `issuance` 导入，定义按 `request`、`validation`、`retry`、`record`、`error` 组织；`issuance::service::IssueService` 保留原公共入口，其授权、订单提交、证书保存、发布生命周期、响应解析与执行预算分别归 `service/` 下的对应模块。
 
 CLI 的 `cert::execute` 负责命令分发，`execute/{issuance,transaction,foreground,inspection,failure}` 分别负责输入准备、持锁事务、solver/工作流适配、查询与失败报告。`cert::render` 负责报告分发，按 inspection、details、materials、outcome、batch、maintenance、lifecycle 和 deployment 划分纯呈现。部署的 command、configuration、automatic、publication、reload_state 分别拥有命令、配置、自动调度、文件发布和 reload 检查点；子进程机制仍归独立 reload adapter。
+
+续期的 `renewal::admission` 拥有前台准入、失败记账资格与未完成世代选择；`core::renewal` 拥有可覆写本地退避／不可覆写 CA 期限和未知结果的纯决策，时间比较保留原精度。`deployment::DeploymentCheckpoint` 拥有 pending-generation、重试准入、阶段转换与退避期限，宿主和存储使用同一份规则。CLI 的工作量统计也调用库的续期准入，不重新解释重试字段。
+
+`cli_storage::issuance::deployment` 保存文件 schema 与库检查点的显式转换；其 `configuration`、`session`、`checkpoint` 分别负责绑定配置、材料读取／发布和条件持久化。适配器持锁读取实际 `in_use`、完整绑定及前一检查点，调用库策略后再次比较快照并落盘；这些身份比较与文件约束属于存储，不是另一套业务准入。
+
+账户换钥的 CA 确认、staged key 校验、Confirmed 恢复和本地 commit 都归 `AccountService`。CLI 负责选择算法、呈现确认并调用服务；Confirmed 恢复无需 CA 在线。
 
 ## Challenge边界
 

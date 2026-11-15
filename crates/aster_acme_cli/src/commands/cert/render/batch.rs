@@ -202,7 +202,9 @@ pub(in crate::commands::cert::render) fn render_batch_entry(
                     if deployment_events
                         .iter()
                         .any(|event| event.kind == output::MessageKind::Error)
-                        || deployments.iter().any(|entry| !entry.is_deployed()) =>
+                        || deployments
+                            .iter()
+                            .any(|entry| !entry.checkpoint().is_deployed()) =>
                 {
                     (
                         "deployment failed",
@@ -274,7 +276,9 @@ pub(in crate::commands::cert::render) fn batch_status_style(result: &RenewalResu
         }) if deployment_events
             .iter()
             .any(|event| event.kind == output::MessageKind::Error)
-            || deployments.iter().any(|entry| !entry.is_deployed()) =>
+            || deployments
+                .iter()
+                .any(|entry| !entry.checkpoint().is_deployed()) =>
         {
             Style::Red
         }

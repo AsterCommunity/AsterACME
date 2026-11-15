@@ -47,7 +47,7 @@ pub(crate) async fn retry_due(
         let generation = record.generation_name();
         let selected = definitions
             .into_iter()
-            .filter(|binding| binding.retry_due(&generation, now))
+            .filter(|binding| binding.checkpoint().due(&generation, now))
             .collect::<Vec<_>>();
         if selected.is_empty() {
             continue;

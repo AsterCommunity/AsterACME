@@ -134,6 +134,21 @@ struct Session {
 }
 
 impl Session {
+    fn new(
+        slot: PathBuf,
+        generation: PathBuf,
+        lease: Arc<FileLease>,
+        initial: IssueRecord,
+    ) -> Self {
+        Self {
+            slot,
+            generation,
+            lease,
+            initial,
+            io: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
     fn verify_identity(&self, record: &IssueRecord) -> Result<(), IssueError> {
         if record.operation_id != self.initial.operation_id
             || record.name != self.initial.name
@@ -464,13 +479,7 @@ impl CliIssueStore {
                 );
                 certificate::validate(&chain, &key, &record.identifiers)?;
             }
-            Ok(Session {
-                slot,
-                generation,
-                lease,
-                initial: record,
-                io: Arc::new(tokio::sync::Mutex::new(())),
-            })
+            Ok(Session::new(slot, generation, lease, record))
         })
         .await
         .map_err(|_| failure("issuance open worker failed"))?

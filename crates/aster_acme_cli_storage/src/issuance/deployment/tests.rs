@@ -47,11 +47,19 @@ fn retry_due_has_exact_time_generation_and_phase_boundaries() {
                 | DeploymentPhase::PublicationComplete
                 | DeploymentPhase::ReloadFailed
         );
-        assert_eq!(value.retry_due("current", now), retryable, "{phase:?}");
-        assert!(!value.retry_due("current", now - time::Duration::nanoseconds(1)));
-        assert!(!value.retry_due("previous", now));
+        assert_eq!(
+            value.checkpoint().due("current", now),
+            retryable,
+            "{phase:?}"
+        );
+        assert!(
+            !value
+                .checkpoint()
+                .due("current", now - time::Duration::nanoseconds(1))
+        );
+        assert!(!value.checkpoint().due("previous", now));
         value.retry_at = None;
-        assert_eq!(value.retry_due("current", now), retryable);
+        assert_eq!(value.checkpoint().due("current", now), retryable);
     }
 }
 
@@ -64,13 +72,13 @@ fn pending_generation_is_retryable_without_claiming_the_previous_generation_was_
     value.generation = Some("generation-a".into());
     value.pending_generation = Some("generation-b".into());
     value.phase = DeploymentPhase::Deployed;
-    assert!(value.retry_due("generation-b", now));
-    assert!(!value.retry_due("generation-a", now));
+    assert!(value.checkpoint().due("generation-b", now));
+    assert!(!value.checkpoint().due("generation-a", now));
     value.phase = DeploymentPhase::ReloadUncertain;
-    assert!(!value.retry_due("generation-b", now));
+    assert!(!value.checkpoint().due("generation-b", now));
     value.phase = DeploymentPhase::Deployed;
     value.retry_at = Some(now + time::Duration::seconds(1));
-    assert!(!value.retry_due("generation-b", now));
+    assert!(!value.checkpoint().due("generation-b", now));
 }
 
 #[test]
@@ -317,3 +325,5 @@ fn exact_paths_allow_every_artifact_alone_but_reject_empty_relative_and_duplicat
         }
     }
 }
+
+use crate::issuance::deployment::configuration::{allocate_name, validate_binding};

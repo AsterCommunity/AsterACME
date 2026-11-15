@@ -2,7 +2,7 @@
 
 use crate::account::{
     AccountError, AccountRecord, AccountService, AccountTimes, AcmeAccount, RegistrationOptions,
-    account_id, validate_contacts,
+    validate_contacts,
 };
 use crate::storage::account::AccountLease;
 use crate::{crypto::JwsSigner, transport::json_payload};
@@ -134,7 +134,7 @@ impl AccountService {
             key_algorithm: signer.algorithm(),
             user_agent: None,
             times: AccountTimes::default(),
-            account_id: account_id(&directory, &thumbprint),
+            account_id: AccountRecord::stable_id(&directory, &thumbprint),
             directory_url: directory.clone(),
             key_thumbprint: thumbprint.clone(),
             account_url: None,
@@ -241,7 +241,7 @@ impl AccountService {
             key_algorithm,
             user_agent: None,
             times: AccountTimes::default(),
-            account_id: account_id(directory, thumbprint),
+            account_id: AccountRecord::stable_id(directory, thumbprint),
             directory_url: directory.clone(),
             key_thumbprint: thumbprint.to_owned(),
             account_url: None,

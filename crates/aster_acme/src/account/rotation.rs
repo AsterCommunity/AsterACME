@@ -11,6 +11,55 @@ use aster_acme_protocol::account::AccountObject;
 use std::sync::Arc;
 
 impl AccountService {
+    /// Finish the local part of a key rotation already confirmed by the CA.
+    /// This recovery path needs no directory discovery or remote request.
+    ///
+    /// # Errors
+    /// Rejects a stale account snapshot, missing confirmation or a mismatched staged key.
+    pub async fn finalize_confirmed_rotation(
+        keys: &dyn AccountRotationStore,
+        directory: &aster_acme_protocol::url::AcmeUrl,
+        expected: &AccountRecord,
+        algorithm: Option<crate::crypto::key_algorithm::KeyAlgorithm>,
+    ) -> Result<AccountRecord, AccountError> {
+        let session: Arc<dyn AccountRotation> = Arc::from(keys.rotation(directory).await?);
+        let record = session.record();
+        if record != *expected
+            || record.directory_url != *directory
+            || !record
+                .key_rotation
+                .as_ref()
+                .is_some_and(|rotation| rotation.phase == KeyRotationPhase::Confirmed)
+        {
+            return Err(AccountError::IdentityMismatch);
+        }
+        let staged = session.stage(algorithm).await?;
+        let rotation = record
+            .key_rotation
+            .as_ref()
+            .ok_or(AccountError::IdentityMismatch)?;
+        let thumbprint = staged.jwk()?.thumbprint()?;
+        if thumbprint != rotation.new_thumbprint
+            || thumbprint == record.key_thumbprint
+            || algorithm.is_some_and(|choice| choice != staged.algorithm())
+        {
+            return Err(AccountError::IdentityMismatch);
+        }
+        session.commit(&record).await?;
+        Ok(Self::committed_rotation(record, &staged, thumbprint))
+    }
+
+    fn committed_rotation(
+        mut record: AccountRecord,
+        staged: &Arc<dyn JwsSigner>,
+        thumbprint: String,
+    ) -> AccountRecord {
+        record.key_algorithm = staged.algorithm();
+        record.key_thumbprint = thumbprint;
+        record.key_rotation = None;
+        record
+    }
+
     /// Rotate a durable account key under RFC 8555 section 7.3.5.
     /// The inner JWS uses the new key/algorithm, while the outer JWS uses the current
     /// account key/algorithm (RFC 8555 §7.3.5); they need not be the same algorithm.
@@ -103,10 +152,7 @@ impl AccountService {
         });
         session.save(&record).await?;
         session.commit(&record).await?;
-        record.key_algorithm = new.algorithm();
-        record.key_thumbprint = new_thumbprint;
-        record.key_rotation = None;
-        Ok(record)
+        Ok(Self::committed_rotation(record, &new, new_thumbprint))
     }
 
     pub(super) async fn submit_key_change(

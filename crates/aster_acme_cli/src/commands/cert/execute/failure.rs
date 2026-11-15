@@ -16,42 +16,10 @@ pub(super) async fn report_issue_failure(
     error: Box<dyn std::error::Error>,
 ) -> CliResult<crate::commands::cert::report::CertificateResult> {
     let saved = session.record().await?;
-    if saved.renewal_of.is_some() && saved.unfinished() && !execution.cancellation.is_cancelled() {
-        let blocked_reason = if saved.new_order_intent_saved
-            && saved.order_url.is_none()
-            && saved.creation_failure.is_none()
-        {
-            Some("newOrder may have been accepted but no Location was saved".into())
-        } else if saved
-            .creation_failure
-            .as_ref()
-            .is_some_and(|failure| failure.status == 408 || failure.status >= 500)
-        {
-            Some("newOrder response does not establish whether the CA accepted the order".into())
-        } else {
-            None
-        };
-        let ca_retry_at = [
-            saved
-                .creation_failure
-                .as_ref()
-                .and_then(|failure| failure.retry_at),
-            saved
-                .finalize_rejection
-                .as_ref()
-                .and_then(|failure| failure.retry_at),
-        ]
-        .into_iter()
-        .flatten()
-        .max()
-        .or_else(|| {
-            (saved.poll_wait_source == Some(aster_acme::issuance::PollWaitSource::RetryAfter))
-                .then_some(saved.next_poll_at)
-                .flatten()
-        });
-        let retry = session
-            .record_renewal_failure(time::OffsetDateTime::now_utc(), ca_retry_at, blocked_reason)
-            .await?;
+    if !execution.cancellation.is_cancelled()
+        && let Some(failure) = saved.renewal_failure(time::OffsetDateTime::now_utc())
+    {
+        let retry = session.record_renewal_failure(failure).await?;
         report_renewal_retry(progress, &saved, &retry);
     }
     if matches!(

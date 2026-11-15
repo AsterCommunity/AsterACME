@@ -9,6 +9,25 @@ use aster_acme_core::account::AccountRecordState;
 use tokio::time::sleep;
 
 #[tokio::test]
+async fn account_file_initialization_uses_library_owned_stable_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
+    let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+    let signer = store
+        .signer(&directory, "work", KeyAccess::Create(None))
+        .await
+        .unwrap();
+    let record = store.metadata().await.unwrap().unwrap();
+    assert_eq!(
+        record.account_id,
+        aster_acme::account::AccountRecord::stable_id(
+            &directory,
+            &signer.jwk().unwrap().thumbprint().unwrap(),
+        )
+    );
+}
+
+#[tokio::test]
 async fn timestamp_metadata_roundtrips_without_inventing_unknown_values() {
     let temp = tempfile::tempdir().unwrap();
     let store = CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap();
