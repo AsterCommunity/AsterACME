@@ -1,9 +1,24 @@
 //! Cancellation boundaries and uncertain reload outcomes use real checkpoints.
+
+use crate::commands::cert::deployment::publication::{
+    finish_publication, prepare_publication, publish_and_finish,
+};
+use crate::commands::cert::deployment::reload_state::{
+    finish_reload_attempt, record_reload_failure, settle_reload_attempt,
+};
+use crate::commands::cert::deployment::{
+    automatic::{after_issuance, retry_due},
+    command::execute,
+    execution::Execution,
+    publication::run_one,
+    reload,
+};
 use crate::commands::cert::{
     deployment::tests::{Fixture, assert_descendant_exited, child_command},
-    deployment::*,
     report::CertificateReport,
 };
+use aster_acme::{deployment::DeploymentPhase, storage::issuance::IssueStore as _};
+use std::time::Duration;
 
 #[tokio::test]
 async fn started_reload_wait_failure_is_uncertain_and_never_authorizes_automatic_replay() {

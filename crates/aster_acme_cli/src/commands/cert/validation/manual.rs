@@ -1,4 +1,5 @@
 //! Manual implementations share confirmation semantics but keep method-specific instructions.
+
 use crate::commands::cert::validation::{
     Arc, ChallengeKind, ChallengeSolver, IssueError, Progress,
 };
@@ -80,7 +81,8 @@ impl ChallengeSolver for Manual {
         }
         if !reused && self.interactive && !self.yes {
             let progress = self.progress.clone();
-            let details = crate::commands::cert::render::requirement_lines(&requirements);
+            let details =
+                crate::commands::cert::render::materials::requirement_lines(&requirements);
             let message = match self.method {
                 ChallengeKind::Dns01 => {
                     "Action required: add all TXT values; keep unrelated values"

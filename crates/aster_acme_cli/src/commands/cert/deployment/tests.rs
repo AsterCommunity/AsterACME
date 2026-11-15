@@ -1,8 +1,29 @@
 //! Deployment regression and resource lifecycle tests.
+use crate::commands::cert::deployment::automatic::{after_issuance, retry_due};
+use crate::commands::cert::deployment::command::execute;
+use crate::commands::cert::deployment::configuration::{
+    canonical_file_path, parse_command, select_targets,
+};
+use crate::commands::cert::deployment::publication::run_one;
+use crate::commands::cert::deployment::*;
+use crate::commands::cert::progress::Progress;
+use crate::common::error::CliResult;
+use aster_acme::storage::issuance::IssueStore as _;
+use aster_acme::storage::query::{IssueQuery, IssueView};
+use aster_acme::{
+    deployment::{DeploymentIntent, DeploymentPhase},
+    issuance::CertificateName,
+};
+use aster_acme_cli_storage::issuance::{
+    CliIssueStore, DeploymentBinding, DeploymentDefinition, DeploymentTarget,
+};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 mod hardening;
 mod retry;
-use crate::commands::cert::deployment::*;
-use aster_acme::storage::query::{IssueQuery, IssueView};
 
 struct Fixture {
     temp: tempfile::TempDir,

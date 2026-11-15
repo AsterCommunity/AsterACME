@@ -1,4 +1,5 @@
 //! Real CLI solver + file journals + loopback CA, without public DNS/CA side effects.
+
 use crate::commands::cert::validation::tests::flow::*;
 use aster_acme::crypto::{JwsSigner as _, key::SoftwareSigningKey, key_algorithm::KeyAlgorithm};
 
@@ -111,7 +112,7 @@ async fn persistent_completion_reports_retention_and_no_cleanup_permission_in_te
         panic!("expected completion");
     };
     assert_eq!(cleanup, Vec::<ValidationRequirement>::new());
-    let rendered = crate::commands::cert::render::outcome(
+    let rendered = crate::commands::cert::render::outcome::outcome(
         &IssueOutcome::Completed {
             record: record.clone(),
             cleanup: vec![],
@@ -122,7 +123,7 @@ async fn persistent_completion_reports_retention_and_no_cleanup_permission_in_te
     .unwrap();
     assert!(rendered.contains("Retain these persistent validation requirements"));
     assert!(!rendered.contains("You may remove"));
-    let rendered = crate::commands::cert::render::outcome(
+    let rendered = crate::commands::cert::render::outcome::outcome(
         &IssueOutcome::Completed { record, cleanup },
         crate::common::session::Format::plain(true),
         fixture.temp.path(),

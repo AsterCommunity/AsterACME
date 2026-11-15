@@ -32,6 +32,12 @@ CLI app / dispatch
 
 账户写入显式接收当前 `Arc<dyn AccountLease>`，后台写任务克隆并持有到结束；独立本地编辑由文件适配器新获取租约。换钥与签发会话分别串行化自身IO，不通过全局状态推断租约归属。
 
+### 内部模块导航
+
+账户公共契约和服务构造留在 `account`，协议操作按 `account/{registration,rotation,lifecycle}` 分开。签发公共类型仍从 `issuance` 导入，定义按 `request`、`validation`、`retry`、`record`、`error` 组织；`issuance::service::IssueService` 保留原公共入口，其授权、订单提交、证书保存、发布生命周期、响应解析与执行预算分别归 `service/` 下的对应模块。
+
+CLI 的 `cert::execute` 负责命令分发，`execute/{issuance,transaction,foreground,inspection,failure}` 分别负责输入准备、持锁事务、solver/工作流适配、查询与失败报告。`cert::render` 负责报告分发，按 inspection、details、materials、outcome、batch、maintenance、lifecycle 和 deployment 划分纯呈现。部署的 command、configuration、automatic、publication、reload_state 分别拥有命令、配置、自动调度、文件发布和 reload 检查点；子进程机制仍归独立 reload adapter。
+
 ## Challenge边界
 
 `challenge::{dns01,dns_persist,http01,tls_alpn01}`分别拥有响应材料及派生约束，`ChallengeMaterial`只聚合具名类型。方法元数据准入、发布生命周期、账户证明要求和响应身份由`ChallengeKind`集中穷尽分发；纯`issuance::authorization`准备材料与检查点，`IssueService`负责持久化顺序和协议副作用。`create`保持方法无关；存储和CLI续期通过通用`retained_validation`快照携带长期材料，材料所有者判断发布范围，通用层不解析TXT。具体流程见[签发设计](design/issuance.md)。

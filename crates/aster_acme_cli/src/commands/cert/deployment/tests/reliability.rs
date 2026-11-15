@@ -1,6 +1,11 @@
 //! Cross-generation barriers, deployment artifact validation and batch cancellation.
+
+use crate::commands::cert::deployment::publication::run_one;
 use crate::commands::cert::deployment::tests::{Fixture, child_command};
-use crate::commands::cert::deployment::*;
+use aster_acme::deployment::DeploymentPhase;
+use aster_acme::storage::issuance::IssueStore;
+use aster_acme::storage::query::IssueQuery;
+use aster_acme_cli_storage::issuance::DeploymentPatch;
 
 #[tokio::test]
 async fn wrong_certificate_is_rejected_and_private_pem_is_derived_from_the_verified_der() {

@@ -1,7 +1,8 @@
 //! Single and batch renewal orchestration. Transactions return data; rendering happens once.
+
 use crate::commands::cert::{
     args::{RenewArgs, RunArgs},
-    execute::{RunMode, Start, transact},
+    execute::{RunMode, Start, transaction::transact},
     report::{
         CertificateResult, RenewalBatch, RenewalEntry, RenewalResult, RenewalWork, SkipReason,
     },
@@ -190,7 +191,7 @@ impl RenewalExecutor for Transaction<'_> {
             match self.store.record_renewal_preparation_failure(
                 record, self.immediate, time::OffsetDateTime::now_utc(),
             ).await {
-                Ok(Some(retry)) => crate::commands::cert::execute::report_renewal_retry(
+                Ok(Some(retry)) => crate::commands::cert::execute::failure::report_renewal_retry(
                     &crate::commands::cert::progress::Progress::new(self.cli.output.clone()), record, &retry,
                 ),
                 Ok(None) => {},

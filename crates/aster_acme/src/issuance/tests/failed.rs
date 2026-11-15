@@ -1,5 +1,7 @@
 //! Terminal evidence drives failed cleanup; resume exclusion alone is insufficient.
 use crate::issuance::*;
+use aster_acme_protocol::order::OrderObject;
+
 fn record() -> IssueRecord {
     serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"test","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":"a".repeat(43),"directory":"https://ca.example/directory","account_url":"https://ca.example/account/1","account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap()
 }

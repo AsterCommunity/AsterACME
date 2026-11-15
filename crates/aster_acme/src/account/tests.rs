@@ -1,15 +1,15 @@
 //! Account registration, persisted-intent and failure/recovery contract tests.
-use crate::crypto::key_algorithm::KeyAlgorithm;
-use aster_acme_protocol::jws::FlattenedJws;
-mod deactivation;
-mod timestamps;
-mod update;
 use crate::account::*;
+use crate::crypto::JwsSigner;
+use crate::crypto::key_algorithm::KeyAlgorithm;
 use crate::storage::account::AccountLease;
 use crate::{
     crypto::key::SoftwareSigningKey,
     transport::tests::{local_options, server},
 };
+use aster_acme_core::account::KeyRotationPhase;
+use aster_acme_protocol::jws::FlattenedJws;
+use aster_acme_protocol::problem::ProblemKind;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +18,10 @@ use wiremock::{
     Mock, ResponseTemplate,
     matchers::{method, path},
 };
+
+mod deactivation;
+mod timestamps;
+mod update;
 
 #[derive(Default)]
 struct MemoryStore {

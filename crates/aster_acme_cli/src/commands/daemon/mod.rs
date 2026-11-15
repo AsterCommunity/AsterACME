@@ -1,6 +1,4 @@
 //! Host adapter for finite and resident, noninteractive maintenance cycles.
-pub(crate) mod render;
-mod resident;
 use crate::{
     commands::account::args::AccountArgs,
     commands::cert::args::RunArgs,
@@ -20,6 +18,9 @@ use aster_acme::{
 use aster_acme_cli_storage::issuance::CliIssueStore;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+
+pub(crate) mod render;
+mod resident;
 
 const SCHEDULING_HELP: &str = "Resident scheduling:
   aster-acme daemon run --data-dir /absolute/path/to/state
@@ -214,7 +215,7 @@ impl maintenance::AutomaticTasks for CliAutomaticTasks<'_> {
         candidates: Vec<aster_acme::issuance::IssueRecord>,
         cancellation: &CancellationToken,
     ) -> Self::Deployments {
-        crate::commands::cert::deployment::retry_due(
+        crate::commands::cert::deployment::automatic::retry_due(
             self.store,
             self.timeout,
             cancellation,

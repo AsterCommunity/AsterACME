@@ -1,4 +1,5 @@
 //! Certificate command outcomes, independent of terminal rendering and batch traversal.
+
 use aster_acme::issuance::{IssueOutcome, IssueRecord};
 use serde::Serialize;
 
@@ -15,7 +16,7 @@ pub(crate) enum CertificateReport {
     Show {
         record: Box<IssueRecord>,
         verified: bool,
-        view: crate::commands::cert::render::DetailView,
+        view: crate::commands::cert::render::inspection::DetailView,
     },
     Revoked(Box<IssueRecord>),
     Removed {
