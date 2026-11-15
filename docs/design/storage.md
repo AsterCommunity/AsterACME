@@ -4,7 +4,7 @@
 
 ## 标准库优先与桌面平台存储
 
-最低 Rust 1.100 已覆盖 1.89 稳定的 File::try_lock/unlock；账户/配置租约与 panic 报告锁均使用标准库，移除 aster-fs 的 workspace/成员/lockfile 依赖。FileLease 仍负责显式释放，配置有限等待、取消后持锁完成写入及对象外置锁路径不变。AsterFs [#4](https://github.com/AsterCommunity/AsterFs/issues/4) 固定生态职责：补充标准库缺口而非封装每个 std::fs 操作，不承担 fs2/fs4 接口兼容义务；[#3](https://github.com/AsterCommunity/AsterFs/issues/3) 跟踪可信目录安全打开。模块顶部 TODO 标明尚未上游交付的身份/链接检查及持久化能力。
+最低 Rust 1.99 已覆盖 1.89 稳定的 File::try_lock/unlock；账户/配置租约与 panic 报告锁均使用标准库，移除 aster-fs 的 workspace/成员/lockfile 依赖。FileLease 仍负责显式释放，配置有限等待、取消后持锁完成写入及对象外置锁路径不变。AsterFs [#4](https://github.com/AsterCommunity/AsterFs/issues/4) 固定生态职责：补充标准库缺口而非封装每个 std::fs 操作，不承担 fs2/fs4 接口兼容义务；[#3](https://github.com/AsterCommunity/AsterFs/issues/3) 跟踪可信目录安全打开。模块顶部 TODO 标明尚未上游交付的身份/链接检查及持久化能力。
 
 state_file 集中必要平台差异。Unix 复用 Forge 的目录描述符 IO 并保留 owner、单链接和 0700/0600 检查；Windows 使用标准库读写/替换及最小 winapi-util 句柄信息查询，拒绝 reparse point/托管文件硬链接，不管理 ACL。Windows 原子文件替换前同步文件；目录仅验证可访问，不把缺少目录 flush 的实现冒充 Unix 的目录持久化保证。普通 IO 和锁不要求依赖 AsterFs。平台检查 future API 真正交付后再替换临时适配。
 

@@ -57,8 +57,6 @@ zeroize.workspace = true
 shlex.workspace = true
 aster_forge_utils.workspace = true
 crossterm.workspace = true
-
-[target.'cfg(not(unix))'.dependencies]
 tempfile.workspace = true
 
 [build-dependencies]

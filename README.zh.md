@@ -21,7 +21,7 @@
 
 <p align="center">
   <a href="https://github.com/AsterCommunity/AsterACME/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/AsterCommunity/AsterACME/ci.yml?branch=main&amp;style=flat-square&amp;label=CI"></a>
-  <a href="rust-toolchain.toml"><img alt="Rust 1.100+" src="https://img.shields.io/badge/Rust-1.100%2B-000000?style=flat-square&amp;logo=rust"></a>
+  <a href="rust-toolchain.toml"><img alt="Rust 1.99+" src="https://img.shields.io/badge/Rust-1.99%2B-000000?style=flat-square&amp;logo=rust"></a>
   <a href="LICENSE-MIT"><img alt="MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square"></a>
 </p>
 
@@ -48,7 +48,7 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 
 ## 快速开始
 
-使用 **Rust 1.100+** 从源码安装：
+使用 **Rust 1.99+** 从源码安装：
 
 ```sh
 git clone https://github.com/AsterCommunity/AsterACME.git

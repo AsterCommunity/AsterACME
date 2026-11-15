@@ -17,8 +17,6 @@ jobs:
         with:
           python-version: '3.13'
       - run: python3 -m pip install -r scripts/requirements.txt
-      - name: Update stable Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - run: rustup show
       - run: python3 scripts/check-workspace-deps.py
       - run: python3 scripts/check-rust-imports.py
@@ -27,8 +25,7 @@ jobs:
       - run: python3 scripts/check-dependency-features.py
       - run: python3 -m unittest discover -s scripts/tests
       - run: cargo fmt --all --check
-      - name: Check workspace and native Cargo dependency lints
-        run: cargo check --workspace --locked
+      - run: cargo check --workspace --locked
       - run: cargo test --workspace --locked
       - if: runner.os != 'Windows'
         run: python3 scripts/test-confirmation-terminal.py
@@ -43,8 +40,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Update stable Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - run: python3 scripts/check-precheck-features.py
 
   coverage:
@@ -61,8 +56,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Update stable Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - run: rustup show
       - run: rustup component add llvm-tools-preview
       - uses: taiki-e/install-action@v2
