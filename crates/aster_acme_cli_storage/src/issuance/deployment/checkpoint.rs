@@ -32,7 +32,10 @@ impl DeploymentSession {
     pub async fn save_pending_generation(&mut self, generation: &str) -> Result<(), IssueError> {
         let mut updated = self.definition.clone();
         updated.apply_checkpoint(self.definition.checkpoint().pending(generation)?);
-        self.persist_binding(updated).await
+        if updated != self.definition {
+            self.persist_binding(updated).await?;
+        }
+        Ok(())
     }
 
     /// Restore the complete checkpoint when a recorded intent never started.

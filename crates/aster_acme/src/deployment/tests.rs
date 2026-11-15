@@ -81,6 +81,9 @@ fn after_issuance_and_pending_intents_preserve_unknown_reload_barriers() {
     let mut checkpoint = state();
     checkpoint.phase = DeploymentPhase::Deployed;
     assert!(checkpoint.is_deployed());
+    let already_deployed = checkpoint.pending("current").unwrap();
+    assert_eq!(already_deployed, checkpoint);
+    assert!(already_deployed.is_deployed());
     let pending = checkpoint.pending("next").unwrap();
     assert!(!pending.is_deployed());
     assert_eq!(pending.generation, checkpoint.generation);

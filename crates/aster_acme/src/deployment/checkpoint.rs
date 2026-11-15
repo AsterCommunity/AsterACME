@@ -98,6 +98,12 @@ impl DeploymentCheckpoint {
                 "uncertain reload outcome blocks automatic deployment",
             ));
         }
+        if self.generation.as_deref() == Some(generation) && self.phase == DeploymentPhase::Deployed
+        {
+            let mut completed = self.clone();
+            completed.pending_generation = None;
+            return Ok(completed);
+        }
         let mut next = self.clone();
         next.pending_generation = Some(generation.into());
         next.retry_at = None;

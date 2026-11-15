@@ -116,3 +116,45 @@ async fn retry_checkpoint_cannot_attribute_an_old_attempt_to_the_current_generat
     );
     assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
 }
+
+#[tokio::test]
+async fn queueing_an_already_deployed_generation_is_idempotent() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let target = f.temp.path().join("deployment");
+    std::fs::create_dir(&target).unwrap();
+    let binding = f
+        .store
+        .add_deployment(
+            &current.name,
+            DeploymentDefinition {
+                permissions: DeploymentPermissions::default(),
+                name: Some("service".into()),
+                target: DeploymentTarget::Directory { path: target },
+                reload_command: vec![],
+                timeout_seconds: 1,
+                max_retries: 0,
+            },
+        )
+        .await
+        .unwrap();
+    let slot = f.store.slot(&current.name);
+    let mut config = selection(&slot).unwrap();
+    config.cert.deployments[0].generation = Some(current.generation_name());
+    config.cert.deployments[0].phase = DeploymentPhase::Deployed;
+    write_selection(&slot, &config).unwrap();
+    let before = std::fs::read(slot.join("cert.toml")).unwrap();
+
+    let mut session = f
+        .store
+        .open_deployment(&current.name, &binding.id)
+        .await
+        .unwrap();
+    session
+        .save_pending_generation(&current.generation_name())
+        .await
+        .unwrap();
+
+    assert!(session.definition().checkpoint().is_deployed());
+    assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
+}
