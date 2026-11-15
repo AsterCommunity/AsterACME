@@ -22,7 +22,7 @@ python3 scripts/check-precheck-features.py
 
 共享开发机资源紧张或计时测试受调度干扰时可用 `-- --test-threads=2`；记录实际失败和复测，不能把首次失败抹掉。CI矩阵以.github/workflows/ci.yml为准。
 
-证书报告的字节级回归用例位于 `crates/aster_acme_cli/src/commands/cert/render/tests/contract.rs`，快照来自模块拆分前的 `26ef130`，覆盖文本、颜色和 JSON 输出以及对应退出状态。预期路径仅按宿主路径分隔符适配，不修改实际输出；报告有意变更时应先核对 [CLI 契约](cli-contract.md)，不要在结构重构中重新生成快照掩盖差异。
+证书报告的字节级回归用例位于 `crates/aster_acme_cli/src/commands/cert/render/tests/contract.rs`，快照来自模块拆分前的 `26ef130`，覆盖文本、颜色和 JSON 输出以及对应退出状态；ActionRequired 文本提示有意追加精确 `--operation`，对应两项基准已定点更新。预期路径仅按宿主路径分隔符适配，不修改实际输出；报告有意变更时应先核对 [CLI 契约](cli-contract.md)，不要在结构重构中重新生成快照掩盖差异。
 
 覆盖率由CI的Linux `coverage`任务收集：`cargo llvm-cov --workspace --locked --lcov --output-path coverage/rust/lcov.info`，随后发布摘要并上传Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
 

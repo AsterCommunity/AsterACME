@@ -487,3 +487,5 @@ async fn renew_not_due_uses_saved_definition_and_never_contacts_ca_or_creates_a_
         key_bytes
     );
 }
+
+mod entrypoints;

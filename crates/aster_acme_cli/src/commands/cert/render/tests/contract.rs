@@ -215,34 +215,30 @@ fn platform_snapshot() -> String {
     if cfg!(not(windows)) {
         return snapshot.into();
     }
-    // Only platform path separators differ in the pre-split Windows output.
-    // Adapt expected paths, keeping the actual rendered bytes untouched.
+    // Adapt complete paths and permission labels only in the expected output.
     let mut expected: std::collections::BTreeMap<String, serde_json::Value> =
         serde_json::from_str(snapshot).unwrap();
+    let bases = [
+        (
+            "/data/certs/example.com/in_use",
+            std::path::Path::new("/data")
+                .join("certs")
+                .join("example.com")
+                .join("in_use"),
+        ),
+        ("/certificates", std::path::PathBuf::from("/certificates")),
+    ];
     for (label, entry) in &mut expected {
-        let output = entry["output"].as_str().unwrap();
-        let mut output = output.to_owned();
-        let in_use = std::path::Path::new("/data")
-            .join("certs")
-            .join("example.com")
-            .join("in_use")
-            .display()
-            .to_string();
-        output = output.replace("/data/certs/example.com/in_use", &in_use);
-        for file in ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pem"] {
-            let original = format!("/certificates/{file}");
-            let native = std::path::Path::new("/certificates").join(file);
-            output = output.replace(&original, &native.display().to_string());
-        }
-        if !label.ends_with("/json") {
-            output = output
-                .replace("0600 (default)", "platform inherited permissions")
-                .replace("0644", "platform inherited permissions");
-        }
-        for file in ["cert.pem", "private-key.pem", "ca.pem", "fullchain.pem"] {
-            let original = format!("/certificates/{file}");
-            let native = std::path::Path::new("/certificates").join(file);
-            output = output.replace(&original, &native.display().to_string());
+        let mut output = entry["output"].as_str().unwrap().to_owned();
+        for (base, native_base) in &bases {
+            for file in ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pem"] {
+                output = replace_expected_path(
+                    &output,
+                    &format!("{base}/{file}"),
+                    &native_base.join(file).display().to_string(),
+                    label.ends_with("/json"),
+                );
+            }
         }
         if !label.ends_with("/json") {
             output = output
@@ -252,4 +248,29 @@ fn platform_snapshot() -> String {
         entry["output"] = output.into();
     }
     serde_json::to_string_pretty(&expected).unwrap()
+}
+
+fn replace_expected_path(output: &str, original: &str, native: &str, json: bool) -> String {
+    if json {
+        output.replace(
+            &serde_json::to_string(original).unwrap(),
+            &serde_json::to_string(native).unwrap(),
+        )
+    } else {
+        output.replace(original, native)
+    }
+}
+
+#[test]
+fn windows_expected_paths_include_the_file_separator_and_keep_json_valid() {
+    let original = "/data/certs/example.com/in_use/fullchain.pem";
+    let native = r"/data\certs\example.com\in_use\fullchain.pem";
+    assert_eq!(
+        replace_expected_path(&format!("Full chain: {original}"), original, native, false),
+        format!("Full chain: {native}")
+    );
+    let output = serde_json::json!({"fullchain": original}).to_string();
+    let adapted = replace_expected_path(&output, original, native, true);
+    let decoded: serde_json::Value = serde_json::from_str(&adapted).unwrap();
+    assert_eq!(decoded["fullchain"], native);
 }

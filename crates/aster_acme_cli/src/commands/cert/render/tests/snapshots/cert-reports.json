@@ -1,7 +1,7 @@
 {
   "action-required/color": {
     "exit_status": "Success",
-    "output": "\u001b[33m[WARN]\u001b[0m Action required for example.com\n  Request: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nPublish every validation requirement below; retain unrelated files and records:\n  _acme-challenge.example.com  TXT  txt-value\nTo resume, run:\n  aster-acme cert issue --resume 'example.com'"
+    "output": "\u001b[33m[WARN]\u001b[0m Action required for example.com\n  Request: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nPublish every validation requirement below; retain unrelated files and records:\n  _acme-challenge.example.com  TXT  txt-value\nTo resume, run:\n  aster-acme cert issue --resume 'example.com' --operation aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "action-required/json": {
     "exit_status": "Success",
@@ -9,7 +9,7 @@
   },
   "action-required/text": {
     "exit_status": "Success",
-    "output": "[WARN] Action required for example.com\n  Request: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nPublish every validation requirement below; retain unrelated files and records:\n  _acme-challenge.example.com  TXT  txt-value\nTo resume, run:\n  aster-acme cert issue --resume 'example.com'"
+    "output": "[WARN] Action required for example.com\n  Request: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nPublish every validation requirement below; retain unrelated files and records:\n  _acme-challenge.example.com  TXT  txt-value\nTo resume, run:\n  aster-acme cert issue --resume 'example.com' --operation aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "batch/color": {
     "exit_status": "Cancelled",

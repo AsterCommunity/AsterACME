@@ -252,8 +252,9 @@ pub(in crate::commands::cert) fn outcome(
     }
     if let IssueOutcome::ActionRequired { .. } = outcome {
         lines.push(format!(
-            "To resume, run:\n  aster-acme cert issue --resume '{}'",
-            record.name.as_str()
+            "To resume, run:\n  aster-acme cert issue --resume '{}' --operation {}",
+            record.name.as_str(),
+            record.operation_id
         ));
     }
     Ok(lines.join("\n"))

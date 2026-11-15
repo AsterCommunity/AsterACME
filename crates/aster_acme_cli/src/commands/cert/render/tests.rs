@@ -704,3 +704,6 @@ fn automatic_deployment_uses_same_table_and_orders_events_after_certificate_summ
     assert!(!automatic.contains("Deployment targets:"));
     assert!(!automatic.contains("private-command"));
 }
+
+mod details;
+mod maintenance;
