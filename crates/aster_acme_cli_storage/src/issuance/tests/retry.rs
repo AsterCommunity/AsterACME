@@ -64,7 +64,14 @@ async fn definitive_creation_rejection_keeps_history_and_allows_a_fresh_renewal(
 
 #[tokio::test]
 async fn preparation_failure_is_compare_and_update_and_never_loads_private_material() {
-    let f = fixture().await;
+    let mut f = fixture().await;
+    // Both contenders must acquire the lease to test compare-and-update.
+    // Durable I/O and worker scheduling on Windows can exceed the shared
+    // fixture's 100 ms contention budget; timeout behavior is tested separately.
+    f.store = crate::issuance::CliIssueStore::new(
+        f.temp.path().into(),
+        std::time::Duration::from_secs(5),
+    );
     let current = completed_generation(&f).await;
     let key = f
         .store
@@ -93,6 +100,51 @@ async fn preparation_failure_is_compare_and_update_and_never_loads_private_mater
     assert_eq!(retry.failures, 1);
     assert_eq!(retry.retry_at, Some(now + time::Duration::minutes(1)));
     assert_eq!(std::fs::read(&key).unwrap(), b"unavailable key");
+}
+
+#[tokio::test]
+async fn preparation_failure_lock_timeout_leaves_retry_and_private_material_unchanged() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let key = f
+        .store
+        .slot(&current.name)
+        .join(current.generation_name())
+        .join("private-key.pk8");
+    std::fs::write(&key, b"unavailable key").unwrap();
+    let session = f
+        .store
+        .open_observation(&current.name, &current.operation_id)
+        .await
+        .unwrap();
+    // Hold the actual certificate lease through the entire competing call,
+    // rather than guessing which worker wins using sleeps or elapsed time.
+    let before = session.record().await.unwrap();
+    let error = f
+        .store
+        .record_renewal_preparation_failure(&current, true, OffsetDateTime::now_utc())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        aster_acme::issuance::IssueError::LeaseUnavailable("certificate", _)
+    ));
+    let after = session.record().await.unwrap();
+    assert_eq!(after.operation_id, before.operation_id);
+    assert_eq!(after.renewal_retry, before.renewal_retry);
+    assert!(after.renewal_retry.is_none());
+    assert_eq!(std::fs::read(&key).unwrap(), b"unavailable key");
+    drop(session);
+
+    // Dropping the lease must let the same store complete the update; timeout
+    // does not consume a failure count or leave a lease behind.
+    let updated = f
+        .store
+        .record_renewal_preparation_failure(&current, true, OffsetDateTime::now_utc())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.failures, 1);
 }
 
 #[tokio::test]
