@@ -274,14 +274,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aster_acme_process"
-version = "0.1.0-alpha.1"
-dependencies = [
- "process-wrap",
- "tokio",
- "tokio-util",
-]
-
 [[package]]
 name = "aster_acme_protocol"
 version = "0.1.0-alpha.1"
@@ -340,9 +332,9 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_process"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57fa9e493bd1288465f154f94deb56524a7ec3b0cd629db67ab9c495bb2f5e44"
+checksum = "4d6c44ccb3e91ab122c5875f330b1a423b41662b40a21400c917cf0dc6ee031d"
 dependencies = [
  "process-wrap",
  "tokio",
