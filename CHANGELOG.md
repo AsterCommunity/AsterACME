@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh.md)
 
+## [Unreleased]
+
+### Changed
+
+- **Forge process execution** — Use Forge's `aster_forge_process` for bounded child-process lifecycle mechanics. ADPP and deployment keep their own protocol and side-effect policies.
+
 ## [0.1.0-alpha.1] - 2026-11-16
 
 Initial pre-release. Rust APIs and local formats may change without compatibility readers or automatic migration.

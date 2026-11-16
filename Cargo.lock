@@ -161,10 +161,10 @@ dependencies = [
  "aster_acme_dns",
  "aster_acme_dns_adpp",
  "aster_acme_dns_resolver",
- "aster_acme_process",
  "aster_acme_protocol",
  "aster_acme_validation",
  "aster_forge_panic",
+ "aster_forge_process",
  "aster_forge_utils",
  "async-trait",
  "base64 0.23.1",
@@ -252,7 +252,7 @@ name = "aster_acme_dns_adpp"
 version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme_dns",
- "aster_acme_process",
+ "aster_forge_process",
  "async-trait",
  "aws-lc-rs",
  "base64 0.23.1",
@@ -336,6 +336,17 @@ checksum = "50080b08db383952b16615beff2905c29d815a22683823c95171fa993f5b27d1"
 dependencies = [
  "chrono",
  "rustix",
+]
+
+[[package]]
+name = "aster_forge_process"
+version = "0.1.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57fa9e493bd1288465f154f94deb56524a7ec3b0cd629db67ab9c495bb2f5e44"
+dependencies = [
+ "process-wrap",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

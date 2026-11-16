@@ -86,7 +86,7 @@ written to stderr; stdout is reserved for the protocol response.
 The caller MUST enforce an invocation deadline, bounded request and response
 sizes, and bounded stderr capture. On timeout or cancellation it MUST terminate
 the child and its owned process group/job before releasing the issuance lease.
-ADPP execution MUST use the shared `aster_acme_process` crate, extracted from
+ADPP execution MUST use the shared Forge `aster_forge_process` crate, extracted from
 the deploy reload process manager. That crate owns process-tree termination,
 bounded pipe handling, cancellation, timeout, and child reaping; reload and
 ADPP keep separate business result policies. The executable MUST run with a
@@ -547,7 +547,7 @@ is unconfirmed.
   zone restrictions MUST be checked before invoking the provider; omitted or
   empty restrictions intentionally allow all valid targets.
 - Child processes MUST be bounded by deadline and terminated as an owned
-  process group/job on cancellation or timeout through `aster_acme_process`.
+  process group/job on cancellation or timeout through `aster_forge_process`.
 - No command may delete a record based only on a matching TXT owner. Cleanup
   requires the saved publication receipt and exact-value ownership.
 
@@ -576,7 +576,7 @@ those values do not alter protocol behavior.
 The crate boundaries are `aster_acme_dns` for DNS names, routing,
 provider contracts, and propagation policy; `aster_acme_dns_adpp` for the
 external protocol adapter; `aster_acme_dns_resolver` for concrete system DNS
-observations; and `aster_acme_process` for shared child-process
+observations; and Forge's `aster_forge_process` for shared child-process
 management. Built-in provider implementations can live in separate crates and
 implement the same DNS provider contract. The CLI owns profile editing and
 selects the implementation; the ACME service continues to own challenge
@@ -612,7 +612,7 @@ Before ADPP is advertised as implemented, the implementation must demonstrate:
    request, issuance journal, stdout, stderr, or diagnostics. A provider secret
    explicitly stored in `provider_custom` is sent only on stdin and is never
    written to an issuance journal, output, or diagnostic.
-9. The deploy reload executor and ADPP adapter use `aster_acme_process` for
+9. The deploy reload executor and ADPP adapter use `aster_forge_process` for
    process-tree cleanup, bounded I/O, cancellation, timeout, and reaping; their
    business-level uncertainty and output policies remain separate.
 

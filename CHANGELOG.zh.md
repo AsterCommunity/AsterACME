@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md)
 
+## [Unreleased]
+
+### 变更
+
+- **Forge 进程执行** — 使用 Forge 的 `aster_forge_process` 承载有界子进程生命周期机制；ADPP 与部署仍各自拥有协议和副作用策略。
+
 ## [0.1.0-alpha.1] - 2026-11-16
 
 首次预发布。ACME 包尚未发布，Rust API 与本地格式仍可能直接变化，不提供旧格式兼容读取或自动迁移。

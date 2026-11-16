@@ -25,7 +25,7 @@ CLI 将查询条件交给 storage，负责交互、歧义处理和渲染。name 
 
 `pending_generation` 独立记录已签发但尚未发布的 generation。自动发布在任何副作用前持锁保存该意图；取消、进程退出或 deadline 保留意图，daemon 只对当前 in_use generation 恢复它。进入 Publishing 后消费意图并以实际 generation 保存状态，成功 Deployed 或配置变更清除意图，不把旧 generation 伪报为新 generation 已部署。
 
-CLI部署执行逐目标收集错误，库存/打开/锁失败不冒充空列表或历史成功；执行事件独立于保存的绑定状态，报告同时保留本次execution_error与历史状态。reload生命周期由小型process-wrap适配提供Unix进程组和Windows Job Object，取消时Drop清理、超时终止并有界回收；启动后wait失败记录ReloadUncertain，不与可重试的spawn失败混淆；stdout/stderr并行排空且每路每次只收集64KiB。手动输出实时显示，自动输出随统一部署报告显示；内容仅存本次events，不持久化到cert.toml，不承诺自动脱敏或终止主动脱组的daemon。
+CLI部署执行逐目标收集错误，库存/打开/锁失败不冒充空列表或历史成功；执行事件独立于保存的绑定状态，报告同时保留本次execution_error与历史状态。reload适配使用Forge的`aster_forge_process`管理Unix进程组和Windows Job Object；取消时Drop触发清理、超时终止并有界回收；启动后wait失败记录ReloadUncertain，不与可重试的spawn失败混淆；stdout/stderr并行排空且每路每次只收集64KiB。手动输出实时显示，自动输出随统一部署报告显示；内容仅存本次events，不持久化到cert.toml，不承诺自动脱敏或终止主动脱组的daemon。
 
 新申请输入补全由 CLI 的 cert/interaction 模块负责，所有显式与交互配置调用同一个 validation::configuration 校验。输入步骤在账户选择、config初始化、私钥创建和 CA discovery 前完成；恢复/续期沿用保存定义，不进入新申请向导。交互菜单复用 ValidationMethod 的 ValueEnum 注册表/帮助描述，不维护平行方式列表。
 

@@ -27,7 +27,6 @@ aster_acme_core = { version = "0.1.0-alpha.1", path = "crates/aster_acme_core" }
 aster_acme = { version = "0.1.0-alpha.1", path = "crates/aster_acme", default-features = false }
 aster_acme_validation = { version = "0.1.0-alpha.1", path = "crates/aster_acme_validation", default-features = false }
 aster_acme_cli_storage = { version = "0.1.0-alpha.1", path = "crates/aster_acme_cli_storage" }
-aster_acme_process = { version = "0.1.0-alpha.1", path = "crates/aster_acme_process" }
 aster_acme_dns = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns" }
 aster_acme_dns_adpp = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns_adpp" }
 aster_acme_dns_resolver = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns_resolver" }
@@ -66,7 +65,7 @@ hmac = "0.13"
 httpdate = "1"
 percent-encoding = "2"
 shlex = "2"
-process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
+aster_forge_process = { version = "=0.1.0-alpha.1" }
 tempfile = "3"
 rustix = { version = "1.1", features = ["fs", "process"] }
 wiremock = "0.6"

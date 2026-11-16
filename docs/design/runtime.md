@@ -18,7 +18,7 @@ ACME签名请求禁跳转，HTTP-01建议性检查可有限跟随HTTP/HTTPS。CA
 
 ## Reload进程
 
-process-wrap提供Unix进程组及Windows Job Object。先观察主进程退出并保留状态，再清理拥有的后代，最后排空stdout/stderr；避免后台进程继承管道把成功命令误判成超时。每路每次保留64KiB后继续排空，超时/取消清理进程，正常退出也清理残留后代。不承诺终止主动脱组的daemon。
+`aster_forge_process`提供Unix进程组及Windows Job Object管理。它观察主进程退出并清理拥有的后代，并发排空stdout/stderr，避免后台进程继承管道把成功命令误判成超时。每路每次保留64KiB后继续排空，超时/取消触发清理，正常退出也清理残留后代。不承诺终止主动脱组的daemon。
 
 输出按部署名、尝试次数及流标注，人类/JSON复用同一事件。外部命令输出不自动脱敏，不写入cert.toml。命令成功退出不等于服务健康已验收。
 
