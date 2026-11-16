@@ -2,7 +2,7 @@
 
 [English](CHANGELOG.md)
 
-## [Unreleased]
+## [0.1.0-alpha.1] - 2026-11-16
 
 首次预发布。ACME 包尚未发布，Rust API 与本地格式仍可能直接变化，不提供旧格式兼容读取或自动迁移。
 
@@ -37,4 +37,4 @@
 
 交叉编译及本地 mock 不代表原生平台或公网 CA 验收。
 
-[Unreleased]: https://github.com/AsterCommunity/AsterACME/commits/main/
+[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/releases/tag/v0.1.0-alpha.1

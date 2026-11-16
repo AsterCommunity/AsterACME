@@ -2,9 +2,9 @@
 
 [中文](CHANGELOG.zh.md)
 
-## [Unreleased]
+## [0.1.0-alpha.1] - 2026-11-16
 
-Initial pre-release. ACME packages are not published; Rust APIs and local formats may change without compatibility readers or automatic migration.
+Initial pre-release. Rust APIs and local formats may change without compatibility readers or automatic migration.
 
 ### Added
 
@@ -37,4 +37,4 @@ Initial pre-release. ACME packages are not published; Rust APIs and local format
 
 Cross-compilation and local mocks do not constitute native-platform or public-CA acceptance.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterACME/commits/main/
+[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/releases/tag/v0.1.0-alpha.1

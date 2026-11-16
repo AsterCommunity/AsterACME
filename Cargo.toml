@@ -10,7 +10,7 @@ edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/AsterCommunity/AsterACME"
-publish = false
+publish = true
 
 # All dependency versions and feature selections belong here.
 # Members must inherit dependencies with `workspace = true`.
@@ -22,15 +22,15 @@ aster_forge_http = { version = "=0.1.0-alpha.2", default-features = false, featu
 aster_forge_utils = { version = "=0.1.0-alpha.1" }
 aster_forge_panic = { version = "=0.1.0-alpha.2", default-features = false }
 aster_forge_macros = { version = "=0.1.0-alpha.1" }
-aster_acme_protocol = { path = "crates/aster_acme_protocol" }
-aster_acme_core = { path = "crates/aster_acme_core" }
-aster_acme = { path = "crates/aster_acme", default-features = false }
-aster_acme_validation = { path = "crates/aster_acme_validation", default-features = false }
-aster_acme_cli_storage = { path = "crates/aster_acme_cli_storage" }
-aster_acme_process = { path = "crates/aster_acme_process" }
-aster_acme_dns = { path = "crates/aster_acme_dns" }
-aster_acme_dns_adpp = { path = "crates/aster_acme_dns_adpp" }
-aster_acme_dns_resolver = { path = "crates/aster_acme_dns_resolver" }
+aster_acme_protocol = { version = "0.1.0-alpha.1", path = "crates/aster_acme_protocol" }
+aster_acme_core = { version = "0.1.0-alpha.1", path = "crates/aster_acme_core" }
+aster_acme = { version = "0.1.0-alpha.1", path = "crates/aster_acme", default-features = false }
+aster_acme_validation = { version = "0.1.0-alpha.1", path = "crates/aster_acme_validation", default-features = false }
+aster_acme_cli_storage = { version = "0.1.0-alpha.1", path = "crates/aster_acme_cli_storage" }
+aster_acme_process = { version = "0.1.0-alpha.1", path = "crates/aster_acme_process" }
+aster_acme_dns = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns" }
+aster_acme_dns_adpp = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns_adpp" }
+aster_acme_dns_resolver = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns_resolver" }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util", "signal", "process"] }
 # Forge HTTP selects transport features; this entry supplies shared public types only.
 reqwest = { version = "0.13.5", default-features = false }
