@@ -65,7 +65,7 @@ hmac = "0.13"
 httpdate = "1"
 percent-encoding = "2"
 shlex = "2"
-aster_forge_process = { version = "=0.1.0-alpha.2" }
+aster_forge_process = { version = "=0.1.0-alpha.3" }
 tempfile = "3"
 rustix = { version = "1.1", features = ["fs", "process"] }
 wiremock = "0.6"

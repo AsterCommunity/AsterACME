@@ -6,7 +6,7 @@
 
 ### Changed
 
-- **Forge process execution** — Use Forge's `aster_forge_process` for bounded child-process lifecycle mechanics. ADPP and deployment keep their own protocol and side-effect policies.
+- **Forge process execution** — Replace the retired `aster_acme_process` with published `aster_forge_process = 0.1.0-alpha.3` for bounded child-process lifecycle mechanics. ADPP and deployment retain their protocol and side-effect policies; incomplete tree cleanup overrides direct-child success, preserves uncertain side effects, and forbids automatic replay.
 
 ## [0.1.0-alpha.1] - 2026-11-16
 

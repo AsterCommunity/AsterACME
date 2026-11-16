@@ -84,8 +84,17 @@ from stdout. The response MUST end with a newline. Human diagnostics MAY be
 written to stderr; stdout is reserved for the protocol response.
 
 The caller MUST enforce an invocation deadline, bounded request and response
-sizes, and bounded stderr capture. On timeout or cancellation it MUST terminate
-the child and its owned process group/job before releasing the issuance lease.
+sizes, and bounded stderr capture. On timeout or cancellation it MUST request
+termination of the child and its owned process group/job and await Forge's
+cleanup result before releasing the issuance lease. A successful direct-child
+status alone MUST NOT be treated as a successful invocation when tree cleanup
+failed. An incomplete cleanup MUST map to `process_wait_failed` with unknown
+side effects after startup; the caller MUST NOT automatically replay the
+mutation. Unix cleanup has a bounded wait: an unreaped orphan zombie or a
+termination/wait failure can prevent confirmation that the group is empty.
+In that case lease release does not prove all descendants have stopped, and
+the residual overlap window remains explicitly unconfirmed. A daemon that
+deliberately leaves its process group is outside the containment guarantee.
 ADPP execution MUST use the shared Forge `aster_forge_process` crate, extracted from
 the deploy reload process manager. That crate owns process-tree termination,
 bounded pipe handling, cancellation, timeout, and child reaping; reload and
@@ -595,8 +604,10 @@ Before ADPP is advertised as implemented, the implementation must demonstrate:
 1. Exact request/response schema validation for
    `com.astercosm.acme.adpp`, unsupported-version rejection, bounded
    stdin/stdout/stderr, non-zero exit handling, and no shell parsing.
-2. Cancellation and deadline handling that terminates the child process tree
-   before releasing the issuance lease.
+2. Cancellation and deadline handling that requests tree termination and awaits
+   the cleanup result before releasing the issuance lease. Incomplete cleanup
+   is a host wait failure with unknown side effects, forbids automatic replay,
+   and explicitly preserves the unconfirmed descendant overlap window above.
 3. Idempotent `present` after a lost response, with a stable `publication_id`
    and durable receipt saved before ACME challenge acknowledgement.
 4. Batched partial success recovery without losing successful per-record

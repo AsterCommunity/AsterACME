@@ -70,7 +70,7 @@ pub(super) async fn run(
             stream_output(&text.push(&[], true), id, attempt, name, progress);
         }
     }
-    let (status, timed_out) = classify(outcome.status);
+    let (status, timed_out) = classify(outcome.status, outcome.cleanup_error);
     for (stream, captured) in [("stdout", outcome.stdout), ("stderr", outcome.stderr)] {
         if captured.truncated
             && let Some(progress) = progress
@@ -105,9 +105,15 @@ pub(super) async fn run(
     }
 }
 
+/// Incomplete cleanup is a wait failure, even after direct-child success or a
+/// deadline. Keep it out of the timeout retry path: side effects may continue.
 fn classify(
     status: Result<ExitStatus, aster_forge_process::ProcessFailure>,
+    cleanup_error: Option<io::Error>,
 ) -> (io::Result<ExitStatus>, bool) {
+    if let Some(error) = cleanup_error {
+        return (Err(error), false);
+    }
     match status {
         Ok(status) => (Ok(status), false),
         Err(

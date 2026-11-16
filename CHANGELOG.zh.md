@@ -6,7 +6,7 @@
 
 ### 变更
 
-- **Forge 进程执行** — 使用 Forge 的 `aster_forge_process` 承载有界子进程生命周期机制；ADPP 与部署仍各自拥有协议和副作用策略。
+- **Forge 进程执行** — 使用已发布的 `aster_forge_process = 0.1.0-alpha.3` 替换退役的 `aster_acme_process`，承载有界子进程生命周期机制；ADPP 与部署仍各自拥有协议和副作用策略。进程树清理未完成时覆盖直接 child 的成功结果，保留副作用不确定状态并禁止自动重放。
 
 ## [0.1.0-alpha.1] - 2026-11-16
 

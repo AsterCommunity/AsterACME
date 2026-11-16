@@ -4,7 +4,7 @@
 
 ## 常用命令
 
-进程生命周期机制的完整平台边界测试位于 AsterForge：`cargo test --locked -p aster_forge_process --all-targets`，Linux/macOS/Windows CI 原生执行；ACME 侧的 `aster_acme_dns_adpp` 测试验证协议错误映射和副作用分类。
+进程生命周期机制的完整平台边界测试位于 AsterForge：`cargo test --locked -p aster_forge_process --all-targets`，Linux/macOS/Windows CI 原生执行。ACME 侧运行 `cargo test --locked -p aster_acme_dns_adpp --all-targets` 验证协议错误、清理失败优先级、启动前/后取消与副作用分类；CLI 的 `commands::cert::deployment::reload::tests` 验证清理不确定不会变成成功或自动超时重试。macOS alpha.3 的保守清理失败边界见[运行时设计](design/runtime.md#reload进程)。
 
 ```sh
 cargo test -p aster_acme_cli_storage --locked issuance::deployment
