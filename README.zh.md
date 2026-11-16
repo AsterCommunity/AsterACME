@@ -27,7 +27,7 @@
 
 AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断恢复流程，管理证书生命周期。可以交互使用 CLI、编写脚本，也可以将 Rust 服务嵌入应用，注入自己的存储、签名器和验证适配器。
 
-**尚未正式发布：** ACME 包暂未发布，本地格式与 Rust API 仍可能变化。外部DNS-01自动发布通过ADPP executable提供；内置云厂商adapter及真实DNS/CA验收仍独立。
+**现已发布：** AsterACME `0.1.0-alpha.1` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。外部 DNS-01 自动发布通过 ADPP executable 提供；内置云厂商 adapter 和真实 DNS/公网 CA 验收另计。
 
 ## 能力
 
@@ -47,6 +47,18 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 `dns_persist`要求CA支持[对应草案版本](docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。TXT保留供续期使用；它不包含DNS provider自动写入，也不表示已通过公网CA验收。
 
 ## 快速开始
+
+从 crates.io 安装已发布的 `0.1.0-alpha.1` CLI。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
+
+```sh
+cargo binstall aster_acme_cli@0.1.0-alpha.1
+```
+
+没有 `cargo-binstall` 时，可直接通过 Cargo 安装同一版本：
+
+```sh
+cargo install aster_acme_cli --version 0.1.0-alpha.1
+```
 
 使用 **Rust 1.99+** 从源码安装：
 

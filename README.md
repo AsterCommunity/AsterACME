@@ -27,7 +27,7 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Pre-release:** ACME packages are not published yet; local formats and Rust APIs may change. External DNS-01 automation is available through an ADPP executable; built-in DNS vendor adapters and public-CA/DNS acceptance remain separate.
+**Available now:** AsterACME `0.1.0-alpha.1` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. External DNS-01 automation uses an ADPP executable. Built-in DNS vendor adapters and live DNS/public-CA acceptance are separate.
 
 ## Capabilities
 
@@ -47,6 +47,18 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 `dns_persist` requires a CA implementing the [same draft revision](docs/rfc-reference.md#dns-persist-草案实现2026-11-14). Keep its TXT records for renewal. DNS provider writes and public-CA acceptance are separate capabilities.
 
 ## Quick start
+
+Install the published `0.1.0-alpha.1` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
+
+```sh
+cargo binstall aster_acme_cli@0.1.0-alpha.1
+```
+
+Without `cargo-binstall`, install the same CLI through Cargo:
+
+```sh
+cargo install aster_acme_cli --version 0.1.0-alpha.1
+```
 
 Build from the checkout with **Rust 1.99+**:
 
