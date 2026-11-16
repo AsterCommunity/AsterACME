@@ -84,9 +84,18 @@ from stdout. The response MUST end with a newline. Human diagnostics MAY be
 written to stderr; stdout is reserved for the protocol response.
 
 The caller MUST enforce an invocation deadline, bounded request and response
-sizes, and bounded stderr capture. On timeout or cancellation it MUST terminate
-the child and its owned process group/job before releasing the issuance lease.
-ADPP execution MUST use the shared `aster_acme_process` crate, extracted from
+sizes, and bounded stderr capture. On timeout or cancellation it MUST request
+termination of the child and its owned process group/job and await Forge's
+cleanup result before releasing the issuance lease. A successful direct-child
+status alone MUST NOT be treated as a successful invocation when tree cleanup
+failed. An incomplete cleanup MUST map to `process_wait_failed` with unknown
+side effects after startup; the caller MUST NOT automatically replay the
+mutation. Unix cleanup has a bounded wait: an unreaped orphan zombie or a
+termination/wait failure can prevent confirmation that the group is empty.
+In that case lease release does not prove all descendants have stopped, and
+the residual overlap window remains explicitly unconfirmed. A daemon that
+deliberately leaves its process group is outside the containment guarantee.
+ADPP execution MUST use the shared Forge `aster_forge_process` crate, extracted from
 the deploy reload process manager. That crate owns process-tree termination,
 bounded pipe handling, cancellation, timeout, and child reaping; reload and
 ADPP keep separate business result policies. The executable MUST run with a
@@ -547,7 +556,7 @@ is unconfirmed.
   zone restrictions MUST be checked before invoking the provider; omitted or
   empty restrictions intentionally allow all valid targets.
 - Child processes MUST be bounded by deadline and terminated as an owned
-  process group/job on cancellation or timeout through `aster_acme_process`.
+  process group/job on cancellation or timeout through `aster_forge_process`.
 - No command may delete a record based only on a matching TXT owner. Cleanup
   requires the saved publication receipt and exact-value ownership.
 
@@ -576,7 +585,7 @@ those values do not alter protocol behavior.
 The crate boundaries are `aster_acme_dns` for DNS names, routing,
 provider contracts, and propagation policy; `aster_acme_dns_adpp` for the
 external protocol adapter; `aster_acme_dns_resolver` for concrete system DNS
-observations; and `aster_acme_process` for shared child-process
+observations; and Forge's `aster_forge_process` for shared child-process
 management. Built-in provider implementations can live in separate crates and
 implement the same DNS provider contract. The CLI owns profile editing and
 selects the implementation; the ACME service continues to own challenge
@@ -595,8 +604,10 @@ Before ADPP is advertised as implemented, the implementation must demonstrate:
 1. Exact request/response schema validation for
    `com.astercosm.acme.adpp`, unsupported-version rejection, bounded
    stdin/stdout/stderr, non-zero exit handling, and no shell parsing.
-2. Cancellation and deadline handling that terminates the child process tree
-   before releasing the issuance lease.
+2. Cancellation and deadline handling that requests tree termination and awaits
+   the cleanup result before releasing the issuance lease. Incomplete cleanup
+   is a host wait failure with unknown side effects, forbids automatic replay,
+   and explicitly preserves the unconfirmed descendant overlap window above.
 3. Idempotent `present` after a lost response, with a stable `publication_id`
    and durable receipt saved before ACME challenge acknowledgement.
 4. Batched partial success recovery without losing successful per-record
@@ -612,7 +623,7 @@ Before ADPP is advertised as implemented, the implementation must demonstrate:
    request, issuance journal, stdout, stderr, or diagnostics. A provider secret
    explicitly stored in `provider_custom` is sent only on stdin and is never
    written to an issuance journal, output, or diagnostic.
-9. The deploy reload executor and ADPP adapter use `aster_acme_process` for
+9. The deploy reload executor and ADPP adapter use `aster_forge_process` for
    process-tree cleanup, bounded I/O, cancellation, timeout, and reaping; their
    business-level uncertainty and output policies remain separate.
 

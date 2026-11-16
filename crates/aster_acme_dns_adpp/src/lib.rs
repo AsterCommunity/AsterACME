@@ -1,4 +1,9 @@
-//! `AsterACME` DNS Provider Protocol (ADPP) v1 wire contract.
+//! `AsterACME` DNS Provider Protocol (ADPP) v1 wire contract and process adapter.
+//!
+//! Forge owns process containment, bounded pipes, cancellation, and cleanup.
+//! This crate validates ADPP framing and maps failures into host errors and
+//! side-effect uncertainty. Incomplete cleanup is always a wait failure, even
+//! when the direct child produced a valid response and exited successfully.
 
 #![cfg_attr(
     not(test),
@@ -75,7 +80,7 @@ impl AdppProvider {
         if input.len() > MAX_JSON_BYTES {
             return Err(host(HostErrorCode::RequestInvalid, false));
         }
-        let mut process = aster_acme_process::ProcessSpec::new(
+        let mut process = aster_forge_process::ProcessSpec::new(
             self.executable.program.clone(),
             self.executable.timeout,
         );
@@ -89,23 +94,9 @@ impl AdppProvider {
                 .deadline
                 .saturating_duration_since(std::time::Instant::now()),
         );
-        let outcome = aster_acme_process::run(process, &execution.cancellation, |_, _| {}).await;
+        let outcome = aster_forge_process::run(process, &execution.cancellation, |_, _| {}).await;
         let started = outcome.started;
-        let status = outcome.status.map_err(|failure| {
-            use aster_acme_process::ProcessFailure;
-            let code = match failure {
-                ProcessFailure::Spawn(_) => HostErrorCode::ProcessSpawnFailed,
-                ProcessFailure::CancelledBeforeStart | ProcessFailure::Cancelled => {
-                    HostErrorCode::ProcessCancelled
-                }
-                ProcessFailure::TimedOut => HostErrorCode::ProcessTimeout,
-                ProcessFailure::Wait(_) => HostErrorCode::ProcessWaitFailed,
-            };
-            host(code, started)
-        })?;
-        if !status.success() {
-            return Err(host(HostErrorCode::ProcessExitNonzero, started));
-        }
+        check_process_status(&outcome)?;
         if outcome.stdin_error.is_some() {
             return Err(host(HostErrorCode::ProcessInputFailed, started));
         }
@@ -135,6 +126,34 @@ impl AdppProvider {
 
         Ok(response)
     }
+}
+
+/// Map infrastructure outcomes before trusting protocol bytes. Cleanup failure
+/// takes precedence even when the direct child succeeded or was cancelled;
+/// a started process always leaves its DNS side effects uncertain on failure.
+fn check_process_status(
+    outcome: &aster_forge_process::ProcessOutcome,
+) -> Result<(), ProviderFailure> {
+    use aster_forge_process::ProcessFailure;
+
+    if outcome.cleanup_error.is_some() {
+        return Err(host(HostErrorCode::ProcessWaitFailed, outcome.started));
+    }
+    let status = outcome.status.as_ref().map_err(|failure| {
+        let code = match failure {
+            ProcessFailure::Spawn(_) => HostErrorCode::ProcessSpawnFailed,
+            ProcessFailure::CancelledBeforeStart | ProcessFailure::Cancelled => {
+                HostErrorCode::ProcessCancelled
+            }
+            ProcessFailure::TimedOut => HostErrorCode::ProcessTimeout,
+            ProcessFailure::Wait(_) => HostErrorCode::ProcessWaitFailed,
+        };
+        host(code, outcome.started)
+    })?;
+    if !status.success() {
+        return Err(host(HostErrorCode::ProcessExitNonzero, outcome.started));
+    }
+    Ok(())
 }
 
 #[async_trait]

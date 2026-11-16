@@ -1,3 +1,5 @@
+//! ADPP validation and infrastructure-to-product failure boundaries.
+
 use crate::{
     MAX_RECORDS, PROTOCOL_ID, PROTOCOL_VERSION, request, sanitize_response, validate_request,
     validate_response,
@@ -10,6 +12,122 @@ fn context() -> ProviderContext {
         provider_instance_id: "prod".into(),
         provider_profile_version: 1,
         provider_custom: BTreeMap::new(),
+    }
+}
+
+/// Construct platform-native statuses without starting a process.
+fn process_exit_status(success: bool) -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw(if success { 0 } else { 3 << 8 })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        std::process::ExitStatus::from_raw(if success { 0 } else { 3 })
+    }
+}
+
+fn process_outcome(
+    status: Result<std::process::ExitStatus, aster_forge_process::ProcessFailure>,
+    started: bool,
+) -> aster_forge_process::ProcessOutcome {
+    aster_forge_process::ProcessOutcome {
+        status,
+        started,
+        stdout: aster_forge_process::CapturedOutput::default(),
+        stderr: aster_forge_process::CapturedOutput::default(),
+        stdin_error: None,
+        cleanup_error: None,
+    }
+}
+
+#[test]
+fn process_failures_preserve_host_codes_and_started_side_effects() {
+    use aster_acme_dns::{HostErrorCode, ProviderFailure};
+    use aster_forge_process::ProcessFailure;
+    let cases = [
+        (
+            ProcessFailure::Spawn(std::io::ErrorKind::NotFound.into()),
+            false,
+            HostErrorCode::ProcessSpawnFailed,
+        ),
+        (
+            ProcessFailure::CancelledBeforeStart,
+            false,
+            HostErrorCode::ProcessCancelled,
+        ),
+        (
+            ProcessFailure::TimedOut,
+            false,
+            HostErrorCode::ProcessTimeout,
+        ),
+        (
+            ProcessFailure::Cancelled,
+            true,
+            HostErrorCode::ProcessCancelled,
+        ),
+        (
+            ProcessFailure::TimedOut,
+            true,
+            HostErrorCode::ProcessTimeout,
+        ),
+        (
+            ProcessFailure::Wait(std::io::Error::other("private process error")),
+            true,
+            HostErrorCode::ProcessWaitFailed,
+        ),
+    ];
+    for (failure, started, expected) in cases {
+        let outcome = process_outcome(Err(failure), started);
+        let error = crate::check_process_status(&outcome).unwrap_err();
+        assert!(matches!(
+            error,
+            ProviderFailure::Host { code, side_effect }
+                if code == expected && side_effect == if started { SideEffect::Unknown } else { SideEffect::None }
+        ));
+        assert!(!error.to_string().contains("private process error"));
+    }
+    assert!(
+        crate::check_process_status(&process_outcome(Ok(process_exit_status(true)), true)).is_ok()
+    );
+    assert!(matches!(
+        crate::check_process_status(&process_outcome(Ok(process_exit_status(false)), true)),
+        Err(ProviderFailure::Host {
+            code: HostErrorCode::ProcessExitNonzero,
+            side_effect: SideEffect::Unknown,
+        })
+    ));
+}
+
+#[test]
+fn incomplete_cleanup_overrides_success_cancellation_and_deadline() {
+    use aster_acme_dns::{HostErrorCode, ProviderFailure};
+    use aster_forge_process::ProcessFailure;
+    for kind in [
+        std::io::ErrorKind::TimedOut,
+        std::io::ErrorKind::PermissionDenied,
+    ] {
+        for status in [
+            Ok(process_exit_status(true)),
+            Ok(process_exit_status(false)),
+            Err(ProcessFailure::Cancelled),
+            Err(ProcessFailure::TimedOut),
+            Err(ProcessFailure::Wait(std::io::Error::other("wait failed"))),
+        ] {
+            let mut outcome = process_outcome(status, true);
+            outcome.cleanup_error = Some(std::io::Error::new(kind, "private cleanup error"));
+            let error = crate::check_process_status(&outcome).unwrap_err();
+            assert!(matches!(
+                error,
+                ProviderFailure::Host {
+                    code: HostErrorCode::ProcessWaitFailed,
+                    side_effect: SideEffect::Unknown,
+                }
+            ));
+            assert!(!error.to_string().contains("private cleanup error"));
+        }
     }
 }
 fn record() -> DnsRecord {

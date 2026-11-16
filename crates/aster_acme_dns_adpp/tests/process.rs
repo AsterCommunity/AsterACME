@@ -28,6 +28,15 @@ fn fixture(mode: &str) {
     std::io::stdin().read_to_string(&mut input).unwrap();
     let request: serde_json::Value = serde_json::from_str(&input).unwrap();
     assert!(std::env::var_os("PATH").is_none());
+    if mode == "started-cancel" {
+        // A file acknowledgement proves the executable consumed its request;
+        // cancellation must then map to unknown, rather than no side effect.
+        let ready = request["context"]["provider_custom"]["test_ready_file"]
+            .as_str()
+            .unwrap();
+        std::fs::write(ready, b"started").unwrap();
+        std::thread::sleep(Duration::from_secs(30));
+    }
     if mode == "timeout" {
         std::thread::sleep(Duration::from_secs(10));
     }
@@ -152,12 +161,15 @@ async fn test_process_contract() {
             "{mode}: {error:?}"
         );
     }
+    check_deadlines_and_cancellation(&context, &records).await;
+}
+
+/// Verify deadlines and pre/post-start cancellation without wall-clock guesses.
+async fn check_deadlines_and_cancellation(context: &ProviderContext, records: &[DnsRecord]) {
     let mut scope = execution();
     scope.deadline = Instant::now() + Duration::from_millis(100);
     assert!(matches!(
-        provider("timeout")
-            .present(&context, &records, &scope)
-            .await,
+        provider("timeout").present(context, records, &scope).await,
         Err(ProviderFailure::Host {
             code: HostErrorCode::ProcessTimeout,
             side_effect: SideEffect::Unknown
@@ -166,12 +178,69 @@ async fn test_process_contract() {
     let scope = execution();
     scope.cancellation.cancel();
     assert!(matches!(
-        provider("success")
-            .present(&context, &records, &scope)
-            .await,
+        provider("success").present(context, records, &scope).await,
         Err(ProviderFailure::Host {
             code: HostErrorCode::ProcessCancelled,
             side_effect: SideEffect::None
         })
     ));
+
+    let mut expired = execution();
+    expired.deadline = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        provider("success")
+            .present(context, records, &expired)
+            .await,
+        Err(ProviderFailure::Host {
+            code: HostErrorCode::ProcessTimeout,
+            side_effect: SideEffect::None,
+        })
+    ));
+
+    check_cancellation_after_start(context, records).await;
+}
+
+/// Synchronize with actual request consumption instead of a timing-only sleep.
+async fn check_cancellation_after_start(context: &ProviderContext, records: &[DnsRecord]) {
+    let ready = std::env::temp_dir().join(format!(
+        "aster-acme-adpp-ready-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut context = context.clone();
+    context.provider_custom.insert(
+        "test_ready_file".into(),
+        serde_json::json!(ready.to_str().unwrap()),
+    );
+    let mut scope = execution();
+    scope.deadline = Instant::now() + Duration::from_secs(10);
+    let provider = AdppProvider::new(Executable {
+        program: std::env::current_exe().unwrap(),
+        args: vec!["--adpp-fixture".into(), "started-cancel".into()],
+        timeout: Duration::from_secs(10),
+    });
+    let running = provider.present(&context, records, &scope);
+    tokio::pin!(running);
+    tokio::select! {
+        result = &mut running => panic!("provider exited before readiness: {result:?}"),
+        () = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !ready.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }).await.expect("provider did not consume request");
+        } => {}
+    }
+    scope.cancellation.cancel();
+    assert!(matches!(
+        running.await,
+        Err(ProviderFailure::Host {
+            code: HostErrorCode::ProcessCancelled,
+            side_effect: SideEffect::Unknown,
+        })
+    ));
+    std::fs::remove_file(ready).unwrap();
 }

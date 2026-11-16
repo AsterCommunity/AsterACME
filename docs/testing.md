@@ -4,8 +4,11 @@
 
 ## 常用命令
 
+进程生命周期机制的完整平台边界测试位于 AsterForge：`cargo test --locked -p aster_forge_process --all-targets`，Linux/macOS/Windows CI 原生执行。ACME 侧运行 `cargo test --locked -p aster_acme_dns_adpp --all-targets` 验证协议错误、清理失败优先级、启动前/后取消与副作用分类；CLI 的 `commands::cert::deployment::reload::tests` 验证清理不确定不会变成成功或自动超时重试。macOS alpha.3 的保守清理失败边界见[运行时设计](design/runtime.md#reload进程)。
+
 ```sh
 cargo test -p aster_acme_cli_storage --locked issuance::deployment
+cargo test -p aster_acme_dns_http --locked
 cargo check --workspace --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -20,7 +23,7 @@ python3 scripts/check-doc-links.py
 python3 scripts/check-precheck-features.py
 ```
 
-共享开发机资源紧张或计时测试受调度干扰时可用 `-- --test-threads=2`；记录实际失败和复测，不能把首次失败抹掉。CI矩阵以.github/workflows/ci.yml为准。
+共享开发机资源紧张或计时测试受调度干扰时可用 `-- --test-threads=2`；记录实际失败和复测，不能把首次失败抹掉。CI矩阵以.github/workflows/ci.yml为准：仅 `main` 的 push 和目标为 `main` 的 PR 触发；同一 PR 或同一分支的新运行取消旧运行，避免功能分支同时运行 push/PR 两套检查。
 
 证书报告的字节级回归用例位于 `crates/aster_acme_cli/src/commands/cert/render/tests/contract.rs`，快照来自模块拆分前的 `26ef130`，覆盖文本、颜色和 JSON 输出以及对应退出状态；ActionRequired 文本提示有意追加精确 `--operation`，对应两项基准已定点更新。预期路径仅按宿主路径分隔符适配，不修改实际输出；报告有意变更时应先核对 [CLI 契约](cli-contract.md)，不要在结构重构中重新生成快照掩盖差异。
 

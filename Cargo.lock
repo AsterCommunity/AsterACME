@@ -161,10 +161,10 @@ dependencies = [
  "aster_acme_dns",
  "aster_acme_dns_adpp",
  "aster_acme_dns_resolver",
- "aster_acme_process",
  "aster_acme_protocol",
  "aster_acme_validation",
  "aster_forge_panic",
+ "aster_forge_process",
  "aster_forge_utils",
  "async-trait",
  "base64 0.23.1",
@@ -252,7 +252,7 @@ name = "aster_acme_dns_adpp"
 version = "0.1.0-alpha.1"
 dependencies = [
  "aster_acme_dns",
- "aster_acme_process",
+ "aster_forge_process",
  "async-trait",
  "aws-lc-rs",
  "base64 0.23.1",
@@ -269,15 +269,6 @@ dependencies = [
  "aster_acme_dns",
  "async-trait",
  "hickory-resolver",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "aster_acme_process"
-version = "0.1.0-alpha.1"
-dependencies = [
- "process-wrap",
  "tokio",
  "tokio-util",
 ]
@@ -336,6 +327,19 @@ checksum = "50080b08db383952b16615beff2905c29d815a22683823c95171fa993f5b27d1"
 dependencies = [
  "chrono",
  "rustix",
+]
+
+[[package]]
+name = "aster_forge_process"
+version = "0.1.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "487e3a15b15c3aefbf76785de125b0de38d35b19e42bcc26b8eef8e5252d2903"
+dependencies = [
+ "libc",
+ "process-wrap",
+ "tokio",
+ "tokio-util",
+ "windows",
 ]
 
 [[package]]
@@ -888,7 +892,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1974,7 +1978,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2171,7 +2175,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2228,7 +2232,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2574,7 +2578,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3078,7 +3082,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

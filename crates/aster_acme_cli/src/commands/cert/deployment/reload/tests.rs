@@ -4,6 +4,88 @@ use crate::commands::cert::{
     deployment::tests::{assert_descendant_exited, child_command},
 };
 
+/// Use native exit-status encoding while avoiding extra fixture processes.
+fn exit_status(success: bool) -> ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        ExitStatus::from_raw(if success { 0 } else { 3 << 8 })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt as _;
+        ExitStatus::from_raw(if success { 0 } else { 3 })
+    }
+}
+
+/// Darwin may retain an empty process group briefly while excluding zombies
+/// from killpg iteration, producing EPERM. Forge alpha.3 reports that barrier
+/// as uncertain. Never accept another failure or use this as exit evidence:
+/// the caller must independently acquire the descendant's lifetime lock.
+fn assert_success_or_darwin_cleanup_uncertainty(result: ReloadResult) {
+    assert!(result.started);
+    assert!(!result.timed_out);
+    match result.status {
+        Ok(status) => assert!(status.success()),
+        #[cfg(target_os = "macos")]
+        Err(error) if error.raw_os_error() == Some(1) => {
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        }
+        Err(error) => panic!("unexpected reload failure: {error}"),
+    }
+}
+
+#[test]
+fn incomplete_cleanup_never_reports_success_or_enters_timeout_retry_path() {
+    use aster_forge_process::ProcessFailure;
+    for kind in [io::ErrorKind::TimedOut, io::ErrorKind::PermissionDenied] {
+        for status in [
+            Ok(exit_status(true)),
+            Ok(exit_status(false)),
+            Err(ProcessFailure::TimedOut),
+            Err(ProcessFailure::Cancelled),
+            Err(ProcessFailure::Wait(io::Error::other("direct wait failed"))),
+        ] {
+            let (status, timed_out) = classify(status, Some(kind.into()));
+            assert_eq!(status.unwrap_err().kind(), kind);
+            assert!(!timed_out, "incomplete cleanup must remain uncertain");
+        }
+    }
+}
+
+#[test]
+fn complete_cleanup_preserves_failure_classifications() {
+    use aster_forge_process::ProcessFailure;
+    for (failure, kind, retry_timeout) in [
+        (
+            ProcessFailure::Spawn(io::ErrorKind::NotFound.into()),
+            io::ErrorKind::NotFound,
+            false,
+        ),
+        (
+            ProcessFailure::Wait(io::ErrorKind::Other.into()),
+            io::ErrorKind::Other,
+            false,
+        ),
+        (
+            ProcessFailure::CancelledBeforeStart,
+            io::ErrorKind::Interrupted,
+            false,
+        ),
+        (ProcessFailure::Cancelled, io::ErrorKind::Interrupted, true),
+        (ProcessFailure::TimedOut, io::ErrorKind::TimedOut, true),
+    ] {
+        let (status, timed_out) = classify(Err(failure), None);
+        assert_eq!(status.unwrap_err().kind(), kind);
+        assert_eq!(timed_out, retry_timeout);
+    }
+    for success in [true, false] {
+        let (status, timed_out) = classify(Ok(exit_status(success)), None);
+        assert_eq!(status.unwrap().success(), success);
+        assert!(!timed_out);
+    }
+}
+
 #[tokio::test]
 async fn successful_parent_does_not_leave_background_descendants_running() {
     let temp = tempfile::tempdir().unwrap();
@@ -19,8 +101,7 @@ async fn successful_parent_does_not_leave_background_descendants_running() {
         None,
     )
     .await;
-    assert!(result.status.unwrap().success());
-    assert!(!result.timed_out);
+    assert_success_or_darwin_cleanup_uncertainty(result);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_descendant_exited(&heartbeat).await;
     let before = std::fs::read(&heartbeat).unwrap();
@@ -152,8 +233,7 @@ async fn successful_parent_with_inherited_pipes_does_not_turn_into_a_timeout() {
         None,
     )
     .await;
-    assert!(!result.timed_out);
-    assert!(result.status.unwrap().success());
+    assert_success_or_darwin_cleanup_uncertainty(result);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_descendant_exited(&heartbeat).await;
     let before = std::fs::read(&heartbeat).unwrap();

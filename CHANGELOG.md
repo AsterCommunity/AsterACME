@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.zh.md)
 
+## [Unreleased]
+
+### Changed
+
+- **CI triggers** — Run push checks only on `main` and pull request checks only for `main`; cancel superseded runs for the same PR or branch to avoid duplicate branch/PR checks.
+
+- **Forge process execution** — Replace the retired `aster_acme_process` with published `aster_forge_process = 0.1.0-alpha.3` for bounded child-process lifecycle mechanics. ADPP and deployment retain their protocol and side-effect policies; incomplete tree cleanup overrides direct-child success, preserves uncertain side effects, and forbids automatic replay.
+
 ## [0.1.0-alpha.1] - 2026-11-16
 
 Initial pre-release. Rust APIs and local formats may change without compatibility readers or automatic migration.
