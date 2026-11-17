@@ -53,6 +53,7 @@ pub(super) struct SavedAccount<'a> {
     contacts: &'a [String],
     server_contacts: Option<&'a [String]>,
     accepted_terms_url: Option<&'a AcmeUrl>,
+    auto_accept_terms_updates: bool,
 }
 
 #[derive(Serialize)]
@@ -99,6 +100,7 @@ pub(super) struct Remote<'a> {
     action: crate::commands::account::report::RemoteAction,
     recovered: bool,
     reused: bool,
+    auto_accepted_terms: bool,
 }
 
 #[derive(Serialize)]
@@ -207,18 +209,22 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                     server_contacts: record.and_then(|record| record.server_contacts.as_deref()),
                     accepted_terms_url: record
                         .and_then(|record| record.accepted_terms_url.as_ref()),
+                    auto_accept_terms_updates: record
+                        .is_some_and(|record| record.auto_accept_terms_updates),
                 })
             }
             AccountReport::Remote {
                 action,
                 name,
                 account,
+                auto_accepted_terms,
                 reused,
             } => Self::Remote(Remote {
                 action: *action,
                 identity: Identity::new(name, account, true),
                 recovered: account.recovered,
                 reused: *reused,
+                auto_accepted_terms: *auto_accepted_terms,
             }),
             AccountReport::Deactivated {
                 name,

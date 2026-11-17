@@ -120,6 +120,25 @@ pub(super) fn terms(
     Ok(())
 }
 
+/// Ask for the separate durable trust delegation after current terms consent.
+/// `--yes` and non-interactive output never reach this prompt.
+pub(super) fn auto_accept_terms_updates(
+    options: &mut RegistrationOptions,
+    current: Option<&AcmeUrl>,
+    already_authorized: bool,
+    interactive: bool,
+    prompts: &mut impl RegistrationPrompts,
+) -> CliResult<()> {
+    if current.is_none() || options.auto_accept_terms_updates || already_authorized || !interactive
+    {
+        return Ok(());
+    }
+    if prompts.confirm("Automatically accept future CA terms updates?")? {
+        options.auto_accept_terms_updates = true;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::commands::account::interaction::*;
@@ -303,5 +322,47 @@ mod tests {
             .unwrap_err()
             .is::<Canceled>()
         );
+    }
+
+    #[test]
+    fn auto_accept_terms_requires_explicit_interactive_yes() {
+        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+        let mut options = RegistrationOptions::default();
+        auto_accept_terms_updates(
+            &mut options,
+            Some(&current),
+            false,
+            true,
+            &mut prompts(&[false], None),
+        )
+        .unwrap();
+        assert!(!options.auto_accept_terms_updates);
+        auto_accept_terms_updates(
+            &mut options,
+            Some(&current),
+            false,
+            true,
+            &mut prompts(&[true], None),
+        )
+        .unwrap();
+        assert!(options.auto_accept_terms_updates);
+        auto_accept_terms_updates(
+            &mut RegistrationOptions::default(),
+            Some(&current),
+            false,
+            false,
+            &mut prompts(&[], None),
+        )
+        .unwrap();
+        let mut already = prompts(&[], None);
+        auto_accept_terms_updates(
+            &mut RegistrationOptions::default(),
+            Some(&current),
+            true,
+            true,
+            &mut already,
+        )
+        .unwrap();
+        assert_eq!(already.messages.len(), 0);
     }
 }

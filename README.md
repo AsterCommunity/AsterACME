@@ -89,6 +89,14 @@ aster-acme account register default --contact admin@example.com
 aster-acme cert issue -n example-cert -a default -d example.com -c manual_dns
 ```
 
+For unattended renewal, explicitly delegate future CA terms updates during registration:
+
+```sh
+aster-acme account register default --auto-accept-new-terms
+```
+
+This also accepts the currently advertised terms. The exact accepted URL remains in the account record; `account show` reports whether the future-update delegation is enabled. `--yes`, JSON mode, and implicit issuance account checks never enable it. A normal `account register` without the flag keeps an existing delegation so routine recovery cannot revoke unattended renewal trust.
+
 Publish the requested TXT values and confirm. If interrupted, continue the saved request; renewal keeps the saved validation method:
 
 ```sh

@@ -7,6 +7,7 @@
 ### 新增
 
 - **DNS 发布 TTL** — 通过 `provider add/update --ttl-seconds` 配置 TXT 请求 TTL（默认 120，RFC 2181 范围 0–2147483647），恢复和 Profile 修改不改变已有发布计划中的 TTL。厂商限制仍归各 backend，本地传播观察保留现有建议性行为。
+- **自动接受 CA 条款更新** — `account register --auto-accept-new-terms` 同意当前 directory 条款，并持久化授权未来条款 URL 更新，供无人值守账户 ensure 和续期使用。`account show` 展示精确已接受 URL 及授权状态；`--yes`、JSON 模式和隐式 ensure 不会开启授权。
 
 ### 变更
 

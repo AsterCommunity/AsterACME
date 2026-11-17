@@ -20,6 +20,7 @@ python3 scripts/check-workspace-deps.py
 - PKCS#8 往返、错误密钥、JWK thumbprint、原始 ES256 签名及篡改拒绝。
 - jwk/kid 互斥、精确签名 URL、POST-as-GET 空 payload、HS256 EAB 签名与响应确认。
 - 显式条款、EAB 必需、联系人 URI 边界及输入上限。
+- 自动接受条款更新的授权边界：精确 URL 变化、已授权隐式 ensure、未授权 `TermsRequired`、无 ToS、旧 TOML 缺字段默认关闭，以及 CLI 交互默认拒绝/显式同意和 JSON/`--yes` 不隐含授权。
 - 新账户先持久化 intent、只读找回、CA 明确 not-found 才注册、注册响应丢失后的恢复。
 - 请求超时、任务取消保留 pending；坏 nonce 使用错误响应的新值重签且有次数上限。
 - 8 个并发请求的 nonce 唯一性、签名有效性；非法/重复 nonce 拒绝。

@@ -89,6 +89,14 @@ aster-acme account register default --contact admin@example.com
 aster-acme cert issue -n example-cert -a default -d example.com -c manual_dns
 ```
 
+无人值守续期可在注册时显式委托自动接受 CA 条款更新：
+
+```sh
+aster-acme account register default --auto-accept-new-terms
+```
+
+该参数同时同意当前公布的条款。账户记录仍保存精确的已接受 URL，`account show` 会显示未来更新授权是否启用。`--yes`、JSON 模式和签发时的隐式账户检查都不会开启授权；不带该参数的普通 `account register` 会保留已有授权，避免日常恢复操作意外撤销无人值守续期信任。
+
 按提示发布 TXT 并确认。中途退出后可以继续原申请，续期沿用保存的验证方式：
 
 ```sh

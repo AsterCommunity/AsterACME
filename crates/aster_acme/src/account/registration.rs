@@ -144,6 +144,7 @@ impl AccountService {
             deactivation: crate::account::DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            auto_accept_terms_updates: false,
             state: AccountRecordState::RegistrationPending,
         });
         record
@@ -199,17 +200,23 @@ impl AccountService {
                 .action(AccountOperation::Register)
                 .map_err(AccountError::from)?;
             validate_contacts(&options.contacts)?;
+            let auto_accept_terms_updates =
+                record.auto_accept_terms_updates || options.auto_accept_terms_updates;
             let accepted_terms = match &self.client.directory().meta.terms_of_service {
-                // Consent is recorded as the discovered URL, not a reusable boolean:
-                // a changed document requires another explicit acceptance by the caller.
                 Some(current) if record.accepted_terms_url.as_ref() == Some(current) => {
                     Some(current.clone())
                 }
-                Some(current) if options.terms_accepted => Some(current.clone()),
+                Some(current) if options.terms_accepted || auto_accept_terms_updates => {
+                    Some(current.clone())
+                }
                 Some(current) => return Err(AccountError::TermsRequired(current.clone())),
                 None => None,
             };
             let mut changed = false;
+            if record.auto_accept_terms_updates != auto_accept_terms_updates {
+                record.auto_accept_terms_updates = auto_accept_terms_updates;
+                changed = true;
+            }
             if !options.contacts.is_empty() && record.contacts != options.contacts {
                 record.contacts.clone_from(&options.contacts);
                 changed = true;
@@ -227,7 +234,7 @@ impl AccountService {
         }
         validate_contacts(&options.contacts)?;
         match &self.client.directory().meta.terms_of_service {
-            Some(required) if !options.terms_accepted => {
+            Some(required) if !options.terms_accepted && !options.auto_accept_terms_updates => {
                 return Err(AccountError::TermsRequired(required.clone()));
             }
             Some(_) | None => {}
@@ -251,6 +258,7 @@ impl AccountService {
             deactivation: crate::account::DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: self.client.directory().meta.terms_of_service.clone(),
+            auto_accept_terms_updates: options.auto_accept_terms_updates,
             state: AccountRecordState::RegistrationPending,
         };
         self.store.save(&record, lease).await?;

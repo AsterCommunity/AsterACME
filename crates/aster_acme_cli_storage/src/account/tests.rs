@@ -175,6 +175,7 @@ fn fixture(directory: &AcmeUrl, thumbprint: &str) -> AccountRecord {
         deactivation: aster_acme_core::account::DeactivationState::NotRequested,
         key_rotation: None,
         accepted_terms_url: None,
+        auto_accept_terms_updates: false,
         state: AccountRecordState::RegistrationPending,
     }
 }
@@ -428,6 +429,23 @@ async fn metadata_roundtrips_atomically_and_rejects_corrupt_unknown_and_oversize
         store.load(&directory, &thumb).await.unwrap(),
         Some(record.clone())
     );
+    let legacy = fs::read_to_string(store.account_slot().join("account.toml"))
+        .unwrap()
+        .replace("auto_accept_terms_updates = false\n", "");
+    atomic_write(
+        &store.account_slot().join("account.toml"),
+        legacy.as_bytes(),
+    )
+    .unwrap();
+    assert!(
+        !store
+            .load(&directory, &thumb)
+            .await
+            .unwrap()
+            .unwrap()
+            .auto_accept_terms_updates
+    );
+    write_record(&store.account_slot().join("account.toml"), &record).unwrap();
     record.account_url = Some(AcmeUrl::new("https://ca.example/account/1").unwrap());
     record.state = AccountRecordState::Registered;
     store.save(&record).await.unwrap();

@@ -260,6 +260,7 @@ impl AccountKeyStore for CliAccountStore {
                         server_contacts: None,
 last_status: None,
 deactivation: aster_acme_core::account::DeactivationState::NotRequested, key_rotation: None, accepted_terms_url: None,
+                        auto_accept_terms_updates: false,
                         state: aster_acme_core::account::AccountRecordState::RegistrationPending,
                     };
                     // The record replaces a separate initialization marker. A crash after

@@ -88,6 +88,7 @@ pub(super) async fn update_contacts(
         name: context.name,
         account,
         action: RemoteAction::UpdateContact,
+        auto_accepted_terms: false,
         reused: false,
     })
 }
