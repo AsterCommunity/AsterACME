@@ -30,11 +30,11 @@ docker exec aster-acme cert list
 docker exec aster-acme provider add cloudflare --backend cloudflare
 ```
 
-shim 覆盖 `account`、`cert`、`daemon`、`help`、`provider`、`version`，必须与 CLI 顶层 `Command` 枚举同步（`crates/aster_acme_cli/src/app.rs`，见 Dockerfile 注释）。需要完整 shell 时 `docker exec -it aster-acme sh`。
+shim 覆盖 `account`、`cert`、`daemon`、`help`、`provider`、`version`，必须与 CLI 顶层 `Command` 枚举同步（`crates/aster_acme_cli/src/app.rs`，见 `docker/Dockerfile` 注释）。需要完整 shell 时 `docker exec -it aster-acme sh`。
 
 ## Compose
 
-可复制示例见 [`examples/docker/docker-compose.yml`](../examples/docker/docker-compose.yml)：bind 目录分别暴露数据目录和发布产物。宿主目录由 compose 以 root 创建而镜像默认用户是 uid 10001，示例因此显式 `user: "0:0"`；保留镜像默认用户时先 `chown 10001:10001` 宿主目录。文件权限仍由 CLI 按[存储契约](design/storage.md)收紧，root 运行不放松密钥文件权限。
+可复制示例见 [`docker/docker-compose.yml`](../docker/docker-compose.yml)：bind 目录分别暴露数据目录和发布产物。宿主目录由 compose 以 root 创建而镜像默认用户是 uid 10001，示例因此显式 `user: "0:0"`；保留镜像默认用户时先 `chown 10001:10001` 宿主目录。文件权限仍由 CLI 按[存储契约](design/storage.md)收紧，root 运行不放松密钥文件权限。
 
 ## 部署与 reload 边界
 

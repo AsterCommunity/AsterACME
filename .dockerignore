@@ -13,5 +13,6 @@ examples/
 tests/
 *.md
 .DS_Store
-Dockerfile
+docker/Dockerfile
+docker/docker-compose.yml
 .dockerignore

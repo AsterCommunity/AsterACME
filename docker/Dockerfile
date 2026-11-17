@@ -2,6 +2,8 @@
 # TLS is rustls backed by AWS-LC-RS: its bindings are pregenerated for musl
 # targets and the C sources build through the cc builder, so build-base
 # (gcc + musl-dev) is the only extra requirement.
+# The build context stays the repository root: run
+# `docker build -f docker/Dockerfile .` from the checkout.
 FROM rust:1-alpine AS builder
 
 RUN apk add --no-cache build-base
@@ -52,7 +54,7 @@ VOLUME ["/data"]
 ENV ASTER_ACME_DATA_DIR=/data
 
 COPY --from=builder /build/aster-acme /usr/local/bin/aster-acme
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 USER aster
 ENTRYPOINT ["entrypoint.sh"]
