@@ -27,7 +27,7 @@
 
 AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断恢复流程，管理证书生命周期。可以交互使用 CLI、编写脚本，也可以将 Rust 服务嵌入应用，注入自己的存储、签名器和验证适配器。
 
-**现已发布：** AsterACME `0.1.0-alpha.1` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。当前源码新增内置 Cloudflare 和 ADPP 共用的 DNS solver；这些新增能力尚未包含在已发布 alpha.1 中，真实 DNS/公网 CA 验收另计。
+**现已发布：** AsterACME `0.1.0-alpha.2` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。内置 Cloudflare 和 ADPP 后端已包含在统一的 DNS solver 之中，真实 DNS/公网 CA 验收另计。
 
 ## 能力
 
@@ -48,16 +48,16 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 
 ## 快速开始
 
-从 crates.io 安装已发布的 `0.1.0-alpha.1` CLI。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
+从 crates.io 安装已发布的 `0.1.0-alpha.2` CLI。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
 
 ```sh
-cargo binstall aster_acme_cli@0.1.0-alpha.1
+cargo binstall aster_acme_cli@0.1.0-alpha.2
 ```
 
 没有 `cargo-binstall` 时，可直接通过 Cargo 安装同一版本：
 
 ```sh
-cargo install aster_acme_cli --version 0.1.0-alpha.1
+cargo install aster_acme_cli --version 0.1.0-alpha.2
 ```
 
 使用 **Rust 1.99+** 从源码安装：

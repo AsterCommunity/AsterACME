@@ -99,7 +99,7 @@ CLI 枚举驱动八种 key-type 解析、默认 ecdsa-p256、短参数 -k、resu
 
 账户/证书删除在根.locks保持原inode，成功清理无用户内容的对象目录；用户额外文件和失败标记边界仍覆盖。全库状态路径检查将结果JSON改为ActionRequired/Completed/NotDue标签枚举，not_due不再冒充错误；移除account remove对未查询远端状态的断言，account list提供实际刷新/失败计数，通配符授权与裸域名分开显示。统一选择器行使用ChoiceLabel（名称/摘要/UTC时间/状态/标记）和同一terminal索引身份。默认不显示重复标记，版本视图In use: yes/no。内部、字段、symlink路径统一in_use，无current别名或旧格式迁移。
 
-独立CLI子进程使用临时目录验证默认in_use/历史/精确operation视图、歧义脚本拒绝、history/revoked/all清理、保留pending/用户文件、外置锁；version --json为0.1.0-alpha.1，renew帮助不暴露域名/账户/密钥覆盖参数。所有六个workspace包独立声明该版本，未发布任何包、未操作真实CA或用户数据。
+独立CLI子进程使用临时目录验证默认in_use/历史/精确operation视图、歧义脚本拒绝、history/revoked/all清理、保留pending/用户文件、外置锁；version --json为0.1.0-alpha.2，renew帮助不暴露域名/账户/密钥覆盖参数。所有六个workspace包独立声明该版本，未发布任何包、未操作真实CA或用户数据。
 
 ## 批量续期验收
 

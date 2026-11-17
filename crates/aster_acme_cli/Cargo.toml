@@ -1,6 +1,6 @@
 [package]
 name = "aster_acme_cli"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,25 @@ readme = "README.md"
 name = "aster-acme"
 path = "src/main.rs"
 doc = false
+
+# cargo-binstall maps the crate to the release assets published by the
+# tag-driven workflow; platforms follow the workflow matrix naming.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-{ target }"
+bin-dir = "aster-acme-v{ version }-{ target }"
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-linux-amd64"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-linux-arm64"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-macos-amd64"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-macos-arm64"
 
 [features]
 default = ["precheck", "dns-cloudflare"]

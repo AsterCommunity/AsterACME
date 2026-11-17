@@ -5,8 +5,8 @@ The `aster-acme` command-line application for AsterACME. It manages named CA acc
 ## Install
 
 ```sh
-cargo binstall aster_acme_cli@0.1.0-alpha.1
-cargo install aster_acme_cli --version 0.1.0-alpha.1
+cargo binstall aster_acme_cli@0.1.0-alpha.2
+cargo install aster_acme_cli --version 0.1.0-alpha.2
 ```
 
 Build from a checkout with Rust 1.99 or newer:

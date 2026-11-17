@@ -4,9 +4,11 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-11-18
+
 ### Added
 
-- **Release pipeline** — Publish version tags automatically: a draft GitHub release with changelog-extracted notes, stripped static-musl `aster-acme` binaries for linux amd64+arm64 and stripped macos binaries, each with a per-version symbol archive (macOS UUID pairing via `dwarfdump`, Linux GNU build-id debug files) for offline backtrace resolution (#9), signed multi-arch Alpine container images on GHCR and Docker Hub where `latest` tracks stable tags only, and a Homebrew tap formula update for every release. Windows packaging awaits its separate PDB flow.
+- **Release pipeline** — Publish version tags automatically: a draft GitHub release with changelog-extracted notes, stripped static-musl `aster-acme` binaries for linux amd64+arm64 and stripped macos binaries, each with a per-version symbol archive (macOS UUID pairing via `dwarfdump`, Linux GNU build-id debug files) for offline backtrace resolution (#9), signed multi-arch Alpine container images on GHCR and Docker Hub where `latest` tracks stable tags only, and a Homebrew tap formula update for every release. Include cargo-binstall metadata mapping release assets per target. Windows packaging awaits its separate PDB flow.
 
 - **Native DNS backends** — Discover backend-owned configuration and factories through one validated registry. Add feature-selected Cloudflare (`cloudflare` in the embedding crate, CLI `dns-cloudflare`) with optional zone pinning or discovery from the final CNAME target, durable per-publication zone identity, publication-comment reconciliation, private token files, and exact owned-record cleanup. Providers emit versioned HTTP/checkpoint effects; hosts execute them with bounded Forge transport and durable per-publication/RRset leases. Include a conditional RRset state machine that preserves unrelated values and metadata, retries only proven revision conflicts, and retains uncertain ownership. Real DNS/public-CA acceptance remains separate.
 
@@ -54,4 +56,5 @@ Initial pre-release. Rust APIs and local formats may change without compatibilit
 Cross-compilation and local mocks do not constitute native-platform or public-CA acceptance.
 
 [Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...HEAD
+[0.1.0-alpha.2]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

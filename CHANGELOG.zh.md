@@ -4,9 +4,11 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-11-18
+
 ### 新增
 
-- **发布流水线** — 版本 tag 自动发布：带变更日志摘录的 draft GitHub release，linux amd64+arm64 的 musl 静态 strip 后 `aster-acme` 二进制与 macos strip 后二进制，各自附按版本归档的符号文件（macOS `dwarfdump` UUID 配对、Linux GNU build-id 调试文件），支持离线 backtrace 反推（#9）；GHCR 与 Docker Hub 的 Alpine 多架构签名镜像，`latest` 仅跟随正式版 tag；每个 release 同步更新 Homebrew tap formula。Windows 打包待 PDB 流程另行确定。
+- **发布流水线** — 版本 tag 自动发布：带变更日志摘录的 draft GitHub release，linux amd64+arm64 的 musl 静态 strip 后 `aster-acme` 二进制与 macos strip 后二进制，各自附按版本归档的符号文件（macOS `dwarfdump` UUID 配对、Linux GNU build-id 调试文件），支持离线 backtrace 反推（#9）；GHCR 与 Docker Hub 的 Alpine 多架构签名镜像，`latest` 仅跟随正式版 tag；每个 release 同步更新 Homebrew tap formula。附带 cargo-binstall 元数据按 target 映射 release 资产。Windows 打包待 PDB 流程另行确定。
 
 - **内置 DNS 后端** — 通过同一校验注册表发现后端配置与工厂。新增按厂商 feature 选择的 Cloudflare（嵌入式 `cloudflare`，CLI `dns-cloudflare`），可选固定 zone 或按 CNAME 最终目标自动发现并持久化 zone 身份、publication comment 对账、私有 token 文件与精确所有权清理。Provider 产生版本化 HTTP/checkpoint 动作，由宿主通过有界 Forge 传输和持久化 publication/RRset 租约执行。提供条件 RRset 状态机，保留无关值与字段，只对明确版本冲突重新合并，不确定所有权时保留记录；真实 DNS/公网 CA 验收另计。
 
@@ -54,4 +56,5 @@
 交叉编译及本地 mock 不代表原生平台或公网 CA 验收。
 
 [Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...HEAD
+[0.1.0-alpha.2]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

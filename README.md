@@ -27,7 +27,7 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Available now:** AsterACME `0.1.0-alpha.1` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. The source tree additionally supports native Cloudflare and ADPP backends through a unified DNS solver; these additions are not in the published alpha.1. Live DNS/public-CA acceptance is separate.
+**Available now:** AsterACME `0.1.0-alpha.2` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. It includes native Cloudflare and ADPP backends behind a unified DNS solver. Live DNS/public-CA acceptance is separate.
 
 ## Capabilities
 
@@ -48,16 +48,16 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 ## Quick start
 
-Install the published `0.1.0-alpha.1` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
+Install the published `0.1.0-alpha.2` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
 
 ```sh
-cargo binstall aster_acme_cli@0.1.0-alpha.1
+cargo binstall aster_acme_cli@0.1.0-alpha.2
 ```
 
 Without `cargo-binstall`, install the same CLI through Cargo:
 
 ```sh
-cargo install aster_acme_cli --version 0.1.0-alpha.1
+cargo install aster_acme_cli --version 0.1.0-alpha.2
 ```
 
 Build from the checkout with **Rust 1.99+**:
