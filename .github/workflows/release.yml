@@ -184,7 +184,9 @@ jobs:
           cp "$BIN" "aster-acme-v${VERSION}-${{ matrix.platform }}${{ matrix.ext }}"
 
       # Windows symbols are the PDB sidecar the build keeps; the exe pairs with
-      # it through the GUID embedded in its debug directory.
+      # it through the GUID embedded in its debug directory. The linker names
+      # the PDB after the crate stem (underscores) and uplift paths vary, so
+      # locate the file instead of guessing its path.
       - name: Package binary and PDB symbol archive (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -192,13 +194,20 @@ jobs:
           VERSION=${{ needs.create-release.outputs.version }}
           DIR="target/${{ matrix.target }}/release"
           cp "$DIR/aster-acme.exe" "aster-acme-v${VERSION}-${{ matrix.platform }}${{ matrix.ext }}"
-          cp "$DIR/aster-acme.pdb" .
+          PDB="$(find "$DIR" -name '*.pdb' | sort | head -n1)"
+          if [ -z "$PDB" ]; then
+            echo "::error::no PDB file was produced for ${{ matrix.target }}"
+            find "target/${{ matrix.target }}" -maxdepth 2 -type f -name '*' | head -40
+            exit 1
+          fi
+          echo "found PDB: $PDB"
+          cp "$PDB" aster-acme.pdb
           {
             echo "version: ${VERSION}"
             echo "platform: ${{ matrix.platform }}"
             echo "target: ${{ matrix.target }}"
             echo "binary: aster-acme-v${VERSION}-${{ matrix.platform }}.exe"
-            echo "symbols: aster-acme.pdb (MSVC program database)"
+            echo "symbols: aster-acme.pdb (MSVC program database, from ${{ matrix.target }}/release)"
             echo "pairing: the exe embeds the PDB GUID in its debug directory; WinDbg/cdb load the PDB automatically from the symbol path"
             echo "resolve: windbg -y <symbols-dir> aster-acme.exe, then inspect the reported backtrace addresses"
           } > SYMBOLS.txt
