@@ -179,7 +179,8 @@ jobs:
             echo "target: ${{ matrix.target }}"
             echo "binary: aster-acme-v${VERSION}-${{ matrix.platform }} (Mach-O UUID $UUID_BIN)"
             echo "symbols: aster-acme.symbols (full pre-strip copy; UUID survives strip)"
-            echo "resolve: atos -o aster-acme.symbols -arch ${{ matrix.arch }} -l 0x100000000 <address>"
+            echo "resolve: lldb -b -o 'file aster-acme.symbols' -o 'image lookup -a (0x100000000 + <text-offset>)'"
+            echo "note: atos cannot see Rust v0-mangled (__R...) symbols; lldb can. For a runtime backtrace address pass (RUNTIME_ADDR - slide) instead."
           } > SYMBOLS.txt
           cat SYMBOLS.txt
           tar czf "aster-acme-v${VERSION}-${{ matrix.platform }}-symbols.tar.gz" aster-acme.symbols SYMBOLS.txt
