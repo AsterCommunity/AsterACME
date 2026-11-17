@@ -43,6 +43,16 @@ fn zone() -> ProviderEvent {
 fn remote(comment: Option<&str>, value: &str) -> Value {
     json!({"id":"11111111111111111111111111111111","name":"_acme-challenge.example.com","type":"TXT","content":value,"comment":comment})
 }
+fn absolute_token_path() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(r"C:\absolute\token")
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from("/absolute/token")
+    }
+}
 fn http(effect: ProviderEffect, method: &str) -> aster_acme_dns::operation::HttpRequest {
     let ProviderEffect::Http(request) = effect else {
         panic!("expected HTTP")
@@ -146,6 +156,23 @@ fn lost_create_response_reconciles_tag_without_repeating_post() {
     assert!(
         matches!(restored.advance(response(json!([remote(Some("asteracme:publication-1"),"txt-value")]))).unwrap(),
         ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) if receipt.ownership == RecordOwnership::Created)
+    );
+}
+
+#[test]
+fn publication_id_respects_cloudflare_comment_length_limit() {
+    let mut publication = record();
+    publication.publication_id = "a".repeat(90);
+    assert!(
+        factory()
+            .start(ProviderAction::Present(publication.clone()), None)
+            .is_ok()
+    );
+    publication.publication_id.push('a');
+    assert!(
+        factory()
+            .start(ProviderAction::Present(publication), None)
+            .is_err()
     );
 }
 
@@ -321,7 +348,7 @@ fn invalid_configuration_and_recovery_versions_fail_before_http() {
     let file = Cloudflare::new(CloudflareConfig {
         zone_id: ZONE.into(),
         api_token: None,
-        token_file: Some("/absolute/token".into()),
+        token_file: Some(absolute_token_path()),
     })
     .unwrap();
     let mut machine = file.start(ProviderAction::Present(record()), None).unwrap();

@@ -76,11 +76,14 @@ impl ValidationMethod {
             Self::TlsAlpn => "tls_alpn",
         }
     }
+    pub(crate) fn from_id(id: &str) -> Result<Self, IssueError> {
+        serde_json::from_value(serde_json::Value::String(id.to_owned())).map_err(|_| {
+            IssueError::InvalidInput("saved validation implementation is not supported")
+        })
+    }
+
     pub(super) fn from_record(record: &IssueRecord) -> Result<Self, IssueError> {
-        let method: Self =
-            serde_json::from_value(serde_json::Value::String(record.solver_id.clone())).map_err(
-                |_| IssueError::InvalidInput("saved validation implementation is not supported"),
-            )?;
+        let method = Self::from_id(&record.solver_id)?;
         if method.kind() != record.challenge {
             return Err(IssueError::InvalidInput(
                 "saved implementation does not match its ACME method",
@@ -355,6 +358,27 @@ pub(super) async fn bound_provider_configuration(
     config.backend_config_version = backend.descriptor().config_version;
     serde_json::to_value(config)
         .map_err(|_| IssueError::InvalidInput("cannot encode bound DNS provider reference"))
+}
+
+pub(super) async fn validate_provider_binding(
+    saved: &serde_json::Value,
+    root: &std::path::Path,
+) -> Result<(), IssueError> {
+    let mut config: DnsProviderConfig = serde_json::from_value(saved.clone())
+        .map_err(|_| IssueError::InvalidInput("invalid saved DNS provider profile reference"))?;
+    let mappings = config.dns_targets;
+    let expected = bound_provider_configuration(Some(&config.provider_instance_id), root).await?;
+    config = serde_json::from_value(expected)
+        .map_err(|_| IssueError::InvalidInput("cannot validate DNS provider binding"))?;
+    config.dns_targets = mappings;
+    let expected = serde_json::to_value(config)
+        .map_err(|_| IssueError::InvalidInput("cannot validate DNS provider binding"))?;
+    if &expected != saved {
+        return Err(IssueError::InvalidInput(
+            "DNS provider backend or remote scope changed before request creation",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn provider_adapter(

@@ -6,9 +6,9 @@ use crate::{
         configuration_error,
     },
     operation::{
-        HttpExecutor, HttpFailure, HttpRequest, HttpResponse, OperationFactory, ProviderAction,
-        ProviderEffect, ProviderEvent, ProviderHost, ProviderOperation, ProviderOutcome,
-        PublicationSession, PublicationStore, RecoveryState,
+        CredentialReader, HttpExecutor, HttpFailure, HttpRequest, HttpResponse, OperationFactory,
+        ProviderAction, ProviderEffect, ProviderEvent, ProviderHost, ProviderOperation,
+        ProviderOutcome, PublicationSession, PublicationStore, RecoveryState,
     },
 };
 use async_trait::async_trait;
@@ -23,6 +23,145 @@ enum CancellationPoint {
     Never,
     Response,
     Checkpoint,
+}
+
+#[derive(Clone, Copy)]
+enum SpecialMode {
+    Secret,
+    Wait,
+    InvalidCheckpoint,
+    MutationWithoutCheckpoint,
+    WrongOutcome,
+}
+
+struct SpecialBackend(SpecialMode);
+struct SpecialFactory(SpecialMode);
+struct SpecialOperation {
+    record: DnsRecord,
+    mode: SpecialMode,
+}
+
+impl DnsBackend for SpecialBackend {
+    fn descriptor(&self) -> BackendDescriptor {
+        BackendDescriptor {
+            id: "com.example.dns.special",
+            label: "Special",
+            config_version: 1,
+            executable: false,
+            mutation_model: crate::backend::MutationModel::IndividualRecords,
+            fields: &[],
+        }
+    }
+    fn validate(&self, _: &BackendConfig) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn binding(&self, _: &BackendConfig) -> Result<String, ProviderError> {
+        Ok("special".into())
+    }
+    fn create(&self, _: &BackendConfig) -> Result<BackendImplementation, ProviderError> {
+        let mode = self.0;
+        Ok(BackendImplementation::Native(Arc::new(SpecialFactory(
+            mode,
+        ))))
+    }
+}
+
+impl OperationFactory for SpecialFactory {
+    fn start(
+        &self,
+        action: ProviderAction,
+        _: Option<RecoveryState>,
+    ) -> Result<Box<dyn ProviderOperation>, ProviderError> {
+        let ProviderAction::Present(record) = action else {
+            return Err(configuration_error("special backend only presents"));
+        };
+        let mode = self.0;
+        Ok(Box::new(SpecialOperation { record, mode }))
+    }
+}
+
+impl ProviderOperation for SpecialOperation {
+    fn advance(&mut self, event: ProviderEvent) -> Result<ProviderEffect, ProviderError> {
+        match (&self.mode, event) {
+            (SpecialMode::Secret, ProviderEvent::Start) => {
+                Ok(ProviderEffect::ReadSecret("/private/token".into()))
+            }
+            (SpecialMode::Secret, ProviderEvent::Secret(value)) => {
+                if value == "token" {
+                    Ok(ProviderEffect::Complete(ProviderOutcome::Presented(
+                        crate::PublicationReceipt {
+                            record_id: "secret-record".into(),
+                            ownership: RecordOwnership::Created,
+                            record_name: self.record.name.clone(),
+                            cname_chain: self.record.cname_chain.clone(),
+                        },
+                    )))
+                } else {
+                    Err(configuration_error("unexpected secret"))
+                }
+            }
+            (SpecialMode::Wait, ProviderEvent::Start) => Ok(ProviderEffect::WaitUntil(
+                Instant::now() + Duration::from_millis(1),
+            )),
+            (SpecialMode::Wait, ProviderEvent::Timer) => Ok(ProviderEffect::Complete(
+                ProviderOutcome::Presented(crate::PublicationReceipt {
+                    record_id: "wait-record".into(),
+                    ownership: RecordOwnership::Created,
+                    record_name: self.record.name.clone(),
+                    cname_chain: self.record.cname_chain.clone(),
+                }),
+            )),
+            (SpecialMode::InvalidCheckpoint, ProviderEvent::Start) => {
+                Ok(ProviderEffect::Checkpoint(RecoveryState {
+                    version: 0,
+                    data: serde_json::json!({}),
+                }))
+            }
+            (SpecialMode::MutationWithoutCheckpoint, ProviderEvent::Start) => {
+                Ok(ProviderEffect::Http(HttpRequest {
+                    method: "POST".into(),
+                    url: "https://dns.example/mutation".into(),
+                    headers: vec![],
+                    body: vec![],
+                    mutation: true,
+                }))
+            }
+            (SpecialMode::WrongOutcome, ProviderEvent::Start) => Ok(ProviderEffect::Complete(
+                ProviderOutcome::Cleaned(crate::CleanupStatus::Removed),
+            )),
+            _ => Err(configuration_error("unexpected special event")),
+        }
+    }
+}
+
+struct SecretReader;
+#[async_trait]
+impl CredentialReader for SecretReader {
+    async fn read(
+        &self,
+        _: &std::path::Path,
+        _: &ProviderExecution,
+    ) -> Result<String, ProviderError> {
+        Ok("token".into())
+    }
+}
+
+fn special_provider(mode: SpecialMode, credentials: bool) -> Arc<dyn crate::DnsProvider> {
+    let host = Arc::new(Host::default());
+    ProviderRegistry::new(vec![Arc::new(SpecialBackend(mode))])
+        .unwrap()
+        .provider(
+            "com.example.dns.special",
+            &BackendConfig::default(),
+            ProviderHost {
+                timeout: Duration::from_secs(1),
+                credentials: credentials
+                    .then(|| Arc::new(SecretReader) as Arc<dyn CredentialReader>),
+                http: host.clone(),
+                publications: Arc::new(Store(host)),
+            },
+        )
+        .unwrap()
 }
 #[derive(Default)]
 struct Host {
@@ -384,4 +523,48 @@ async fn cancellation_after_checkpoint_synthesizes_no_effect_without_dispatch() 
         .unwrap();
     assert!(matches!(&result[0].result,Err(error) if error.side_effect==SideEffect::None));
     assert_eq!(*host.trace.lock().unwrap(), ["bind", "save"]);
+}
+
+#[tokio::test]
+async fn special_operations_cover_secret_wait_checkpoint_and_outcome_boundaries() {
+    let secret = special_provider(SpecialMode::Secret, true)
+        .present(&context(), &[record("secret")], &scope())
+        .await
+        .unwrap();
+    assert!(secret[0].result.is_ok());
+
+    let missing = special_provider(SpecialMode::Secret, false)
+        .present(&context(), &[record("missing")], &scope())
+        .await
+        .unwrap();
+    assert!(matches!(
+        missing[0].result,
+        Err(ref error) if error.code == ProviderErrorCode::CredentialsUnavailable
+    ));
+
+    let waited = special_provider(SpecialMode::Wait, false)
+        .present(&context(), &[record("wait")], &scope())
+        .await
+        .unwrap();
+    assert!(waited[0].result.is_ok());
+
+    for mode in [
+        SpecialMode::InvalidCheckpoint,
+        SpecialMode::MutationWithoutCheckpoint,
+    ] {
+        let failed = special_provider(mode, false)
+            .present(&context(), &[record("invalid")], &scope())
+            .await
+            .unwrap();
+        assert!(failed[0].result.is_err());
+    }
+
+    let wrong = special_provider(SpecialMode::WrongOutcome, false)
+        .present(&context(), &[record("wrong")], &scope())
+        .await
+        .unwrap();
+    assert!(matches!(
+        wrong[0].result,
+        Err(ref error) if error.code == ProviderErrorCode::InvalidRequest
+    ));
 }

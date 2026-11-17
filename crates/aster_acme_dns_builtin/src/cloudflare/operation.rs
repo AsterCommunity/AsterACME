@@ -65,7 +65,7 @@ impl OperationFactory for Cloudflare {
             ProviderAction::Cleanup(request) => &request.record,
         };
         if record.publication_id.is_empty()
-            || record.publication_id.len() > 128
+            || record.publication_id.len() > 90
             || !record
                 .publication_id
                 .bytes()

@@ -130,6 +130,13 @@ pub trait CredentialReader: Send + Sync {
 #[async_trait]
 pub trait PublicationSession: Send + Sync {
     fn state(&self) -> Option<RecoveryState>;
+    /// Save a recovery checkpoint and return only after the update is durably committed.
+    ///
+    /// `Ok(())` is the confirmation boundary after which the runner may execute the next
+    /// provider effect. Enqueuing a background write or updating memory is insufficient.
+    /// Implementations should use the strongest persistence guarantee available on the
+    /// host platform; this contract does not promise power-loss durability beyond the
+    /// guarantees provided by that platform and its filesystem.
     async fn save(&mut self, state: RecoveryState) -> Result<(), ProviderError>;
 }
 

@@ -473,7 +473,8 @@ fn validate_request(request: &Request) -> Result<(), ProviderFailure> {
         {
             return Err(invalid());
         }
-        if aster_acme_dns::routing::absolute_name(&data.name).map_err(|_| invalid())? != data.name {
+        if !data.name.ends_with('.') || aster_acme_dns::routing::absolute_name(&data.name).is_err()
+        {
             return Err(invalid());
         }
         match request.action {

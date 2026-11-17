@@ -246,3 +246,44 @@ async fn bad_csr_external_publication_must_be_cleaned_before_certificate_removal
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn legacy_dns_external_cleanup_checkpoint_blocks_removal() {
+    let f = fixture().await;
+    let mut legacy_request = request();
+    legacy_request.solver_id = "dns_external".into();
+    let session = f.store.create(&legacy_request, &f.account).await.unwrap();
+    let mut saved = session.record().await.unwrap();
+    saved.phase = aster_acme_core::workflow::IssuancePhase::Finalizing;
+    saved.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+        status: 400,
+        problem: None,
+        retry_at: None,
+    });
+    let mut json = serde_json::to_value(&saved).unwrap();
+    json["authorizations"] = serde_json::json!([{
+        "url":"https://ca.example/auth/1",
+        "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
+        "challenge_url":null,
+        "validation_requirement":{"method":"dns-01","name":"_acme-challenge.example.com","value":"expected"},
+        "publication_id":"publication-1",
+        "publication_plan":{"publication_id":"publication-1","challenge_name":"_acme-challenge.example.com.","cname_chain":["_acme-challenge.example.com."],"name":"_acme-challenge.example.com.","value":"expected","ttl_seconds":120},
+        "publication_receipt":{"record_id":"receipt-1","ownership":"created","record_name":"_acme-challenge.example.com.","cname_chain":["_acme-challenge.example.com."]},
+        "cleanup_pending":true,
+        "acknowledgement":"not_submitted"
+    }]);
+    saved = serde_json::from_value(json).unwrap();
+    session.save(&saved).await.unwrap();
+    drop(session);
+
+    let removal = f
+        .store
+        .prepare_removal(
+            &saved.name,
+            RemovalScope::Operation(saved.operation_id.clone()),
+        )
+        .await
+        .unwrap();
+    assert!(removal.remove().await.is_err());
+    assert!(f.store.open(&saved.name, &saved.operation_id).await.is_ok());
+}

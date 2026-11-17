@@ -37,6 +37,24 @@ pub mod removal;
 const MAX_JOURNAL: u64 = 1024 * 1024;
 const JOURNAL_VERSION: u32 = 1;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProviderSolverId {
+    Current,
+    LegacyExternal,
+    Other,
+}
+
+impl ProviderSolverId {
+    #[must_use]
+    pub fn from_saved_id(id: &str) -> Self {
+        match id {
+            "dns_provider" => Self::Current,
+            "dns_external" => Self::LegacyExternal,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// Local certificate catalog. Names and operation IDs are validated before joining paths.
 #[derive(Clone)]
 pub struct CliIssueStore {
@@ -518,13 +536,15 @@ pub fn provider_referenced(root: &Path, provider: &str) -> std::io::Result<bool>
         }
         let config = selection(&slot)
             .map_err(|_| std::io::Error::other("cannot verify certificate provider references"))?;
-        if config.cert.solver_id == "dns_provider"
-            && config
-                .cert
-                .solver_config
-                .get("provider_instance_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(provider)
+        if matches!(
+            ProviderSolverId::from_saved_id(&config.cert.solver_id),
+            ProviderSolverId::Current | ProviderSolverId::LegacyExternal
+        ) && config
+            .cert
+            .solver_config
+            .get("provider_instance_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(provider)
         {
             return Ok(true);
         }

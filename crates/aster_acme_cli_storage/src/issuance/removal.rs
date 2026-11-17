@@ -133,13 +133,7 @@ impl CertificateRemoval {
     /// # Errors
     /// Failed cleanup keeps `.removing` to prevent reusing partial material after restart.
     pub async fn remove(self) -> Result<(), IssueError> {
-        if self.records.iter().any(|record| {
-            record.solver_id == "dns_provider"
-                && record
-                    .authorizations
-                    .iter()
-                    .any(|auth| auth.cleanup_pending && auth.publication_plan.is_some())
-        }) {
+        if self.records.iter().any(has_pending_dns_cleanup) {
             return Err(failure(
                 "external DNS cleanup is pending; run provider cleanup before removing its journal",
             ));
@@ -181,6 +175,17 @@ impl CertificateRemoval {
             }
             Ok(())
         }).await.map_err(|_|failure("certificate removal worker failed"))?
+    }
+}
+
+fn has_pending_dns_cleanup(record: &IssueRecord) -> bool {
+    match crate::issuance::ProviderSolverId::from_saved_id(&record.solver_id) {
+        crate::issuance::ProviderSolverId::Current
+        | crate::issuance::ProviderSolverId::LegacyExternal => record
+            .authorizations
+            .iter()
+            .any(|auth| auth.cleanup_pending && auth.publication_plan.is_some()),
+        crate::issuance::ProviderSolverId::Other => false,
     }
 }
 

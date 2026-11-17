@@ -38,7 +38,8 @@ pub(super) async fn issue(
             .await?
             .ok_or("No registered account exists.")?;
         let mut request = request(&args, &context.name)?;
-        if request.solver_id == "dns_provider" {
+        if args.challenge == Some(crate::commands::cert::validation::ValidationMethod::DnsProvider)
+        {
             request.solver_config =
                 crate::commands::cert::validation::bound_provider_configuration(
                     args.provider.as_deref(),

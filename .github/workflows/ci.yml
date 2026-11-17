@@ -72,7 +72,7 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - run: mkdir -p coverage/rust
-      - run: cargo llvm-cov --workspace --locked --no-fail-fast --lcov --output-path coverage/rust/lcov.info
+      - run: cargo llvm-cov --workspace --all-features --locked --no-fail-fast --lcov --output-path coverage/rust/lcov.info
       - name: Publish coverage summary
         if: always() && hashFiles('coverage/rust/lcov.info') != ''
         run: node scripts/coverage-summary.mjs "Rust" coverage/rust/lcov.info

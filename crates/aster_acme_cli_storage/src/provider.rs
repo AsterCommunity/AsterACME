@@ -659,16 +659,18 @@ mod tests {
             .unwrap();
         let slot = temp.path().join("certs/test-cert");
         std::fs::create_dir_all(&slot).unwrap();
-        let config = serde_json::json!({"version":1,"cert":{"name":"test-cert","identifiers":["example.com"],"key_algorithm":"ecdsa-p256","account_name":"default","account_id":"account","directory":"https://ca.example/directory","challenge":"dns-01","solver_id":"dns_provider","solver_config":{"provider_instance_id":"prod"}}});
-        crate::toml_file::atomic_write(
-            &slot.join("cert.toml"),
-            toml::to_string(&config).unwrap().as_bytes(),
-        )
-        .unwrap();
-        assert_eq!(
-            store.remove("prod".into()).await.unwrap_err().kind(),
-            io::ErrorKind::PermissionDenied
-        );
+        for solver_id in ["dns_provider", "dns_external"] {
+            let config = serde_json::json!({"version":1,"cert":{"name":"test-cert","identifiers":["example.com"],"key_algorithm":"ecdsa-p256","account_name":"default","account_id":"account","directory":"https://ca.example/directory","challenge":"dns-01","solver_id":solver_id,"solver_config":{"provider_instance_id":"prod"}}});
+            crate::toml_file::atomic_write(
+                &slot.join("cert.toml"),
+                toml::to_string(&config).unwrap().as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(
+                store.remove("prod".into()).await.unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
         assert!(store.get("prod".into()).await.is_ok());
     }
     #[tokio::test]

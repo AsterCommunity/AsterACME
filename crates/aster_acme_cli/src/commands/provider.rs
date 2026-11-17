@@ -433,7 +433,8 @@ async fn cleanup_profile(
     let mut interrupted = false;
     let mut incomplete = false;
     for record in records.into_iter().filter(|record| {
-        record.solver_id == "dns_provider"
+        aster_acme_cli_storage::issuance::ProviderSolverId::from_saved_id(&record.solver_id)
+            == aster_acme_cli_storage::issuance::ProviderSolverId::Current
             && record
                 .solver_config
                 .get("provider_instance_id")

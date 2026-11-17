@@ -66,7 +66,32 @@ enum Checkpoint {
     PresentRejected,
     Presented { created: bool },
     CleanupIntent,
-    Cleaned,
+    Cleaned(CleanedStatus),
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CleanedStatus {
+    Removed,
+    Retained,
+    AlreadyAbsent,
+}
+impl From<CleanedStatus> for CleanupStatus {
+    fn from(value: CleanedStatus) -> Self {
+        match value {
+            CleanedStatus::Removed => Self::Removed,
+            CleanedStatus::Retained => Self::Retained,
+            CleanedStatus::AlreadyAbsent => Self::AlreadyAbsent,
+        }
+    }
+}
+impl From<CleanupStatus> for CleanedStatus {
+    fn from(value: CleanupStatus) -> Self {
+        match value {
+            CleanupStatus::Removed => Self::Removed,
+            CleanupStatus::Retained => Self::Retained,
+            CleanupStatus::AlreadyAbsent => Self::AlreadyAbsent,
+        }
+    }
 }
 #[derive(Clone, Copy)]
 enum Stage {
@@ -120,7 +145,7 @@ impl OperationFactory for ConditionalRrsetFactory {
                     Some(
                         Checkpoint::Presented { created: true }
                             | Checkpoint::CleanupIntent
-                            | Checkpoint::Cleaned
+                            | Checkpoint::Cleaned(_)
                     )
                 )
             {
@@ -158,7 +183,9 @@ impl Operation {
                 return match self.saved {
                     Some(Checkpoint::Presented { created }) => self.presented(created),
                     Some(
-                        Checkpoint::PresentIntent | Checkpoint::CleanupIntent | Checkpoint::Cleaned,
+                        Checkpoint::PresentIntent
+                        | Checkpoint::CleanupIntent
+                        | Checkpoint::Cleaned(_),
                     ) => Err(not_owned()),
                     None | Some(Checkpoint::PresentRejected) => self.presented(false),
                 };
@@ -171,7 +198,9 @@ impl Operation {
         if matches!(self.action, ProviderAction::Present(_))
             && matches!(
                 self.saved,
-                Some(Checkpoint::PresentIntent | Checkpoint::CleanupIntent | Checkpoint::Cleaned)
+                Some(
+                    Checkpoint::PresentIntent | Checkpoint::CleanupIntent | Checkpoint::Cleaned(_),
+                )
             )
         {
             return Err(not_owned());
@@ -233,7 +262,7 @@ impl Operation {
     }
     fn cleaned(&mut self, status: CleanupStatus) -> Result<ProviderEffect, ProviderError> {
         self.outcome = Some(ProviderOutcome::Cleaned(status));
-        self.checkpoint(Checkpoint::Cleaned, Stage::SaveOutcome)
+        self.checkpoint(Checkpoint::Cleaned(status.into()), Stage::SaveOutcome)
     }
 }
 
@@ -241,6 +270,11 @@ impl ProviderOperation for Operation {
     fn advance(&mut self, event: ProviderEvent) -> Result<ProviderEffect, ProviderError> {
         match (self.stage, event) {
             (Stage::Start, ProviderEvent::Start) => {
+                if let Some(Checkpoint::Cleaned(status)) = self.saved {
+                    return Ok(ProviderEffect::Complete(ProviderOutcome::Cleaned(
+                        status.into(),
+                    )));
+                }
                 if matches!(&self.action, ProviderAction::Cleanup(request) if request.receipt.ownership == RecordOwnership::Preexisting)
                 {
                     return self.cleaned(CleanupStatus::Retained);
@@ -281,14 +315,20 @@ impl ProviderOperation for Operation {
                     ConditionalWrite::Conflict => {
                         self.conflicts += 1;
                         if self.conflicts >= 4 {
-                            return Err(ProviderError {
+                            let error = ProviderError {
                                 code: ProviderErrorCode::RecordConflict,
                                 message: "RRset changed repeatedly; conditional write was rejected"
                                     .into(),
                                 side_effect: SideEffect::None,
                                 retry_after_seconds: None,
                                 provider_code: None,
-                            });
+                            };
+                            if matches!(self.action, ProviderAction::Present(_)) {
+                                self.failure = Some(error);
+                                return self
+                                    .checkpoint(Checkpoint::PresentRejected, Stage::SaveOutcome);
+                            }
+                            return Err(error);
                         }
                         // A proved conditional rejection is the only path that can
                         // discard pending ownership uncertainty before another read.

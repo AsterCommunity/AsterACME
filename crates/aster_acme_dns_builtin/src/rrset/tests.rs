@@ -247,13 +247,66 @@ fn repeated_revision_conflicts_stop_with_no_unconditional_write_fallback() {
             body: vec![],
         })));
         if attempt == 3 {
-            assert!(
-                matches!(outcome,Err(error) if error.code==ProviderErrorCode::RecordConflict && error.side_effect==SideEffect::None)
-            );
+            let saved = checkpoint(outcome.unwrap());
+            assert!(matches!(
+                machine.advance(ProviderEvent::CheckpointSaved),
+                Err(error) if error.code == ProviderErrorCode::RecordConflict
+                    && error.side_effect == SideEffect::None
+            ));
+            let mut retry = factory()
+                .start(ProviderAction::Present(record()), Some(saved))
+                .unwrap();
+            assert!(matches!(
+                retry.advance(ProviderEvent::Start).unwrap(),
+                ProviderEffect::Http(_)
+            ));
         } else {
             assert!(matches!(outcome, Ok(ProviderEffect::Http(_))));
         }
     }
+}
+
+#[test]
+fn completed_cleanup_restore_never_deletes_a_later_recreated_rrset_value() {
+    let publication = record();
+    let receipt = aster_acme_dns::PublicationReceipt {
+        record_id: identity_for_test(&publication),
+        ownership: RecordOwnership::Created,
+        record_name: publication.name.clone(),
+        cname_chain: publication.cname_chain.clone(),
+    };
+    let action = ProviderAction::Cleanup(CleanupRequest {
+        publication_id: publication.publication_id.clone(),
+        record: publication,
+        receipt,
+    });
+    let mut cleanup = factory()
+        .start(
+            action.clone(),
+            Some(RecoveryState {
+                version: 1,
+                data: json!({"phase":"presented","created":true}),
+            }),
+        )
+        .unwrap();
+    cleanup.advance(ProviderEvent::Start).unwrap();
+    checkpoint(cleanup.advance(response(&["our-value"], "rev1")).unwrap());
+    write(cleanup.as_mut());
+    let cleaned = checkpoint(cleanup.advance(ack()).unwrap());
+    assert!(matches!(
+        cleanup.advance(ProviderEvent::CheckpointSaved).unwrap(),
+        ProviderEffect::Complete(ProviderOutcome::Cleaned(CleanupStatus::Removed))
+    ));
+
+    let mut restored = factory().start(action, Some(cleaned)).unwrap();
+    assert!(matches!(
+        restored.advance(ProviderEvent::Start).unwrap(),
+        ProviderEffect::Complete(ProviderOutcome::Cleaned(CleanupStatus::Removed))
+    ));
+}
+
+fn identity_for_test(record: &DnsRecord) -> String {
+    format!("rrset:{}", record.publication_id)
 }
 
 #[test]

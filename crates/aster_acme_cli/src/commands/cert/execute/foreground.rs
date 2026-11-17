@@ -29,7 +29,9 @@ impl Foreground<'_> {
         session: &mut dyn IssueSession,
     ) -> CliResult<IssueOutcome> {
         let saved = session.record().await?;
-        let solver = if saved.solver_id == "dns_provider" {
+        let solver = if crate::commands::cert::validation::ValidationMethod::from_record(&saved)?
+            == crate::commands::cert::validation::ValidationMethod::DnsProvider
+        {
             crate::commands::cert::validation::provider_adapter(
                 &saved,
                 self.context
