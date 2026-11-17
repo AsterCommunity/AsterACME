@@ -37,7 +37,19 @@ pub(super) async fn issue(
             .metadata()
             .await?
             .ok_or("No registered account exists.")?;
-        Some((request(&args, &context.name)?, account))
+        let mut request = request(&args, &context.name)?;
+        if args.challenge == Some(crate::commands::cert::validation::ValidationMethod::DnsProvider)
+        {
+            request.solver_config =
+                crate::commands::cert::validation::bound_provider_configuration(
+                    args.provider.as_deref(),
+                    &settings.data_dir,
+                )
+                .await?;
+            let targets = crate::commands::cert::validation::parse_dns_targets(&args.dns_targets)?;
+            request.solver_config["dns_targets"] = serde_json::to_value(targets)?;
+        }
+        Some((request, account))
     } else {
         None
     };
@@ -157,8 +169,8 @@ pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
     let solver_config =
-        if method == crate::commands::cert::validation::ValidationMethod::DnsExternal {
-            crate::commands::cert::validation::external_configuration(args.provider.as_deref())?
+        if method == crate::commands::cert::validation::ValidationMethod::DnsProvider {
+            crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?
         } else {
             crate::commands::cert::validation::configuration(
                 method,

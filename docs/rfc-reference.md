@@ -176,9 +176,9 @@ CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取
 | 账户 | 注册、找回、EAB、联系人更新、查看、停用及跨算法换钥 | HSM/外部签名器具体适配由嵌入者提供 |
 | 订单/授权/签发 | newOrder、挑战选择/材料/ack/轮询、固定CSR finalize、下载及终态错误；取消与不确定提交可恢复 | 可选预授权/newAuthz、授权停用没有独立产品入口 |
 | HTTP/TLS验证 | HTTP-01人工/webroot/standalone，TLS-ALPN-01 standalone | 各部署环境的公网80/443与真实CA验收仍独立 |
-| DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | ADPP external provider、受限CNAME路由、创建对账和所有权清理已接入；内置厂商adapter、各provider真实DNS/CA验收及DNS Persist真实CA签发验收仍待补齐 |
+| DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | ADPP external provider、受限CNAME路由、创建对账和所有权清理已接入；其他内置厂商adapter、各provider真实DNS/CA验收及DNS Persist真实CA签发验收仍待补齐 |
 | 标识符/证书材料 | DNS/IDN、SAN、通配符、多种密钥、CSR/私钥固定、SAN/公钥/有效期/相邻链签名检查 | IP标识符、外部CSR及候选证书链选择未实现；相邻签名检查不是系统信任路径验证 |
-| 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | dns_external可无人值守续期；真实provider凭据/权限/传播验收仍独立，人工方式不猜测已发布 |
+| 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | dns_provider可无人值守续期；真实provider凭据/权限/传播验收仍独立，人工方式不猜测已发布 |
 | 吊销 | 账户kid／证书私钥jwk签名、原因代码、alreadyRevoked及精确目标/不确定结果保存 | CLI目前管理已托管证书；库支持外部target/session，任意文件导入和其他已获全部标识符授权的账户选择入口尚未提供 |
 | 文件和部署 | 私有状态、跨进程租约、多世代与in_use、多目标发布、自动部署/reload与结果记录 | 不承诺整组原子替换或服务健康；真实断电及服务更新需另验 |
 | 扩展与运维成熟度 | 本表已列RFC8737、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | Profiles、STAR、IP、S/MIME等未普遍实现；Pebble、公网CA和各原生平台验收分别报告 |

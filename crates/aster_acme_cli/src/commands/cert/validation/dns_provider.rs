@@ -17,11 +17,12 @@ use aster_acme_dns::{
 use async_trait::async_trait;
 use std::sync::Arc;
 
-pub(super) struct ExternalDns {
+pub(super) struct ProviderDns {
     pub(super) context: ProviderContext,
     pub(super) provider: Arc<dyn DnsProvider>,
     pub(super) lookup: Arc<dyn DnsLookup>,
     pub(super) allowed_zones: Vec<String>,
+    pub(super) dns_targets: std::collections::BTreeMap<String, String>,
     pub(super) propagation: PropagationPolicy,
     pub(super) progress: Arc<Progress>,
 }
@@ -31,7 +32,37 @@ fn scope(execution: &ExecutionContext) -> ProviderExecution {
         deadline: execution.deadline,
     }
 }
-impl ExternalDns {
+impl ProviderDns {
+    fn validate_plan(
+        &self,
+        publication: &ChallengePublication,
+        plan: &aster_acme_dns::DnsRecord,
+    ) -> Result<(), IssueError> {
+        validate_chain(
+            &plan.challenge_name,
+            &plan.name,
+            &plan.cname_chain,
+            &self.allowed_zones,
+        )
+        .map_err(IssueError::from)?;
+        if plan.cname_chain.is_empty()
+            && self.dns_targets.get(&publication.identifier.value()) != Some(&plan.name)
+        {
+            return Err(IssueError::InvalidInput(
+                "explicit DNS target differs from saved configuration",
+            ));
+        }
+        if !plan.cname_chain.is_empty()
+            && self
+                .dns_targets
+                .contains_key(&publication.identifier.value())
+        {
+            return Err(IssueError::InvalidInput(
+                "configured DNS target does not match saved route",
+            ));
+        }
+        Ok(())
+    }
     fn report_cleanup(&self, count: usize, outcome: &CleanupResult) {
         self.progress.output.details(
             if outcome.failure.is_some() {
@@ -69,13 +100,7 @@ impl ExternalDns {
             let plan = publication.plan.as_ref().ok_or(IssueError::InvalidInput(
                 "missing saved DNS publication route",
             ))?;
-            validate_chain(
-                &plan.challenge_name,
-                &plan.name,
-                &plan.cname_chain,
-                &self.allowed_zones,
-            )
-            .map_err(IssueError::from)?;
+            self.validate_plan(publication, plan)?;
             if publication.receipt.is_none() {
                 records.push(plan.clone());
             }
@@ -118,7 +143,11 @@ impl ExternalDns {
                     outcome.retry_at = outcome.retry_at.max(retry_at(&error));
                     outcome.ready = false;
                     if outcome.failure.is_none() {
-                        outcome.failure = Some(IssueError::DnsProvider(error.into()));
+                        outcome.failure = Some(if execution.cancellation.is_cancelled() {
+                            IssueError::Interrupted
+                        } else {
+                            IssueError::DnsProvider(error.into())
+                        });
                     }
                 }
             }
@@ -127,7 +156,7 @@ impl ExternalDns {
     }
 }
 #[async_trait]
-impl ChallengeSolver for ExternalDns {
+impl ChallengeSolver for ProviderDns {
     fn kind(&self) -> ChallengeKind {
         ChallengeKind::Dns01
     }
@@ -149,21 +178,47 @@ impl ChallengeSolver for ExternalDns {
                     "external DNS solver received non-DNS material",
                 ));
             };
-            let chain = resolve(
-                self.lookup.as_ref(),
-                name,
-                &self.allowed_zones,
-                &scope(execution),
-            )
-            .await
-            .map_err(|error| match error {
-                aster_acme_dns::routing::RouteError::Interrupted => IssueError::Interrupted,
-                error => IssueError::DnsRouting(error),
-            })?;
-            let target = chain
-                .last()
-                .cloned()
-                .ok_or(IssueError::InvalidInput("empty DNS route"))?;
+            let owner = absolute_name(name).map_err(IssueError::from)?;
+            let (target, chain) =
+                if let Some(target) = self.dns_targets.get(&publication.identifier.value()) {
+                    self.progress.output.progress(
+                        MessageKind::Info,
+                        &format!(
+                            "Using configured DNS TXT target for {}: {target}",
+                            publication.identifier.value()
+                        ),
+                    );
+                    if !aster_acme_dns::routing::allowed_zone(target, &self.allowed_zones) {
+                        return Err(IssueError::DnsRouting(
+                            aster_acme_dns::routing::RouteError::ZoneNotAllowed,
+                        ));
+                    }
+                    (target.clone(), Vec::new())
+                } else {
+                    self.progress.output.progress(
+                        MessageKind::Info,
+                        &format!(
+                            "Resolving CNAME route for {} ({owner})",
+                            publication.identifier.value()
+                        ),
+                    );
+                    let chain = resolve(
+                        self.lookup.as_ref(),
+                        name,
+                        &self.allowed_zones,
+                        &scope(execution),
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        aster_acme_dns::routing::RouteError::Interrupted => IssueError::Interrupted,
+                        error => IssueError::DnsRouting(error),
+                    })?;
+                    let target = chain
+                        .last()
+                        .cloned()
+                        .ok_or(IssueError::InvalidInput("empty DNS route"))?;
+                    (target, chain)
+                };
             updates.push(PublicationPlanUpdate {
                 publication_id: publication.publication_id.clone(),
                 plan: aster_acme_dns::DnsRecord {
@@ -276,14 +331,9 @@ impl ChallengeSolver for ExternalDns {
                 }
                 continue;
             };
-            if let Err(error) = validate_chain(
-                &plan.challenge_name,
-                &plan.name,
-                &plan.cname_chain,
-                &self.allowed_zones,
-            ) {
+            if let Err(error) = self.validate_plan(publication, &plan) {
                 if outcome.failure.is_none() {
-                    outcome.failure = Some(IssueError::from(error));
+                    outcome.failure = Some(error);
                 }
                 continue;
             }
@@ -322,7 +372,12 @@ impl ChallengeSolver for ExternalDns {
                             Err(error) => {
                                 outcome.retry_at = outcome.retry_at.max(retry_at(&error));
                                 if outcome.failure.is_none() {
-                                    outcome.failure = Some(IssueError::DnsProvider(error.into()));
+                                    outcome.failure =
+                                        Some(if execution.cancellation.is_cancelled() {
+                                            IssueError::Interrupted
+                                        } else {
+                                            IssueError::DnsProvider(error.into())
+                                        });
                                 }
                             }
                         }

@@ -148,6 +148,7 @@ impl Fixture {
     }
     fn cli() -> CommandContext {
         CommandContext {
+            dns_http: aster_acme_dns_http::ForgeDnsHttp::default(),
             output: OutputSession::new(true),
             http: HttpPool::default(),
         }

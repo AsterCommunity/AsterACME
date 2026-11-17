@@ -1,4 +1,4 @@
-//! Manage per-profile DNS provider executables and custom configuration.
+//! Manage named DNS backend profiles and their private configuration.
 
 use crate::common::output::{MessageKind, Style, field, safe, styled};
 use crate::common::{
@@ -14,10 +14,13 @@ use serde::Serialize;
 use std::{path::PathBuf, time::Duration};
 
 mod interaction;
+pub(crate) mod runtime;
 
 #[derive(Subcommand)]
 pub(crate) enum ProviderCommand {
-    /// Register a named provider executable.
+    /// List backend types available in this build and their configuration fields.
+    Backends(LocalArgs),
+    /// Register a named DNS provider profile.
     Add(AddArgs),
     /// List configured provider profile names and safe metadata.
     List(LocalArgs),
@@ -25,7 +28,7 @@ pub(crate) enum ProviderCommand {
     Show(ShowArgs),
     /// Retry owned DNS cleanup for terminal requests using this provider profile.
     Cleanup(ShowArgs),
-    /// Update executable settings for a provider profile.
+    /// Update configuration for a DNS provider profile.
     Update(UpdateArgs),
     /// Remove a provider profile that no retained certificate references.
     Remove(RemoveArgs),
@@ -35,7 +38,7 @@ impl ProviderCommand {
     pub(crate) fn local(&self) -> &LocalArgs {
         match self {
             Self::Add(args) => &args.local,
-            Self::List(local) => local,
+            Self::List(local) | Self::Backends(local) => local,
             Self::Show(args) | Self::Cleanup(args) => &args.local,
             Self::Update(args) => &args.local,
             Self::Remove(args) => &args.local,
@@ -51,6 +54,14 @@ pub(crate) struct AddArgs {
     /// Absolute executable path; no shell is used.
     #[arg(long, value_name = "PATH")]
     exec: Option<PathBuf>,
+    /// Backend type ID; defaults to ADPP when --exec is supplied.
+    #[arg(long, value_name = "ID")]
+    backend: Option<String>,
+    #[arg(skip)]
+    custom: serde_json::Map<String, serde_json::Value>,
+    /// Private TOML file containing backend-owned configuration values.
+    #[arg(long, value_name = "PATH")]
+    settings_file: Option<PathBuf>,
     /// Exact argument; repeat to build argv. Never put secrets here.
     #[arg(long = "arg", value_name = "VALUE")]
     args: Vec<String>,
@@ -71,7 +82,7 @@ pub(crate) struct ShowArgs {
 }
 
 #[derive(Args)]
-#[command(group(clap::ArgGroup::new("provider_changes").args(["exec", "args", "clear_args", "allowed_zones", "clear_zones"]).multiple(true)))]
+#[command(group(clap::ArgGroup::new("provider_changes").args(["exec", "args", "clear_args", "allowed_zones", "clear_zones", "settings_file"]).multiple(true)))]
 pub(crate) struct UpdateArgs {
     /// Stable provider profile name; choose interactively when omitted.
     #[arg(value_parser = parse_account_name)]
@@ -91,6 +102,9 @@ pub(crate) struct UpdateArgs {
     /// Clear zone restrictions and allow all valid publication owners.
     #[arg(long, conflicts_with = "allowed_zones")]
     clear_zones: bool,
+    /// Replace backend-owned configuration from a private TOML file.
+    #[arg(long, value_name = "PATH")]
+    settings_file: Option<PathBuf>,
     #[command(flatten)]
     local: LocalArgs,
 }
@@ -109,6 +123,8 @@ pub(crate) struct RemoveArgs {
 
 #[derive(Debug, Clone, Serialize)]
 struct ProfileView {
+    backend_id: String,
+    backend_config_version: u32,
     name: String,
     profile_path: PathBuf,
     executable: PathBuf,
@@ -128,6 +144,8 @@ struct CleanupView {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProviderReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    backends: Vec<aster_acme_dns::backend::BackendDescriptor>,
     operation: &'static str,
     profiles: Vec<ProfileView>,
     removed: Option<String>,
@@ -161,6 +179,15 @@ pub(crate) async fn execute(
         Duration::from_secs(5),
     );
     match command {
+        ProviderCommand::Backends(_) => Ok(ProviderReport {
+            backends: runtime::registry()?.descriptors(),
+            operation: "backends",
+            profiles: Vec::new(),
+            removed: None,
+            cleanup: Vec::new(),
+            cancelled: false,
+            incomplete: false,
+        }),
         ProviderCommand::Add(args) => add_profile(args, &store, interactive, cli).await,
         ProviderCommand::List(_) => {
             let names = store.names().await?;
@@ -173,6 +200,7 @@ pub(crate) async fn execute(
                 ));
             }
             Ok(ProviderReport {
+                backends: Vec::new(),
                 operation: "listed",
                 profiles,
                 removed: None,
@@ -184,6 +212,7 @@ pub(crate) async fn execute(
         ProviderCommand::Show(args) => {
             let name = target(args.name, &store, &cli.output, "show", interactive).await?;
             Ok(ProviderReport {
+                backends: Vec::new(),
                 operation: "shown",
                 profiles: vec![view(
                     name.clone(),
@@ -223,13 +252,38 @@ async fn add_profile(
         &mut interaction::TerminalPrompts(&cli.output),
     )?;
     let name = args.name.ok_or("Specify a DNS provider profile name.")?;
-    let profile = aster_acme_cli_storage::provider::ProviderProfile::new(
-        args.exec.ok_or("Specify --exec <PATH>.")?,
-        args.args,
-        args.allowed_zones,
-    )?;
+    let backend_id = args
+        .backend
+        .unwrap_or_else(|| aster_acme_dns::backend::ADPP_BACKEND_ID.into());
+    let descriptor = runtime::registry()?.require(&backend_id)?.descriptor();
+    let mut profile = if descriptor.executable {
+        aster_acme_cli_storage::provider::ProviderProfile::new(
+            args.exec.ok_or("Specify --exec <PATH>.")?,
+            args.args,
+            args.allowed_zones,
+        )?
+    } else {
+        if args.exec.is_some() || !args.args.is_empty() {
+            return Err("This backend does not accept --exec or --arg.".into());
+        }
+        aster_acme_cli_storage::provider::ProviderProfile::builtin(
+            backend_id.clone(),
+            args.custom,
+            args.allowed_zones,
+        )?
+    };
+    profile.backend_id = backend_id;
+    profile.backend_config_version = descriptor.config_version;
+    if let Some(path) = args.settings_file {
+        profile.provider_custom = runtime::read_settings(&path).await?;
+    }
+    profile.validate()?;
+    runtime::registry()?
+        .require(&profile.backend_id)?
+        .validate(&(&profile).into())?;
     store.add(name.clone(), profile.clone()).await?;
     Ok(ProviderReport {
+        backends: Vec::new(),
         operation: "added",
         profiles: vec![view(name.clone(), store.path(&name)?, profile)],
         removed: None,
@@ -245,7 +299,8 @@ async fn update_profile(
     interactive: bool,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<ProviderReport> {
-    let explicit = args.exec.is_some()
+    let explicit = args.settings_file.is_some()
+        || args.exec.is_some()
         || args.args.is_some()
         || args.clear_args
         || args.allowed_zones.is_some()
@@ -257,6 +312,11 @@ async fn update_profile(
         validate_executable(executable)?;
     }
     let name = target(args.name.clone(), store, &cli.output, "update", interactive).await?;
+    let custom = match args.settings_file.as_deref() {
+        Some(path) => Some(runtime::read_settings(path).await?),
+        None => None,
+    };
+    let registry = runtime::registry()?;
     let profile = if explicit {
         store
             .edit(name.clone(), move |profile| {
@@ -273,7 +333,15 @@ async fn update_profile(
                 } else if args.clear_zones {
                     profile.allowed_zones.clear();
                 }
-                profile.validate()
+                if let Some(custom) = custom {
+                    profile.provider_custom = custom;
+                }
+                profile.validate()?;
+                registry
+                    .require(&profile.backend_id)
+                    .map_err(std::io::Error::other)?
+                    .validate(&(&*profile).into())
+                    .map_err(std::io::Error::other)
             })
             .await?
     } else {
@@ -287,6 +355,7 @@ async fn update_profile(
         save_interactive_edit(store, name.clone(), expected, edited).await?
     };
     Ok(ProviderReport {
+        backends: Vec::new(),
         operation: "updated",
         profiles: vec![view(name.clone(), store.path(&name)?, profile)],
         removed: None,
@@ -320,9 +389,9 @@ async fn remove_profile(
     let profile = store.get(name.clone()).await?;
     terminal::confirm_action(
         &format!(
-            "Remove provider profile '{}' for executable {}? Custom values are sensitive and will be deleted.",
+            "Remove provider profile '{}' using backend {}? Custom values are sensitive and will be deleted.",
             name,
-            safe(&profile.executable.to_string_lossy())
+            safe(&profile.backend_id)
         ),
         "Remove this provider profile?",
         yes,
@@ -330,6 +399,7 @@ async fn remove_profile(
     )?;
     store.remove(name.clone()).await?;
     Ok(ProviderReport {
+        backends: Vec::new(),
         operation: "removed",
         profiles: Vec::new(),
         removed: Some(name),
@@ -363,7 +433,8 @@ async fn cleanup_profile(
     let mut interrupted = false;
     let mut incomplete = false;
     for record in records.into_iter().filter(|record| {
-        record.solver_id == "dns_external"
+        aster_acme_cli_storage::issuance::ProviderSolverId::from_saved_id(&record.solver_id)
+            == aster_acme_cli_storage::issuance::ProviderSolverId::Current
             && record
                 .solver_config
                 .get("provider_instance_id")
@@ -388,6 +459,7 @@ async fn cleanup_profile(
             session.as_ref(),
             cli.output.clone(),
             &execution,
+            cli.dns_http.clone(),
         )
         .await;
         cleanup.push(CleanupView {
@@ -403,6 +475,7 @@ async fn cleanup_profile(
         });
     }
     Ok(ProviderReport {
+        backends: Vec::new(),
         operation: "cleanup",
         profiles: Vec::new(),
         removed: None,
@@ -476,6 +549,8 @@ fn view(
     profile: aster_acme_cli_storage::provider::ProviderProfile,
 ) -> ProfileView {
     ProfileView {
+        backend_id: profile.backend_id,
+        backend_config_version: profile.backend_config_version,
         name,
         profile_path,
         executable: profile.executable,
@@ -500,15 +575,33 @@ pub(crate) fn render(report: &ProviderReport, format: Format) -> CliResult<Strin
     if report.operation == "cleanup" {
         return Ok(render_cleanup(report, format.color));
     }
+    if report.operation == "backends" {
+        let mut rows = vec![["BACKEND ID".into(), "NAME".into(), "CONFIGURATION".into()]];
+        for backend in &report.backends {
+            rows.push([
+                backend.id.into(),
+                backend.label.into(),
+                backend
+                    .fields
+                    .iter()
+                    .map(|field| field.name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ]);
+        }
+        return Ok(
+            crate::common::table::listing(&rows, format.color, |_, _| Style::Plain).join("\n"),
+        );
+    }
     if report.profiles.is_empty() {
         return Ok("No DNS provider profiles configured.".into());
     }
     if report.operation == "listed" {
-        let mut rows = vec![["NAME".into(), "EXECUTABLE".into(), "ALLOWED ZONES".into()]];
+        let mut rows = vec![["NAME".into(), "BACKEND".into(), "ALLOWED ZONES".into()]];
         for profile in &report.profiles {
             rows.push([
                 profile.name.clone(),
-                profile.executable.to_string_lossy().into_owned(),
+                profile.backend_id.clone(),
                 if profile.allowed_zones.is_empty() {
                     "all (unrestricted)".into()
                 } else {
@@ -550,11 +643,19 @@ fn detail_lines(profile: &ProfileView, color: bool) -> CliResult<Vec<String>> {
         &styled(&safe(&profile.name), Style::BoldGreen, color),
         color,
     ));
+    lines.push(field("Backend:", &safe(&profile.backend_id), color));
     lines.push(field(
-        "Executable:",
-        &safe(&profile.executable.to_string_lossy()),
+        "Backend config version:",
+        &profile.backend_config_version.to_string(),
         color,
     ));
+    if !profile.executable.as_os_str().is_empty() {
+        lines.push(field(
+            "Executable:",
+            &safe(&profile.executable.to_string_lossy()),
+            color,
+        ));
+    }
     lines.push(field(
         "Profile file:",
         &safe(&profile.profile_path.to_string_lossy()),
@@ -680,7 +781,7 @@ mod tests {
                     .await
                     .unwrap_err()
                     .to_string()
-                    .contains("provider add <NAME> --exec <PATH>")
+                    .contains("provider add <NAME> with --backend <ID> or --exec <PATH>")
             );
         }
         for words in [
@@ -760,8 +861,11 @@ mod tests {
     #[test]
     fn profile_and_cleanup_reports_escape_untrusted_fields_and_keep_machine_output_pure() {
         let mut report = ProviderReport {
+            backends: Vec::new(),
             operation: "shown",
             profiles: vec![crate::commands::provider::ProfileView {
+                backend_id: aster_acme_dns::backend::ADPP_BACKEND_ID.into(),
+                backend_config_version: 1,
                 name: "safe-name".into(),
                 profile_path: "path\nfile.toml".into(),
                 executable: "bad\x1b[2J".into(),
@@ -780,7 +884,10 @@ mod tests {
             let text = render(&report, Format::plain(false)).unwrap();
             assert!(!text.contains('\x1b'));
             assert!(!text.contains('\r'));
-            assert!(text.contains("bad\\u{1b}[2J"));
+            if operation == "shown" {
+                assert!(text.contains("bad\\u{1b}[2J"));
+            }
+            assert!(text.contains("zone\\r.example"));
             let json = render(
                 &report,
                 Format {
@@ -948,6 +1055,7 @@ mod tests {
     #[test]
     fn incomplete_cleanup_report_is_rendered_and_fails_the_command() {
         let report = ProviderReport {
+            backends: Vec::new(),
             operation: "cleanup",
             profiles: Vec::new(),
             removed: None,
@@ -1275,4 +1383,5 @@ mod tests {
             assert!(Args::try_parse_from(["aster-acme"].into_iter().chain(words)).is_err());
         }
     }
+    mod builtin;
 }

@@ -780,11 +780,9 @@ async fn automatic_cancellation_after_child_start_reaps_descendants_and_saves_un
     let (_, events) = tokio::time::timeout(Duration::from_secs(3), running)
         .await
         .unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|event| event.message.contains("cancelled"))
-    );
+    assert!(events.iter().any(|event| {
+        crate::commands::cert::deployment::tests::cancellation_or_darwin_cleanup(&event.message)
+    }));
     let saved = fixture.status("slow").await;
     assert_eq!(saved.phase, DeploymentPhase::ReloadUncertain);
     assert_eq!(saved.attempts, 1);

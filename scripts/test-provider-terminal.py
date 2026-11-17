@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import termios
 import time
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -29,8 +30,11 @@ def command(binary, mode, root):
         return [binary, "provider", mode, *common]
     if mode == "add":
         return [binary, "provider", "add", *common]
+    if mode == "add-explicit":
+        return [binary, "provider", "add", "cf-new", "--backend",
+                "com.astercosm.acme.dns.cloudflare", *common]
     if mode == "issue":
-        return [binary, "cert", "issue", "-c", "dns_external", "-d", "example.com", *common]
+        return [binary, "cert", "issue", "-c", "dns_provider", "-d", "example.com", *common]
     raise AssertionError(mode)
 
 
@@ -75,7 +79,10 @@ def run_case(binary, mode, prompts, color, cancelled=False):
             assert process.poll() is not None, (mode, sent, bytes(output).decode(errors="replace"))
             assert process.wait(timeout=1) == expected_status, bytes(output).decode(errors="replace")
             assert sent == len(prompts), repr(bytes(output))
+            assert b"pty-token-sentinel" not in bytes(output), "credential input must not echo"
             visible = ANSI.sub(b"", bytes(output)).replace(b"\r", b"")
+            if any(b"pty-token-sentinel" in value for _, value in prompts):
+                assert b"*" in visible, "credential input must display a mask"
             if cancelled:
                 assert b"Canceled; inspect saved state" in visible, repr(visible)
             elif mode == "issue":
@@ -84,10 +91,14 @@ def run_case(binary, mode, prompts, color, cancelled=False):
                 assert b"No terminal DNS publication cleanup is pending" in visible, repr(visible)
             elif mode == "remove":
                 assert b"Removed provider profile cf-test" in visible, repr(visible)
-            elif mode == "add":
+            elif mode in {"add", "add-explicit"}:
                 report = bytes(output)
                 assert b"cf-new" in visible and b"providers/cf-new.toml" in visible, repr(visible)
                 assert (b"\x1b[36mProfile file:" in report) == color, repr(report)
+                if mode == "add-explicit":
+                    with open(Path(directory) / "providers/cf-new.toml", "rb") as saved:
+                        profile = tomllib.load(saved)
+                    assert profile["provider_custom"] == {"api_token": "pty-token-sentinel"}
             elif mode == "show":
                 report = bytes(output)
                 details = ANSI.sub(b"", report).replace(b"\r", b"").rsplit(b"\nDNS provider profile:\n", 1)[-1]
@@ -116,7 +127,7 @@ def main():
     cases = 0
     for mode in ["show", "issue", "cleanup", "remove", "add"]:
         prompts = [(b"DNS provider profile name:", b"cf-new\r"),
-                   (b"Provider executable path:", b"/usr/bin/true\r")] if mode == "add" else [selector]
+                   (b"DNS backend:", b"\r"), (b"Provider executable path:", b"/usr/bin/true\r")] if mode == "add" else [selector]
         if mode == "remove":
             prompts += [(b"Remove this provider profile?", b"y\r")]
         for color in [False, True]:
@@ -128,7 +139,27 @@ def main():
         run_case(binary, "remove", [selector, (b"Remove this provider profile?", keys)], False, cancelled=True)
         cases += 1
     run_case(binary, "add", [(b"DNS provider profile name:", b"cf-new\r"),
-                              (b"Provider executable path:", b"\x03")], False, cancelled=True)
+                              (b"DNS backend:", b"\r"), (b"Provider executable path:", b"\x03")], False, cancelled=True)
+    cases += 1
+    run_case(binary, "add-explicit", [(b"Cloudflare API token (or use token_file):", b"pty-token-sentinel\r"),
+                                      (b"Absolute private token file (or use api_token):", b"\r"),
+                                      (b"Cloudflare zone ID (optional):", b"\r")], False)
+    cases += 1
+    run_case(binary, "add-explicit", [(b"Cloudflare API token (or use token_file):", b"\x1b[200~pty-token-sentinel\x1b[201~\r"),
+                                      (b"Absolute private token file (or use api_token):", b"\r"),
+                                      (b"Cloudflare zone ID (optional):", b"\r")], False)
+    cases += 1
+    run_case(binary, "add", [(b"DNS provider profile name:", b"cf-new\r"),
+                             (b"DNS backend:", b"Cloudflare\r"),
+                             (b"Cloudflare API token (or use token_file):", b"pty-token-sentinel\r"),
+                             (b"Absolute private token file (or use api_token):", b"\r"),
+                             (b"Cloudflare zone ID (optional):", b"0123456789abcdef0123456789abcdef\r")], False)
+    cases += 1
+    run_case(binary, "add", [(b"DNS provider profile name:", b"cf-new\r"),
+                             (b"DNS backend:", b"Cloudflare\r"),
+                             (b"Cloudflare API token (or use token_file):", b"pty-token-sentinel\r"),
+                             (b"Absolute private token file (or use api_token):", b"\r"),
+                             (b"Cloudflare zone ID (optional):", b"\r")], False)
     cases += 1
     update = [selector, (b"Edit provider profile:", b"Arguments\r"),
               (b"Edit arguments:", b"Add value\r"),

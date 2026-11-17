@@ -97,18 +97,23 @@ pub(super) async fn complete(
                 "Specify -d/--domain <DOMAIN> (repeat for SANs), or --resume <CERTIFICATE>.".into(),
             );
         }
-        if method == ValidationMethod::DnsExternal {
+        if method == ValidationMethod::DnsProvider {
             if args.webroot.is_some() || args.listen_address.is_some() {
-                return Err("DNS external does not use --webroot or --listen-address.".into());
+                return Err(
+                    "DNS provider validation does not use --webroot or --listen-address.".into(),
+                );
             }
-            crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;
+            crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?;
         } else {
-            if args.provider.is_some() {
-                return Err("--provider is only valid with -c dns_external.".into());
+            if args.provider.is_some() || !args.dns_targets.is_empty() {
+                return Err(
+                    "--provider and --dns-target are only valid with -c dns_provider.".into(),
+                );
             }
             configuration(method, args.webroot.as_deref(), args.listen_address)?;
         }
         validate_domains(args, method)?;
+        validate_dns_targets(args)?;
         return Ok(());
     }
     if args.domain.is_empty() {
@@ -120,11 +125,13 @@ pub(super) async fn complete(
             }
         };
     }
+    validate_dns_targets(args)?;
     let choices = ValidationMethod::value_variants()
         .iter()
         .copied()
         .filter(|method| {
-            (args.provider.is_none() || *method == ValidationMethod::DnsExternal)
+            ((args.provider.is_none() && args.dns_targets.is_empty())
+                || *method == ValidationMethod::DnsProvider)
                 && (args.webroot.is_none() || *method == ValidationMethod::Webroot)
                 && (args.listen_address.is_none()
                     || matches!(
@@ -143,23 +150,37 @@ pub(super) async fn complete(
     }
     let method = args.challenge.ok_or("Missing validation method.")?;
     validate_domains(args, method)?;
-    if method == ValidationMethod::DnsExternal && args.provider.is_none() {
+    if method == ValidationMethod::DnsProvider && args.provider.is_none() {
         args.provider = Some(prompts.provider(args.run.local.data_dir.as_deref()).await?);
     }
-    if method == ValidationMethod::DnsExternal {
-        crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;
-    } else if args.provider.is_some() {
-        return Err("--provider is only valid with -c dns_external.".into());
+    if method == ValidationMethod::DnsProvider {
+        crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?;
+    } else if args.provider.is_some() || !args.dns_targets.is_empty() {
+        return Err("--provider and --dns-target are only valid with -c dns_provider.".into());
     }
     // Reject conflicting explicit options before asking for unrelated missing input.
     if args.webroot.is_some() || args.listen_address.is_some() {
         configuration(method, args.webroot.as_deref(), args.listen_address)?;
     }
     complete_method(args, method, prompts)?;
-    if method == ValidationMethod::DnsExternal {
-        crate::commands::cert::validation::external_configuration(args.provider.as_deref())?;
+    if method == ValidationMethod::DnsProvider {
+        crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?;
     } else {
         configuration(method, args.webroot.as_deref(), args.listen_address)?;
+    }
+    Ok(())
+}
+
+fn validate_dns_targets(args: &IssueArgs) -> CliResult<()> {
+    let targets = crate::commands::cert::validation::parse_dns_targets(&args.dns_targets)?;
+    for domain in targets.keys() {
+        if !args
+            .domain
+            .iter()
+            .any(|identifier| identifier.value() == *domain)
+        {
+            return Err("DNS target domain does not match a requested domain".into());
+        }
     }
     Ok(())
 }
@@ -167,7 +188,7 @@ pub(super) async fn complete(
 fn validate_domains(args: &IssueArgs, method: ValidationMethod) -> CliResult<()> {
     if args.domain.iter().any(DnsIdentifier::is_wildcard) && !method.kind().supports_wildcards() {
         return Err(
-            "Wildcard domains require DNS-01 or DNS-PERSIST-01; choose manual_dns, dns_external or dns_persist."
+            "Wildcard domains require DNS-01 or DNS-PERSIST-01; choose manual_dns, dns_provider or dns_persist."
                 .into(),
         );
     }
@@ -212,7 +233,7 @@ fn complete_method(
         }
         ValidationMethod::ManualDns
         | ValidationMethod::DnsPersist
-        | ValidationMethod::DnsExternal
+        | ValidationMethod::DnsProvider
         | ValidationMethod::ManualHttp
         | ValidationMethod::Webroot
         | ValidationMethod::Standalone

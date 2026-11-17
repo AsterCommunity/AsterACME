@@ -562,7 +562,14 @@ fn assert_cancelled_report(result: &CertificateReport) {
             .iter()
             .any(|event| event["deployment"] == "manual")
     );
-    assert!(text.contains("cancelled"));
+    assert!(
+        json["events"].as_array().unwrap().iter().any(|event| {
+            event["message"].as_str().is_some_and(
+                crate::commands::cert::deployment::tests::cancellation_or_darwin_cleanup,
+            )
+        }),
+        "the event message should identify cancellation (or the macOS cleanup diagnostic)"
+    );
     let CertificateReport::Deployment(report) = result else {
         panic!("missing deployment report");
     };

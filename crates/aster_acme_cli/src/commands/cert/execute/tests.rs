@@ -31,16 +31,19 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
     let temp = tempfile::tempdir().unwrap();
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(2));
     let account = allocation_account();
-    let request = IssueRequest {
+    let mut request = IssueRequest {
         name: CertificateName::new("dns-cert").unwrap(),
         identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
         account_name: "default".into(),
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
-        solver_id: "dns_external".into(),
-        solver_config: crate::commands::cert::validation::external_configuration(Some("prod"))
+        solver_id: "dns_provider".into(),
+        solver_config: crate::commands::cert::validation::provider_configuration(Some("prod"))
             .unwrap(),
     };
+    request.solver_config["dns_targets"] = serde_json::json!({
+        "example.com": "verify.validation.net."
+    });
     let target = temp.path().join("published");
     std::fs::create_dir(&target).unwrap();
     let mut predecessor: Option<String> = None;
@@ -51,6 +54,10 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
             store.create(&request, &account).await.unwrap()
         };
         let mut record = session.record().await.unwrap();
+        assert_eq!(
+            record.solver_config["dns_targets"]["example.com"],
+            "verify.validation.net."
+        );
         if renewal {
             assert_eq!(
                 record.renewal_of.as_ref().unwrap().operation_id,

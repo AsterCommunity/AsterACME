@@ -1,0 +1,23 @@
+[package]
+name = "aster_acme_dns_builtin"
+version = "0.1.0-alpha.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Feature-selected DNS provider state machines without network or filesystem access."
+publish.workspace = true
+
+[features]
+default = []
+cloudflare = ["dep:linkme"]
+
+[dependencies]
+aster_acme_dns.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+linkme = { workspace = true, optional = true }
+
+[lints]
+workspace = true

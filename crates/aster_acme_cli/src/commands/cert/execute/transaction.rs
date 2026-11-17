@@ -2,7 +2,7 @@
 use crate::commands::cert::execute::failure::report_issue_failure;
 use crate::commands::cert::execute::foreground::Foreground;
 use crate::commands::cert::execute::issuance::prepare_session;
-use crate::commands::cert::execute::{RunMode, Start};
+use crate::commands::cert::execute::{IssueInput, RunMode, Start};
 use crate::commands::cert::progress::Progress;
 use crate::common::output::MessageKind;
 use crate::{
@@ -78,11 +78,12 @@ pub(in crate::commands::cert) async fn transact(
         .await?
         .ok_or("No registered account exists.")?;
     let _providers = aster_acme_cli_storage::provider::ProviderProfileStore::new(
-        data_dir,
+        data_dir.clone(),
         Duration::from_secs(5),
     )
     .lease()
     .await?;
+    validate_new_provider_binding(&start, &data_dir).await?;
     let mut session = match start {
         Start::Issue(input) => prepare_session(store, input, &account, &progress).await?,
         Start::Renew {
@@ -127,6 +128,21 @@ pub(in crate::commands::cert) async fn transact(
     };
     drop(session);
     Ok(attach_deployment_results(outcome, store, &execution).await)
+}
+
+async fn validate_new_provider_binding(start: &Start, data_dir: &std::path::Path) -> CliResult<()> {
+    let Start::Issue(IssueInput::New { request, .. }) = start else {
+        return Ok(());
+    };
+    let method = crate::commands::cert::validation::ValidationMethod::from_id(&request.solver_id)?;
+    if method == crate::commands::cert::validation::ValidationMethod::DnsProvider {
+        crate::commands::cert::validation::validate_provider_binding(
+            &request.solver_config,
+            data_dir,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub(super) async fn attach_deployment_results(

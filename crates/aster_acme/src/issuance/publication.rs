@@ -43,8 +43,9 @@ pub(super) async fn prepare(
         if update.plan.publication_id != update.publication_id
             || update.plan.value != *value
             || update.plan.challenge_name.trim_end_matches('.') != name.trim_end_matches('.')
-            || update.plan.cname_chain.first() != Some(&update.plan.challenge_name)
-            || update.plan.cname_chain.last() != Some(&update.plan.name)
+            || (!update.plan.cname_chain.is_empty()
+                && (update.plan.cname_chain.first() != Some(&update.plan.challenge_name)
+                    || update.plan.cname_chain.last() != Some(&update.plan.name)))
             || auth
                 .publication_plan
                 .as_ref()
@@ -62,7 +63,13 @@ pub(super) async fn prepare(
 }
 
 pub(super) fn publication(auth: &AuthorizationRecord) -> Result<ChallengePublication, IssueError> {
+    let crate::identifier::Identifier::Dns(identifier) =
+        crate::identifier::authorization_identifier(
+            auth.resource.identifier.clone(),
+            auth.resource.wildcard,
+        )?;
     Ok(ChallengePublication {
+        identifier,
         publication_id: auth
             .publication_id
             .clone()

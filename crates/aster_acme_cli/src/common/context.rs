@@ -16,12 +16,14 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 pub(crate) struct CommandContext {
     pub(crate) output: crate::common::session::OutputSession,
     pub(crate) http: aster_acme::transport::HttpPool,
+    pub(crate) dns_http: aster_acme_dns_http::ForgeDnsHttp,
 }
 impl CommandContext {
     pub(crate) fn new(json: bool) -> Self {
         Self {
             output: crate::common::session::OutputSession::new(json),
             http: aster_acme::transport::HttpPool::default(),
+            dns_http: aster_acme_dns_http::ForgeDnsHttp::default(),
         }
     }
 }

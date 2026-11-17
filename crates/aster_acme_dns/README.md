@@ -1,15 +1,9 @@
 # aster_acme_dns
 
-Protocol-neutral DNS publication contracts shared by external and built-in provider adapters.
+Shared DNS publication contracts, CNAME routing and bounded propagation policy.
 
-`DnsRecord` carries the stable publication ID, challenge owner, frozen CNAME route, final TXT owner, value, and TTL. `PublicationReceipt` records exact provider ownership. `DnsProvider` exposes idempotent `present` and receipt-based `cleanup` operations with per-record results and structured side-effect classification.
+`backend` defines backend IDs, configuration descriptors and validated immutable provider registries. Metadata and runtime factories come from the same backend object. Statically linked registration uses `linkme`; applications can instead inject explicit backend objects through `ProviderRegistry::new`.
 
-`routing` follows bounded CNAME chains and applies label-aware zone restrictions. `propagation::PropagationPolicy` waits five seconds, performs one bounded advisory TXT observation, and adds a ten-second grace delay when local visibility is unknown before CA validation. Local visibility never replaces CA validation. Cancellation and operation deadlines apply to every wait and query.
+`operation` defines provider actions, HTTP request/response values, versioned recovery facts and execution effects. The common runner holds host-owned publication sessions, persists identity/intention before mutations, enforces invocation budgets and preserves per-record partial outcomes. Embedders inject `HttpExecutor`, optional `CredentialReader`, and `PublicationStore`; the contract does not depend on CLI file layout or install process-global state.
 
-Credentials, provider profiles, ACME order state, child processes, and vendor clients belong to other crates. The injected `DnsLookup` port is read-only.
-
-```sh
-cargo test -p aster_acme_dns --locked
-```
-
-License: MIT OR Apache-2.0.
+Concrete implementations are provided by `aster_acme_dns_builtin` (one opt-in feature per vendor) and `aster_acme_dns_adpp` (external executable protocol). `aster_acme_dns_http` supplies the Forge host transport. Their operational and ownership boundaries are documented in [DNS backends](../../docs/design/dns-backends.md).

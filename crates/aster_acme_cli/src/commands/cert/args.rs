@@ -179,9 +179,17 @@ pub(crate) struct IssueArgs {
     /// Temporary validation listener socket: port 80 for standalone or 443 for `tls_alpn`; saved for resume/renew.
     #[arg(long, value_name = "IP:PORT", conflicts_with = "resume")]
     pub listen_address: Option<std::net::SocketAddr>,
-    /// DNS provider profile; valid only with `-c dns_external`.
+    /// DNS provider profile; valid only with `-c dns_provider`.
     #[arg(long, value_parser = parse_certificate_name, conflicts_with = "resume")]
     pub provider: Option<String>,
+    /// Map a requested DOMAIN to its complete final `TXT_NAME`; repeat for multiple domains.
+    /// Example: example.com=_acme-challenge.example.com
+    #[arg(
+        long = "dns-target",
+        value_name = "DOMAIN=TXT_NAME",
+        conflicts_with = "resume"
+    )]
+    pub dns_targets: Vec<String>,
     /// Resume a saved request; omit the name to choose unfinished requests interactively.
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
     pub resume: Option<ResumeTarget>,

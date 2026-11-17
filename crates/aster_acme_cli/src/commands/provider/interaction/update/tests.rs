@@ -153,3 +153,36 @@ fn back_navigation_preserves_the_draft_and_returns_only_one_level() {
         .is::<Canceled>()
     );
 }
+
+#[cfg(feature = "dns-cloudflare")]
+#[test]
+fn native_editor_updates_custom_fields_and_allowed_zones() {
+    let custom = serde_json::json!({
+        "api_token": "old-token",
+        "zone_id": "0123456789abcdef0123456789abcdef"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let original = ProviderProfile::builtin(
+        aster_acme_dns_builtin::cloudflare::BACKEND_ID.into(),
+        custom,
+        vec!["old.example".into()],
+    )
+    .unwrap();
+    let mut prompts = inputs(
+        &[0, 2, 3, 0, 3, 4],
+        &[
+            "new-token",
+            "0123456789abcdef0123456789abcdef",
+            "new.example",
+        ],
+    );
+    let edited = edit("native", Path::new("profile.toml"), &original, &mut prompts).unwrap();
+    assert_eq!(edited.provider_custom["api_token"], "new-token");
+    assert_eq!(
+        edited.provider_custom["zone_id"],
+        "0123456789abcdef0123456789abcdef"
+    );
+    assert_eq!(edited.allowed_zones, ["old.example", "new.example"]);
+}

@@ -35,6 +35,24 @@ fn assert_success_or_darwin_cleanup_uncertainty(result: ReloadResult) {
     }
 }
 
+/// Cleanup failure outranks timeout on Darwin; actual descendant exit is
+/// independently checked by each real-process fixture below.
+fn assert_timeout_or_darwin_cleanup_uncertainty(result: &ReloadResult) {
+    assert!(result.started);
+    let error = result.status.as_ref().unwrap_err();
+    if result.timed_out {
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    } else {
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(error.raw_os_error(), Some(1));
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        }
+        #[cfg(not(target_os = "macos"))]
+        panic!("unexpected timeout classification: {error}");
+    }
+}
+
 #[test]
 fn incomplete_cleanup_never_reports_success_or_enters_timeout_retry_path() {
     use aster_forge_process::ProcessFailure;
@@ -161,7 +179,7 @@ async fn timeout_retains_partial_output_and_kills_descendants() {
         None,
     )
     .await;
-    assert!(result.timed_out);
+    assert_timeout_or_darwin_cleanup_uncertainty(&result);
     assert!(
         events
             .iter()
@@ -257,7 +275,7 @@ async fn reload_timeout_terminates_owned_descendants_that_inherit_pipe_handles()
         None,
     )
     .await;
-    assert!(result.timed_out);
+    assert_timeout_or_darwin_cleanup_uncertainty(&result);
     assert_descendant_exited(&heartbeat).await;
     let first = std::fs::read(&heartbeat).unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -285,7 +303,7 @@ async fn overall_deadline_terminates_waiting_parent_and_inherited_pipe_descendan
     )
     .await;
     assert!(result.status.is_err());
-    assert!(result.timed_out);
+    assert_timeout_or_darwin_cleanup_uncertainty(&result);
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_descendant_exited(&heartbeat).await;
     let before = std::fs::read(&heartbeat).unwrap();

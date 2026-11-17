@@ -38,12 +38,6 @@ pub struct Request {
 pub struct RequestRecord {
     /// Stable idempotency identity.
     pub publication_id: String,
-    /// Original challenge owner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub challenge_name: Option<String>,
-    /// Resolved CNAME chain.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cname_chain: Vec<String>,
     /// Exact DNS record data for present, and ownership verification for cleanup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<RecordData>,

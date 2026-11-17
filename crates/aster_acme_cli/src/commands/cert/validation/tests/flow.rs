@@ -26,8 +26,8 @@ use wiremock::{
     matchers::{method, path},
 };
 
-mod dns_external;
 mod dns_persist;
+mod dns_provider;
 
 const TOKEN: &str = "opaque-HTTP-token-with-enough-entropy";
 struct Fixture {
@@ -99,8 +99,8 @@ impl Fixture {
             account_name: "default".into(),
             challenge: implementation.kind(),
             solver_id: implementation.id().into(),
-            solver_config: if implementation == ValidationMethod::DnsExternal {
-                external_configuration(Some("test-provider")).unwrap()
+            solver_config: if implementation == ValidationMethod::DnsProvider {
+                provider_configuration(Some("test-provider")).unwrap()
             } else {
                 configuration(
                     implementation,
@@ -238,7 +238,7 @@ impl Fixture {
         let (challenge_kind, challenge_path) = match implementation {
             ValidationMethod::TlsAlpn => ("tls-alpn-01", "/tls-challenge"),
             ValidationMethod::DnsPersist => ("dns-persist-01", "/persist-challenge"),
-            ValidationMethod::DnsExternal => ("dns-01", "/dns-challenge"),
+            ValidationMethod::DnsProvider => ("dns-01", "/dns-challenge"),
             ValidationMethod::ManualDns
             | ValidationMethod::ManualHttp
             | ValidationMethod::Webroot

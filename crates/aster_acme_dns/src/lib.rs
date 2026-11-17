@@ -18,6 +18,8 @@ use std::{collections::BTreeMap, time::Instant};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+pub mod backend;
+pub mod operation;
 pub mod propagation;
 pub mod routing;
 
@@ -52,7 +54,7 @@ pub struct DnsRecord {
     pub publication_id: String,
     /// Original `_acme-challenge` owner.
     pub challenge_name: String,
-    /// CNAME owner chain, including the original and final names.
+    /// Resolved CNAME owner chain; empty when the target was explicitly configured.
     pub cname_chain: Vec<String>,
     /// Final TXT owner where the provider writes the value.
     pub name: String,
@@ -82,7 +84,7 @@ pub struct PublicationReceipt {
     pub ownership: RecordOwnership,
     /// Exact publication owner chosen when the DNS mutation occurred.
     pub record_name: String,
-    /// CNAME chain resolved when the DNS mutation occurred.
+    /// Resolved CNAME chain, or empty for an explicitly configured target.
     pub cname_chain: Vec<String>,
 }
 

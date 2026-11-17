@@ -15,6 +15,9 @@ publish = true
 # All dependency versions and feature selections belong here.
 # Members must inherit dependencies with `workspace = true`.
 [workspace.dependencies]
+linkme = "0.3"
+aster_acme_dns_builtin = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns_builtin", default-features = false }
+aster_acme_dns_http = { version = "0.1.0-alpha.1", path = "crates/aster_acme_dns_http" }
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 x509-parser = { version = "0.18.1", features = ["verify-aws"] }
 aster_forge_http = { version = "=0.1.0-alpha.2", default-features = false, features = ["json", "rustls-aws-lc-rs", "system-proxy"] }

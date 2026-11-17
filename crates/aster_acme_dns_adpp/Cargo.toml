@@ -10,6 +10,7 @@ description = "ADPP external DNS provider process adapter for AsterACME."
 publish.workspace = true
 
 [dependencies]
+linkme.workspace = true
 aster_acme_dns.workspace = true
 aster_forge_process.workspace = true
 async-trait.workspace = true

@@ -160,6 +160,8 @@ dependencies = [
  "aster_acme_core",
  "aster_acme_dns",
  "aster_acme_dns_adpp",
+ "aster_acme_dns_builtin",
+ "aster_acme_dns_http",
  "aster_acme_dns_resolver",
  "aster_acme_protocol",
  "aster_acme_validation",
@@ -240,6 +242,7 @@ name = "aster_acme_dns"
 version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
+ "linkme",
  "serde",
  "serde_json",
  "thiserror",
@@ -256,10 +259,34 @@ dependencies = [
  "async-trait",
  "aws-lc-rs",
  "base64 0.23.1",
+ "linkme",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "aster_acme_dns_builtin"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "aster_acme_dns",
+ "linkme",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aster_acme_dns_http"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "aster_acme_dns",
+ "aster_forge_http",
+ "async-trait",
+ "reqwest",
+ "tokio",
+ "tokio-util",
+ "wiremock",
 ]
 
 [[package]]
@@ -892,7 +919,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1597,6 +1624,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "linkme"
+version = "0.3.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a4e12fd3f6b22d5bc28beccac0f53bb35db4a897c6ddb709c4a0161f72eb6e"
+dependencies = [
+ "linkme-impl",
+]
+
+[[package]]
+name = "linkme-impl"
+version = "0.3.38"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cd04c256b1cd686a45898c8fd150c79b801d96a3eb7bae1075f9eb3b4b85c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1978,7 +2025,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2175,7 +2222,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2232,7 +2279,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2578,7 +2625,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3082,7 +3129,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

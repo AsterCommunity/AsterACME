@@ -177,7 +177,7 @@ fn requests_reject_duplicates_counts_names_ttl_and_invalid_context() {
     assert!(request(Action::Present, &context(), &[], &[]).is_err());
     let over = vec![record(); MAX_RECORDS + 1];
     assert!(request(Action::Present, &context(), &over, &[]).is_err());
-    for mutate in [0, 1, 2, 3, 4, 5] {
+    for mutate in 0..7 {
         let (mut request, _) = response();
         match mutate {
             0 => request.records.push(request.records[0].clone()),
@@ -185,9 +185,14 @@ fn requests_reject_duplicates_counts_names_ttl_and_invalid_context() {
             2 => request.records[0].record.as_mut().unwrap().name = "bad..name.".into(),
             3 => request.records[0].record.as_mut().unwrap().ttl_seconds = Some(0),
             4 => request.records[0].record.as_mut().unwrap().value = "x".repeat(256),
+            5 => request.records[0].record.as_mut().unwrap().name = "Delegated.example.net.".into(),
             _ => request.context.provider_profile_version = 2,
         }
-        assert!(validate_request(&request).is_err(), "case {mutate}");
+        if mutate == 5 {
+            validate_request(&request).unwrap();
+        } else {
+            assert!(validate_request(&request).is_err(), "case {mutate}");
+        }
     }
 }
 #[test]
@@ -364,4 +369,20 @@ fn validate_rfc_examples(rfc: &str) -> usize {
         count += 1;
     }
     count
+}
+
+#[test]
+fn explicit_target_is_sent_without_claiming_a_resolved_cname_chain() {
+    let mut record = record();
+    record.name = "delegated.example.net.".into();
+    record.cname_chain.clear();
+    let request = request(Action::Present, &context(), &[record], &[]).unwrap();
+    validate_request(&request).unwrap();
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        value["records"][0]["record"]["name"],
+        "delegated.example.net."
+    );
+    assert!(value["records"][0].get("challenge_name").is_none());
+    assert!(value["records"][0].get("cname_chain").is_none());
 }

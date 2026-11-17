@@ -62,7 +62,7 @@ fn args(words: &[&str]) -> IssueArgs {
 
 #[tokio::test]
 async fn external_dns_selects_a_profile_only_when_missing_and_interactive() {
-    let mut options = args(&["-c", "dns_external", "-d", "example.com"]);
+    let mut options = args(&["-c", "dns_provider", "-d", "example.com"]);
     let mut prompts = Inputs {
         answers: ["cloudflare".into()].into(),
         ..Inputs::default()
@@ -73,7 +73,7 @@ async fn external_dns_selects_a_profile_only_when_missing_and_interactive() {
     let mut prompts = Inputs::default();
     complete(&mut options, true, &mut prompts).await.unwrap();
     assert_eq!(prompts.asked, Vec::<String>::new());
-    let mut options = args(&["-c", "dns_external", "-d", "example.com"]);
+    let mut options = args(&["-c", "dns_provider", "-d", "example.com"]);
     assert!(complete(&mut options, false, &mut prompts).await.is_err());
     assert_eq!(prompts.asked, Vec::<String>::new());
     assert!(
@@ -89,7 +89,7 @@ async fn bare_issue_collects_domains_and_each_methods_required_inputs() {
     let root = tempfile::tempdir().unwrap();
     for method in ValidationMethod::value_variants()
         .iter()
-        .filter(|method| **method != ValidationMethod::DnsExternal)
+        .filter(|method| **method != ValidationMethod::DnsProvider)
     {
         let mut args = args(&[]);
         let mut inputs = Inputs {
@@ -104,7 +104,7 @@ async fn bare_issue_collects_domains_and_each_methods_required_inputs() {
             ValidationMethod::Standalone | ValidationMethod::TlsAlpn => {
                 inputs.answers.push_back(String::new());
             }
-            ValidationMethod::DnsExternal
+            ValidationMethod::DnsProvider
             | ValidationMethod::ManualDns
             | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp => {}
@@ -127,7 +127,7 @@ async fn bare_issue_collects_domains_and_each_methods_required_inputs() {
                 assert_eq!(args.listen_address.unwrap().to_string(), "0.0.0.0:443");
             }
             ValidationMethod::Webroot => assert_eq!(args.webroot.as_deref(), Some(root.path())),
-            ValidationMethod::DnsExternal
+            ValidationMethod::DnsProvider
             | ValidationMethod::ManualDns
             | ValidationMethod::DnsPersist
             | ValidationMethod::ManualHttp => {
@@ -144,7 +144,7 @@ async fn explicit_input_skips_every_prompt_and_resume_never_asks() {
     let root = tempfile::tempdir().unwrap();
     for method in ValidationMethod::value_variants()
         .iter()
-        .filter(|method| **method != ValidationMethod::DnsExternal)
+        .filter(|method| **method != ValidationMethod::DnsProvider)
     {
         let mut words = vec!["-c", method.id(), "-d", "example.com"];
         if *method == ValidationMethod::Webroot {
@@ -182,9 +182,9 @@ async fn method_choices_respect_wildcards_and_supplied_configuration() {
         (
             vec!["-d", "*.example.com"],
             vec![
+                ValidationMethod::DnsProvider,
                 ValidationMethod::ManualDns,
                 ValidationMethod::DnsPersist,
-                ValidationMethod::DnsExternal,
             ],
         ),
         (
@@ -199,6 +199,7 @@ async fn method_choices_respect_wildcards_and_supplied_configuration() {
         let mut args = args(&words);
         let mut prompts = Inputs {
             selected: Some(expected[0]),
+            answers: ["cloudflare".into()].into(),
             ..Inputs::default()
         };
         complete(&mut args, true, &mut prompts).await.unwrap();
@@ -342,4 +343,85 @@ fn complete_rejects_noninteractive_missing_inputs_before_initializing_the_data_d
         assert!(result.is_err());
         assert!(!data_dir.exists());
     }
+}
+
+#[tokio::test]
+async fn dns_target_mappings_validate_multi_domain_and_reject_conflicts() {
+    let good = [
+        "-d",
+        "example.com",
+        "-d",
+        "*.example.com",
+        "-d",
+        "other.net",
+        "-c",
+        "dns_provider",
+        "--provider",
+        "cf",
+        "--dns-target",
+        "example.com=verify.validation.net",
+        "--dns-target",
+        "*.example.com=verify.validation.net",
+        "--dns-target",
+        "other.net=verify.validation.net",
+    ];
+    let mut options = args(&good);
+    complete(&mut options, false, &mut Inputs::default())
+        .await
+        .unwrap();
+    let parsed =
+        crate::commands::cert::validation::parse_dns_targets(&options.dns_targets).unwrap();
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed["example.com"], "verify.validation.net.");
+    assert_eq!(parsed["*.example.com"], "verify.validation.net.");
+    for values in [
+        vec![
+            "example.com=verify.validation.net",
+            "EXAMPLE.COM.=other.net",
+        ],
+        vec![
+            "example.com=verify.validation.net",
+            "*.example.com=other.net",
+        ],
+        vec!["bad..name=verify.validation.net"],
+        vec!["example.com=bad..name"],
+        vec!["example.com"],
+        vec!["_acme-challenge.example.com=target.net"],
+        vec!["foo.*.example.com=target.net"],
+    ] {
+        assert!(
+            crate::commands::cert::validation::parse_dns_targets(
+                &values.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+    }
+    let mut bad = args(&[
+        "-d",
+        "example.com",
+        "-c",
+        "dns_provider",
+        "--provider",
+        "cf",
+        "--dns-target",
+        "*.example.com=verify.validation.net",
+    ]);
+    assert!(
+        complete(&mut bad, false, &mut Inputs::default())
+            .await
+            .is_err()
+    );
+    let mut wrong_method = args(&[
+        "-d",
+        "example.com",
+        "-c",
+        "manual_dns",
+        "--dns-target",
+        "example.com=verify.validation.net",
+    ]);
+    assert!(
+        complete(&mut wrong_method, false, &mut Inputs::default())
+            .await
+            .is_err()
+    );
 }

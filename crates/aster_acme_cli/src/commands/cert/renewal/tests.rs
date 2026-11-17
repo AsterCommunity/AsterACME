@@ -701,7 +701,7 @@ async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_tra
     for method in [
         ValidationMethod::ManualDns,
         ValidationMethod::DnsPersist,
-        ValidationMethod::DnsExternal,
+        ValidationMethod::DnsProvider,
         ValidationMethod::ManualHttp,
         ValidationMethod::Webroot,
         ValidationMethod::Standalone,
@@ -745,6 +745,14 @@ async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_tra
                 "{} should enter the transaction and fail at its unreachable fixture CA",
                 method.id()
             );
+            if method == ValidationMethod::DnsProvider {
+                let RenewalResult::Failed { message, .. } = &report.entries[0].result else {
+                    panic!("DNS provider renewal should fail during CA execution");
+                };
+                assert!(
+                    !message.contains("provider backend") && !message.contains("provider profile")
+                );
+            }
             let renewal = records
                 .iter()
                 .find(|candidate| candidate.unfinished())
@@ -791,7 +799,7 @@ impl LocalFixture {
                 8080
             },
         ));
-        let config = if method == ValidationMethod::DnsExternal {
+        let config = if method == ValidationMethod::DnsProvider {
             aster_acme_cli_storage::provider::ProviderProfileStore::new(
                 self.settings.data_dir.clone(),
                 Duration::from_secs(2),
@@ -807,8 +815,12 @@ impl LocalFixture {
             )
             .await
             .unwrap();
-            crate::commands::cert::validation::external_configuration(Some("test-provider"))
-                .unwrap()
+            crate::commands::cert::validation::bound_provider_configuration(
+                Some("test-provider"),
+                &self.settings.data_dir,
+            )
+            .await
+            .unwrap()
         } else {
             crate::commands::cert::validation::configuration(
                 method,

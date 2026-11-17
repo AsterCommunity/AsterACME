@@ -58,7 +58,7 @@ challenge validation.
 - **Challenge owner**: the `_acme-challenge` DNS name derived for the ACME
   identifier, before any CNAME delegation.
 - **Publication name**: the TXT owner where the record is actually written
-  after AsterACME resolves an allowed CNAME chain.
+  after AsterACME selects an allowed final publication name.
 - **Provider instance**: a named external provider configuration, including
   its executable and provider-side credential/configuration selection.
 - **Publication ID**: a stable, opaque identifier for one logical record
@@ -134,11 +134,6 @@ The request envelope is:
   "records": [
     {
       "publication_id": "stable-publication-id",
-      "challenge_name": "_acme-challenge.example.com.",
-      "cname_chain": [
-        "_acme-challenge.example.com.",
-        "validation.example.net."
-      ],
       "record": {
         "type": "TXT",
         "name": "validation.example.net.",
@@ -235,11 +230,6 @@ Each `records` entry has this shape:
 ```json
 {
   "publication_id": "stable-publication-id",
-  "challenge_name": "_acme-challenge.example.com.",
-  "cname_chain": [
-    "_acme-challenge.example.com.",
-    "validation.example.net."
-  ],
   "record": {
     "type": "TXT",
     "name": "validation.example.net.",
@@ -256,10 +246,9 @@ records. `ttl_seconds` is an optional requested value, not a promise that the
 DNS service supports that exact TTL; the provider MAY apply its documented
 minimum or default.
 
-The original `challenge_name` is retained for audit and error reporting.
-`cname_chain` records the delegation AsterACME resolved. `record.name` is the
-final publication name. The provider MUST NOT change the CNAME chain or write
-the TXT value at a different name without returning an explicit failure.
+`record.name` is the final publication name selected by the host. The provider
+MUST write at this exact name and MUST NOT independently follow CNAMEs. The host
+retains the original challenge name and its observed or explicitly configured route.
 
 An invocation MAY contain multiple records. The provider MUST return an
 individual result for every `publication_id`; a single aggregate success flag
@@ -275,7 +264,12 @@ the request after a timeout MUST return the same provider record identity or
 reconcile the same record, not create an unbounded series of duplicates.
 
 The provider MUST preserve unrelated TXT values at the owner. It MUST NOT
-replace or clear an entire TXT RRset to publish one value. If the exact value
+clear an RRset or replace unrelated values to publish one value. A service that
+only exposes whole-RRset replacement MAY be used through a read/merge/conditional-write
+operation that preserves all unrelated values and metadata. The condition MUST
+provide genuine atomic conflict detection; a local process lock or a successful
+read-back alone does not provide that guarantee. Without such a primitive or an
+equivalent provider-side atomic operation, the provider MUST fail before writing. If the exact value
 already existed before this publication, the provider MUST report that it did
 not create the value and MUST NOT later delete that pre-existing value.
 
@@ -318,7 +312,10 @@ ownership. Reuse of an ID with a different record tuple MUST fail as
 
 `cleanup` receives the saved publication and provider record IDs. It MUST remove
 only the value owned by that publication. It MUST NOT delete a pre-existing
-value, another publication's value, or the whole TXT RRset. Repeating cleanup
+value or another publication's value. For a whole-RRset API, cleanup MUST re-read
+the current set and conditionally remove only the owned value; it MUST NOT restore
+an earlier snapshot. An empty RRset resource may be removed only when doing so
+cannot remove any unowned value. Repeating cleanup
 for a value already absent MUST succeed. If ownership cannot be established,
 the provider MUST fail closed and leave the record in place.
 
@@ -341,11 +338,6 @@ the provider MUST fail closed and leave the record in place.
       "publication_id": "stable-publication-id",
       "record_id": "provider-record-123",
       "ownership": "created",
-      "challenge_name": "_acme-challenge.example.com.",
-      "cname_chain": [
-        "_acme-challenge.example.com.",
-        "validation.example.net."
-      ],
       "record": {
         "type": "TXT",
         "name": "validation.example.net.",
@@ -403,10 +395,9 @@ separates challenge derivation from DNS routing:
 
 1. AsterACME derives the challenge owner and expected TXT value from ACME
    challenge material.
-2. AsterACME resolves a bounded CNAME chain and applies the operator's allowed
-   delegation policy.
-3. AsterACME sends the original owner, resolved chain, and final publication
-   name to the provider.
+2. AsterACME resolves a bounded CNAME chain or uses the operator's explicit
+   target and applies the allowed delegation policy.
+3. AsterACME sends the final publication name to the provider.
 4. The provider discovers the authoritative zone and writes the value at the
    supplied final name.
 
@@ -586,8 +577,11 @@ The crate boundaries are `aster_acme_dns` for DNS names, routing,
 provider contracts, and propagation policy; `aster_acme_dns_adpp` for the
 external protocol adapter; `aster_acme_dns_resolver` for concrete system DNS
 observations; and Forge's `aster_forge_process` for shared child-process
-management. Built-in provider implementations can live in separate crates and
-implement the same DNS provider contract. The CLI owns profile editing and
+management. Built-in implementations live in feature-selected modules of `aster_acme_dns_builtin`
+and implement the same DNS publication contract through provider-owned effect/state-machine
+factories. A shared validated registry owns both descriptors and construction;
+`aster_acme_dns_http` supplies the Forge execution adapter. These in-process contracts
+do not change the ADPP v1 wire identity or require new protocol actions. The CLI owns profile editing and
 selects the implementation; the ACME service continues to own challenge
 lifecycle and durable publication checkpoints.
 

@@ -8,7 +8,10 @@
 
 ```sh
 cargo test -p aster_acme_cli_storage --locked issuance::deployment
+cargo test -p aster_acme_dns --locked
+cargo test -p aster_acme_dns_builtin --features cloudflare --locked
 cargo test -p aster_acme_dns_http --locked
+cargo test -p aster_acme_cli_storage --locked provider_publication
 cargo check --workspace --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -44,3 +47,5 @@ python3 scripts/check-precheck-features.py
 Unix原生确认终端回归：`python3 scripts/test-confirmation-terminal.py` 在PTY中验证提示/输入同一行、可见答案、光标/删除/退格、大小写、非法输入与长度上限、默认否，以及不发送任何按键时的deadline/外部取消/shutdown和完整termios恢复。Linux/macOS CI执行；Windows保留原生编译和普通测试。
 
 Provider 原生终端回归：`python3 scripts/test-provider-terminal.py` 在 PTY 中验证 add/show/cleanup/remove/update 和签发 Profile 选择、搜索、颜色与 NO_COLOR、默认否/取消、update 保存/丢弃草稿、子菜单返回并保留草稿及 termios 恢复，不执行真实 Provider 或访问 CA；Linux/macOS CI 同步执行。
+
+DNS 后端测试包括：registry 重复/未知 ID、编译 feature 集合、写请求前 checkpoint 确认、失败与部分结果、HTTP 精确字节/禁重试/禁重定向/收发上限/取消期限、Cloudflare 分页/同值所有权/错误脱敏/丢响应恢复/精确删除，以及条件 RRset 冲突重读、metadata 保留和不确定所有权。CLI loopback 测试使用真实 Cloudflare 状态机、实际文件恢复存储和 ACME 服务；PTY 额外核对后端选择及敏感输入不回显。真实 DNS/CA 验收不由这些 mock 代替。
