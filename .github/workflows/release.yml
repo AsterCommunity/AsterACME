@@ -201,18 +201,22 @@ jobs:
             exit 1
           fi
           echo "found PDB: $PDB"
-          cp "$PDB" aster-acme.pdb
+          # Keep the linker's crate-stem name (aster_acme.pdb): the exe's
+          # debug directory records that basename and debuggers match it on
+          # the symbol path, so renaming would break automatic loading.
+          PDB_BASENAME="$(basename "$PDB")"
+          cp "$PDB" "$PDB_BASENAME"
           {
             echo "version: ${VERSION}"
             echo "platform: ${{ matrix.platform }}"
             echo "target: ${{ matrix.target }}"
             echo "binary: aster-acme-v${VERSION}-${{ matrix.platform }}.exe"
-            echo "symbols: aster-acme.pdb (MSVC program database, from ${{ matrix.target }}/release)"
-            echo "pairing: the exe embeds the PDB GUID in its debug directory; WinDbg/cdb load the PDB automatically from the symbol path"
+            echo "symbols: $PDB_BASENAME (MSVC program database; keep the linker's crate-stem name, debuggers match it against the path recorded in the exe)"
+            echo "pairing: the exe embeds the PDB name and GUID in its debug directory; WinDbg/cdb load the PDB automatically from the symbol path"
             echo "resolve: windbg -y <symbols-dir> aster-acme.exe, then inspect the reported backtrace addresses"
           } > SYMBOLS.txt
           cat SYMBOLS.txt
-          tar czf "aster-acme-v${VERSION}-${{ matrix.platform }}-symbols.tar.gz" aster-acme.pdb SYMBOLS.txt
+          tar czf "aster-acme-v${VERSION}-${{ matrix.platform }}-symbols.tar.gz" "$PDB_BASENAME" SYMBOLS.txt
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
