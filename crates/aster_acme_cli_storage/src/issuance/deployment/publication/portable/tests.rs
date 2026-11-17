@@ -69,3 +69,49 @@ fn portable_readback_rejects_a_different_open_file_identity() {
         .to_string();
     assert!(error.contains("file identity changed"), "{error}");
 }
+
+#[test]
+fn portable_readback_rechecks_path_identity_after_content_verification() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("published.pem");
+    let replacement = root.path().join("replacement.pem");
+    let contents = b"new-leaf";
+    let mut temporary = Temporary::create(&path).unwrap();
+    temporary.as_file_mut().write_all(contents).unwrap();
+    temporary.as_file().sync_all().unwrap();
+    let published = temporary.persist(&path).unwrap();
+    let expected = ExpectedFile {
+        digest: Sha256::digest(contents).into(),
+        length: contents.len() as u64,
+        #[cfg(unix)]
+        mode: None,
+    };
+    published.verify(&path, &expected).unwrap();
+    fs::rename(&path, &replacement).unwrap();
+    fs::write(&path, contents).unwrap();
+    let error = published.reopen_same(&path).unwrap_err().to_string();
+    assert!(error.contains("file identity changed"), "{error}");
+}
+
+#[test]
+fn portable_readback_rechecks_identity_after_content_verification() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("published.pem");
+    let other = root.path().join("replacement.pem");
+    let contents = b"new-leaf";
+    let mut temporary = Temporary::create(&path).unwrap();
+    temporary.as_file_mut().write_all(contents).unwrap();
+    temporary.as_file().sync_all().unwrap();
+    let published = temporary.persist(&path).unwrap();
+    let expected = ExpectedFile {
+        digest: Sha256::digest(contents).into(),
+        length: contents.len() as u64,
+        #[cfg(unix)]
+        mode: None,
+    };
+    published.verify(&path, &expected).unwrap();
+    fs::rename(&path, &other).unwrap();
+    fs::write(&path, contents).unwrap();
+    let error = published.reopen_same(&path).unwrap_err().to_string();
+    assert!(error.contains("file identity changed"), "{error}");
+}

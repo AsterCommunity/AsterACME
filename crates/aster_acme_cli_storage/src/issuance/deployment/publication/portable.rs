@@ -11,6 +11,12 @@ pub(super) struct Published(File);
 impl Published {
     pub(super) fn verify(&self, path: &Path, expected: &ExpectedFile) -> Result<(), IssueError> {
         inspect_destination(path).map_err(|error| path_error("verification", path, &error))?;
+        let file = self.reopen_same(path)?;
+        verify_contents(file, expected, path)?;
+        self.reopen_same(path).map(|_| ())
+    }
+
+    fn reopen_same(&self, path: &Path) -> Result<File, IssueError> {
         let file = crate::state_file::open_regular(path)
             .map_err(|error| path_error("verification open", path, &error))?;
         if !crate::state_file::same_file(&self.0, &file)
@@ -21,7 +27,7 @@ impl Published {
                 path.display()
             )));
         }
-        verify_contents(file, expected, path)
+        Ok(file)
     }
 }
 impl Temporary {

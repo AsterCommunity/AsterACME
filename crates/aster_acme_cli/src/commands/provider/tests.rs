@@ -488,15 +488,13 @@ async fn cleanup_filters_legacy_foreign_idle_and_nonterminal_requests() {
         };
         let session = issues.create(&request, &account).await.unwrap();
         let mut record = session.record().await.unwrap();
-        if name == "nonterminal" {
-            record.authorizations = serde_json::from_value(serde_json::json!([{
-                "url":"https://ca.example/auth",
-                "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
-                "challenge_url":null,"validation_requirement":null,
-                "cleanup_pending":cleanup_pending,"acknowledgement":"not_submitted"
-            }])).unwrap();
-        }
-        if name != "nonterminal" && cleanup_pending {
+        record.authorizations = serde_json::from_value(serde_json::json!([{
+            "url":"https://ca.example/auth",
+            "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
+            "challenge_url":null,"validation_requirement":null,
+            "cleanup_pending":cleanup_pending,"acknowledgement":"not_submitted"
+        }])).unwrap();
+        if name != "nonterminal" {
             record.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
                 status: 400,
                 problem: None,
