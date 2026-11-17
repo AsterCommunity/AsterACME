@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "ACME resource states and state machine decisions."
 publish.workspace = true
+keywords = ["acme", "certificate", "pki", "protocol", "state-machine"]
 readme = "README.md"
 
 [dependencies]

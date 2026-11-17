@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "DNS challenge publication contracts and routing policy for AsterACME."
 publish.workspace = true
+keywords = ["acme", "dns", "dns-01", "certificate", "challenge"]
 
 [dependencies]
 async-trait.workspace = true

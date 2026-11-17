@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "Command-line interface for AsterACME."
 publish.workspace = true
+keywords = ["acme", "certificate", "letsencrypt", "cli", "automation"]
 readme = "README.md"
 
 [[bin]]

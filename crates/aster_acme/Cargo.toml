@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "Embeddable ACME client and certificate lifecycle orchestration."
 publish.workspace = true
+keywords = ["acme", "certificate", "letsencrypt", "pki", "async"]
 readme = "README.md"
 
 [features]

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "Feature-selected DNS provider state machines without network or filesystem access."
 publish.workspace = true
+keywords = ["acme", "dns", "dns-01", "cloudflare", "provider"]
 
 [features]
 default = []

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "Private local account and key storage for the AsterACME CLI."
 publish.workspace = true
+keywords = ["acme", "storage", "keys", "secrets", "cli"]
 readme = "README.md"
 
 [dependencies]

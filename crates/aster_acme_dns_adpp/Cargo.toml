@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 description = "ADPP external DNS provider process adapter for AsterACME."
 publish.workspace = true
+keywords = ["acme", "dns", "dns-01", "provider", "automation"]
 
 [dependencies]
 linkme.workspace = true
