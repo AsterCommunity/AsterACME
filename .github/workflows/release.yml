@@ -1,0 +1,329 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from changelog
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          awk -v version="$VERSION" '
+            BEGIN { header = "## [" version "]" }
+            index($0, header) == 1 && \
+              (length($0) == length(header) || substr($0, length(header) + 1, 1) == " ") {
+              found = 1
+              capture = 1
+              next
+            }
+            capture && /^## \[/ { exit }
+            capture { print }
+            END { if (!found) exit 2 }
+          ' CHANGELOG.md > release-notes.md
+
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "CHANGELOG.md section for ${VERSION} is empty" >&2
+            exit 1
+          fi
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: aster-acme v${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            platform: linux-amd64
+            arch: x86_64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            platform: linux-arm64
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            platform: macos-amd64
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            platform: macos-arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install musl cross toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p aster_acme_cli
+
+      # Issue #9: move the LINKEDIT/symtab payload out of the distributed binary
+      # into a per-version symbol archive. The release profile stays untouched.
+      - name: Split symbols and strip binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          BIN="target/${{ matrix.target }}/release/aster-acme"
+          objcopy --only-keep-debug "$BIN" aster-acme.debug
+          strip "$BIN"
+          objcopy --add-gnu-debuglink=aster-acme.debug "$BIN"
+          BUILD_ID=$(readelf -n "$BIN" | awk '/Build ID:/ {print $NF}')
+          {
+            echo "version: ${VERSION}"
+            echo "platform: ${{ matrix.platform }}"
+            echo "target: ${{ matrix.target }}"
+            echo "binary: aster-acme-v${VERSION}-${{ matrix.platform }} (GNU build-id ${BUILD_ID:-none})"
+            echo "symbols: aster-acme.debug (objcopy --only-keep-debug)"
+            echo "resolve: gdb -ex 'file aster-acme' -ex 'add-symbol-file aster-acme.debug' -ex 'info symbol <address>'"
+          } > SYMBOLS.txt
+          cat SYMBOLS.txt
+          tar czf "aster-acme-v${VERSION}-${{ matrix.platform }}-symbols.tar.gz" aster-acme.debug SYMBOLS.txt
+          cp "$BIN" "aster-acme-v${VERSION}-${{ matrix.platform }}"
+
+      - name: Split symbols and strip binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          BIN="target/${{ matrix.target }}/release/aster-acme"
+          cp "$BIN" aster-acme.symbols
+          strip "$BIN"
+          UUID_BIN=$(dwarfdump --uuid "$BIN" | awk 'NR==1 {print $2}')
+          UUID_SYM=$(dwarfdump --uuid aster-acme.symbols | awk 'NR==1 {print $2}')
+          if [ -z "$UUID_BIN" ] || [ "$UUID_BIN" != "$UUID_SYM" ]; then
+            echo "::error::symbol file UUID does not match the stripped binary"
+            exit 1
+          fi
+          {
+            echo "version: ${VERSION}"
+            echo "platform: ${{ matrix.platform }}"
+            echo "target: ${{ matrix.target }}"
+            echo "binary: aster-acme-v${VERSION}-${{ matrix.platform }} (Mach-O UUID $UUID_BIN)"
+            echo "symbols: aster-acme.symbols (full pre-strip copy; UUID survives strip)"
+            echo "resolve: atos -o aster-acme.symbols -arch ${{ matrix.arch }} -l 0x100000000 <address>"
+          } > SYMBOLS.txt
+          cat SYMBOLS.txt
+          tar czf "aster-acme-v${VERSION}-${{ matrix.platform }}-symbols.tar.gz" aster-acme.symbols SYMBOLS.txt
+          cp "$BIN" "aster-acme-v${VERSION}-${{ matrix.platform }}"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            aster-acme-v${{ needs.create-release.outputs.version }}-${{ matrix.platform }}
+            aster-acme-v${{ needs.create-release.outputs.version }}-${{ matrix.platform }}-symbols.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Windows is intentionally absent: the PDB extraction and pairing flow is a
+  # separate decision (issue #9); add a matrix entry with a pdb archive step there.
+
+  finalize:
+    name: Publish release and update Homebrew tap
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create Homebrew tap token
+        id: tap-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.ASTER_PACKAGE_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.ASTER_PACKAGE_PUBLISHER_PRIVATE_KEY }}
+          owner: AsterCommunity
+          repositories: homebrew-tap
+
+      - name: Download release binaries and calculate SHA256
+        id: sha256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          for platform in macos-arm64 macos-amd64 linux-arm64 linux-amd64; do
+            gh release download "v${VERSION}" --repo "${{ github.repository }}" \
+              --pattern "aster-acme-v${VERSION}-${platform}" --output "aster-acme-${platform}"
+          done
+          for platform in macos-arm64 macos-amd64 linux-arm64 linux-amd64; do
+            echo "${platform//-/_}=$(sha256sum "aster-acme-${platform}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Publish the draft release
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const tag = context.ref.replace('refs/tags/', '');
+            const draft = releases.find(release => release.tag_name === tag);
+            if (!draft) {
+              core.setFailed(`Draft release for ${tag} not found`);
+              return;
+            }
+            if (!draft.draft) {
+              core.notice(`Release ${tag} is already published`);
+              return;
+            }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: draft.id,
+              draft: false,
+            });
+
+      - name: Update Homebrew formula
+        uses: actions/github-script@v8
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+          SHA_MACOS_ARM64: ${{ steps.sha256.outputs.macos_arm64 }}
+          SHA_MACOS_AMD64: ${{ steps.sha256.outputs.macos_amd64 }}
+          SHA_LINUX_ARM64: ${{ steps.sha256.outputs.linux_arm64 }}
+          SHA_LINUX_AMD64: ${{ steps.sha256.outputs.linux_amd64 }}
+        with:
+          github-token: ${{ steps.tap-token.outputs.token }}
+          script: |
+            const version = process.env.VERSION;
+            const sha256 = {
+              macos_arm64: process.env.SHA_MACOS_ARM64,
+              macos_amd64: process.env.SHA_MACOS_AMD64,
+              linux_arm64: process.env.SHA_LINUX_ARM64,
+              linux_amd64: process.env.SHA_LINUX_AMD64,
+            };
+            for (const [platform, digest] of Object.entries(sha256)) {
+              if (!/^[0-9a-f]{64}$/.test(digest)) {
+                core.setFailed(`Missing SHA256 for ${platform}`);
+                return;
+              }
+            }
+
+            const formula = `# typed: false
+            # frozen_string_literal: true
+
+            class AsterAcme < Formula
+              desc "Embeddable Rust ACME client and CLI for automated certificate issuance"
+              homepage "https://github.com/AsterCommunity/AsterACME"
+              version "${version}"
+              license "MIT OR Apache-2.0"
+
+              on_macos do
+                on_arm do
+                  url "https://github.com/AsterCommunity/AsterACME/releases/download/v#{version}/aster-acme-v#{version}-macos-arm64"
+                  sha256 "${sha256.macos_arm64}"
+
+                  def install
+                    bin.install "aster-acme-v#{version}-macos-arm64" => "aster-acme"
+                  end
+                end
+
+                on_intel do
+                  url "https://github.com/AsterCommunity/AsterACME/releases/download/v#{version}/aster-acme-v#{version}-macos-amd64"
+                  sha256 "${sha256.macos_amd64}"
+
+                  def install
+                    bin.install "aster-acme-v#{version}-macos-amd64" => "aster-acme"
+                  end
+                end
+              end
+
+              on_linux do
+                on_arm do
+                  url "https://github.com/AsterCommunity/AsterACME/releases/download/v#{version}/aster-acme-v#{version}-linux-arm64"
+                  sha256 "${sha256.linux_arm64}"
+
+                  def install
+                    bin.install "aster-acme-v#{version}-linux-arm64" => "aster-acme"
+                  end
+                end
+
+                on_intel do
+                  url "https://github.com/AsterCommunity/AsterACME/releases/download/v#{version}/aster-acme-v#{version}-linux-amd64"
+                  sha256 "${sha256.linux_amd64}"
+
+                  def install
+                    bin.install "aster-acme-v#{version}-linux-amd64" => "aster-acme"
+                  end
+                end
+              end
+
+              test do
+                assert_match version.to_s, shell_output("#{bin}/aster-acme --version")
+              end
+            end
+            `.split('\n').map(line => line.replace(/^            /, '')).join('\n');
+
+            let fileSha;
+            try {
+              const { data: existing } = await github.rest.repos.getContent({
+                owner: 'AsterCommunity',
+                repo: 'homebrew-tap',
+                path: 'Formula/aster-acme.rb',
+              });
+              fileSha = existing.sha;
+            } catch (error) {
+              fileSha = undefined;
+            }
+
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: 'AsterCommunity',
+              repo: 'homebrew-tap',
+              path: 'Formula/aster-acme.rb',
+              message: `aster-acme v${version}`,
+              content: Buffer.from(formula).toString('base64'),
+              sha: fileSha,
+            });

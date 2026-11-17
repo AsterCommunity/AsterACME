@@ -1,0 +1,17 @@
+target/
+.git/
+.github/
+.agents/
+.cargo/
+.claude/
+.codex/
+.gcop/
+.symposium/
+docs/
+scripts/
+examples/
+tests/
+*.md
+.DS_Store
+Dockerfile
+.dockerignore

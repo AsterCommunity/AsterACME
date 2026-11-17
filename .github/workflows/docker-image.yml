@@ -1,0 +1,165 @@
+name: Docker Image
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY_IMAGE_GHCR: ghcr.io/astercommunity/aster-acme
+  REGISTRY_IMAGE_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME }}/aster-acme
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build and push per-arch image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE_GHCR }}:build-${{ github.run_id }}-${{ matrix.arch }}
+            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:build-${{ github.run_id }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=docker-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.arch }}
+          build-args: |
+            ASTER_BUILD_REVISION=${{ github.sha }}
+          provenance: true
+          sbom: true
+
+  publish-manifest:
+    name: Publish multi-arch manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Extract GHCR image metadata
+        id: meta-ghcr
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          # latest tracks stable releases only; prereleases keep only the tag.
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Extract Docker Hub image metadata
+        id: meta-dockerhub
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY_IMAGE_DOCKERHUB }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Create multi-arch manifests
+        id: manifests
+        env:
+          GHCR_TAGS: ${{ steps.meta-ghcr.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.meta-dockerhub.outputs.tags }}
+        run: |
+          create_manifest() {
+            local image="$1"
+            local tags="$2"
+            local metadata_file="$3"
+            local tag
+            local -a args=()
+
+            while IFS= read -r tag; do
+              if [ -n "$tag" ]; then
+                args+=("-t" "$tag")
+              fi
+            done <<< "$tags"
+
+            if [ "${#args[@]}" -eq 0 ]; then
+              echo "No manifest tags generated for ${image}" >&2
+              exit 1
+            fi
+
+            docker buildx imagetools create "${args[@]}" \
+              --metadata-file "$metadata_file" \
+              "${image}:build-${{ github.run_id }}-amd64" \
+              "${image}:build-${{ github.run_id }}-arm64" >&2
+
+            local digest
+            digest="$(jq -r '."containerimage.descriptor".digest' "$metadata_file")"
+            if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+              echo "Failed to read manifest digest for ${image}" >&2
+              exit 1
+            fi
+            printf '%s\n' "$digest"
+          }
+
+          create_manifest "$REGISTRY_IMAGE_GHCR" "$GHCR_TAGS" /tmp/ghcr-metadata.json > ghcr-digest.txt
+          create_manifest "$REGISTRY_IMAGE_DOCKERHUB" "$DOCKERHUB_TAGS" /tmp/dockerhub-metadata.json > dockerhub-digest.txt
+
+      - name: Sign images
+        run: |
+          cosign sign --yes "${REGISTRY_IMAGE_GHCR}@$(cat ghcr-digest.txt)"
+          cosign sign --yes "${REGISTRY_IMAGE_DOCKERHUB}@$(cat dockerhub-digest.txt)"
