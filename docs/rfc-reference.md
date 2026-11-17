@@ -118,6 +118,12 @@ CLI 使用 `cert issue -c dns_persist`，首次人工发布并确认，后续 `r
 - 检查预期 TXT 值而非答案一致率；考虑权威 DNS、递归缓存、负缓存、超时和取消。
 - 本地传播检查通过不代表 CA 验证成功；以授权与订单状态作为签发进度依据。
 
+### 请求结果和 TTL 原文核对（2026-11-18）
+
+- [RFC 9110 §15.5.9](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.5.9) 的 408 表示未在服务端等待期间收到完整请求，允许客户端重新发送；[RFC 6585 §4](https://www.rfc-editor.org/rfc/rfc6585.html#section-4) 的 429 表示限流，可携带 Retry-After。它们不必然证明原操作已生效。本项目统一采用保守恢复策略：408/429 不作为解除已提交证据的明确拒绝，吊销保留 Pending，challenge ack/finalize 保留 Submitted，并保存收到的查询等待下限；不把暂时性响应当作可清理申请的终态证据。
+- [RFC 8555 §6.6](https://www.rfc-editor.org/rfc/rfc8555.html#section-6.6) 要求限流错误类型并建议提供 Retry-After；[§7.6](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.6) 规定吊销成功为 200，已吊销示例为 400/alreadyRevoked。已有不确定尝试不能被后来一次明确拒绝抹除。
+- [RFC 2181 §8](https://www.rfc-editor.org/rfc/rfc2181.html#section-8) 允许 TTL 0 到 2³¹−1；本项目接受这一范围，后端可施加厂商限制。TTL 是缓存上限，不是本地传播等待或 CA 验证成功的保证。
+
 ## 6. DNS provider 复用来源
 
 外部命令接口草案：[RFC 0001：AsterACME DNS Provider Protocol (ADPP)](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)。该RFC已接受；实现、测试和真实DNS/CA互操作证据仍分别记录。

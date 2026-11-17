@@ -124,6 +124,11 @@ impl IssueService {
                 }) = &error
                     && (400..500).contains(status)
                 {
+                    if !crate::transport::definitive_rejection(*status) {
+                        schedule_retry(record, retry_after.as_ref(), execution.poll_interval);
+                        session.save(record).await?;
+                        return Err(error);
+                    }
                     match problem.kind {
                         ProblemKind::BadCsr => {
                             record.finalize_rejection =

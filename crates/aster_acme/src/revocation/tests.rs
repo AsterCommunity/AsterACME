@@ -682,41 +682,34 @@ async fn local_signing_failure_creates_no_intent_and_confirmed_result_needs_no_s
 
 #[tokio::test]
 async fn unexpected_success_redirects_nonproblem_errors_and_server_errors_stay_pending() {
-    for (response, definite_rejection) in [
-        (ResponseTemplate::new(201), false),
-        (ResponseTemplate::new(204), false),
-        (ResponseTemplate::new(302), false),
-        (
-            ResponseTemplate::new(403).set_body_string("not a problem"),
-            false,
-        ),
-        (problem(500, "serverInternal"), false),
-        (problem(429, "rateLimited"), true),
+    for response in [
+        ResponseTemplate::new(201),
+        ResponseTemplate::new(204),
+        ResponseTemplate::new(302),
+        ResponseTemplate::new(403).set_body_string("not a problem"),
+        problem(500, "serverInternal"),
+        problem(408, "connection"),
+        problem(429, "rateLimited"),
     ] {
         let mut f = Fixture::new().await;
         f.reply(response).await;
         let service = f.service(RevocationSigningMethod::CertificateKey);
-        let result = service.revoke(&mut f.session, None, &execution()).await;
-        if definite_rejection {
-            assert!(matches!(
-                result,
-                Err(IssueError::Transport(TransportError::Problem {
-                    status: 429,
-                    ..
-                }))
-            ));
-            assert_eq!(
-                f.session.revocation().await.unwrap().state,
-                RevocationState::NotRequested
-            );
-        } else {
-            assert!(matches!(result, Err(IssueError::RevocationUncertain(_))));
-            assert_eq!(
-                f.session.revocation().await.unwrap().state,
-                RevocationState::Pending
-            );
-        }
+        assert!(matches!(
+            service.revoke(&mut f.session, None, &execution()).await,
+            Err(IssueError::RevocationUncertain(_))
+        ));
+        let pending = f.session.revocation().await.unwrap();
+        assert_eq!(pending.state, RevocationState::Pending);
+        assert!(pending.certificate_sha256.is_some());
+        assert!(pending.signer.is_some());
         assert_eq!(f.posts().await.len(), 1);
+        // A later definite refusal cannot erase this first uncertain attempt.
+        f.reply(problem(403, "unauthorized")).await;
+        assert!(matches!(
+            service.revoke(&mut f.session, None, &execution()).await,
+            Err(IssueError::RevocationUncertain(_))
+        ));
+        assert_eq!(f.session.revocation().await.unwrap(), pending);
     }
 }
 
@@ -746,5 +739,23 @@ async fn expired_deadline_and_oversized_certificate_never_request_a_nonce_or_sub
                 .iter()
                 .all(|r| r.method == "GET")
         );
+    }
+}
+
+#[tokio::test]
+async fn fresh_definitive_problem_statuses_clear_only_this_attempts_intent() {
+    for status in [400, 401, 403, 404, 409, 422, 499] {
+        let mut fixture = Fixture::new().await;
+        fixture.reply(problem(status, "unauthorized")).await;
+        let service = fixture.service(RevocationSigningMethod::CertificateKey);
+        assert!(
+            matches!(service.revoke(&mut fixture.session, None, &execution()).await,
+            Err(IssueError::Transport(TransportError::Problem { status: observed, .. })) if observed == status)
+        );
+        assert_eq!(
+            fixture.session.revocation().await.unwrap(),
+            RevocationRecord::default()
+        );
+        assert_eq!(fixture.posts().await.len(), 1);
     }
 }

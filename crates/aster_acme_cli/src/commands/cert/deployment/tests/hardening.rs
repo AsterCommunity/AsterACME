@@ -122,7 +122,8 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
 }
 
 #[tokio::test]
-async fn open_failure_keeps_saved_history_but_reports_current_failure_and_runs_next_target() {
+async fn unverifiable_ownership_keeps_history_and_reports_each_target_until_directory_is_restored()
+{
     let fixture = Fixture::new().await;
     let first = fixture.add("first", Vec::new(), 0).await;
     fixture.add("second", child_command("success"), 0).await;
@@ -148,7 +149,12 @@ async fn open_failure_keeps_saved_history_but_reports_current_failure_and_runs_n
             .unwrap()
             .contains("cannot resolve deployment directory")
     );
-    assert!(json["deployments"][1]["execution_error"].is_null());
+    assert!(
+        json["deployments"][1]["execution_error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot prove deployment ownership")
+    );
     assert_eq!(json["deployments"][1]["phase"], "deployed");
     let human = crate::commands::cert::render::render(
         &report,
@@ -160,6 +166,22 @@ async fn open_failure_keeps_saved_history_but_reports_current_failure_and_runs_n
         fixture.status("first").await.phase,
         DeploymentPhase::Deployed
     );
+    assert!(!json["events"].as_array().unwrap().iter().any(|event| {
+        event["message"]
+            .as_str()
+            .unwrap()
+            .contains("reload succeeded")
+    }));
+    std::fs::rename(first.with_extension("unavailable"), &first).unwrap();
+    let repaired = manage_binding(&fixture, &["run"]).await.unwrap();
+    let json: serde_json::Value = serde_json::from_str(
+        &crate::commands::cert::render::render(
+            &repaired,
+            crate::common::session::Format::plain(true),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(json["events"].as_array().unwrap().iter().any(|event| {
         event["deployment"] == "second"
             && event["message"]

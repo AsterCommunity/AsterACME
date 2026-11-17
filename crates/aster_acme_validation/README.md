@@ -8,7 +8,7 @@ Features are intentionally explicit:
 - `precheck-caa` provides CAA policy observations and system-resolver diagnostics.
 - `precheck-dns` provides TXT observations through the shared precheck runner.
 
-The default feature set is empty and does not pull Hickory or the ACME client into an embedded application. Callers invoke the runner explicitly, provide an execution deadline and cancellation token, and decide how to present advisory reports. A failed or timed-out local check never authorizes or rejects a CA request by itself.
+The default feature set is empty and does not pull Tokio, tokio-util, Hickory or the ACME client into an embedded application. Callers invoke the runner explicitly, provide an execution deadline and cancellation token, and decide how to present advisory reports. A failed or timed-out local check never authorizes or rejects a CA request by itself.
 
 The crate uses `aster_acme_dns` for publication data and `aster_acme` for solver and precheck contracts. The CLI owns HTTP/webroot/listener implementations and provider profile selection.
 

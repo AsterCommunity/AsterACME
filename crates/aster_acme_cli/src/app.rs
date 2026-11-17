@@ -33,7 +33,7 @@ pub(crate) enum Command {
     /// Manage DNS provider profiles.
     Provider {
         #[command(subcommand)]
-        command: crate::commands::provider::ProviderCommand,
+        command: crate::commands::provider::args::ProviderCommand,
     },
     /// Show version, revision, target, profile, enabled features and build time.
     Version {

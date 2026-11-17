@@ -24,6 +24,11 @@ def main():
         if feature:
             command += ["--features", feature]
         subprocess.run(command, cwd=ROOT, check=True)
+    for feature in [None, "dns01", "precheck-caa", "precheck-dns"]:
+        command = ["cargo", "test", "-p", "aster_acme_validation", "--no-default-features", "--locked", "--lib"]
+        if feature:
+            command += ["--features", feature]
+        subprocess.run(command, cwd=ROOT, check=True)
     for package in ("aster_acme", "aster_acme_validation"):
         tree = subprocess.run(
             ["cargo", "tree", "-p", package, "--no-default-features", "--locked", "--edges", "normal", "--prefix", "none", "--format", "{p}"],
@@ -31,6 +36,10 @@ def main():
         ).stdout
         if any(line.split()[0] == "hickory-resolver" for line in tree.splitlines()):
             raise SystemExit(f"{package}: disabled prechecks must not include the DNS resolver")
+        if package == "aster_acme_validation" and any(
+            line.split()[0] in {"tokio", "tokio-util"} for line in tree.splitlines()
+        ):
+            raise SystemExit("validation: disabled features must not include an async runtime")
     for feature in [None, "cloudflare"]:
         command = ["cargo", "test", "-p", "aster_acme_dns_builtin", "--no-default-features", "--locked", "--lib"]
         if feature:
@@ -48,7 +57,7 @@ def main():
         ).stdout
         if any(line.split()[0] in {"reqwest", "aster_forge_http"} for line in tree.splitlines()):
             raise SystemExit("builtin provider state machines must not acquire an HTTP client dependency")
-    print("Optional precheck/provider features: all configurations compile; disabled libraries exclude Hickory; CLI resolver supports external DNS independently")
+    print("Optional precheck/provider features: all configurations compile; disabled libraries exclude Hickory and empty validation excludes Tokio; CLI resolver supports external DNS independently")
 
 
 if __name__ == "__main__":

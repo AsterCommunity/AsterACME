@@ -34,13 +34,13 @@ pub(in crate::commands::cert::render) struct BatchEntryOutput<'a> {
 }
 
 #[derive(Serialize)]
-pub(in crate::commands::cert::render) struct BatchOutput<'a> {
+pub(in crate::commands) struct BatchOutput<'a> {
     status: BatchDisposition,
     summary: RenewalSummary,
     results: Vec<BatchEntryOutput<'a>>,
 }
 
-pub(in crate::commands::cert::render) fn batch_output<'a>(
+pub(in crate::commands) fn batch_output<'a>(
     report: &'a RenewalBatch,
     data_dir: &std::path::Path,
 ) -> BatchOutput<'a> {

@@ -815,7 +815,7 @@ impl LocalFixture {
             )
             .await
             .unwrap();
-            crate::commands::cert::validation::bound_provider_configuration(
+            crate::commands::cert::validation::provider::bound_provider_configuration(
                 Some("test-provider"),
                 &self.settings.data_dir,
             )

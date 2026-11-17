@@ -296,15 +296,7 @@ async fn classify(
             ..
         })) if problem.kind == ProblemKind::AlreadyRevoked => {}
         Err(IssueError::Transport(error)) => {
-            if previous.state == RevocationState::NotRequested
-                && matches!(
-                    error,
-                    TransportError::Problem {
-                        status: 400..=499,
-                        ..
-                    }
-                )
-            {
+            if previous.state == RevocationState::NotRequested && error.is_definitive_rejection() {
                 session
                     .save_revocation(&RevocationRecord::default())
                     .await?;

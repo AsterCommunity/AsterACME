@@ -1,11 +1,13 @@
 //! Unix publication stays relative to opened directories, never reopens by path.
-use crate::issuance::deployment::publication::{inspect_destination, parent};
+use crate::issuance::deployment::publication::{
+    ExpectedFile, inspect_destination, parent, verify_contents,
+};
 use crate::issuance::{IssueError, failure};
-use rustix::fs::{AtFlags, Mode, OFlags, open, openat, renameat, statat, unlinkat};
+use rustix::fs::{AtFlags, Mode, OFlags, fstat, open, openat, renameat, statat, unlinkat};
 use std::{
     ffi::OsString,
     fs::{self, File},
-    io,
+    io::{self, Seek as _, SeekFrom},
     os::unix::fs::MetadataExt as _,
     path::Path,
 };
@@ -21,6 +23,69 @@ pub(super) struct Temporary {
     #[cfg(test)]
     path: PathBuf,
     committed: bool,
+}
+
+pub(super) struct Published {
+    directory: File,
+    file: File,
+    destination: OsString,
+    identity: rustix::fs::Stat,
+}
+
+impl Published {
+    pub(super) fn verify(&self, path: &Path, expected: &ExpectedFile) -> Result<(), IssueError> {
+        self.check_identity(path)?;
+        // Retain the staged read/write handle so requested mode 000 or write-only
+        // permissions do not prevent readback. The pathname must still identify it.
+        let mut file = self
+            .file
+            .try_clone()
+            .map_err(|error| failure(&error.to_string()))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| failure(&error.to_string()))?;
+        verify_contents(file, expected, path)?;
+        self.check_identity(path)
+    }
+
+    fn check_identity(&self, path: &Path) -> Result<(), IssueError> {
+        inspect_destination(path).map_err(|error| {
+            failure(&format!(
+                "deployment verification failed at {}: {error}",
+                path.display()
+            ))
+        })?;
+        let parent_metadata =
+            fs::metadata(parent(path)?).map_err(|error| failure(&error.to_string()))?;
+        let opened = self
+            .directory
+            .metadata()
+            .map_err(|error| failure(&error.to_string()))?;
+        if (parent_metadata.dev(), parent_metadata.ino()) != (opened.dev(), opened.ino()) {
+            return Err(failure(
+                "deployment parent directory changed before verification",
+            ));
+        }
+        let stat = statat(
+            &self.directory,
+            &self.destination,
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| {
+            failure(&format!(
+                "deployment verification failed at {}: {error}",
+                path.display()
+            ))
+        })?;
+        if !rustix::fs::FileType::from_raw_mode(stat.st_mode).is_file()
+            || (stat.st_dev, stat.st_ino) != (self.identity.st_dev, self.identity.st_ino)
+        {
+            return Err(failure(&format!(
+                "deployment verification failed at {}: file identity changed",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Temporary {
@@ -48,7 +113,7 @@ impl Temporary {
             openat(
                 &directory,
                 &name,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::RUSR | Mode::WUSR,
             )
             .map_err(io::Error::from)
@@ -105,7 +170,16 @@ impl Temporary {
         }
     }
 
-    pub(super) fn persist(mut self, path: &Path) -> Result<(), IssueError> {
+    pub(super) fn persist(mut self, path: &Path) -> Result<Published, IssueError> {
+        let directory = self
+            .directory
+            .try_clone()
+            .map_err(|error| failure(&error.to_string()))?;
+        let file = self
+            .file
+            .try_clone()
+            .map_err(|error| failure(&error.to_string()))?;
+        let identity = fstat(&self.file).map_err(|error| failure(&error.to_string()))?;
         renameat(
             &self.directory,
             &self.name,
@@ -119,9 +193,15 @@ impl Temporary {
             ))
         })?;
         self.committed = true;
-        self.directory
-            .sync_all()
-            .map_err(|error| failure(&format!("deployment sync parent directory failed: {error}")))
+        self.directory.sync_all().map_err(|error| {
+            failure(&format!("deployment sync parent directory failed: {error}"))
+        })?;
+        Ok(Published {
+            directory,
+            file,
+            destination: self.destination.clone(),
+            identity,
+        })
     }
 }
 

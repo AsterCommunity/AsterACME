@@ -253,9 +253,11 @@ impl IssueRecord {
                 .order
                 .as_ref()
                 .is_some_and(|order| matches!(order.status, OrderStatus::Valid))
-            && (self.creation_failure.as_ref().is_some_and(|failure| {
-                (400..500).contains(&failure.status) && !matches!(failure.status, 408 | 429)
-            }) || self.finalize_rejection.is_some()
+            && (self
+                .creation_failure
+                .as_ref()
+                .is_some_and(|failure| crate::transport::definitive_rejection(failure.status))
+                || self.finalize_rejection.is_some()
                 || self.authorization_failure().is_some()
                 || self
                     .order

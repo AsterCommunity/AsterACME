@@ -114,8 +114,10 @@ pub(super) fn check_conflicts(
                 continue;
             }
             for path in paths(&existing.target) {
-                // A temporarily unavailable unrelated target must not prevent new configurations.
-                let path = normalized(&path).unwrap_or(path);
+                let path = normalized(&path).map_err(|error| failure(&format!(
+                    "cannot prove deployment ownership for certificate '{}' deployment '{}': {error}",
+                    config.cert.name, existing.id
+                )))?;
                 if wanted.contains(&path) {
                     return Err(failure(&format!(
                         "deployment destination {} conflicts with certificate '{}' deployment '{}'",

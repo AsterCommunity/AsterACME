@@ -370,7 +370,8 @@ async fn dns_target_mappings_validate_multi_domain_and_reject_conflicts() {
         .await
         .unwrap();
     let parsed =
-        crate::commands::cert::validation::parse_dns_targets(&options.dns_targets).unwrap();
+        crate::commands::cert::validation::provider::parse_dns_targets(&options.dns_targets)
+            .unwrap();
     assert_eq!(parsed.len(), 3);
     assert_eq!(parsed["example.com"], "verify.validation.net.");
     assert_eq!(parsed["*.example.com"], "verify.validation.net.");
@@ -390,7 +391,7 @@ async fn dns_target_mappings_validate_multi_domain_and_reject_conflicts() {
         vec!["foo.*.example.com=target.net"],
     ] {
         assert!(
-            crate::commands::cert::validation::parse_dns_targets(
+            crate::commands::cert::validation::provider::parse_dns_targets(
                 &values.into_iter().map(str::to_owned).collect::<Vec<_>>()
             )
             .is_err()

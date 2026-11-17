@@ -130,13 +130,16 @@ pub(in crate::commands::cert) async fn transact(
     Ok(attach_deployment_results(outcome, store, &execution).await)
 }
 
-async fn validate_new_provider_binding(start: &Start, data_dir: &std::path::Path) -> CliResult<()> {
+pub(in crate::commands::cert) async fn validate_new_provider_binding(
+    start: &Start,
+    data_dir: &std::path::Path,
+) -> CliResult<()> {
     let Start::Issue(IssueInput::New { request, .. }) = start else {
         return Ok(());
     };
     let method = crate::commands::cert::validation::ValidationMethod::from_id(&request.solver_id)?;
     if method == crate::commands::cert::validation::ValidationMethod::DnsProvider {
-        crate::commands::cert::validation::validate_provider_binding(
+        crate::commands::cert::validation::provider::validate_provider_binding(
             &request.solver_config,
             data_dir,
         )

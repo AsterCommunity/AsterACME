@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **DNS 发布 TTL** — 通过 `provider add/update --ttl-seconds` 配置 TXT 请求 TTL（默认 120，RFC 2181 范围 0–2147483647），恢复和 Profile 修改不改变已有发布计划中的 TTL。厂商限制仍归各 backend，本地传播观察保留现有建议性行为。
+
+### 变更
+
+- **部署核验** — reload 前对整组发布文件核验暂存内容、身份和适用权限；失败报告已完成替换的路径，继续保留部分文件集和整组重试契约，不承诺整组原子性或自动回滚。已有目的路径无法规范化、不能证明所有权无冲突时，拒绝配置及部署；恢复访问或移除失效绑定后再重试。
+- **可选验证依赖** — `aster_acme_validation` 空 feature 不再引入生产 Tokio 依赖，独立检查并测试可选 feature 组合。
+
+### 修复
+
+- **ACME mutation 恢复** — 408/429 保留吊销 Pending、challenge/finalize Submitted 证据，不作为明确拒绝；保留 ack/finalize 等待下限、已有不确定吊销状态和显式重试边界。
+- **维护诊断** — 单证书 refresh 失败后持久状态读回也失败时，同时保留两个错误，将最新调度时间标为不可用，并继续处理其余证书。
+
 ## [0.1.0-alpha.2] - 2026-11-18
 
 ### 新增
@@ -55,6 +69,6 @@
 
 交叉编译及本地 mock 不代表原生平台或公网 CA 验收。
 
-[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.2...HEAD
 [0.1.0-alpha.2]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

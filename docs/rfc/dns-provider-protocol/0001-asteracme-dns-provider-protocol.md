@@ -191,7 +191,10 @@ strings, booleans, finite numbers, arrays or tables; null and native TOML
 datetime values are not part of this profile schema. `propagation_timeout` is
 the single advisory DNS probe budget (default 5 seconds; range 1–3600), while
 `propagation_interval` is the delay before that probe (default 5 seconds; range
-1–60). Existing explicit values are retained without migration. Both remain
+1–60). `ttl_seconds` is the requested TTL (default 120, range 0–2147483647 per
+RFC 2181 section 8); backends own vendor limits. It is frozen into each
+publication plan and never changed by a profile edit during recovery of that
+publication. Existing explicit values are retained without migration. Both remain
 bounded by the operation budget. A saved issuance records the profile ID and schema version;
 later runs use the current values for that profile. Profile updates therefore
 affect resume, renewal, and pending cleanup invocations. Removing a profile

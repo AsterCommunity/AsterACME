@@ -1,7 +1,7 @@
 //! Edit a private draft; only the caller may commit it after a complete snapshot check.
 use crate::commands::provider::{
+    execute::validate_executable,
     interaction::{Back, Prompts},
-    validate_executable,
 };
 use crate::common::{error::CliResult, output::safe, terminal::Canceled};
 use aster_acme_cli_storage::provider::ProviderProfile;

@@ -6,6 +6,15 @@ use thiserror::Error;
 /// Protocol/service failures without private key material.
 #[derive(Debug, Error)]
 pub enum IssueError {
+    /// The maintenance operation failed and its latest durable state could not be read.
+    #[error("maintenance failed: {operation}; latest saved state could not be read: {readback}")]
+    MaintenanceReadback {
+        /// Original refresh failure, preserved independently of the later storage error.
+        #[source]
+        operation: Box<IssueError>,
+        /// Failure while observing the durable result under the same lease.
+        readback: Box<IssueError>,
+    },
     /// Renewal policy denied another attempt; this is not a filesystem failure.
     #[error(transparent)]
     RenewalAdmission(#[from] crate::renewal::admission::AdmissionError),

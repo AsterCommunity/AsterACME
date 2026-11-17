@@ -47,8 +47,7 @@ pub(crate) fn cycle(
             let exit_status = crate::commands::daemon::exit_status(report);
             let failed = exit_status == crate::common::session::ExitStatus::Failed;
             if output_session.is_json() {
-                let rendered = render(report, Format::plain(true))?;
-                let value: serde_json::Value = serde_json::from_str(&rendered)?;
+                let value = report_output(report)?;
                 output_session.stream_json(&serde_json::json!({
                     "event": "cycle",
                     "at": rfc3339(at)?,
@@ -184,32 +183,9 @@ pub(crate) fn render(
     format: Format,
 ) -> CliResult<String> {
     if format.json {
-        let ari_value: serde_json::Value =
-            serde_json::from_str(&render_ari(&report.ari, Format::plain(true))?)?;
-        let renewal_value: serde_json::Value =
-            serde_json::from_str(&crate::commands::cert::render::batch::batch(
-                &report.renewals,
-                Format::plain(true),
-                &report.data_dir,
-            )?)?;
-        let deployment_values = report
-            .deployment_retries
-            .iter()
-            .map(|deployment| {
-                crate::commands::cert::render::deployment::deployment_report(
-                    deployment,
-                    Format::plain(true),
-                )
-                .and_then(|json| serde_json::from_str(&json).map_err(Into::into))
-            })
-            .collect::<CliResult<Vec<serde_json::Value>>>()?;
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "cancelled": report.ari.cancelled || report.renewals.was_cancelled() || report.deployment_cancelled,
-            "ari": ari_value,
-            "renewal": renewal_value,
-            "deployment_retries": deployment_values,
-        }))?);
+        return Ok(serde_json::to_string_pretty(&report_output(report)?)?);
     }
+
     if report.ari.entries.is_empty()
         && report.renewals.is_empty()
         && report.deployment_retries.is_empty()
@@ -251,16 +227,7 @@ pub(crate) fn render(
 
 fn render_ari(report: &aster_acme::maintenance::Report, format: Format) -> CliResult<String> {
     if format.json {
-        let entries = report.entries.iter().map(|entry| {
-            let error = match &entry.outcome {
-                Outcome::Failed(error) => Some(serde_json::json!({"message": error.to_string()})),
-                _ => None,
-            };
-            Ok(serde_json::json!({"name":entry.name.as_str(),"operation_id":entry.operation_id,"status":status(&entry.outcome),"error":error,"renew_at":entry.renew_at.map(|at|at.format(&time::format_description::well_known::Rfc3339)).transpose()?,"next_check_at":entry.next_check_at.map(|at|at.format(&time::format_description::well_known::Rfc3339)).transpose()?}))
-        }).collect::<CliResult<Vec<_>>>()?;
-        return Ok(serde_json::to_string(
-            &serde_json::json!({"entries":entries,"cancelled":report.cancelled}),
-        )?);
+        return Ok(serde_json::to_string(&ari_output(report)?)?);
     }
     if report.entries.is_empty() {
         return Ok("No ARI refreshes were due.".into());
@@ -328,4 +295,79 @@ fn render_ari(report: &aster_acme::maintenance::Report, format: Format) -> CliRe
     }
     lines.push(output::tips("Unchanged ARI windows retain the selected renewal time. Failures retain existing plans; manual validation methods are skipped and eligible renewals run configured deployments.", format.color));
     Ok(lines.join("\n"))
+}
+
+#[derive(serde::Serialize)]
+struct MaintenanceOutput<'a> {
+    cancelled: bool,
+    ari: AriOutput<'a>,
+    renewal: crate::commands::cert::render::batch::BatchOutput<'a>,
+    deployment_retries: Vec<crate::commands::cert::render::deployment::DeploymentReportOutput<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct AriOutput<'a> {
+    entries: Vec<AriEntryOutput<'a>>,
+    cancelled: bool,
+}
+
+fn report_output(
+    report: &crate::commands::daemon::DaemonReport,
+) -> CliResult<MaintenanceOutput<'_>> {
+    Ok(MaintenanceOutput {
+        cancelled: report.ari.cancelled
+            || report.renewals.was_cancelled()
+            || report.deployment_cancelled,
+        ari: ari_output(&report.ari)?,
+        renewal: crate::commands::cert::render::batch::batch_output(
+            &report.renewals,
+            &report.data_dir,
+        ),
+        deployment_retries: report
+            .deployment_retries
+            .iter()
+            .map(crate::commands::cert::render::deployment::deployment_output)
+            .collect(),
+    })
+}
+
+#[derive(serde::Serialize)]
+struct AriEntryOutput<'a> {
+    name: &'a str,
+    operation_id: &'a str,
+    status: &'static str,
+    error: Option<AriErrorOutput>,
+    renew_at: Option<String>,
+    next_check_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct AriErrorOutput {
+    message: String,
+}
+
+fn ari_output(report: &aster_acme::maintenance::Report) -> CliResult<AriOutput<'_>> {
+    let entries = report
+        .entries
+        .iter()
+        .map(|entry| {
+            Ok(AriEntryOutput {
+                name: entry.name.as_str(),
+                operation_id: &entry.operation_id,
+                status: status(&entry.outcome),
+                error: match &entry.outcome {
+                    Outcome::Failed(error) => Some(AriErrorOutput {
+                        message: error.to_string(),
+                    }),
+                    _ => None,
+                },
+                renew_at: entry.renew_at.map(rfc3339).transpose()?,
+                next_check_at: entry.next_check_at.map(rfc3339).transpose()?,
+            })
+        })
+        .collect::<CliResult<Vec<_>>>()?;
+    Ok(AriOutput {
+        entries,
+        cancelled: report.cancelled,
+    })
 }

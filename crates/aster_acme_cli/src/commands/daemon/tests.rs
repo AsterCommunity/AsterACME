@@ -321,3 +321,32 @@ fn streamed_cycle_status_reflects_cancellation_in_any_stage() {
         assert_eq!(stderr.text(), "");
     }
 }
+
+#[test]
+fn streamed_report_matches_standalone_document_for_every_ari_outcome() {
+    for outcome in [
+        Outcome::Refreshed,
+        Outcome::RetryScheduled,
+        Outcome::Unavailable,
+        Outcome::Skipped,
+        Outcome::Cancelled,
+        Outcome::NotStarted,
+        Outcome::Failed(IssueError::MaintenanceReadback {
+            operation: Box::new(IssueError::InvalidInput("original failure")),
+            readback: Box::new(IssueError::InvalidInput("readback failure")),
+        }),
+    ] {
+        let report = daemon_report(Report {
+            entries: vec![entry(outcome)],
+            cancelled: false,
+        });
+        let standalone: serde_json::Value =
+            serde_json::from_str(&render::render(&report, Format::plain(true)).unwrap()).unwrap();
+        let (output, stdout, stderr) = crate::common::session::tests::session(true);
+        render::cycle(&output, 42, &Ok(report)).unwrap();
+        let streamed: serde_json::Value = serde_json::from_str(stdout.text().trim()).unwrap();
+        assert_eq!(streamed["report"], standalone);
+        assert_eq!(streamed["cycle"], 42);
+        assert_eq!(stderr.text(), "");
+    }
+}

@@ -32,7 +32,7 @@ impl Foreground<'_> {
         let solver = if crate::commands::cert::validation::ValidationMethod::from_record(&saved)?
             == crate::commands::cert::validation::ValidationMethod::DnsProvider
         {
-            crate::commands::cert::validation::provider_adapter(
+            crate::commands::cert::validation::provider::provider_adapter(
                 &saved,
                 self.context
                     .config_path
