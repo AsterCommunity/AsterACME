@@ -300,9 +300,21 @@ async fn cleanup_profile(
             incomplete = true;
             break;
         }
-        let session = issues
+        let session = match issues
             .open_observation(&record.name, &record.operation_id)
-            .await?;
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                cleanup.push(CleanupView {
+                    certificate: record.name.as_str().into(),
+                    operation: record.operation_id,
+                    completed: false,
+                    error: Some(error.to_string()),
+                });
+                continue;
+            }
+        };
         let result = crate::commands::cert::validation::provider::cleanup_provider(
             root,
             session.as_ref(),

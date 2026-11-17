@@ -218,7 +218,11 @@ fn commit_failure_can_leave_a_partial_set_but_releases_staging_and_explicit_retr
 
 #[test]
 fn post_commit_verification_rejects_changed_missing_and_replaced_files() {
-    for fault in ["contents", "missing", "identity"] {
+    #[cfg(unix)]
+    let faults = vec!["contents", "missing", "identity"];
+    #[cfg(not(unix))]
+    let faults = vec!["contents", "missing"];
+    for fault in faults {
         let root = tempfile::tempdir().unwrap();
         let prepared = PreparedPublication::prepare(
             &DeploymentTarget::Directory {

@@ -73,7 +73,7 @@ pub(in crate::commands::cert) fn provider_configuration(
     .map_err(|_| IssueError::InvalidInput("cannot encode DNS provider configuration"))
 }
 
-pub(in crate::commands::cert) async fn bound_provider_configuration(
+pub(in crate::commands) async fn bound_provider_configuration(
     provider: Option<&str>,
     root: &std::path::Path,
 ) -> Result<serde_json::Value, IssueError> {

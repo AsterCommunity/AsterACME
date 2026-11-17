@@ -8,6 +8,7 @@ use crate::{
     },
     common::{context::CommandContext, session::Format},
 };
+use aster_acme::storage::issuance::IssueStore;
 use clap::Parser;
 fn command(words: &[&str]) -> crate::commands::provider::args::ProviderCommand {
     let args = Args::try_parse_from(
@@ -238,6 +239,40 @@ fn profile_and_cleanup_reports_escape_untrusted_fields_and_keep_machine_output_p
     assert!(removed.contains("Removed provider profile prod\\nunsafe"));
 }
 
+#[test]
+fn backend_and_unrecognized_operation_reports_keep_their_rendering_boundaries() {
+    let descriptors = crate::commands::provider::runtime::registry()
+        .unwrap()
+        .descriptors();
+    let report = ProviderReport {
+        backends: descriptors.clone(),
+        operation: "backends",
+        profiles: Vec::new(),
+        removed: None,
+        cleanup: Vec::new(),
+        cancelled: false,
+        incomplete: false,
+    };
+    let output = render(&report, Format::plain(false)).unwrap();
+    assert!(output.contains("BACKEND ID") && output.contains("CONFIGURATION"));
+    for descriptor in descriptors {
+        assert!(output.contains(descriptor.id));
+        assert!(output.contains(descriptor.label));
+        for field in descriptor.fields {
+            assert!(output.contains(field.name));
+        }
+    }
+
+    let mut report = report;
+    report.operation = "future-operation";
+    report.profiles.push(untrusted_profile_view());
+    assert!(
+        render(&report, Format::plain(false))
+            .unwrap()
+            .contains("DNS provider profiles:")
+    );
+}
+
 #[tokio::test]
 async fn list_is_a_sorted_table_and_show_exposes_the_profile_file_with_shared_styles() {
     let temp = tempfile::tempdir().unwrap();
@@ -391,6 +426,184 @@ async fn cleanup_command_is_offline_and_reports_all_terminal_results() {
     .unwrap();
     assert_eq!(report.operation, "cleanup");
     assert!(report.cleanup.is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_filters_legacy_foreign_idle_and_nonterminal_requests() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_str().unwrap();
+    let executable = std::env::current_exe().unwrap();
+    let cli = CommandContext::new(true);
+    execute(
+        command(&[
+            "add",
+            "prod",
+            "--exec",
+            executable.to_str().unwrap(),
+            "--data-dir",
+            root,
+            "--json",
+        ]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    let account: aster_acme::account::AccountRecord = serde_json::from_value(serde_json::json!({
+        "key_algorithm":"ecdsa-p256", "account_id":"test-account",
+        "directory_url":"https://ca.example/directory",
+        "account_url":"https://ca.example/account/1", "key_thumbprint":"test-thumbprint",
+        "contacts":[], "server_contacts":null, "last_status":"valid",
+        "deactivation":"not_requested", "key_rotation":null, "accepted_terms_url":null,
+        "state":"registered"
+    }))
+    .unwrap();
+    let issues = aster_acme_cli_storage::issuance::CliIssueStore::new(
+        temp.path().into(),
+        std::time::Duration::from_secs(1),
+    );
+    let config = crate::commands::cert::validation::provider::bound_provider_configuration(
+        Some("prod"),
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    for (name, solver, provider, cleanup_pending) in [
+        ("legacy", "dns_external", "prod", true),
+        ("foreign", "dns_provider", "other", true),
+        ("idle", "dns_provider", "prod", false),
+        ("nonterminal", "dns_provider", "prod", true),
+    ] {
+        let request = aster_acme::issuance::IssueRequest {
+            challenge: aster_acme::challenge::ChallengeKind::Dns01,
+            solver_id: solver.into(),
+            solver_config: if solver == "dns_provider" && provider == "prod" {
+                config.clone()
+            } else {
+                serde_json::json!({"provider_instance_id":provider})
+            },
+            name: aster_acme::issuance::CertificateName::new(name).unwrap(),
+            identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            account_name: "default".into(),
+        };
+        let session = issues.create(&request, &account).await.unwrap();
+        let mut record = session.record().await.unwrap();
+        if name == "nonterminal" {
+            record.authorizations = serde_json::from_value(serde_json::json!([{
+                "url":"https://ca.example/auth",
+                "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
+                "challenge_url":null,"validation_requirement":null,
+                "cleanup_pending":cleanup_pending,"acknowledgement":"not_submitted"
+            }])).unwrap();
+        }
+        if name != "nonterminal" && cleanup_pending {
+            record.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+                status: 400,
+                problem: None,
+                retry_at: None,
+            });
+        }
+        session.save(&record).await.unwrap();
+    }
+    let report = execute(
+        command(&["cleanup", "prod", "--data-dir", root, "--json"]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    assert!(report.cleanup.is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_records_open_failures_and_continues_to_later_matching_certificates() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_str().unwrap();
+    let executable = std::env::current_exe().unwrap();
+    let cli = CommandContext::new(true);
+    execute(
+        command(&[
+            "add",
+            "prod",
+            "--exec",
+            executable.to_str().unwrap(),
+            "--data-dir",
+            root,
+            "--json",
+        ]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    let account: aster_acme::account::AccountRecord = serde_json::from_value(serde_json::json!({
+        "key_algorithm":"ecdsa-p256", "account_id":"test-account",
+        "directory_url":"https://ca.example/directory",
+        "account_url":"https://ca.example/account/1", "key_thumbprint":"test-thumbprint",
+        "contacts":[], "server_contacts":null, "last_status":"valid",
+        "deactivation":"not_requested", "key_rotation":null, "accepted_terms_url":null,
+        "state":"registered"
+    }))
+    .unwrap();
+    let issues = aster_acme_cli_storage::issuance::CliIssueStore::new(
+        temp.path().into(),
+        std::time::Duration::from_secs(1),
+    );
+    let config = crate::commands::cert::validation::provider::bound_provider_configuration(
+        Some("prod"),
+        temp.path(),
+    )
+    .await
+    .unwrap();
+    let mut held = Vec::new();
+    for name in ["a-locked", "b-available"] {
+        let request = aster_acme::issuance::IssueRequest {
+            challenge: aster_acme::challenge::ChallengeKind::Dns01,
+            solver_id: "dns_provider".into(),
+            solver_config: config.clone(),
+            name: aster_acme::issuance::CertificateName::new(name).unwrap(),
+            identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            account_name: "default".into(),
+        };
+        let session = issues.create(&request, &account).await.unwrap();
+        let mut record = session.record().await.unwrap();
+        record.finalize_rejection = Some(aster_acme::issuance::RequestFailure {
+            status: 400,
+            problem: None,
+            retry_at: None,
+        });
+        record.authorizations = serde_json::from_value(serde_json::json!([{
+            "url":"https://ca.example/auth",
+            "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"invalid","challenges":[]},
+            "challenge_url":null,"validation_requirement":null,
+            "cleanup_pending":true,"acknowledgement":"not_submitted"
+        }])).unwrap();
+        session.save(&record).await.unwrap();
+        if name == "a-locked" {
+            held.push(session);
+        }
+    }
+    let report = execute(
+        command(&["cleanup", "prod", "--data-dir", root, "--json"]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.cleanup.len(), 2);
+    let locked = report
+        .cleanup
+        .iter()
+        .find(|entry| entry.certificate == "a-locked")
+        .unwrap();
+    assert!(!locked.completed);
+    assert!(locked.error.as_deref().unwrap().contains("lock"));
+    let later = report
+        .cleanup
+        .iter()
+        .find(|entry| entry.certificate == "b-available")
+        .unwrap();
+    assert!(!later.completed);
+    assert!(later.error.is_none());
+    drop(held);
 }
 
 #[tokio::test]

@@ -16,7 +16,7 @@ use std::{
 };
 #[cfg(unix)]
 mod anchored;
-#[cfg(not(unix))]
+#[cfg(any(not(unix), test))]
 mod portable;
 #[cfg(unix)]
 use crate::issuance::deployment::publication::anchored::{Published, Temporary};

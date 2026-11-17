@@ -130,7 +130,10 @@ pub(in crate::commands::cert) async fn transact(
     Ok(attach_deployment_results(outcome, store, &execution).await)
 }
 
-async fn validate_new_provider_binding(start: &Start, data_dir: &std::path::Path) -> CliResult<()> {
+pub(in crate::commands::cert) async fn validate_new_provider_binding(
+    start: &Start,
+    data_dir: &std::path::Path,
+) -> CliResult<()> {
     let Start::Issue(IssueInput::New { request, .. }) = start else {
         return Ok(());
     };

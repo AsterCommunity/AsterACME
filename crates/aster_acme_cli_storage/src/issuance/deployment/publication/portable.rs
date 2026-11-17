@@ -10,11 +10,11 @@ pub(super) struct Temporary(tempfile::NamedTempFile);
 pub(super) struct Published(File);
 impl Published {
     pub(super) fn verify(&self, path: &Path, expected: &ExpectedFile) -> Result<(), IssueError> {
-        inspect_destination(path)?;
+        inspect_destination(path).map_err(|error| path_error("verification", path, &error))?;
         let file = crate::state_file::open_regular(path)
-            .map_err(|error| path_error("verify open", path, &error))?;
+            .map_err(|error| path_error("verification open", path, &error))?;
         if !crate::state_file::same_file(&self.0, &file)
-            .map_err(|error| path_error("verify identity", path, &error))?
+            .map_err(|error| path_error("verification identity", path, &error))?
         {
             return Err(crate::issuance::failure(&format!(
                 "deployment verification failed at {}: file identity changed",
@@ -62,3 +62,6 @@ impl Temporary {
         Ok(Published(file))
     }
 }
+
+#[cfg(test)]
+mod tests;

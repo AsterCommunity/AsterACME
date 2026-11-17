@@ -355,6 +355,394 @@ async fn saved_definition_allows_token_rotation_but_rejects_backend_or_zone_chan
 }
 
 #[tokio::test]
+async fn provider_binding_validation_preserves_domain_targets_and_rejects_identity_drift() {
+    let fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        fixture.temp.path().into(),
+        Duration::from_secs(1),
+    );
+    store
+        .add(
+            "native".into(),
+            aster_acme_cli_storage::provider::ProviderProfile::builtin(
+                BACKEND_ID.into(),
+                config().custom,
+                vec![],
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut saved = crate::commands::cert::validation::provider::bound_provider_configuration(
+        Some("native"),
+        fixture.temp.path(),
+    )
+    .await
+    .unwrap();
+    saved["dns_targets"] = json!({"example.com":"verify.validation.net."});
+    crate::commands::cert::validation::provider::validate_provider_binding(
+        &saved,
+        fixture.temp.path(),
+    )
+    .await
+    .unwrap();
+
+    let mut bad_binding = saved.clone();
+    bad_binding["backend_binding"] = json!("different-account");
+    assert!(
+        crate::commands::cert::validation::provider::validate_provider_binding(
+            &bad_binding,
+            fixture.temp.path()
+        )
+        .await
+        .is_err()
+    );
+    let mut bad_backend = saved.clone();
+    bad_backend["backend_id"] = json!("com.astercosm.acme.adpp");
+    assert!(
+        crate::commands::cert::validation::provider::validate_provider_binding(
+            &bad_backend,
+            fixture.temp.path()
+        )
+        .await
+        .is_err()
+    );
+    let mut bad_version = saved.clone();
+    bad_version["backend_config_version"] = json!(99);
+    assert!(
+        crate::commands::cert::validation::provider::validate_provider_binding(
+            &bad_version,
+            fixture.temp.path()
+        )
+        .await
+        .is_err()
+    );
+    let mut changed_targets = saved.clone();
+    changed_targets["dns_targets"] = json!({"example.com":"verify.other.net."});
+    crate::commands::cert::validation::provider::validate_provider_binding(
+        &changed_targets,
+        fixture.temp.path(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn provider_binding_validation_rejects_malformed_and_missing_profiles() {
+    let fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        fixture.temp.path().into(),
+        Duration::from_secs(1),
+    );
+    store
+        .add(
+            "native".into(),
+            aster_acme_cli_storage::provider::ProviderProfile::builtin(
+                BACKEND_ID.into(),
+                config().custom,
+                vec![],
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let saved = crate::commands::cert::validation::provider::bound_provider_configuration(
+        Some("native"),
+        fixture.temp.path(),
+    )
+    .await
+    .unwrap();
+    for invalid in [json!({}), json!({"unexpected":true})] {
+        assert!(
+            crate::commands::cert::validation::provider::validate_provider_binding(
+                &invalid,
+                fixture.temp.path()
+            )
+            .await
+            .is_err()
+        );
+    }
+    let missing = fixture.temp.path().join("missing-profile-data");
+    assert!(
+        crate::commands::cert::validation::provider::validate_provider_binding(&saved, &missing)
+            .await
+            .is_err()
+    );
+    assert!(
+        crate::commands::cert::validation::provider::bound_provider_configuration(
+            Some("../bad"),
+            fixture.temp.path()
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        crate::commands::cert::validation::provider::bound_provider_configuration(
+            Some("missing"),
+            fixture.temp.path()
+        )
+        .await
+        .is_err()
+    );
+    assert!(crate::commands::cert::validation::provider::provider_configuration(None).is_err());
+}
+
+#[tokio::test]
+async fn provider_adapter_rejects_mapping_profile_and_saved_backend_boundaries() {
+    let fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        fixture.temp.path().into(),
+        Duration::from_secs(1),
+    );
+    store
+        .add(
+            "native".into(),
+            aster_acme_cli_storage::provider::ProviderProfile::builtin(
+                BACKEND_ID.into(),
+                config().custom,
+                vec![],
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut record = fixture.session.as_ref().unwrap().record().await.unwrap();
+    record.solver_config =
+        crate::commands::cert::validation::provider::bound_provider_configuration(
+            Some("native"),
+            fixture.temp.path(),
+        )
+        .await
+        .unwrap();
+    for mapping in [
+        json!({"bad..name":"target.example."}),
+        json!({"other.example":"target.example."}),
+    ] {
+        let mut changed = record.clone();
+        changed.solver_config["dns_targets"] = mapping;
+        assert!(
+            crate::commands::cert::validation::provider::provider_adapter(
+                &changed,
+                fixture.temp.path(),
+                progress(),
+                aster_acme_dns_http::ForgeDnsHttp::default()
+            )
+            .await
+            .is_err()
+        );
+    }
+    for key in [
+        "backend_id",
+        "backend_config_version",
+        "backend_binding",
+        "provider_profile_version",
+    ] {
+        let mut changed = record.clone();
+        changed.solver_config[key] =
+            if key == "backend_config_version" || key == "provider_profile_version" {
+                json!(99)
+            } else {
+                json!("different")
+            };
+        assert!(
+            crate::commands::cert::validation::provider::provider_adapter(
+                &changed,
+                fixture.temp.path(),
+                progress(),
+                aster_acme_dns_http::ForgeDnsHttp::default()
+            )
+            .await
+            .is_err(),
+            "{key}"
+        );
+    }
+    let profile_path = store.path("native").unwrap();
+    let mut invalid_profile: toml::Table = std::fs::read_to_string(&profile_path)
+        .unwrap()
+        .parse()
+        .unwrap();
+    invalid_profile.insert("propagation_interval".into(), toml::Value::Integer(0));
+    std::fs::write(&profile_path, toml::to_string(&invalid_profile).unwrap()).unwrap();
+    assert!(
+        crate::commands::cert::validation::provider::provider_adapter(
+            &record,
+            fixture.temp.path(),
+            progress(),
+            aster_acme_dns_http::ForgeDnsHttp::default()
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        crate::commands::cert::validation::provider::provider_adapter(
+            &record,
+            &fixture.temp.path().join("missing-data"),
+            progress(),
+            aster_acme_dns_http::ForgeDnsHttp::default()
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn provider_cleanup_rejects_records_saved_for_a_different_solver() {
+    let fixture = Fixture::new(ValidationMethod::ManualDns).await;
+    let session = fixture.session.as_ref().unwrap();
+    let error = crate::commands::cert::validation::provider::cleanup_provider(
+        fixture.temp.path(),
+        session.as_ref(),
+        crate::common::session::OutputSession::new(true),
+        &aster_acme::solver::ExecutionContext {
+            cancellation: tokio_util::sync::CancellationToken::new(),
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+        },
+        aster_acme_dns_http::ForgeDnsHttp::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires DNS provider validation")
+    );
+    assert_eq!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/vendor/create")
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn provider_adapter_rejects_unknown_profiles_and_invalid_saved_profile_limits() {
+    let fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        fixture.temp.path().into(),
+        Duration::from_secs(1),
+    );
+    let profile = aster_acme_cli_storage::provider::ProviderProfile::builtin(
+        BACKEND_ID.into(),
+        config().custom,
+        vec![],
+    )
+    .unwrap();
+    store.add("invalid".into(), profile).await.unwrap();
+    let profile_path = store.path("invalid").unwrap();
+    let mut invalid_profile: toml::Table = std::fs::read_to_string(&profile_path)
+        .unwrap()
+        .parse()
+        .unwrap();
+    invalid_profile.insert("propagation_interval".into(), toml::Value::Integer(0));
+    std::fs::write(&profile_path, toml::to_string(&invalid_profile).unwrap()).unwrap();
+    let mut record = fixture.session.as_ref().unwrap().record().await.unwrap();
+    record.solver_config =
+        crate::commands::cert::validation::provider::provider_configuration(Some("missing"))
+            .unwrap();
+    assert!(
+        crate::commands::cert::validation::provider::provider_adapter(
+            &record,
+            fixture.temp.path(),
+            progress(),
+            aster_acme_dns_http::ForgeDnsHttp::default()
+        )
+        .await
+        .is_err()
+    );
+    record.solver_config =
+        crate::commands::cert::validation::provider::provider_configuration(Some("invalid"))
+            .unwrap();
+    assert!(
+        crate::commands::cert::validation::provider::provider_adapter(
+            &record,
+            fixture.temp.path(),
+            progress(),
+            aster_acme_dns_http::ForgeDnsHttp::default()
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn new_request_provider_binding_rejects_profile_drift_and_accepts_pinned_targets() {
+    let fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        fixture.temp.path().into(),
+        Duration::from_secs(1),
+    );
+    store
+        .add(
+            "native".into(),
+            aster_acme_cli_storage::provider::ProviderProfile::builtin(
+                BACKEND_ID.into(),
+                config().custom,
+                vec![],
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut request = fixture.session.as_ref().unwrap().record().await.unwrap();
+    request.solver_config =
+        crate::commands::cert::validation::provider::bound_provider_configuration(
+            Some("native"),
+            fixture.temp.path(),
+        )
+        .await
+        .unwrap();
+    request.solver_config["dns_targets"] = json!({"example.com":"verify.validation.net."});
+    let start = crate::commands::cert::execute::Start::Issue(
+        crate::commands::cert::execute::IssueInput::New {
+            request: aster_acme::issuance::IssueRequest {
+                challenge: aster_acme::challenge::ChallengeKind::Dns01,
+                solver_id: "dns_provider".into(),
+                solver_config: request.solver_config.clone(),
+                name: request.name.clone(),
+                identifiers: request.identifiers.clone(),
+                account_name: request.account_name.clone(),
+                key_algorithm: request.key_algorithm,
+            },
+            naming: crate::commands::cert::execute::Naming::Explicit,
+        },
+    );
+    crate::commands::cert::execute::transaction::validate_new_provider_binding(
+        &start,
+        fixture.temp.path(),
+    )
+    .await
+    .unwrap();
+    request.solver_config["backend_binding"] = json!("changed");
+    let start = crate::commands::cert::execute::Start::Issue(
+        crate::commands::cert::execute::IssueInput::New {
+            request: aster_acme::issuance::IssueRequest {
+                challenge: aster_acme::challenge::ChallengeKind::Dns01,
+                solver_id: "dns_provider".into(),
+                solver_config: request.solver_config,
+                name: request.name,
+                identifiers: request.identifiers,
+                account_name: request.account_name,
+                key_algorithm: request.key_algorithm,
+            },
+            naming: crate::commands::cert::execute::Naming::Explicit,
+        },
+    );
+    assert!(
+        crate::commands::cert::execute::transaction::validate_new_provider_binding(
+            &start,
+            fixture.temp.path()
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn cancellation_after_native_api_success_saves_receipt_and_resumes_without_recreating() {
     let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let cloud = Arc::new(Cloud::default());

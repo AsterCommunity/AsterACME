@@ -141,3 +141,30 @@ async fn unknown_backend_fails_before_creating_a_profile() {
     );
     assert!(!root.path().join("providers/unknown.toml").exists());
 }
+
+#[cfg(feature = "dns-cloudflare")]
+#[tokio::test]
+async fn native_backend_rejects_executable_and_argv_before_profile_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().to_str().unwrap();
+    let executable = std::env::current_exe().unwrap();
+    let executable = executable.to_str().unwrap();
+    for args in [vec!["--exec", executable], vec!["--arg=--unexpected"]] {
+        let mut words = vec![
+            "add",
+            "bad",
+            "--backend",
+            "com.astercosm.acme.dns.cloudflare",
+            "--data-dir",
+            directory,
+            "--json",
+        ];
+        words.extend(args);
+        assert!(
+            execute(command(&words), &CommandContext::new(true))
+                .await
+                .is_err()
+        );
+        assert!(!root.path().join("providers/bad.toml").exists());
+    }
+}

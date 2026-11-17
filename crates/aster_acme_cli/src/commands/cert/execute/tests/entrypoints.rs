@@ -144,6 +144,70 @@ async fn issue_resume_and_show_entrypoints_preserve_fixed_material_on_transport_
 }
 
 #[tokio::test]
+async fn dns_provider_issue_resolves_profile_and_targets_before_transport_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    seed_account(temp.path()).await;
+    let registry = crate::commands::provider::runtime::registry().unwrap();
+    let backend = registry
+        .require(aster_acme_dns::backend::ADPP_BACKEND_ID)
+        .unwrap();
+    let mut profile = aster_acme_cli_storage::provider::ProviderProfile::new(
+        std::env::current_exe().unwrap(),
+        Vec::new(),
+        vec![],
+    )
+    .unwrap();
+    profile.backend_id = backend.descriptor().id.into();
+    profile.backend_config_version = backend.descriptor().config_version;
+    aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        temp.path().into(),
+        Duration::from_secs(1),
+    )
+    .add("prod".into(), profile)
+    .await
+    .unwrap();
+    let cli = CommandContext::new(true);
+    let result = execute::execute(
+        command(
+            temp.path(),
+            &[
+                "issue",
+                "-a",
+                "default",
+                "-d",
+                "example.com",
+                "-c",
+                "dns_provider",
+                "--provider",
+                "prod",
+                "--dns-target",
+                "example.com=verify.validation.net",
+            ],
+        ),
+        &cli,
+    )
+    .await;
+    let Err(error) = result else {
+        panic!("the test CA endpoint must reject the request");
+    };
+    assert!(!error.to_string().contains("provider profile"));
+    let record = CliIssueStore::new(temp.path().into(), Duration::from_secs(1))
+        .query(IssueQuery::default())
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        record.solver_config["dns_targets"]["example.com"],
+        "verify.validation.net."
+    );
+    assert_eq!(
+        record.solver_config["backend_id"],
+        aster_acme_dns::backend::ADPP_BACKEND_ID
+    );
+}
+
+#[tokio::test]
 async fn automatic_issue_names_and_similar_recovery_do_not_allocate_duplicate_generations() {
     let temp = tempfile::tempdir().unwrap();
     seed_account(temp.path()).await;
