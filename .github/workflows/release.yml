@@ -179,8 +179,10 @@ jobs:
             echo "target: ${{ matrix.target }}"
             echo "binary: aster-acme-v${VERSION}-${{ matrix.platform }} (Mach-O UUID $UUID_BIN)"
             echo "symbols: aster-acme.symbols (full pre-strip copy; UUID survives strip)"
-            echo "resolve: lldb -b -o 'file aster-acme.symbols' -o 'image lookup -a (0x100000000 + <text-offset>)'"
-            echo "note: atos cannot see Rust v0-mangled (__R...) symbols; lldb can. For a runtime backtrace address pass (RUNTIME_ADDR - slide) instead."
+            echo "resolve: lldb -b -o 'file aster-acme.symbols' -o 'image lookup -a 0x100000000+<text-offset>' -o quit"
+            echo "note: keep the arithmetic space-free; lldb splits args on whitespace and '(0x100000000 + ...)' fails to evaluate."
+            echo "note: crash-report runtime address -> vmaddr = RUNTIME_ADDR - slide, slide = image load addr (Binary Images first column) - 0x100000000."
+            echo "note: atos on macOS 26.x fails file-based symbolication entirely (plain C symbols included); lldb is unaffected."
           } > SYMBOLS.txt
           cat SYMBOLS.txt
           tar czf "aster-acme-v${VERSION}-${{ matrix.platform }}-symbols.tar.gz" aster-acme.symbols SYMBOLS.txt
