@@ -48,6 +48,12 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 ## Quick start
 
+Install the CLI from Homebrew:
+
+```sh
+brew install astercommunity/tap/aster-acme
+```
+
 Install the published `0.1.0-alpha.2` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
 
 ```sh

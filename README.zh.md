@@ -48,6 +48,12 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 
 ## 快速开始
 
+通过 Homebrew 安装 CLI：
+
+```sh
+brew install astercommunity/tap/aster-acme
+```
+
 从 crates.io 安装已发布的 `0.1.0-alpha.2` CLI。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
 
 ```sh
