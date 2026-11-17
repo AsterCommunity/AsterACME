@@ -562,7 +562,7 @@ fn assert_cancelled_report(result: &CertificateReport) {
             .iter()
             .any(|event| event["deployment"] == "manual")
     );
-    assert!(text.contains("cancelled"));
+    assert!(crate::commands::cert::deployment::tests::cancellation_or_darwin_cleanup(&text));
     let CertificateReport::Deployment(report) = result else {
         panic!("missing deployment report");
     };

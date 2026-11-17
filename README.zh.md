@@ -27,7 +27,7 @@
 
 AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断恢复流程，管理证书生命周期。可以交互使用 CLI、编写脚本，也可以将 Rust 服务嵌入应用，注入自己的存储、签名器和验证适配器。
 
-**现已发布：** AsterACME `0.1.0-alpha.1` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。外部 DNS-01 自动发布通过 ADPP executable 提供；内置云厂商 adapter 和真实 DNS/公网 CA 验收另计。
+**现已发布：** AsterACME `0.1.0-alpha.1` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。当前源码新增内置 Cloudflare 和 ADPP 共用的 DNS solver；这些新增能力尚未包含在已发布 alpha.1 中，真实 DNS/公网 CA 验收另计。
 
 ## 能力
 
@@ -39,7 +39,7 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 
 | 验证方式 | 实现 |
 | --- | --- |
-| DNS-01 | `dns_external --provider NAME`：ADPP自动发布；`manual_dns`：手动发布 TXT，支持通配符 |
+| DNS-01 | `dns_provider --provider NAME`：内置Cloudflare或ADPP自动发布；`manual_dns`：手动发布 TXT，支持通配符 |
 | DNS-PERSIST-01（草案 -02） | `dns_persist`：首次手动配置长期 TXT，后续续期复用；支持通配符 |
 | HTTP-01 | `manual_http`、`webroot`，或临时监听 80 端口的 `standalone` |
 | TLS-ALPN-01 | 临时监听 443 端口的 `tls_alpn` |
@@ -84,7 +84,7 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`daemon run` 在前台常驻，启动后立即检查，之后按配置间隔（默认 60 秒）开始下一轮维护。它刷新 ARI 建议、自动续期使用`webroot`、`standalone`、`tls_alpn`、`dns_external`或已配置`dns_persist`的到期证书，并重试已配置部署；人工验证方式会跳过。按 `Ctrl-C` 或 Unix `SIGTERM` 后停止新周期并保留已启动工作的结果。建议通过系统服务管理器启动和重启；`daemon run-once` 仍可供 cron 使用。
+`daemon run` 在前台常驻，启动后立即检查，之后按配置间隔（默认 60 秒）开始下一轮维护。它刷新 ARI 建议、自动续期使用`webroot`、`standalone`、`tls_alpn`、`dns_provider`或已配置`dns_persist`的到期证书，并重试已配置部署；人工验证方式会跳过。按 `Ctrl-C` 或 Unix `SIGTERM` 后停止新周期并保留已启动工作的结果。建议通过系统服务管理器启动和重启；`daemon run-once` 仍可供 cron 使用。
 
 常驻 daemon 会独占对应的 data-dir。可在 `config.toml` 设置 `daemon_interval = 60`，或用 `daemon run --interval 60` 覆盖。人类日志与签发使用相同的时间戳和级别格式；`--json` 逐行输出 JSON 对象。
 

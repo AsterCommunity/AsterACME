@@ -1,7 +1,7 @@
 //! Frozen-route and durable-receipt acceptance through the real ACME service.
 use crate::commands::cert::validation::{
     ValidationMethod,
-    dns_external::ExternalDns,
+    dns_provider::ProviderDns,
     tests::flow::Fixture,
     tests::{execution, progress},
 };
@@ -159,8 +159,8 @@ impl DnsProvider for Dns {
             .collect())
     }
 }
-fn solver(dns: Arc<Dns>) -> ExternalDns {
-    ExternalDns {
+fn solver(dns: Arc<Dns>) -> ProviderDns {
+    ProviderDns {
         context: ProviderContext {
             provider_instance_id: "test-provider".into(),
             provider_profile_version: 1,
@@ -172,6 +172,7 @@ fn solver(dns: Arc<Dns>) -> ExternalDns {
         provider: dns.clone(),
         lookup: dns,
         allowed_zones: vec!["validation.net".into()],
+        dns_targets: std::collections::BTreeMap::new(),
         propagation: PropagationPolicy {
             initial_delay: Duration::from_millis(5),
             fallback_delay: Duration::from_millis(10),
@@ -202,7 +203,7 @@ async fn run(
 }
 #[tokio::test]
 async fn lost_present_response_reuses_saved_route_and_id_then_cleans_owned_record() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     dns.lose_response.store(true, Ordering::SeqCst);
     let solver = solver(dns.clone());
@@ -234,7 +235,7 @@ async fn lost_present_response_reuses_saved_route_and_id_then_cleans_owned_recor
 }
 #[tokio::test]
 async fn cancellation_after_provider_success_persists_receipt_before_waiting() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     dns.cancel_after_present.store(true, Ordering::SeqCst);
     assert!(
@@ -259,7 +260,7 @@ async fn cancellation_after_provider_success_persists_receipt_before_waiting() {
 }
 #[tokio::test]
 async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     dns.fail_cleanup.store(true, Ordering::SeqCst);
     let mut solver = solver(dns.clone());
@@ -307,7 +308,7 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
 #[tokio::test]
 async fn unconfirmed_local_txt_still_requests_ca_after_grace_period_and_cleans_up() {
     for json in [false, true] {
-        let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+        let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
         let dns = Arc::new(Dns::default());
         dns.hide_txt.store(true, Ordering::SeqCst);
         let mut solver = solver(dns.clone());
@@ -387,7 +388,7 @@ impl ChallengeSolver for ReceiptRecovery {
 
 #[tokio::test]
 async fn recovered_receipt_retry_checkpoint_blocks_provider_cleanup() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     let solver = solver(dns.clone());
     let IssueOutcome::Completed { .. } = run(&mut fixture, &solver, &controls()).await.unwrap()
@@ -418,7 +419,7 @@ async fn recovered_receipt_retry_checkpoint_blocks_provider_cleanup() {
 
 #[tokio::test]
 async fn deterministic_bad_csr_rejection_allows_dns_cleanup() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     let solver = solver(dns);
     let IssueOutcome::Completed { .. } = run(&mut fixture, &solver, &controls()).await.unwrap()
@@ -462,6 +463,7 @@ async fn cleanup_keeps_processing_later_records_after_invalid_saved_routes() {
             ),
         };
         ChallengePublication {
+            identifier: aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
             publication_id: id.into(),
             requirement: ValidationRequirement::Dns01 {
                 name: name.into(),
@@ -507,7 +509,7 @@ async fn cleanup_keeps_processing_later_records_after_invalid_saved_routes() {
 }
 #[tokio::test]
 async fn preexisting_txt_is_retained_without_calling_provider_cleanup() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     dns.preexisting.store(true, Ordering::SeqCst);
     let IssueOutcome::Completed { cleanup, .. } =
@@ -531,7 +533,7 @@ async fn preexisting_txt_is_retained_without_calling_provider_cleanup() {
 }
 #[tokio::test]
 async fn explicit_cleanup_rejects_nonterminal_orders_without_side_effects() {
-    let fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     assert!(
         aster_acme::issuance::publication::cleanup(
@@ -590,7 +592,7 @@ impl aster_acme::storage::issuance::IssueSession for FailSave<'_> {
 #[tokio::test]
 async fn failed_route_or_receipt_save_never_acknowledges_and_recovery_never_duplicates_dns() {
     for receipt_stage in [false, true] {
-        let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+        let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
         let dns = Arc::new(Dns::default());
         let handler = solver(dns.clone());
         {
@@ -625,7 +627,7 @@ async fn failed_route_or_receipt_save_never_acknowledges_and_recovery_never_dupl
 
 #[tokio::test]
 async fn rate_limit_backoff_is_saved_and_resume_cannot_reinvoke_before_it() {
-    let mut fixture = Fixture::new(ValidationMethod::DnsExternal).await;
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let dns = Arc::new(Dns::default());
     dns.rate_limited.store(true, Ordering::SeqCst);
     let solver = solver(dns.clone());
@@ -651,4 +653,118 @@ async fn rate_limit_backoff_is_saved_and_resume_cannot_reinvoke_before_it() {
         run(&mut fixture, &solver, &controls()).await.unwrap(),
         IssueOutcome::Completed { .. }
     ));
+}
+
+#[cfg(feature = "dns-cloudflare")]
+mod cloudflare;
+
+#[tokio::test]
+async fn explicit_target_skips_cname_lookup_survives_restart_and_cleans_saved_target() {
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let dns = Arc::new(Dns::default());
+    dns.lose_response.store(true, Ordering::SeqCst);
+    let mut solver = solver(dns.clone());
+    solver
+        .dns_targets
+        .insert("example.com".into(), "explicit.validation.net.".into());
+    assert!(run(&mut fixture, &solver, &controls()).await.is_err());
+    let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+    let plan = saved.authorizations[0].publication_plan.as_ref().unwrap();
+    assert_eq!(plan.name, "explicit.validation.net.");
+    assert_eq!(plan.cname_chain, [] as [String; 0]);
+    assert_eq!(dns.route_queries.load(Ordering::SeqCst), 0);
+    fixture.reopen().await;
+    assert!(matches!(
+        run(&mut fixture, &solver, &controls()).await.unwrap(),
+        IssueOutcome::Completed { .. }
+    ));
+    assert_eq!(dns.route_queries.load(Ordering::SeqCst), 0);
+    assert_eq!(dns.writes.load(Ordering::SeqCst), 1);
+    assert!(dns.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn multiple_owners_use_explicit_mapping_or_independent_dns_resolution() {
+    let dns = Arc::new(Dns::default());
+    let mut solver = solver(dns.clone());
+    solver
+        .dns_targets
+        .insert("example.com".into(), "shared.validation.net.".into());
+    solver
+        .dns_targets
+        .insert("other.net".into(), "shared.validation.net.".into());
+    solver
+        .dns_targets
+        .insert("*.example.com".into(), "shared.validation.net.".into());
+    let make = |id: &str, name: &str| ChallengePublication {
+        identifier: aster_acme::identifier::DnsIdentifier::new(match id {
+            "wildcard" => "*.example.com",
+            "two" => "other.net",
+            _ => "example.com",
+        })
+        .unwrap(),
+        publication_id: id.into(),
+        requirement: ValidationRequirement::Dns01 {
+            name: name.into(),
+            value: format!("value-{id}"),
+        },
+        receipt: None,
+        plan: None,
+    };
+    let plans = solver
+        .prepare(
+            &[
+                make("one", "_acme-challenge.example.com"),
+                make("wildcard", "_acme-challenge.example.com"),
+                make("two", "_acme-challenge.other.net"),
+            ],
+            &execution(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plans.len(), 3);
+    assert!(
+        plans
+            .iter()
+            .all(|plan| plan.plan.name == "shared.validation.net."
+                && plan.plan.cname_chain.is_empty())
+    );
+    assert_eq!(dns.route_queries.load(Ordering::SeqCst), 0);
+    solver.dns_targets.remove("example.com");
+    let mixed = solver
+        .prepare(
+            &[
+                make("one", "_acme-challenge.example.com"),
+                make("wildcard", "_acme-challenge.example.com"),
+            ],
+            &execution(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mixed[0].plan.name, "delegated.validation.net.");
+    assert_ne!(mixed[0].plan.cname_chain, [] as [String; 0]);
+    assert_eq!(mixed[1].plan.name, "shared.validation.net.");
+    assert_eq!(mixed[1].plan.cname_chain, [] as [String; 0]);
+    assert_eq!(dns.route_queries.load(Ordering::SeqCst), 2);
+    let plans = solver
+        .prepare(
+            &[
+                make("one", "_acme-challenge.example.com"),
+                make("two", "_acme-challenge.other.net"),
+            ],
+            &execution(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plans[0].plan.name, "delegated.validation.net.");
+    assert_eq!(plans[1].plan.name, "shared.validation.net.");
+    assert_eq!(dns.route_queries.load(Ordering::SeqCst), 4);
+    solver.allowed_zones = vec!["other.example".into()];
+    assert!(
+        solver
+            .prepare(&[make("two", "_acme-challenge.other.net")], &execution())
+            .await
+            .is_err()
+    );
+    assert_eq!(dns.route_queries.load(Ordering::SeqCst), 4);
 }

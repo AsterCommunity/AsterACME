@@ -10,7 +10,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
-mod dns_external;
+mod dns_provider;
 mod listener;
 mod manual;
 mod standalone;
@@ -20,6 +20,10 @@ mod webroot;
 /// Stable user-facing implementation IDs; protocol method choices remain in ACME.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub(crate) enum ValidationMethod {
+    /// Publish DNS-01 records through a configured native or external backend profile.
+    #[value(name = "dns_provider")]
+    #[serde(rename = "dns_provider")]
+    DnsProvider,
     /// Publish DNS TXT values yourself.
     #[value(name = "manual_dns")]
     #[serde(rename = "manual_dns")]
@@ -28,10 +32,6 @@ pub(crate) enum ValidationMethod {
     #[value(name = "dns_persist")]
     #[serde(rename = "dns_persist")]
     DnsPersist,
-    /// Publish DNS-01 records through a configured ADPP executable profile.
-    #[value(name = "dns_external")]
-    #[serde(rename = "dns_external")]
-    DnsExternal,
     /// Publish HTTP challenge files yourself using your existing HTTP server.
     #[value(name = "manual_http")]
     #[serde(rename = "manual_http")]
@@ -53,13 +53,13 @@ impl ValidationMethod {
     pub(super) const fn automatic(self) -> bool {
         matches!(
             self,
-            Self::DnsPersist | Self::DnsExternal | Self::Webroot | Self::Standalone | Self::TlsAlpn
+            Self::DnsPersist | Self::DnsProvider | Self::Webroot | Self::Standalone | Self::TlsAlpn
         )
     }
 
     pub(super) const fn kind(self) -> ChallengeKind {
         match self {
-            Self::ManualDns | Self::DnsExternal => ChallengeKind::Dns01,
+            Self::ManualDns | Self::DnsProvider => ChallengeKind::Dns01,
             Self::DnsPersist => ChallengeKind::DnsPersist01,
             Self::ManualHttp | Self::Webroot | Self::Standalone => ChallengeKind::Http01,
             Self::TlsAlpn => ChallengeKind::TlsAlpn01,
@@ -69,7 +69,7 @@ impl ValidationMethod {
         match self {
             Self::ManualDns => "manual_dns",
             Self::DnsPersist => "dns_persist",
-            Self::DnsExternal => "dns_external",
+            Self::DnsProvider => "dns_provider",
             Self::ManualHttp => "manual_http",
             Self::Webroot => "webroot",
             Self::Standalone => "standalone",
@@ -163,8 +163,8 @@ pub(super) fn configuration(
         (ValidationMethod::Webroot, None) => Err(IssueError::InvalidInput(
             "webroot validation requires --webroot <PATH>",
         )),
-        (ValidationMethod::DnsExternal, _) => Err(IssueError::InvalidInput(
-            "dns_external requires its provider profile configuration",
+        (ValidationMethod::DnsProvider, _) => Err(IssueError::InvalidInput(
+            "dns_provider requires its provider profile configuration",
         )),
         (
             ValidationMethod::ManualDns
@@ -206,8 +206,8 @@ pub(super) fn adapter(
                 progress,
             )))
         }
-        ValidationMethod::DnsExternal => Err(IssueError::InvalidInput(
-            "dns_external requires its saved provider profile to be loaded by the CLI",
+        ValidationMethod::DnsProvider => Err(IssueError::InvalidInput(
+            "dns_provider requires its saved provider profile to be loaded by the CLI",
         )),
         ValidationMethod::TlsAlpn => {
             let config: StandaloneConfig = serde_json::from_value(record.solver_config.clone())
@@ -263,17 +263,48 @@ pub(super) fn adapter(
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct DnsExternalConfig {
+pub(super) struct DnsProviderConfig {
+    #[serde(default)]
+    pub(super) dns_targets: std::collections::BTreeMap<String, String>,
+    pub(super) backend_id: String,
+    pub(super) backend_binding: String,
+    pub(super) backend_config_version: u32,
     pub(super) provider_instance_id: String,
     pub(super) provider_profile_version: u32,
 }
 
-pub(super) fn external_configuration(
+pub(super) fn parse_dns_targets(
+    values: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, IssueError> {
+    let mut result = std::collections::BTreeMap::new();
+    let mut owner_targets = std::collections::BTreeMap::new();
+    for value in values {
+        let (domain, target) = value.split_once('=').ok_or(IssueError::InvalidInput(
+            "DNS target must be DOMAIN=TXT_NAME",
+        ))?;
+        let identifier = aster_acme::identifier::DnsIdentifier::new(domain)?;
+        let target = aster_acme_dns::routing::absolute_name(target).map_err(IssueError::from)?;
+        if owner_targets
+            .insert(identifier.name().as_str().to_owned(), target.clone())
+            .is_some_and(|previous| previous != target)
+        {
+            return Err(IssueError::InvalidInput(
+                "domains sharing a DNS challenge name must use the same target",
+            ));
+        }
+        if result.insert(identifier.value(), target).is_some() {
+            return Err(IssueError::InvalidInput("duplicate DNS target domain"));
+        }
+    }
+    Ok(result)
+}
+
+pub(super) fn provider_configuration(
     provider: Option<&str>,
 ) -> Result<serde_json::Value, IssueError> {
     let Some(provider_instance_id) = provider else {
         return Err(IssueError::InvalidInput(
-            "dns_external requires --provider <PROFILE>",
+            "dns_provider requires --provider <PROFILE>",
         ));
     };
     if !aster_acme_cli_storage::account::valid_account_name(provider_instance_id) {
@@ -281,7 +312,11 @@ pub(super) fn external_configuration(
             "invalid DNS provider profile name",
         ));
     }
-    serde_json::to_value(DnsExternalConfig {
+    serde_json::to_value(DnsProviderConfig {
+        dns_targets: std::collections::BTreeMap::new(),
+        backend_id: String::new(),
+        backend_binding: String::new(),
+        backend_config_version: 1,
         provider_instance_id: provider_instance_id.to_owned(),
         provider_profile_version:
             aster_acme_cli_storage::provider::ProviderProfile::CURRENT_VERSION,
@@ -289,13 +324,62 @@ pub(super) fn external_configuration(
     .map_err(|_| IssueError::InvalidInput("cannot encode DNS provider configuration"))
 }
 
-pub(super) async fn external_adapter(
+pub(super) async fn bound_provider_configuration(
+    provider: Option<&str>,
+    root: &std::path::Path,
+) -> Result<serde_json::Value, IssueError> {
+    let mut config: DnsProviderConfig =
+        serde_json::from_value(provider_configuration(provider)?)
+            .map_err(|_| IssueError::InvalidInput("invalid DNS provider reference"))?;
+    let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
+        root.into(),
+        std::time::Duration::from_secs(5),
+    );
+    let profile = store
+        .get(config.provider_instance_id.clone())
+        .await
+        .map_err(|_| IssueError::InvalidInput("cannot load DNS provider profile"))?;
+    let registry = crate::commands::provider::runtime::registry()
+        .map_err(aster_acme_dns::ProviderFailure::from)?;
+    let backend = registry
+        .require(&profile.backend_id)
+        .map_err(aster_acme_dns::ProviderFailure::from)?;
+    let options = (&profile).into();
+    backend
+        .validate(&options)
+        .map_err(aster_acme_dns::ProviderFailure::from)?;
+    config.backend_id = profile.backend_id;
+    config.backend_binding = backend
+        .binding(&options)
+        .map_err(aster_acme_dns::ProviderFailure::from)?;
+    config.backend_config_version = backend.descriptor().config_version;
+    serde_json::to_value(config)
+        .map_err(|_| IssueError::InvalidInput("cannot encode bound DNS provider reference"))
+}
+
+pub(super) async fn provider_adapter(
     record: &IssueRecord,
     root: &std::path::Path,
     progress: Arc<Progress>,
+    http: aster_acme_dns_http::ForgeDnsHttp,
 ) -> Result<Box<dyn ChallengeSolver>, IssueError> {
-    let config: DnsExternalConfig = serde_json::from_value(record.solver_config.clone())
+    let config: DnsProviderConfig = serde_json::from_value(record.solver_config.clone())
         .map_err(|_| IssueError::InvalidInput("invalid saved DNS provider profile reference"))?;
+    let saved_mappings = config
+        .dns_targets
+        .iter()
+        .map(|(domain, target)| format!("{domain}={target}"))
+        .collect::<Vec<_>>();
+    if parse_dns_targets(&saved_mappings).ok().as_ref() != Some(&config.dns_targets)
+        || config.dns_targets.keys().any(|domain| {
+            !record
+                .identifiers
+                .iter()
+                .any(|identifier| identifier.value() == *domain)
+        })
+    {
+        return Err(IssueError::InvalidInput("invalid saved DNS target mapping"));
+    }
     let store = aster_acme_cli_storage::provider::ProviderProfileStore::new(
         root.to_path_buf(),
         std::time::Duration::from_secs(5),
@@ -317,22 +401,52 @@ pub(super) async fn external_adapter(
             "provider profile version differs from saved certificate definition",
         ));
     }
+    let registry = crate::commands::provider::runtime::registry()
+        .map_err(aster_acme_dns::ProviderFailure::from)?;
+    let backend = registry
+        .require(&profile.backend_id)
+        .map_err(aster_acme_dns::ProviderFailure::from)?;
+    let options = (&profile).into();
+    if config.backend_id != profile.backend_id
+        || config.backend_config_version != backend.descriptor().config_version
+        || config.backend_binding
+            != backend
+                .binding(&options)
+                .map_err(aster_acme_dns::ProviderFailure::from)?
+    {
+        return Err(IssueError::InvalidInput(
+            "DNS provider backend or remote scope differs from saved certificate definition",
+        ));
+    }
     let lookup = aster_acme_dns_resolver::SystemDns::new();
-    Ok(Box::new(dns_external::ExternalDns {
+    Ok(Box::new(dns_provider::ProviderDns {
         context: aster_acme_dns::ProviderContext {
             provider_instance_id: config.provider_instance_id,
             provider_profile_version: profile.provider_profile_version,
-            provider_custom: profile.provider_custom.into_iter().collect(),
+            provider_custom: profile.provider_custom.clone().into_iter().collect(),
         },
-        provider: Arc::new(aster_acme_dns_adpp::AdppProvider::new(
-            aster_acme_dns_adpp::Executable {
-                program: profile.executable,
-                args: profile.args.into_iter().map(Into::into).collect(),
-                timeout: std::time::Duration::from_secs(profile.timeout_seconds),
-            },
-        )),
+        provider: crate::commands::provider::runtime::registry()
+            .map_err(aster_acme_dns::ProviderFailure::from)?
+            .provider(
+                &profile.backend_id,
+                &(&profile).into(),
+                aster_acme_dns::operation::ProviderHost {
+                    timeout: std::time::Duration::from_secs(profile.timeout_seconds),
+                    http: Arc::new(http),
+                    credentials: Some(Arc::new(
+                        crate::commands::provider::runtime::PrivateCredentials,
+                    )),
+                    publications: Arc::new(
+                        aster_acme_cli_storage::provider_publication::ProviderPublicationStore::new(
+                            root.to_path_buf(),
+                        ),
+                    ),
+                },
+            )
+            .map_err(aster_acme_dns::ProviderFailure::from)?,
         lookup: Arc::new(lookup),
         allowed_zones: profile.allowed_zones,
+        dns_targets: config.dns_targets,
         propagation: aster_acme_dns::propagation::PropagationPolicy {
             initial_delay: std::time::Duration::from_secs(profile.propagation_interval),
             timeout: std::time::Duration::from_secs(profile.propagation_timeout),
@@ -348,14 +462,15 @@ pub(crate) async fn cleanup_provider(
     session: &dyn aster_acme::storage::issuance::IssueSession,
     output: crate::common::session::OutputSession,
     execution: &aster_acme::solver::ExecutionContext,
+    http: aster_acme_dns_http::ForgeDnsHttp,
 ) -> Result<IssueRecord, IssueError> {
     let saved = session.record().await?;
-    if ValidationMethod::from_record(&saved)? != ValidationMethod::DnsExternal {
+    if ValidationMethod::from_record(&saved)? != ValidationMethod::DnsProvider {
         return Err(IssueError::InvalidInput(
-            "provider cleanup requires external DNS",
+            "provider cleanup requires DNS provider validation",
         ));
     }
-    let solver = external_adapter(&saved, root, Arc::new(Progress::new(output))).await?;
+    let solver = provider_adapter(&saved, root, Arc::new(Progress::new(output)), http).await?;
     let result =
         aster_acme::issuance::publication::cleanup(session, solver.as_ref(), execution).await;
     solver.shutdown().await;

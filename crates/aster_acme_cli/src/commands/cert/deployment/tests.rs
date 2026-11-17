@@ -1769,3 +1769,25 @@ fn bare_deployment_filename_resolves_against_current_directory() {
 
 mod lifecycle;
 mod reliability;
+
+/// Incomplete Darwin process-group cleanup may override a cancellation diagnosis.
+/// This matcher is only diagnostic evidence: callers also assert `ReloadUncertain`
+/// and independently acquire the descendant lifetime lock before accepting exit.
+fn cancellation_or_darwin_cleanup(message: &str) -> bool {
+    message.contains("cancelled") || (cfg!(target_os = "macos") && message.contains("(os error 1)"))
+}
+
+#[test]
+fn cancellation_diagnostics_accept_only_cancelled_or_the_known_darwin_barrier() {
+    assert!(cancellation_or_darwin_cleanup(
+        "reload cancelled after process startup"
+    ));
+    assert_eq!(
+        cancellation_or_darwin_cleanup("Operation not permitted (os error 1)"),
+        cfg!(target_os = "macos")
+    );
+    assert!(!cancellation_or_darwin_cleanup("unrelated wait failure"));
+    assert!(!cancellation_or_darwin_cleanup(
+        "Permission denied (os error 13)"
+    ));
+}

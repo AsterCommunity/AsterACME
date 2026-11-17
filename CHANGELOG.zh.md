@@ -4,7 +4,13 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **内置 DNS 后端** — 通过同一校验注册表发现后端配置与工厂。新增按厂商 feature 选择的 Cloudflare（嵌入式 `cloudflare`，CLI `dns-cloudflare`），可选固定 zone 或按 CNAME 最终目标自动发现并持久化 zone 身份、publication comment 对账、私有 token 文件与精确所有权清理。Provider 产生版本化 HTTP/checkpoint 动作，由宿主通过有界 Forge 传输和持久化 publication/RRset 租约执行。提供条件 RRset 状态机，保留无关值与字段，只对明确版本冲突重新合并，不确定所有权时保留记录；真实 DNS/公网 CA 验收另计。
+
 ### 变更
+
+- **DNS 配置** — 内置与 ADPP 共用 `dns_provider`，新增 `provider backends` 和私有 `--settings-file` 输入，Profile 列表展示后端 ID，交互验证菜单优先列出 `dns_provider`，并支持按申请域名显式指定 DNS 发布目标。Profile 要求 `backend_id` 与 `backend_config_version`，证书定义固定后端/配置版本及非秘密远端 binding。旧 `dns_external` 定义与旧 Profile 布局保留但不自动读取或迁移；ADPP v1 请求仅传最终记录名，不再传 CNAME 路由字段；外部 provider 需适配此预发布协议变更。
 
 - **CI 触发范围** — 仅在 `main` 的 push 和目标为 `main` 的 PR 上运行检查，同一 PR 或分支的新运行取消旧运行，避免功能分支重复执行 push/PR 两套检查。
 
@@ -12,7 +18,7 @@
 
 ## [0.1.0-alpha.1] - 2026-11-16
 
-首次预发布。ACME 包尚未发布，Rust API 与本地格式仍可能直接变化，不提供旧格式兼容读取或自动迁移。
+首次预发布。Rust API 与本地格式仍可能直接变化，不提供旧格式兼容读取或自动迁移。
 
 ### 新增
 
@@ -45,4 +51,5 @@
 
 交叉编译及本地 mock 不代表原生平台或公网 CA 验收。
 
-[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/releases/tag/v0.1.0-alpha.1
+[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...HEAD
+[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

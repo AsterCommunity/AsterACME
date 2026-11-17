@@ -4,7 +4,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Native DNS backends** — Discover backend-owned configuration and factories through one validated registry. Add feature-selected Cloudflare (`cloudflare` in the embedding crate, CLI `dns-cloudflare`) with optional zone pinning or discovery from the final CNAME target, durable per-publication zone identity, publication-comment reconciliation, private token files, and exact owned-record cleanup. Providers emit versioned HTTP/checkpoint effects; hosts execute them with bounded Forge transport and durable per-publication/RRset leases. Include a conditional RRset state machine that preserves unrelated values and metadata, retries only proven revision conflicts, and retains uncertain ownership. Real DNS/public-CA acceptance remains separate.
+
 ### Changed
+
+- **DNS configuration** — Use `dns_provider` for both native and ADPP backends, expose `provider backends` and private `--settings-file` inputs, display backend IDs in profile lists, list `dns_provider` first in the interactive validation menu, and allow per-requested-domain explicit DNS publication targets. Profiles require `backend_id` and `backend_config_version`; saved certificate definitions pin backend/configuration version and non-sensitive remote binding. Old `dns_external` definitions and prior profile layouts are retained but not automatically read or migrated. ADPP v1 requests now carry the final record name without CNAME routing fields; external providers must adapt to this pre-release wire change.
 
 - **CI triggers** — Run push checks only on `main` and pull request checks only for `main`; cancel superseded runs for the same PR or branch to avoid duplicate branch/PR checks.
 
@@ -45,4 +51,5 @@ Initial pre-release. Rust APIs and local formats may change without compatibilit
 
 Cross-compilation and local mocks do not constitute native-platform or public-CA acceptance.
 
-[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/releases/tag/v0.1.0-alpha.1
+[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...HEAD
+[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

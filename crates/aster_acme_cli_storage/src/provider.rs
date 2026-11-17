@@ -14,6 +14,10 @@ const PROFILE_LIMIT: usize = 64 * 1024;
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
+    /// Stable backend type selected through the validated provider registry.
+    pub backend_id: String,
+    /// Backend-owned configuration version, independent of profile and ADPP wire versions.
+    pub backend_config_version: u32,
     /// Profile schema version passed to the provider executable.
     pub provider_profile_version: u32,
     /// Per-process timeout (1..=300 seconds).
@@ -26,6 +30,7 @@ pub struct ProviderProfile {
     #[serde(default = "default_propagation_interval")]
     pub propagation_interval: u64,
     /// Absolute executable path.
+    #[serde(default)]
     pub executable: PathBuf,
     /// Exact argv values; never interpreted by a shell.
     #[serde(default)]
@@ -74,7 +79,9 @@ impl ProviderProfile {
         allowed_zones: Vec<String>,
     ) -> io::Result<Self> {
         let profile = Self {
+            backend_id: aster_acme_dns::backend::ADPP_BACKEND_ID.into(),
             provider_profile_version: PROFILE_VERSION,
+            backend_config_version: 1,
             timeout_seconds: default_timeout(),
             propagation_timeout: default_propagation_timeout(),
             propagation_interval: default_propagation_interval(),
@@ -82,6 +89,30 @@ impl ProviderProfile {
             args,
             allowed_zones,
             provider_custom: serde_json::Map::new(),
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+
+    /// Construct a backend-owned configuration without an executable transport.
+    /// # Errors
+    /// Rejects invalid common profile fields; the backend registry validates custom values.
+    pub fn builtin(
+        backend_id: String,
+        provider_custom: serde_json::Map<String, serde_json::Value>,
+        allowed_zones: Vec<String>,
+    ) -> io::Result<Self> {
+        let profile = Self {
+            backend_id,
+            provider_profile_version: PROFILE_VERSION,
+            backend_config_version: 1,
+            timeout_seconds: default_timeout(),
+            propagation_timeout: default_propagation_timeout(),
+            propagation_interval: default_propagation_interval(),
+            executable: PathBuf::new(),
+            args: Vec::new(),
+            allowed_zones,
+            provider_custom,
         };
         profile.validate()?;
         Ok(profile)
@@ -95,7 +126,11 @@ impl ProviderProfile {
             || !(1..=3600).contains(&self.propagation_timeout)
             || !(1..=60).contains(&self.propagation_interval)
             || self.provider_profile_version != PROFILE_VERSION
-            || !self.executable.is_absolute()
+            || self.backend_config_version == 0
+            || !aster_acme_dns::backend::valid_backend_id(&self.backend_id)
+            || (!self.executable.as_os_str().is_empty() && !self.executable.is_absolute())
+            || (self.backend_id == aster_acme_dns::backend::ADPP_BACKEND_ID
+                && !self.executable.is_absolute())
             || self
                 .allowed_zones
                 .iter()
@@ -410,6 +445,17 @@ fn list_names(root: &Path) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
+impl From<&ProviderProfile> for aster_acme_dns::backend::BackendConfig {
+    fn from(profile: &ProviderProfile) -> Self {
+        Self {
+            version: profile.backend_config_version,
+            executable: profile.executable.clone(),
+            args: profile.args.clone(),
+            custom: profile.provider_custom.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::provider::*;
@@ -613,7 +659,7 @@ mod tests {
             .unwrap();
         let slot = temp.path().join("certs/test-cert");
         std::fs::create_dir_all(&slot).unwrap();
-        let config = serde_json::json!({"version":1,"cert":{"name":"test-cert","identifiers":["example.com"],"key_algorithm":"ecdsa-p256","account_name":"default","account_id":"account","directory":"https://ca.example/directory","challenge":"dns-01","solver_id":"dns_external","solver_config":{"provider_instance_id":"prod"}}});
+        let config = serde_json::json!({"version":1,"cert":{"name":"test-cert","identifiers":["example.com"],"key_algorithm":"ecdsa-p256","account_name":"default","account_id":"account","directory":"https://ca.example/directory","challenge":"dns-01","solver_id":"dns_provider","solver_config":{"provider_instance_id":"prod"}}});
         crate::toml_file::atomic_write(
             &slot.join("cert.toml"),
             toml::to_string(&config).unwrap().as_bytes(),

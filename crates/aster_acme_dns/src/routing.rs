@@ -110,7 +110,14 @@ pub fn validate_chain(
     chain: &[String],
     zones: &[String],
 ) -> Result<(), RouteError> {
-    if chain.is_empty() || chain.len() > MAX_CNAME_LINKS + 1 {
+    if chain.is_empty() {
+        absolute_name(owner)?;
+        if !allowed_zone(target, zones) {
+            return Err(RouteError::ZoneNotAllowed);
+        }
+        return Ok(());
+    }
+    if chain.len() > MAX_CNAME_LINKS + 1 {
         return Err(RouteError::CnameChainTooLong);
     }
     let canonical = chain

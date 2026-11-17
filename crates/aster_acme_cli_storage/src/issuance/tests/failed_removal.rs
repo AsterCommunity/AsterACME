@@ -185,7 +185,7 @@ async fn failed_cleanup_keeps_expired_unconfirmed_finalize_key_csr_and_journal()
 async fn bad_csr_external_publication_must_be_cleaned_before_certificate_removal() {
     let f = fixture().await;
     let mut external_request = request();
-    external_request.solver_id = "dns_external".into();
+    external_request.solver_id = "dns_provider".into();
     external_request.solver_config = serde_json::json!({
         "provider_instance_id":"test-provider",
         "provider_profile_version":1

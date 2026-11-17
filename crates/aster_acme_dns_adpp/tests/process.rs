@@ -55,6 +55,13 @@ fn fixture(mode: &str) {
             .write_all(&vec![b's'; 1024 * 1024])
             .unwrap();
     }
+    if mode == "explicit-target" {
+        for record in request["records"].as_array().unwrap() {
+            assert_eq!(record["record"]["name"], "delegated.validation.net.");
+            assert!(record.get("challenge_name").is_none());
+            assert!(record.get("cname_chain").is_none());
+        }
+    }
     let action = request["action"].as_str().unwrap();
     let results = request["records"].as_array().unwrap().iter().enumerate().map(|(index, record)| {
         if mode == "partial" && index == 1 { return serde_json::json!({"publication_id": record["publication_id"],"status":"error","error":{"code":"provider_timeout","message":"secret-sentinel API timed out","side_effect":"unknown"}}); }
@@ -129,6 +136,29 @@ async fn test_process_contract() {
                 .is_ok()
         );
     }
+    let mut explicit = record("explicit");
+    explicit.name = "delegated.validation.net.".into();
+    explicit.cname_chain.clear();
+    let receipt = provider("explicit-target")
+        .present(&context, &[explicit.clone()], &execution())
+        .await
+        .unwrap()[0]
+        .result
+        .clone()
+        .unwrap();
+    let cleanup = CleanupRequest {
+        publication_id: "explicit".into(),
+        receipt,
+        record: explicit,
+    };
+    assert!(
+        provider("explicit-target")
+            .cleanup(&context, &[cleanup], &execution())
+            .await
+            .unwrap()[0]
+            .result
+            .is_ok()
+    );
     let results = provider("partial")
         .present(&context, &records, &execution())
         .await

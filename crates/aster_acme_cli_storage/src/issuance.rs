@@ -518,7 +518,7 @@ pub fn provider_referenced(root: &Path, provider: &str) -> std::io::Result<bool>
         }
         let config = selection(&slot)
             .map_err(|_| std::io::Error::other("cannot verify certificate provider references"))?;
-        if config.cert.solver_id == "dns_external"
+        if config.cert.solver_id == "dns_provider"
             && config
                 .cert
                 .solver_config

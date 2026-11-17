@@ -13,6 +13,12 @@ pub(in crate::commands::provider) fn edit(
     original: &ProviderProfile,
     prompts: &mut dyn Prompts,
 ) -> CliResult<ProviderProfile> {
+    let descriptor = crate::commands::provider::runtime::registry()?
+        .require(&original.backend_id)?
+        .descriptor();
+    if !descriptor.executable {
+        return edit_native(name, path, original, prompts, &descriptor);
+    }
     let mut draft = original.clone();
     let choices = [
         "Executable path",
@@ -54,6 +60,65 @@ pub(in crate::commands::provider) fn edit(
             }
             4 => return Err(Box::new(Canceled)),
             _ => return Err("Invalid provider edit selection.".into()),
+        }
+    }
+}
+
+fn edit_native(
+    name: &str,
+    path: &Path,
+    original: &ProviderProfile,
+    prompts: &mut dyn Prompts,
+    descriptor: &aster_acme_dns::backend::BackendDescriptor,
+) -> CliResult<ProviderProfile> {
+    let mut draft = original.clone();
+    let mut choices = descriptor
+        .fields
+        .iter()
+        .map(|field| field.label.to_owned())
+        .collect::<Vec<_>>();
+    choices.extend([
+        "Allowed zones".into(),
+        "Save changes".into(),
+        "Cancel".into(),
+    ]);
+    loop {
+        prompts.review(name, path, &draft)?;
+        let index = match prompts.select("Edit provider profile:", &choices) {
+            Ok(index) => index,
+            Err(error) if error.is::<Back>() => return Err(Box::new(Canceled)),
+            Err(error) => return Err(error),
+        };
+        if let Some(field) = descriptor.fields.get(index) {
+            let value = if field.sensitive {
+                prompts.sensitive_text(&format!("{} (blank removes value):", field.label), true)
+            } else {
+                prompts.text(&format!("{} (blank removes value):", field.label), true)
+            };
+            let value = match value {
+                Ok(value) => value,
+                Err(error) if error.is::<Back>() => continue,
+                Err(error) => return Err(error),
+            };
+            match crate::commands::provider::interaction::parse_field(field, &value) {
+                Ok(Some(value)) => {
+                    draft.provider_custom.insert(field.name.into(), value);
+                }
+                Ok(None) => {
+                    draft.provider_custom.remove(field.name);
+                }
+                Err(message) => prompts.invalid(message),
+            }
+        } else if index == descriptor.fields.len() {
+            edit_list(&mut draft.allowed_zones, ListKind::Zones, prompts)?;
+        } else if index == descriptor.fields.len() + 1 {
+            draft.validate()?;
+            crate::commands::provider::runtime::registry()?
+                .require(&draft.backend_id)?
+                .validate(&(&draft).into())?;
+            return Ok(draft);
+        } else {
+            return Err(Box::new(Canceled));
         }
     }
 }

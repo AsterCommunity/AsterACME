@@ -29,14 +29,15 @@ impl Foreground<'_> {
         session: &mut dyn IssueSession,
     ) -> CliResult<IssueOutcome> {
         let saved = session.record().await?;
-        let solver = if saved.solver_id == "dns_external" {
-            crate::commands::cert::validation::external_adapter(
+        let solver = if saved.solver_id == "dns_provider" {
+            crate::commands::cert::validation::provider_adapter(
                 &saved,
                 self.context
                     .config_path
                     .parent()
                     .ok_or("Missing provider profile root.")?,
                 self.progress.clone(),
+                self.cli.dns_http.clone(),
             )
             .await?
         } else {

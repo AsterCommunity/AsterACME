@@ -573,7 +573,7 @@ fn only_saved_noninteractive_validation_methods_are_eligible_for_automatic_renew
         (ValidationMethod::Standalone, true),
         (ValidationMethod::TlsAlpn, true),
         (ValidationMethod::DnsPersist, true),
-        (ValidationMethod::DnsExternal, true),
+        (ValidationMethod::DnsProvider, true),
         (ValidationMethod::ManualDns, false),
         (ValidationMethod::ManualHttp, false),
     ] {
@@ -682,6 +682,7 @@ pub(crate) fn publications(
         .enumerate()
         .map(
             |(index, requirement)| aster_acme::solver::ChallengePublication {
+                identifier: aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
                 publication_id: format!("test-publication-{index}"),
                 requirement: requirement.clone(),
                 receipt: None,

@@ -23,6 +23,7 @@
 | cli-contract.md | 参数、配置、交互、输出和退出码 |
 | certificate-lifecycle.md | 托管身份、续期、ARI、吊销与删除语义 |
 | design/account.md | 账户协议、确认及换钥恢复 |
+| design/dns-backends.md | DNS后端注册、厂商状态机、宿主effects和RRset并发契约 |
 | design/issuance.md | 签发、验证材料及solver生命周期 |
 | design/storage.md | 文件、查询、平台发布与恢复 |
 | design/runtime.md | 输出会话、HTTP池及panic |

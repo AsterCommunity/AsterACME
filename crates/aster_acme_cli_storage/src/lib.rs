@@ -22,5 +22,6 @@ pub mod daemon;
 pub mod inventory;
 pub mod issuance;
 pub mod provider;
+pub mod provider_publication;
 pub mod state_file;
 pub mod toml_file;

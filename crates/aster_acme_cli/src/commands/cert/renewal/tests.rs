@@ -701,7 +701,7 @@ async fn daemon_skips_manual_methods_and_only_allowed_methods_enter_existing_tra
     for method in [
         ValidationMethod::ManualDns,
         ValidationMethod::DnsPersist,
-        ValidationMethod::DnsExternal,
+        ValidationMethod::DnsProvider,
         ValidationMethod::ManualHttp,
         ValidationMethod::Webroot,
         ValidationMethod::Standalone,
@@ -791,7 +791,7 @@ impl LocalFixture {
                 8080
             },
         ));
-        let config = if method == ValidationMethod::DnsExternal {
+        let config = if method == ValidationMethod::DnsProvider {
             aster_acme_cli_storage::provider::ProviderProfileStore::new(
                 self.settings.data_dir.clone(),
                 Duration::from_secs(2),
@@ -807,7 +807,7 @@ impl LocalFixture {
             )
             .await
             .unwrap();
-            crate::commands::cert::validation::external_configuration(Some("test-provider"))
+            crate::commands::cert::validation::provider_configuration(Some("test-provider"))
                 .unwrap()
         } else {
             crate::commands::cert::validation::configuration(

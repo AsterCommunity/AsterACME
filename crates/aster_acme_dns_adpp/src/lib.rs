@@ -23,6 +23,7 @@ use aster_acme_dns::{
     ProviderFailure, PublicationReceipt, SideEffect,
 };
 use async_trait::async_trait;
+mod backend;
 pub mod wire;
 use crate::wire::{Action, RecordData, Request, RequestRecord, Response};
 use std::{ffi::OsString, path::PathBuf, time::Duration};
@@ -282,8 +283,6 @@ fn request(
             .iter()
             .map(|record| RequestRecord {
                 publication_id: record.publication_id.clone(),
-                challenge_name: Some(record.challenge_name.clone()),
-                cname_chain: record.cname_chain.clone(),
                 record: Some(RecordData {
                     record_type: "TXT".into(),
                     name: record.name.clone(),
@@ -298,8 +297,6 @@ fn request(
             .iter()
             .map(|entry| RequestRecord {
                 publication_id: entry.publication_id.clone(),
-                challenge_name: Some(entry.record.challenge_name.clone()),
-                cname_chain: entry.receipt.cname_chain.clone(),
                 record: Some(RecordData {
                     record_type: "TXT".into(),
                     name: entry.receipt.record_name.clone(),
@@ -467,7 +464,6 @@ fn validate_request(request: &Request) -> Result<(), ProviderFailure> {
             return Err(invalid());
         }
         let data = record.record.as_ref().ok_or_else(invalid)?;
-        let owner = record.challenge_name.as_ref().ok_or_else(invalid)?;
         if data.record_type != "TXT"
             || data.value.is_empty()
             || data.value.len() > 255
@@ -477,13 +473,9 @@ fn validate_request(request: &Request) -> Result<(), ProviderFailure> {
         {
             return Err(invalid());
         }
-        aster_acme_dns::routing::validate_chain(
-            owner,
-            &data.name,
-            &record.cname_chain,
-            std::slice::from_ref(&data.name),
-        )
-        .map_err(|_| invalid())?;
+        if aster_acme_dns::routing::absolute_name(&data.name).map_err(|_| invalid())? != data.name {
+            return Err(invalid());
+        }
         match request.action {
             Action::Present if record.record_id.is_none() && record.ownership.is_none() => {}
             Action::Cleanup

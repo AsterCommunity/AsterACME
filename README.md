@@ -27,7 +27,7 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-**Available now:** AsterACME `0.1.0-alpha.1` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. External DNS-01 automation uses an ADPP executable. Built-in DNS vendor adapters and live DNS/public-CA acceptance are separate.
+**Available now:** AsterACME `0.1.0-alpha.1` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. The source tree additionally supports native Cloudflare and ADPP backends through a unified DNS solver; these additions are not in the published alpha.1. Live DNS/public-CA acceptance is separate.
 
 ## Capabilities
 
@@ -39,7 +39,7 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 | Validation | Implementation |
 | --- | --- |
-| DNS-01 | `dns_external --provider NAME`: ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
+| DNS-01 | `dns_provider --provider NAME`: native Cloudflare or ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
 | DNS-PERSIST-01 (draft -02) | `dns_persist`: provision persistent TXT records manually, then reuse them for renewal; supports wildcards |
 | HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
 | TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
@@ -84,7 +84,7 @@ aster-acme cert renew example-cert
 aster-acme cert renew --all
 ```
 
-`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, `tls_alpn`, `dns_external`, or already provisioned `dns_persist`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
+`daemon run` stays in the foreground, checks immediately, then starts another maintenance cycle after the configured delay (default 60 seconds). It refreshes ARI suggestions, renews due certificates using `webroot`, `standalone`, `tls_alpn`, `dns_provider`, or already provisioned `dns_persist`, and retries configured deployments. Manual validation methods are skipped. `Ctrl-C` or Unix `SIGTERM` stops it after started work is retained. Use a service manager to start and restart the process; `daemon run-once` remains available for cron.
 
 The resident daemon holds an exclusive lock for its data directory. Set `daemon_interval = 60` in `config.toml` or override it with `daemon run --interval 60`. Human logs use the same timestamped levels as issuance; `--json` streams one JSON object per line.
 

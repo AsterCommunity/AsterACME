@@ -134,7 +134,7 @@ impl CertificateRemoval {
     /// Failed cleanup keeps `.removing` to prevent reusing partial material after restart.
     pub async fn remove(self) -> Result<(), IssueError> {
         if self.records.iter().any(|record| {
-            record.solver_id == "dns_external"
+            record.solver_id == "dns_provider"
                 && record
                     .authorizations
                     .iter()

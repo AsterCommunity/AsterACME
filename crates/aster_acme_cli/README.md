@@ -29,7 +29,7 @@ All commands support the shared `--data-dir` and `--json` boundaries. JSON and n
 
 ## Certificate validation
 
-`manual_dns`, `dns_persist`, `dns_external`, `manual_http`, `webroot`, `standalone`, and `tls_alpn` are supported validation implementations. External DNS uses a named ADPP executable profile and persists frozen routes and per-record receipts. After publication, the CLI waits five seconds for one advisory local TXT check; unknown visibility adds a ten-second grace delay before CA validation. The CA remains authoritative.
+`manual_dns`, `dns_persist`, `dns_provider`, `manual_http`, `webroot`, `standalone`, and `tls_alpn` are supported validation implementations. External DNS uses a named ADPP executable profile and persists frozen routes and per-record receipts. After publication, the CLI waits five seconds for one advisory local TXT check; unknown visibility adds a ten-second grace delay before CA validation. The CA remains authoritative.
 
 Provider profiles are stored under `providers/<name>.toml`. `list` uses the shared compact account/certificate table style; `show` displays the redacted profile and TOML path. Terminal users can select profiles for issuance, show, cleanup, and removal. `update` edits a draft with back navigation, explicit save/cancel, and a full snapshot check against concurrent changes.
 

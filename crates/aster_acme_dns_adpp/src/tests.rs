@@ -365,3 +365,19 @@ fn validate_rfc_examples(rfc: &str) -> usize {
     }
     count
 }
+
+#[test]
+fn explicit_target_is_sent_without_claiming_a_resolved_cname_chain() {
+    let mut record = record();
+    record.name = "delegated.example.net.".into();
+    record.cname_chain.clear();
+    let request = request(Action::Present, &context(), &[record], &[]).unwrap();
+    validate_request(&request).unwrap();
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        value["records"][0]["record"]["name"],
+        "delegated.example.net."
+    );
+    assert!(value["records"][0].get("challenge_name").is_none());
+    assert!(value["records"][0].get("cname_chain").is_none());
+}

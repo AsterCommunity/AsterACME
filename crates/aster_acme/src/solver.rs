@@ -11,6 +11,8 @@ use crate::challenge::ChallengeKind;
 /// One authorization publication with its stable retry identity and saved receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChallengePublication {
+    /// Canonical certificate identifier, including any wildcard prefix.
+    pub identifier: crate::identifier::DnsIdentifier,
     /// Stable ID persisted before invoking any external provider.
     pub publication_id: String,
     /// Exact ACME-derived public validation material.

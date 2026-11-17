@@ -16,10 +16,14 @@ path = "src/main.rs"
 doc = false
 
 [features]
-default = ["precheck"]
+default = ["precheck", "dns-cloudflare"]
 precheck = ["dep:aster_acme_validation", "aster_acme/precheck-http", "aster_acme_validation/precheck-caa", "aster_acme_validation/precheck-dns"]
 
+dns-cloudflare = ["aster_acme_dns_builtin/cloudflare"]
+
 [dependencies]
+aster_acme_dns_builtin.workspace = true
+aster_acme_dns_http.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
@@ -57,6 +61,8 @@ zeroize.workspace = true
 shlex.workspace = true
 aster_forge_utils.workspace = true
 crossterm.workspace = true
+
+[target.'cfg(not(unix))'.dependencies]
 tempfile.workspace = true
 
 [build-dependencies]
