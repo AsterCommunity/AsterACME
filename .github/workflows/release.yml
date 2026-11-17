@@ -123,9 +123,11 @@ jobs:
       - name: Build release binary (Windows, keep PDB)
         if: runner.os == 'Windows'
         env:
-          # The release profile strips debuginfo, which makes the MSVC linker
-          # skip PDB emission; the distributed exe still carries no debug
-          # payload because MSVC stores it in the PDB sidecar.
+          # MSVC emits the PDB only when debug info exists in the link inputs:
+          # with debug=0 there is no PDB regardless of strip. debug=1 routes
+          # the payload into the PDB sidecar, so the exe itself still carries
+          # no debug sections; STRIP stays none to keep that sidecar linked.
+          CARGO_PROFILE_RELEASE_DEBUG: "1"
           CARGO_PROFILE_RELEASE_STRIP: "none"
         run: cargo build --release --locked --target ${{ matrix.target }} -p aster_acme_cli
 
