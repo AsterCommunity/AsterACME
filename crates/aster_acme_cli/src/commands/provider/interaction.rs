@@ -1,5 +1,5 @@
 //! Fill missing provider registration fields without changing the execution path.
-use crate::commands::provider::{AddArgs, validate_executable};
+use crate::commands::provider::{args::AddArgs, execute::validate_executable};
 use crate::common::{error::CliResult, output, session::OutputSession, terminal};
 
 pub(super) mod update;
@@ -57,10 +57,14 @@ impl Prompts for TerminalPrompts<'_> {
         path: &std::path::Path,
         profile: &aster_acme_cli_storage::provider::ProviderProfile,
     ) -> CliResult<()> {
-        let view = crate::commands::provider::view(name.into(), path.into(), profile.clone());
+        let view =
+            crate::commands::provider::report::view(name.into(), path.into(), profile.clone());
         self.0.context(
-            &crate::commands::provider::detail_lines(&view, self.0.diagnostic_format().color)?
-                .join("\n"),
+            &crate::commands::provider::render::detail_lines(
+                &view,
+                self.0.diagnostic_format().color,
+            )?
+            .join("\n"),
         );
         Ok(())
     }
@@ -213,7 +217,7 @@ fn validate_name(name: &str, names: &[String]) -> CliResult<()> {
 #[cfg(test)]
 mod tests {
     use crate::commands::provider::{
-        AddArgs,
+        args::AddArgs,
         interaction::{Prompts, complete_add},
     };
     use crate::common::{args::LocalArgs, error::CliResult, terminal::Canceled};
@@ -249,6 +253,7 @@ mod tests {
     }
     fn args() -> AddArgs {
         AddArgs {
+            ttl_seconds: None,
             name: None,
             exec: None,
             backend: None,
@@ -313,9 +318,10 @@ mod tests {
     #[test]
     fn executable_validation_rejects_missing_files_directories_and_unix_nonexecutables() {
         let root = tempfile::tempdir().unwrap();
-        assert!(crate::commands::provider::validate_executable(root.path()).is_err());
+        assert!(crate::commands::provider::execute::validate_executable(root.path()).is_err());
         assert!(
-            crate::commands::provider::validate_executable(&root.path().join("missing")).is_err()
+            crate::commands::provider::execute::validate_executable(&root.path().join("missing"))
+                .is_err()
         );
         #[cfg(unix)]
         {
@@ -323,7 +329,7 @@ mod tests {
             let file = root.path().join("not-executable");
             std::fs::write(&file, "fixture").unwrap();
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-            assert!(crate::commands::provider::validate_executable(&file).is_err());
+            assert!(crate::commands::provider::execute::validate_executable(&file).is_err());
         }
     }
     #[test]

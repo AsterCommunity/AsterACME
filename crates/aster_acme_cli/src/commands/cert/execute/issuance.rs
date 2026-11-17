@@ -41,12 +41,13 @@ pub(super) async fn issue(
         if args.challenge == Some(crate::commands::cert::validation::ValidationMethod::DnsProvider)
         {
             request.solver_config =
-                crate::commands::cert::validation::bound_provider_configuration(
+                crate::commands::cert::validation::provider::bound_provider_configuration(
                     args.provider.as_deref(),
                     &settings.data_dir,
                 )
                 .await?;
-            let targets = crate::commands::cert::validation::parse_dns_targets(&args.dns_targets)?;
+            let targets =
+                crate::commands::cert::validation::provider::parse_dns_targets(&args.dns_targets)?;
             request.solver_config["dns_targets"] = serde_json::to_value(targets)?;
         }
         Some((request, account))
@@ -170,7 +171,9 @@ pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest
         .ok_or("Specify -c/--challenge for a new certificate.")?;
     let solver_config =
         if method == crate::commands::cert::validation::ValidationMethod::DnsProvider {
-            crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?
+            crate::commands::cert::validation::provider::provider_configuration(
+                args.provider.as_deref(),
+            )?
         } else {
             crate::commands::cert::validation::configuration(
                 method,

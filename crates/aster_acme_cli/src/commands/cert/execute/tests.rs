@@ -38,8 +38,10 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "dns_provider".into(),
-        solver_config: crate::commands::cert::validation::provider_configuration(Some("prod"))
-            .unwrap(),
+        solver_config: crate::commands::cert::validation::provider::provider_configuration(Some(
+            "prod",
+        ))
+        .unwrap(),
     };
     request.solver_config["dns_targets"] = serde_json::json!({
         "example.com": "verify.validation.net."

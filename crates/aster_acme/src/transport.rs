@@ -28,6 +28,15 @@ mod http_precheck;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const NONCE_POOL_CAPACITY: usize = 64;
 
+/// Status eligible for definitive rejection when accompanied by an ACME problem.
+/// RFC 9110 §15.5.9 permits retrying 408 and RFC 6585 §4 defines 429 throttling.
+/// Keeping both nonterminal is our conservative recovery policy, not a claim
+/// that either response proves the origin applied the mutation. Endpoints still
+/// own problem-specific transitions and must preserve prior uncertain attempts.
+pub(crate) const fn definitive_rejection(status: u16) -> bool {
+    status >= 400 && status < 500 && !matches!(status, 408 | 429)
+}
+
 /// Retry information returned to callers, never an instruction for unbounded retries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryAfter {
@@ -95,6 +104,11 @@ pub enum TransportError {
 }
 
 impl TransportError {
+    /// Only a structured ACME refusal can clear this attempt's submission evidence.
+    pub(crate) fn is_definitive_rejection(&self) -> bool {
+        matches!(self, Self::Problem { status, .. } if definitive_rejection(*status))
+    }
+
     /// Match a complete ACME problem URI; unknown errors do not trigger known behavior.
     #[must_use]
     pub fn is_problem(&self, kind: &ProblemKind) -> bool {

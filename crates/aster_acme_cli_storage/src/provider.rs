@@ -14,6 +14,9 @@ const PROFILE_LIMIT: usize = 64 * 1024;
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
+    /// Requested DNS record TTL. Backends own provider-specific limits.
+    #[serde(default = "default_ttl")]
+    pub ttl_seconds: u32,
     /// Stable backend type selected through the validated provider registry.
     pub backend_id: String,
     /// Backend-owned configuration version, independent of profile and ADPP wire versions.
@@ -43,6 +46,9 @@ pub struct ProviderProfile {
     pub provider_custom: serde_json::Map<String, serde_json::Value>,
 }
 
+fn default_ttl() -> u32 {
+    120
+}
 fn default_timeout() -> u64 {
     30
 }
@@ -79,6 +85,7 @@ impl ProviderProfile {
         allowed_zones: Vec<String>,
     ) -> io::Result<Self> {
         let profile = Self {
+            ttl_seconds: default_ttl(),
             backend_id: aster_acme_dns::backend::ADPP_BACKEND_ID.into(),
             provider_profile_version: PROFILE_VERSION,
             backend_config_version: 1,
@@ -103,6 +110,7 @@ impl ProviderProfile {
         allowed_zones: Vec<String>,
     ) -> io::Result<Self> {
         let profile = Self {
+            ttl_seconds: default_ttl(),
             backend_id,
             provider_profile_version: PROFILE_VERSION,
             backend_config_version: 1,
@@ -123,6 +131,7 @@ impl ProviderProfile {
     /// Rejects unsupported versions, invalid zones, paths, arguments and resource bounds.
     pub fn validate(&self) -> io::Result<()> {
         if !(1..=300).contains(&self.timeout_seconds)
+            || self.ttl_seconds > i32::MAX as u32
             || !(1..=3600).contains(&self.propagation_timeout)
             || !(1..=60).contains(&self.propagation_interval)
             || self.provider_profile_version != PROFILE_VERSION
@@ -711,5 +720,27 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[test]
+    fn ttl_defaults_roundtrip_and_boundaries() {
+        let original = profile(std::env::current_exe().unwrap());
+        let mut value = serde_json::to_value(&original).unwrap();
+        value.as_object_mut().unwrap().remove("ttl_seconds");
+        let defaulted: ProviderProfile = serde_json::from_value(value).unwrap();
+        assert_eq!(defaulted.ttl_seconds, 120);
+        for ttl in [0, 1, 120, 2_147_483_647] {
+            let mut profile = original.clone();
+            profile.ttl_seconds = ttl;
+            profile.validate().unwrap();
+            let decoded: ProviderProfile =
+                toml::from_str(&toml::to_string(&profile).unwrap()).unwrap();
+            assert_eq!(decoded.ttl_seconds, ttl);
+        }
+        for ttl in [2_147_483_648, u32::MAX] {
+            let mut profile = original.clone();
+            profile.ttl_seconds = ttl;
+            assert!(profile.validate().is_err());
+        }
     }
 }

@@ -219,30 +219,37 @@ pub(in crate::commands::cert::render) fn deployment_removed(
     ))
 }
 
+#[derive(Serialize)]
+pub(in crate::commands) struct DeploymentReportOutput<'a> {
+    certificate: &'a str,
+    deployments: Vec<DeploymentStatusView<'a>>,
+    events: &'a [crate::commands::cert::report::DeploymentEvent],
+}
+
+pub(in crate::commands) fn deployment_output(
+    report: &crate::commands::cert::report::DeploymentReport,
+) -> DeploymentReportOutput<'_> {
+    DeploymentReportOutput {
+        certificate: &report.name,
+        events: &report.events,
+        deployments: report
+            .entries
+            .iter()
+            .map(|binding| {
+                let mut view = DeploymentStatusView::from(binding);
+                view.execution_error = current_error(&report.events, &binding.id);
+                view
+            })
+            .collect(),
+    }
+}
+
 pub(crate) fn deployment_report(
     report: &crate::commands::cert::report::DeploymentReport,
     format: Format,
 ) -> CliResult<String> {
-    #[derive(Serialize)]
-    struct View<'a> {
-        certificate: &'a str,
-        deployments: Vec<DeploymentStatusView<'a>>,
-        events: &'a [crate::commands::cert::report::DeploymentEvent],
-    }
     if format.json {
-        return Ok(serde_json::to_string_pretty(&View {
-            certificate: &report.name,
-            events: &report.events,
-            deployments: report
-                .entries
-                .iter()
-                .map(|binding| {
-                    let mut view = DeploymentStatusView::from(binding);
-                    view.execution_error = current_error(&report.events, &binding.id);
-                    view
-                })
-                .collect(),
-        })?);
+        return Ok(serde_json::to_string_pretty(&deployment_output(report))?);
     }
     if report.entries.is_empty() {
         if !report.events.is_empty() {

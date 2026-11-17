@@ -282,3 +282,14 @@ CLI/文件集成回归使用生产preparation事务和真实journal：删除整�
 清理验收：签发成功后在 zone 权威 NS 查询 `_acme-challenge.test.849239.xyz` 的 TXT 为空，终态自动清理无残留；一方 Cloudflare provider 的 present→传播→CA 验证→精确清理在真实环境闭环。
 
 本轮未覆盖：provider 中断后同 publication_id 恢复对账、preexisting TXT 保留、dns_external 续期、CNAME 委派、生产 CA、其他 DNS provider 与 Linux/Windows 平台。
+
+## 可靠性与边界回归（2026-11-18）
+
+本轮基于 `783ab39` 的工作树验证，环境为 macOS。DNS 传播策略保持原行为，`aster_acme_dns` 和 `aster_acme_dns_resolver` 与该基础 revision 完全一致。
+
+- `cargo test --workspace --all-targets --locked -- --test-threads=2`：主套件 **901 passed、0 failed、10 ignored**；计数排除主套件再次启动的子 fixture，ignored 均为独立子进程或 PTY 入口。
+- 新增或扩展边界覆盖：首次明确吊销拒绝与已有不确定结果、408/429 后 ack/finalize 保留提交和等待期限、暂时性状态优先于 Problem 名称；单证书 refresh/读回双重失败保留两种原因且继续后续证书；部署部分失败、发布后内容/身份/链接/权限/目录变化、空 CA 链、000/仅写模式、路径失效阻止配置和执行、恢复与别名冲突；TTL 缺省/上下界、厂商 clamp、配置更新和丢响应恢复不改已保存 TTL；daemon 流式/独立 JSON 一致性与既有输出快照。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked` 通过；`scripts/check-precheck-features.py` 独立编译和测试可选组合，并验证空 validation 生产依赖不包含 Tokio/tokio-util/Hickory。
+- 原生 PTY：Provider 29 场景、确认输入 18 场景通过。workspace/import/TLS/生产 feature 策略、本地文档链接与 `git diff HEAD --check` 通过；使用 `scripts/requirements.txt` 的隔离 Python 环境运行脚本单元测试，14 项通过。
+
+协议分类和 TTL 范围已核对 RFC 原文，依据见 [RFC 核对](rfc-reference.md#请求结果和-ttl-原文核对2026-11-18)。未执行 Linux/Windows 原生验收、真实公网 DNS/CA mutation 或整机掉电测试；逐文件部署仍不保证整组原子切换或核验后外部修改隔离。

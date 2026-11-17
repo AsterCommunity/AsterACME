@@ -158,3 +158,92 @@ async fn queueing_an_already_deployed_generation_is_idempotent() {
     assert!(session.definition().checkpoint().is_deployed());
     assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
 }
+
+#[tokio::test]
+async fn unavailable_existing_destination_blocks_configuration_and_execution_until_repaired() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let existing = f.temp.path().join("existing");
+    let available = f.temp.path().join("available");
+    std::fs::create_dir(&existing).unwrap();
+    std::fs::create_dir(&available).unwrap();
+    let definition = |name: &str, path: std::path::PathBuf| DeploymentDefinition {
+        permissions: DeploymentPermissions::default(),
+        name: Some(name.into()),
+        target: DeploymentTarget::Directory { path },
+        reload_command: vec![],
+        timeout_seconds: 1,
+        max_retries: 0,
+    };
+    f.store
+        .add_deployment(&current.name, definition("existing", existing.clone()))
+        .await
+        .unwrap();
+    std::fs::remove_dir(&existing).unwrap();
+    let slot = f.store.slot(&current.name);
+    let before = std::fs::read(slot.join("cert.toml")).unwrap();
+    let error = f
+        .store
+        .add_deployment(&current.name, definition("new", available.clone()))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("cannot prove deployment ownership") && error.contains("existing"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
+    assert!(std::fs::read_dir(&available).unwrap().next().is_none());
+    std::fs::create_dir(&existing).unwrap();
+    f.store
+        .add_deployment(&current.name, definition("new", available.clone()))
+        .await
+        .unwrap();
+    std::fs::remove_dir(&existing).unwrap();
+    assert!(
+        f.store
+            .open_deployment(&current.name, "new")
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("cannot prove deployment ownership")
+    );
+    assert!(std::fs::read_dir(&available).unwrap().next().is_none());
+    std::fs::create_dir(&existing).unwrap();
+    let session = f.store.open_deployment(&current.name, "new").await.unwrap();
+    session.publish().await.unwrap();
+    assert!(available.join("cert.pem").is_file());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn canonical_ancestor_alias_cannot_claim_an_existing_deployment() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let target = f.temp.path().join("destination");
+    let alias = f.temp.path().join("alias");
+    std::fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, &alias).unwrap();
+    for (index, path) in [target, alias].into_iter().enumerate() {
+        let result = f
+            .store
+            .add_deployment(
+                &current.name,
+                DeploymentDefinition {
+                    permissions: DeploymentPermissions::default(),
+                    name: Some(format!("service-{index}")),
+                    target: DeploymentTarget::Directory { path },
+                    reload_command: vec![],
+                    timeout_seconds: 1,
+                    max_retries: 0,
+                },
+            )
+            .await;
+        if index == 0 {
+            result.unwrap();
+        } else {
+            assert!(result.unwrap_err().to_string().contains("conflicts"));
+        }
+    }
+}

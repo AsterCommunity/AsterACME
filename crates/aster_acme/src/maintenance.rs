@@ -157,7 +157,7 @@ pub struct Entry {
     pub operation_id: String,
     /// Result classification for this invocation.
     pub outcome: Outcome,
-    /// Selected renewal time, when a durable plan was observed.
+    /// Selected renewal time; absent when the latest durable state could not be read.
     pub renew_at: Option<time::OffsetDateTime>,
     /// Persisted next ARI query time, independent of `renew_at`.
     pub next_check_at: Option<time::OffsetDateTime>,
@@ -255,7 +255,13 @@ pub async fn run_once(
                     entry.outcome = Outcome::Cancelled;
                     report.cancelled = true;
                 }
-                Err(error) => entry.outcome = Outcome::Failed(error),
+                Err(error) => {
+                    if matches!(error, IssueError::MaintenanceReadback { .. }) {
+                        entry.renew_at = None;
+                        entry.next_check_at = None;
+                    }
+                    entry.outcome = Outcome::Failed(error);
+                }
             }
         }
         if let Some(observer) = observer {
@@ -293,7 +299,15 @@ async fn refresh_one(
     };
     // The refresh may have saved retry intent before cancellation. Read durable
     // state while still holding the lease, including on a network/deadline error.
-    let saved = session.record().await?;
+    let saved = match session.record().await {
+        Ok(saved) => saved,
+        Err(readback) => {
+            return Err(IssueError::MaintenanceReadback {
+                operation: Box::new(error),
+                readback: Box::new(readback),
+            });
+        }
+    };
     let outcome = match error {
         IssueError::Interrupted if execution.cancellation.is_cancelled() => Outcome::Cancelled,
         error => Outcome::Failed(error),
@@ -303,6 +317,7 @@ async fn refresh_one(
 
 #[cfg(test)]
 mod tests {
+    mod readback;
     use crate::{
         account::AccountRecord,
         issuance::{CertificateName, IssueError, IssueRecord, IssueRequest},

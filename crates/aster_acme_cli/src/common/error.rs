@@ -117,6 +117,7 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
 fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option<String>) {
     use aster_acme::issuance::IssueError;
     match issue {
+        IssueError::MaintenanceReadback { .. } => (issue.to_string(), Some("Inspect certificate storage and permissions. The latest saved renewal state is unavailable; other certificates are processed independently.".into())),
         IssueError::LeaseUnavailable(..) => (issue.to_string(), Some("Let the running operation finish, then check the saved certificate state and lock permissions. Lock contention does not advance renewal backoff.".into())),
         IssueError::AuthorizationFailed { status, problem } => self::problem::authorization_failed(status, problem.as_deref()),
         IssueError::DnsProvider(_) | IssueError::DnsRouting(_) | IssueError::DnsPropagation(_) | IssueError::DnsRetryAt(_) => (issue.to_string(), Some("Inspect provider show <PROFILE> and its private TOML configuration, allowed DNS zones, resolver diagnostic and provider error code. Retain the saved request and publication receipts; resume the same request after correcting the cause or waiting for the saved retry time. For a terminal request use provider cleanup <PROFILE>.".into())),

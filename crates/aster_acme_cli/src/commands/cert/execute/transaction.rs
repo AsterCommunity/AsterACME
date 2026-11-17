@@ -136,7 +136,7 @@ async fn validate_new_provider_binding(start: &Start, data_dir: &std::path::Path
     };
     let method = crate::commands::cert::validation::ValidationMethod::from_id(&request.solver_id)?;
     if method == crate::commands::cert::validation::ValidationMethod::DnsProvider {
-        crate::commands::cert::validation::validate_provider_binding(
+        crate::commands::cert::validation::provider::validate_provider_binding(
             &request.solver_config,
             data_dir,
         )

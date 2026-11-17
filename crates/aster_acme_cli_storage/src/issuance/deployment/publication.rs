@@ -8,9 +8,10 @@ use crate::issuance::deployment::{
     DeploymentArtifacts, DeploymentPermissions, DeploymentTarget, permissions,
 };
 use crate::issuance::{IssueError, ensure_real_dir, failure};
+use sha2::{Digest as _, Sha256};
 use std::{
-    fs,
-    io::Write as _,
+    fs::{self, File},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
@@ -18,9 +19,9 @@ mod anchored;
 #[cfg(not(unix))]
 mod portable;
 #[cfg(unix)]
-use crate::issuance::deployment::publication::anchored::Temporary;
+use crate::issuance::deployment::publication::anchored::{Published, Temporary};
 #[cfg(not(unix))]
-use crate::issuance::deployment::publication::portable::Temporary;
+use crate::issuance::deployment::publication::portable::{Published, Temporary};
 
 /// Owns all fully written/synced files until the explicit commit boundary.
 pub(super) struct PreparedPublication {
@@ -30,6 +31,20 @@ pub(super) struct PreparedPublication {
 struct PreparedFile {
     destination: PathBuf,
     temporary: Temporary,
+    expected: ExpectedFile,
+}
+
+struct ExpectedFile {
+    digest: [u8; 32],
+    length: u64,
+    #[cfg(unix)]
+    mode: Option<u32>,
+}
+
+struct PublishedFile {
+    destination: PathBuf,
+    published: Published,
+    expected: ExpectedFile,
 }
 
 struct Destination<'a> {
@@ -120,18 +135,93 @@ impl PreparedPublication {
     }
 
     pub(super) fn commit(self) -> Result<(), IssueError> {
+        self.commit_observed(|| {})
+    }
+
+    fn commit_observed(self, after_replacement: impl Fn()) -> Result<(), IssueError> {
         // Recheck the whole set after preparation before replacing the first file.
         // Unix IO stays anchored even if a path changes after the last check.
         // Initial resolution and the portable path adapter need trusted ancestors.
         for file in &self.files {
             file.temporary.inspect(&file.destination)?;
         }
+        let mut published = Vec::with_capacity(self.files.len());
         for file in self.files {
-            file.temporary.inspect(&file.destination)?;
-            file.temporary.persist(&file.destination)?;
+            let result = file
+                .temporary
+                .inspect(&file.destination)
+                .and_then(|()| file.temporary.persist(&file.destination));
+            match result {
+                Ok(handle) => published.push(PublishedFile {
+                    destination: file.destination,
+                    published: handle,
+                    expected: file.expected,
+                }),
+                Err(error) => return Err(partial_error(&published, &error)),
+            }
+            after_replacement();
+        }
+        for file in &published {
+            file.published
+                .verify(&file.destination, &file.expected)
+                .map_err(|error| partial_error(&published, &error))?;
         }
         Ok(())
     }
+}
+
+fn partial_error(published: &[PublishedFile], error: &IssueError) -> IssueError {
+    let paths = published
+        .iter()
+        .map(|file| file.destination.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    failure(&format!(
+        "{error}; replacements completed before failure: [{paths}]; destinations may contain a partial or changed set (the failing replacement may also have taken effect); reload is forbidden; retry the complete set"
+    ))
+}
+
+fn verify_contents(file: File, expected: &ExpectedFile, path: &Path) -> Result<(), IssueError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| path_error("verify metadata", path, &error))?;
+    if !metadata.is_file() || metadata.len() != expected.length {
+        return Err(failure(&format!(
+            "deployment verification failed at {}: file type or length changed",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if let Some(mode) = expected.mode {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o7777 != mode {
+            return Err(failure(&format!(
+                "deployment verification failed at {}: permissions changed",
+                path.display()
+            )));
+        }
+    }
+    let mut digest = Sha256::new();
+    let mut reader = file.take(expected.length.saturating_add(1));
+    let mut buffer = zeroize::Zeroizing::new([0_u8; 8192]);
+    let mut length = 0_u64;
+    loop {
+        let read = reader
+            .read(buffer.as_mut())
+            .map_err(|error| path_error("verify contents", path, &error))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        length += read as u64;
+    }
+    if length != expected.length || <[u8; 32]>::from(digest.finalize()) != expected.digest {
+        return Err(failure(&format!(
+            "deployment verification failed at {}: contents changed",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 /// The collection owns each successfully prepared file before starting the next.
@@ -157,9 +247,28 @@ fn stage_all(
     let mut prepared = Vec::with_capacity(files.len());
     for file in files {
         let temporary = stage(&file)?;
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt as _;
+            Some(
+                temporary
+                    .as_file()
+                    .metadata()
+                    .map_err(|error| path_error("inspect staged permissions", &file.path, &error))?
+                    .permissions()
+                    .mode()
+                    & 0o7777,
+            )
+        };
         prepared.push(PreparedFile {
             destination: file.path,
             temporary,
+            expected: ExpectedFile {
+                digest: Sha256::digest(file.contents).into(),
+                length: file.contents.len() as u64,
+                #[cfg(unix)]
+                mode,
+            },
         });
     }
     Ok(PreparedPublication { files: prepared })

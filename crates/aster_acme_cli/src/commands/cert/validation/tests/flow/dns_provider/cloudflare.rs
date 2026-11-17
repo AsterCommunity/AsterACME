@@ -142,6 +142,7 @@ fn solver(cloud: Arc<Cloud>, root: &std::path::Path, config: &BackendConfig) -> 
         )
         .unwrap();
     ProviderDns {
+        ttl_seconds: 120,
         context: ProviderContext {
             provider_instance_id: "native".into(),
             provider_profile_version: 1,
@@ -264,12 +265,13 @@ async fn saved_definition_allows_token_rotation_but_rejects_backend_or_zone_chan
     .unwrap();
     store.add("native".into(), profile.clone()).await.unwrap();
     let mut record = fixture.session.as_ref().unwrap().record().await.unwrap();
-    record.solver_config = crate::commands::cert::validation::bound_provider_configuration(
-        Some("native"),
-        fixture.temp.path(),
-    )
-    .await
-    .unwrap();
+    record.solver_config =
+        crate::commands::cert::validation::provider::bound_provider_configuration(
+            Some("native"),
+            fixture.temp.path(),
+        )
+        .await
+        .unwrap();
     assert!(
         !record
             .solver_config
@@ -283,7 +285,7 @@ async fn saved_definition_allows_token_rotation_but_rejects_backend_or_zone_chan
         let mut tampered = record.clone();
         tampered.solver_config["dns_targets"] = mapping;
         assert!(
-            crate::commands::cert::validation::provider_adapter(
+            crate::commands::cert::validation::provider::provider_adapter(
                 &tampered,
                 fixture.temp.path(),
                 progress(),
@@ -303,7 +305,7 @@ async fn saved_definition_allows_token_rotation_but_rejects_backend_or_zone_chan
         .await
         .unwrap();
     assert!(
-        crate::commands::cert::validation::provider_adapter(
+        crate::commands::cert::validation::provider::provider_adapter(
             &record,
             fixture.temp.path(),
             progress(),
@@ -322,7 +324,7 @@ async fn saved_definition_allows_token_rotation_but_rejects_backend_or_zone_chan
         .await
         .unwrap();
     assert!(
-        crate::commands::cert::validation::provider_adapter(
+        crate::commands::cert::validation::provider::provider_adapter(
             &record,
             fixture.temp.path(),
             progress(),
@@ -341,7 +343,7 @@ async fn saved_definition_allows_token_rotation_but_rejects_backend_or_zone_chan
         .await
         .unwrap();
     assert!(
-        crate::commands::cert::validation::provider_adapter(
+        crate::commands::cert::validation::provider::provider_adapter(
             &record,
             fixture.temp.path(),
             progress(),

@@ -50,6 +50,7 @@ executable = "/absolute/path/my-dns-provider"
 args = []
 allowed_zones = [] # 默认不限制；例如 ["example.com"] 可启用附加限制
 timeout_seconds = 30
+ttl_seconds = 120 # 请求值；0..2147483647，厂商可采用最小值
 propagation_timeout = 5 # 本地建议性检查的预算
 propagation_interval = 5 # 发布成功后、首次检查前的等待
 
@@ -102,6 +103,8 @@ _acme-challenge.example.com. CNAME acme.validation.net.
 provider `present` 成功只表示 DNS API 操作已完成或完成对账。保存回执后默认等 5 秒，再对原始 challenge owner 做一次本地 TXT 建议性检查，默认检查预算为 5 秒；同名的全部预期值必须出现在同一份应答中。全部匹配立即请求 CA 验证；缺值、解析错误或本地检查超时仅警告，再等 10 秒后请求 CA，不循环等待本地可见。本地可见性不代表 CA 已通过验证。等待、检查和 CA 请求始终受取消及 `--operation-timeout` 限制；取消/整体超时仍保留记录与回执且不 ack。
 
 `timeout_seconds` 为每次 provider 调用（含内置批次或外部进程）1–300 秒；`propagation_timeout` 现在表示单次本地检查预算（1–3600 秒）；`propagation_interval` 现在表示检查前等待（1–60 秒），不再表示轮询间隔。已有 Profile 使用文件中明确保存的数值，不自动重写；例如旧文件的 `propagation_timeout = 120` 会给单次检查最多 120 秒，可手动改为 5。额外等待固定为 10 秒。共享策略位于 `aster_acme_dns`，供外部及内置 adapter 复用。
+
+`ttl_seconds` 默认 120，采用 RFC 2181 §8 的 `0..=2147483647` 范围。它是请求值，Cloudflare 当前将其限制到 60–86400；其他 backend 拥有各自的限制。TTL 不会清除已有递归或负缓存，也不代表传播等待时间。第一次写入前把 TTL 与目标和值一起固定在 publication plan 中；修改 Profile 只影响尚未生成计划的新发布，恢复、对账与清理继续使用已保存的计划，不因配置变化改写同一 publication ID。可通过 `provider add/update NAME --ttl-seconds 300` 设置；show 的人类和 JSON 输出也展示请求值。
 
 ## 恢复、所有权和清理
 

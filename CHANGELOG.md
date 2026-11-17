@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **DNS publication TTL** — Configure requested TXT TTL with `provider add/update --ttl-seconds` (default 120, RFC 2181 range 0–2147483647); retain each publication's saved TTL across recovery and profile edits. Backends own vendor-specific limits; local propagation observations keep their existing advisory behavior.
+
+### Changed
+
+- **Deployment verification** — Verify the full published file set against staged content, identity and applicable permissions before reload. Report completed replacement paths on failure while retaining the partial-set/retry contract; no whole-set atomicity or automatic rollback is promised. Refuse configuration and deployment when an existing destination cannot be normalized to prove ownership; restore access or remove the stale binding before retrying.
+- **Optional validation dependencies** — An empty `aster_acme_validation` feature set no longer brings Tokio into production dependencies. Check and test optional feature combinations independently.
+
+### Fixed
+
+- **ACME mutation recovery** — Retain revocation Pending and challenge/finalize Submitted evidence after 408/429 instead of treating these transient responses as definitive rejection. Preserve acknowledgement/finalize retry deadlines, prior uncertain revocations and the existing explicit-retry boundaries.
+- **Maintenance diagnostics** — Preserve both the refresh failure and subsequent durable-read failure for one certificate, report its latest schedule as unavailable, and continue processing the remaining certificates.
+
 ## [0.1.0-alpha.2] - 2026-11-18
 
 ### Added
@@ -55,6 +69,6 @@ Initial pre-release. Rust APIs and local formats may change without compatibilit
 
 Cross-compilation and local mocks do not constitute native-platform or public-CA acceptance.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.2...HEAD
 [0.1.0-alpha.2]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

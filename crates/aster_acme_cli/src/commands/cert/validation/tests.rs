@@ -1,4 +1,5 @@
 //! CLI policy does not become protocol logic; persisted definitions are authoritative.
+use crate::commands::cert::validation::provider::provider_configuration;
 use crate::commands::cert::validation::*;
 use aster_acme::{issuance::ValidationRequirement, solver::ExecutionContext};
 use clap::Parser;

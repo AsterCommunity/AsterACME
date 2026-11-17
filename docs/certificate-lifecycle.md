@@ -36,7 +36,7 @@ aster-acme daemon run-once --request-timeout 30 --operation-timeout 600 --poll-i
 
 ARI刷新只扫描当前 in_use、已完成、未吊销、未过期且有ARI标识且`next_check_at`已到期的证书；这一阶段不需要账户密钥。随后自动续期独立筛选当前 in_use、已完成、未吊销且`renew_at`已到期的证书，不要求该轮先完成ARI刷新。两个阶段分别调用各自期限，不注册账户、不创建订单直到续期事务通过准入检查。最后重新查询当前证书及部署绑定，对到期的已知部署失败执行重试；续期成功仍通过既有自动部署/reload hook立即部署。
 
-可嵌入入口`aster_acme::maintenance::run_cycle`协调ARI、续期与部署重试阶段；ARI资格判断、目录缓存与发现、延期重查和更新归`renewal::refresh::RefreshCycle`，实际GET及持久化复用`RenewalService`的同一实现。续期退避与部署重试准入属于库策略；租约及持锁快照重验由`IssueStore`实现，文件适配器用跨进程锁执行。ARI使用类型化`IssueQuery::ari_due_at`筛选，每项调用`IssueStore::open_observation`获取与前台执行共用的证书锁，锁内重验选用世代、到期与吊销状态。正常元数据会话不加载固定key/CSR，执行会话`open`仍做原有材料验证；Windows视图恢复仍遵循存储契约。查询快照过期则跳过，重叠进程不会基于旧快照重复更新。锁失败记录为该项失败，不跳过为成功。
+可嵌入入口`aster_acme::maintenance::run_cycle`协调ARI、续期与部署重试阶段；ARI资格判断、目录缓存与发现、延期重查和更新归`renewal::refresh::RefreshCycle`，实际GET及持久化复用`RenewalService`的同一实现。续期退避与部署重试准入属于库策略；租约及持锁快照重验由`IssueStore`实现，文件适配器用跨进程锁执行。ARI使用类型化`IssueQuery::ari_due_at`筛选，每项调用`IssueStore::open_observation`获取与前台执行共用的证书锁，锁内重验选用世代、到期与吊销状态。正常元数据会话不加载固定key/CSR，执行会话`open`仍做原有材料验证；Windows视图恢复仍遵循存储契约。查询快照过期则跳过，重叠进程不会基于旧快照重复更新。锁失败记录为该项失败，不跳过为成功。单证书 refresh 或本地 record 读取失败记录该项 Failed 并继续后续证书；refresh 失败后持锁读回也失败时保留两个错误，并把最新续期/查询时间标为未知，不用库存旧快照冒充最新状态。
 
 同一轮共用HTTP池，每个CA成功发现的directory复用一次。发现失败或无 `renewalInfo` 时保留原续期计划，将下一次发现延后六小时，避免频繁cron请求；这不冒充一次成功ARI GET，`last_checked_at`保持不变。实际ARI查询复用 `RenewalService` 的持久化意图、窗口、Retry-After和重试策略。缺少/非法Retry-After仍可应用有效窗口，结果为 `retry scheduled`。全部时间写回对应版本的现有计划，不增加独立任务状态文件。查询前保存一次重试意图；失败或响应没有新信息时不重复写journal，只有计划变化才保存响应结果。成功路径直接返回已保存记录，失败路径仍在锁内重读以报告真实持久化状态。
 
@@ -68,7 +68,7 @@ aster-acme cert revoke --operation <FULL-ID> --yes --json
 - 证书密钥来自当前选定的托管世代`private-key.pk8`；无需原账户私钥、账户目录或CSR。库可通过`RevocationTarget`和`dyn RevocationSession`注入外部证书及存储，CLI本轮不增加任意文件导入入口。CA directory由托管记录或嵌入调用方显式提供，不从证书猜端点。
 - `JwsSigner`与`SoftwareSigningKey`是账户和证书共用的密码学边界，证书公钥通过`Jwk::from_spki`与签名器比较；不构造虚假账户或重复JWS实现。账户路径无需证书私钥；两条路径均不使用签发执行会话，不校验固定CSR、不强制证书仍在有效期内，CA最终决定是否接受吊销。
 - `--reason` 覆盖 RFC 5280 全部已分配代码：unspecified (0)、key-compromise (1)、ca-compromise (2)、affiliation-changed (3)、superseded (4)、cessation-of-operation (5)、certificate-hold (6)、remove-from-crl (8)、privilege-withdrawn (9)、aa-compromise (10)。7 未定义，解析时拒绝。缺省省略 reason；CA 可用 badRevocationReason 拒绝，不设客户端 CA 政策白名单。remove-from-crl 是增量 CRL 的移除条目，不代表 ACME 支持恢复证书；本客户端无论提交何种原因都不会将 confirmed revoked 改回有效。
-- nonce和签名准备完成后、真正发送前保存pending，固定精确叶子DER的SHA-256、directory、原因、实际签名方式及公钥指纹；会话从确认前固定目标并在每次写入时复核，证书文件变化不得更换吊销目标。只有 HTTP 200 或 HTTP 400 的 alreadyRevoked problem 确认成功，空成功 body 合法。网络、5xx、未知响应或确认写入失败保留未确认状态。
+- nonce和签名准备完成后、真正发送前保存pending，固定精确叶子DER的SHA-256、directory、原因、实际签名方式及公钥指纹；会话从确认前固定目标并在每次写入时复核，证书文件变化不得更换吊销目标。只有 HTTP 200 或 HTTP 400 的 alreadyRevoked problem 确认成功，空成功 body 合法。网络、408/429、5xx、未知响应或确认写入失败保留未确认状态；只有首次尝试的明确 ACME 拒绝才能清除 intent，已有 Pending 永不被后来一次拒绝清除。
 - 不自动重放超时或 5xx；transport 仅对 badNonce 有限重签。操作员显式再次执行 revoke 时，可使用同一证书和原原因重新请求，以 200/alreadyRevoked 确认。pending 不允许换原因；省略时沿用原原因。
 - 首次请求的明确 4xx problem 拒绝可恢复为未请求；之后的拒绝不能抹除更早 pending 的不确定性。已确认重复调用校验保存的目标绑定后返回本地结果，不读取签名器或发现CA。
 - 文件和 in_use 链接保留，不会重新生成密钥、删除证书、撤回已部署副本或重载服务。吊销状态与 order.status=valid、签发 phase=completed 独立。pending/confirmed 不再作为续期候选或继续 issue --resume。

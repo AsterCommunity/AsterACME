@@ -582,3 +582,41 @@ fn automatic_zone_discovery_rejects_ambiguous_or_invalid_results() {
     http(op.advance(response(json!([]))).unwrap(), "GET");
     assert!(op.advance(response(json!([]))).is_err());
 }
+
+#[test]
+fn requested_ttl_uses_backend_limits_without_changing_the_saved_record() {
+    for (requested, effective) in [
+        (None, 120),
+        (Some(0), 60),
+        (Some(59), 60),
+        (Some(60), 60),
+        (Some(300), 300),
+        (Some(86_400), 86_400),
+        (Some(2_147_483_647), 86_400),
+    ] {
+        let mut record = record();
+        record.ttl_seconds = requested;
+        let original = record.clone();
+        let mut machine = factory()
+            .start(ProviderAction::Present(record), None)
+            .unwrap();
+        http(machine.advance(ProviderEvent::Start).unwrap(), "GET");
+        http(machine.advance(zone()).unwrap(), "GET");
+        let ProviderEffect::Checkpoint(saved) = machine.advance(response(json!([]))).unwrap()
+        else {
+            panic!("missing checkpoint")
+        };
+        let request = http(
+            machine.advance(ProviderEvent::CheckpointSaved).unwrap(),
+            "POST",
+        );
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["ttl"], effective);
+        // Recovery is still bound to the exact requested record, not the vendor clamp.
+        assert!(
+            factory()
+                .start(ProviderAction::Present(original), Some(saved))
+                .is_ok()
+        );
+    }
+}

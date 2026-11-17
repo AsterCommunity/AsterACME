@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 pub(super) struct ProviderDns {
+    pub(super) ttl_seconds: u32,
     pub(super) context: ProviderContext,
     pub(super) provider: Arc<dyn DnsProvider>,
     pub(super) lookup: Arc<dyn DnsLookup>,
@@ -227,7 +228,7 @@ impl ChallengeSolver for ProviderDns {
                     cname_chain: chain,
                     name: target,
                     value: value.clone(),
-                    ttl_seconds: Some(120),
+                    ttl_seconds: Some(self.ttl_seconds),
                 },
             });
         }

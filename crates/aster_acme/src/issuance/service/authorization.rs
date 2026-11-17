@@ -270,11 +270,15 @@ impl IssueService {
                                 ) => retry_after.clone(),
                                 _ => None,
                             };
-                            record.authorizations[index].acknowledgement =
-                                SubmissionState::NotSubmitted;
+                            if matches!(&error, IssueError::Transport(error) if error.is_definitive_rejection())
+                            {
+                                record.authorizations[index].acknowledgement =
+                                    SubmissionState::NotSubmitted;
+                            }
                             // RFC 8555 §6.6 and RFC 9110 §10.2.3: a rejected
-                            // submission still carries a server wait deadline.
-                            // Persist it before allowing an explicit retry.
+                            // response still carries a server wait deadline.
+                            // 408/429 retain submission uncertainty; the deadline
+                            // also applies before querying the remote resource.
                             schedule_retry(record, retry_after.as_ref(), execution.poll_interval);
                             session.save(record).await?;
                             return Err(error);

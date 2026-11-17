@@ -75,3 +75,5 @@ DNS solver的正常取消由拥有子进程的runner处理，服务不从外层�
 `dns_provider`使用命名Profile与统一后端registry，支持内置Cloudflare状态机和ADPP adapter；路由和receipt都不含provider_custom。恢复沿用已保存CNAME目标；响应丢失时只以同一publication_id重试对账。provider原始错误码、无副作用/未知副作用及本地process/protocol错误分开，DNS路由错误保留resolver原因。CNAME与传播的具体策略、Profile存储和独立清理入口见[Provider操作](../dns-providers.md)。
 
 `issuance::publication::cleanup`可在无ACME客户端/账户密钥时重试已确认终态的清理；逐条保存成功结果，保留失败条目。尚无回执但有保存计划时按原ID对账再清理；未知CA结果禁止调用。它不把本地文件删除当DNS清理。
+
+challenge ack/finalize 的结构化 408/429 保留 Submitted，并保存 Retry-After 作为下一次查询下限；其他明确 4xx 仍按对应端点规则处理。HTTP 拒绝分类共享于 transport，协议特有 Problem 转换仍归各自流程，原文依据见 [RFC 核对](../rfc-reference.md#请求结果和-ttl-原文核对2026-11-18)。

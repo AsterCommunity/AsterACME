@@ -24,7 +24,7 @@ impl Prompts for TerminalPrompts<'_> {
         let root = data_dir.map_or_else(crate::config::default_data_dir, |root| {
             Ok(root.to_path_buf())
         })?;
-        crate::commands::provider::select(&root, self.0).await
+        crate::commands::provider::execute::select(&root, self.0).await
     }
     fn text(&mut self, message: &str, default: Option<&str>) -> CliResult<String> {
         self.0.interaction_started();
@@ -103,7 +103,9 @@ pub(super) async fn complete(
                     "DNS provider validation does not use --webroot or --listen-address.".into(),
                 );
             }
-            crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?;
+            crate::commands::cert::validation::provider::provider_configuration(
+                args.provider.as_deref(),
+            )?;
         } else {
             if args.provider.is_some() || !args.dns_targets.is_empty() {
                 return Err(
@@ -154,7 +156,9 @@ pub(super) async fn complete(
         args.provider = Some(prompts.provider(args.run.local.data_dir.as_deref()).await?);
     }
     if method == ValidationMethod::DnsProvider {
-        crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?;
+        crate::commands::cert::validation::provider::provider_configuration(
+            args.provider.as_deref(),
+        )?;
     } else if args.provider.is_some() || !args.dns_targets.is_empty() {
         return Err("--provider and --dns-target are only valid with -c dns_provider.".into());
     }
@@ -164,7 +168,9 @@ pub(super) async fn complete(
     }
     complete_method(args, method, prompts)?;
     if method == ValidationMethod::DnsProvider {
-        crate::commands::cert::validation::provider_configuration(args.provider.as_deref())?;
+        crate::commands::cert::validation::provider::provider_configuration(
+            args.provider.as_deref(),
+        )?;
     } else {
         configuration(method, args.webroot.as_deref(), args.listen_address)?;
     }
@@ -172,7 +178,8 @@ pub(super) async fn complete(
 }
 
 fn validate_dns_targets(args: &IssueArgs) -> CliResult<()> {
-    let targets = crate::commands::cert::validation::parse_dns_targets(&args.dns_targets)?;
+    let targets =
+        crate::commands::cert::validation::provider::parse_dns_targets(&args.dns_targets)?;
     for domain in targets.keys() {
         if !args
             .domain

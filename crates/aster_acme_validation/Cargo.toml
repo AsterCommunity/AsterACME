@@ -13,20 +13,21 @@ readme = "README.md"
 
 [features]
 default = []
-dns01 = ["dep:aster_acme", "dep:async-trait", "dep:hickory-resolver", "dep:thiserror"]
-precheck-caa = ["dep:aster_acme", "dep:async-trait", "dep:aster_acme_protocol", "dep:hickory-resolver", "dep:aster_acme_core", "dep:thiserror", "aster_acme/precheck"]
+dns01 = ["dep:aster_acme", "dep:async-trait", "dep:hickory-resolver", "dep:thiserror", "dep:tokio"]
+precheck-caa = ["dep:aster_acme", "dep:async-trait", "dep:aster_acme_protocol", "dep:hickory-resolver", "dep:aster_acme_core", "dep:thiserror", "dep:tokio", "aster_acme/precheck"]
 precheck-dns = ["dns01", "aster_acme/precheck"]
 
 [dependencies]
 thiserror = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 hickory-resolver = { workspace = true, optional = true }
-tokio.workspace = true
+tokio = { workspace = true, optional = true }
 aster_acme = { workspace = true, optional = true }
 aster_acme_core = { workspace = true, optional = true }
 aster_acme_protocol = { workspace = true, optional = true }
 
 [dev-dependencies]
+tokio.workspace = true
 serde_json.workspace = true
 tokio-util.workspace = true
 

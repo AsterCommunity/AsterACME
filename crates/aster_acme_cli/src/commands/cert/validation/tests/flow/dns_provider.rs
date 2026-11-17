@@ -161,6 +161,7 @@ impl DnsProvider for Dns {
 }
 fn solver(dns: Arc<Dns>) -> ProviderDns {
     ProviderDns {
+        ttl_seconds: 120,
         context: ProviderContext {
             provider_instance_id: "test-provider".into(),
             provider_profile_version: 1,
@@ -767,4 +768,51 @@ async fn multiple_owners_use_explicit_mapping_or_independent_dns_resolution() {
             .is_err()
     );
     assert_eq!(dns.route_queries.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn saved_publication_ttl_survives_profile_changes_and_lost_response_reconciliation() {
+    let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+    let dns = Arc::new(Dns::default());
+    dns.lose_response.store(true, Ordering::SeqCst);
+    let mut first = solver(dns.clone());
+    first.ttl_seconds = 300;
+    assert!(run(&mut fixture, &first, &controls()).await.is_err());
+    let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+    assert_eq!(
+        saved.authorizations[0]
+            .publication_plan
+            .as_ref()
+            .unwrap()
+            .ttl_seconds,
+        Some(300)
+    );
+    assert_eq!(
+        dns.records
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .0
+            .ttl_seconds,
+        Some(300)
+    );
+    fixture.reopen().await;
+    let mut changed = solver(dns.clone());
+    changed.ttl_seconds = 900;
+    let IssueOutcome::Completed { record, .. } =
+        run(&mut fixture, &changed, &controls()).await.unwrap()
+    else {
+        panic!("not completed")
+    };
+    assert_eq!(
+        record.authorizations[0]
+            .publication_plan
+            .as_ref()
+            .unwrap()
+            .ttl_seconds,
+        Some(300)
+    );
+    assert_eq!(dns.writes.load(Ordering::SeqCst), 1);
 }

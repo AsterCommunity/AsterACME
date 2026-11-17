@@ -15,7 +15,7 @@ pub(crate) enum CommandReport {
     Certificate(cert::report::CertificateReport),
     Maintenance(daemon::DaemonReport),
     DaemonStopped(daemon::DaemonStopped),
-    Provider(provider::ProviderReport),
+    Provider(provider::report::ProviderReport),
     Version,
 }
 impl CommandReport {
@@ -25,7 +25,7 @@ impl CommandReport {
             Self::Certificate(report) => cert::render::render(report, format),
             Self::Maintenance(report) => daemon::render::render(report, format),
             Self::DaemonStopped(report) => daemon::render::render_stopped(report, format),
-            Self::Provider(report) => provider::render(report, format),
+            Self::Provider(report) => provider::render::render(report, format),
             Self::Version => crate::commands::build_info::render(format.json),
         }
     }
@@ -64,7 +64,7 @@ pub(crate) async fn execute(args: Args, cli: &CommandContext) -> CliResult<Comma
         ))),
         Command::Version { .. } => Ok(CommandReport::Version),
         Command::Provider { command } => Ok(CommandReport::Provider(
-            provider::execute(command, cli).await?,
+            provider::execute::execute(command, cli).await?,
         )),
         Command::Daemon { command } => match daemon::execute(command, cli).await? {
             daemon::DaemonExecution::Cycle(report) => Ok(CommandReport::Maintenance(report)),

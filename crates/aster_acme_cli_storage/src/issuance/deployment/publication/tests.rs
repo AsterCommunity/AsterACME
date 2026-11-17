@@ -194,6 +194,8 @@ fn commit_failure_can_leave_a_partial_set_but_releases_staging_and_explicit_retr
     fs::remove_file(prepared.files[1].temporary.path()).unwrap();
     let error = prepared.commit().unwrap_err().to_string();
     assert!(error.contains("replace destination") && error.contains("cert.pem"));
+    assert!(error.contains("partial or changed set") && error.contains("reload is forbidden"));
+    assert!(error.contains(&root.path().join("fullchain.pem").display().to_string()));
     assert_eq!(
         fs::read(root.path().join("fullchain.pem")).unwrap(),
         b"new-chain"
@@ -212,6 +214,76 @@ fn commit_failure_can_leave_a_partial_set_but_releases_staging_and_explicit_retr
     );
     assert_eq!(fs::read(root.path().join("cert.pem")).unwrap(), b"new-leaf");
     assert_no_temporaries(root.path());
+}
+
+#[test]
+fn post_commit_verification_rejects_changed_missing_and_replaced_files() {
+    for fault in ["contents", "missing", "identity"] {
+        let root = tempfile::tempdir().unwrap();
+        let prepared = PreparedPublication::prepare(
+            &DeploymentTarget::Directory {
+                path: root.path().into(),
+            },
+            &artifacts(),
+            &DeploymentPermissions::default(),
+        )
+        .unwrap();
+        let replacements = std::cell::Cell::new(0);
+        let error = prepared
+            .commit_observed(|| {
+                replacements.set(replacements.get() + 1);
+                if replacements.get() == 4 {
+                    let path = root.path().join("cert.pem");
+                    match fault {
+                        "contents" => fs::write(path, b"bad-leaf").unwrap(),
+                        "missing" => fs::remove_file(path).unwrap(),
+                        _ => {
+                            fs::rename(&path, root.path().join("original.pem")).unwrap();
+                            fs::write(path, b"new-leaf").unwrap();
+                        }
+                    }
+                }
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("verification"), "{error}");
+        assert!(error.contains("reload is forbidden"), "{error}");
+        assert_no_temporaries(root.path());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn post_commit_verification_rejects_permissions_and_link_replacements() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for link in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let prepared = PreparedPublication::prepare(
+            &DeploymentTarget::Directory {
+                path: root.path().into(),
+            },
+            &artifacts(),
+            &DeploymentPermissions::default(),
+        )
+        .unwrap();
+        let replacements = std::cell::Cell::new(0);
+        let error = prepared
+            .commit_observed(|| {
+                replacements.set(replacements.get() + 1);
+                if replacements.get() == 4 {
+                    let key = root.path().join("private-key.pem");
+                    if link {
+                        fs::remove_file(&key).unwrap();
+                        std::os::unix::fs::symlink("cert.pem", key).unwrap();
+                    } else {
+                        fs::set_permissions(key, fs::Permissions::from_mode(0o644)).unwrap();
+                    }
+                }
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("verification"), "{error}");
+    }
 }
 
 #[cfg(unix)]
@@ -390,4 +462,67 @@ fn ancestors_need_search_permission_but_not_directory_read_permission() {
         b"new-key"
     );
     assert_no_temporaries(&target);
+}
+
+#[cfg(unix)]
+#[test]
+fn readback_retains_requested_zero_and_write_only_modes() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for mode in [0, 0o200, 0o600, 0o777] {
+        let root = tempfile::tempdir().unwrap();
+        PreparedPublication::prepare(
+            &DeploymentTarget::Directory {
+                path: root.path().into(),
+            },
+            &artifacts(),
+            &DeploymentPermissions {
+                file_mode: Some(mode),
+                key_mode: Some(mode),
+            },
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        for file in FILES {
+            assert_eq!(
+                fs::metadata(root.path().join(file))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                mode
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn post_commit_verification_detects_parent_renames_without_touching_replacement_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("target");
+    let moved = root.path().join("moved");
+    fs::create_dir(&target).unwrap();
+    let prepared = PreparedPublication::prepare(
+        &DeploymentTarget::Directory {
+            path: target.clone(),
+        },
+        &artifacts(),
+        &DeploymentPermissions::default(),
+    )
+    .unwrap();
+    let replacements = std::cell::Cell::new(0);
+    let error = prepared
+        .commit_observed(|| {
+            replacements.set(replacements.get() + 1);
+            if replacements.get() == 4 {
+                fs::rename(&target, &moved).unwrap();
+                fs::create_dir(&target).unwrap();
+            }
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("parent directory changed"), "{error}");
+    assert!(fs::read_dir(&target).unwrap().next().is_none());
+    assert_eq!(fs::read(moved.join("cert.pem")).unwrap(), b"new-leaf");
 }

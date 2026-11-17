@@ -1,9 +1,29 @@
 //! Platforms without descriptor-relative replacement require trusted parents.
 use crate::issuance::IssueError;
-use crate::issuance::deployment::publication::{inspect_destination, parent, path_error};
+use crate::issuance::deployment::publication::{
+    ExpectedFile, inspect_destination, parent, path_error, verify_contents,
+};
 use std::{fs::File, path::Path};
 
 pub(super) struct Temporary(tempfile::NamedTempFile);
+
+pub(super) struct Published(File);
+impl Published {
+    pub(super) fn verify(&self, path: &Path, expected: &ExpectedFile) -> Result<(), IssueError> {
+        inspect_destination(path)?;
+        let file = crate::state_file::open_regular(path)
+            .map_err(|error| path_error("verify open", path, &error))?;
+        if !crate::state_file::same_file(&self.0, &file)
+            .map_err(|error| path_error("verify identity", path, &error))?
+        {
+            return Err(crate::issuance::failure(&format!(
+                "deployment verification failed at {}: file identity changed",
+                path.display()
+            )));
+        }
+        verify_contents(file, expected, path)
+    }
+}
 impl Temporary {
     pub(super) fn create(path: &Path) -> Result<Self, IssueError> {
         tempfile::Builder::new()
@@ -32,11 +52,13 @@ impl Temporary {
         }
         inspect_destination(path)
     }
-    pub(super) fn persist(self, path: &Path) -> Result<(), IssueError> {
-        self.0
+    pub(super) fn persist(self, path: &Path) -> Result<Published, IssueError> {
+        let file = self
+            .0
             .persist(path)
             .map_err(|error| path_error("replace destination", path, &error.error))?;
         crate::state_file::sync_directory(parent(path)?)
-            .map_err(|error| path_error("sync parent directory", path, &error))
+            .map_err(|error| path_error("sync parent directory", path, &error))?;
+        Ok(Published(file))
     }
 }

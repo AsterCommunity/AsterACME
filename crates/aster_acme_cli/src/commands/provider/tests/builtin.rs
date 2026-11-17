@@ -1,5 +1,5 @@
 use crate::{
-    commands::provider::{execute, tests::command},
+    commands::provider::{execute::execute, tests::command},
     common::context::CommandContext,
 };
 #[tokio::test]
@@ -34,7 +34,7 @@ async fn backend_inventory_reports_only_compiled_implementations_without_provide
 #[cfg(feature = "dns-cloudflare")]
 #[tokio::test]
 async fn native_profile_crud_is_offline_redacted_and_invalid_update_is_atomic() {
-    use crate::{commands::provider::render, common::session::Format};
+    use crate::{commands::provider::render::render, common::session::Format};
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("settings.toml");
     let settings = aster_acme_cli_storage::state_file::StateDirectory::open(root.path()).unwrap();

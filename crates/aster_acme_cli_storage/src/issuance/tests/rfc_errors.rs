@@ -426,7 +426,7 @@ async fn terminal_authorization_and_selected_challenge_failures_keep_problem_and
 
 #[tokio::test]
 async fn rejected_acknowledgement_is_retryable_but_server_errors_remain_submitted() {
-    for status in [403, 503] {
+    for status in [403, 408, 429, 503] {
         let fixture = fixture().await;
         mount_flow(&fixture).await;
         Mock::given(method("POST"))
@@ -581,7 +581,7 @@ async fn rotated_account_signer_can_resume_saved_material_without_changing_its_t
 }
 
 #[tokio::test]
-async fn rejected_acknowledgement_retry_after_survives_reopen_and_blocks_early_requests() {
+async fn uncertain_acknowledgement_retry_after_survives_reopen_and_blocks_early_requests() {
     let http_date = time::format_description::parse_borrowed::<1>(
         "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
     )
@@ -621,7 +621,7 @@ async fn rejected_acknowledgement_retry_after_survives_reopen_and_blocks_early_r
         let saved = session.record().await.unwrap();
         assert_eq!(
             saved.authorizations[0].acknowledgement,
-            SubmissionState::NotSubmitted
+            SubmissionState::Submitted
         );
         assert!(saved.next_poll_at.unwrap() >= started + time::Duration::seconds(115));
         assert_eq!(
@@ -656,9 +656,12 @@ async fn rejected_acknowledgement_retry_after_survives_reopen_and_blocks_early_r
 }
 
 #[tokio::test]
-async fn definitive_finalize_refusals_reset_submission_and_preserve_retry_deadline() {
+async fn finalize_refusals_preserve_retry_deadline_and_transient_submission_uncertainty() {
     for (status, kind) in [
+        (408, ProblemKind::Connection),
         (429, ProblemKind::RateLimited),
+        (408, ProblemKind::BadCsr),
+        (429, ProblemKind::OrderNotReady),
         (403, ProblemKind::Unauthorized),
         (
             400,
@@ -692,7 +695,14 @@ async fn definitive_finalize_refusals_reset_submission_and_preserve_retry_deadli
                 .is_err()
         );
         let saved = session.record().await.unwrap();
-        assert_eq!(saved.finalize_submitted, SubmissionState::NotSubmitted);
+        assert_eq!(
+            saved.finalize_submitted,
+            if matches!(status, 408 | 429) {
+                SubmissionState::Submitted
+            } else {
+                SubmissionState::NotSubmitted
+            }
+        );
         assert!(saved.finalize_rejection.is_none());
         assert!(
             saved.next_poll_at.unwrap()
