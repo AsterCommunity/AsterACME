@@ -1,0 +1,30 @@
+# AsterACME 容器编排示例。compose 以 root 创建 bind 宿主目录，镜像默认用户是
+# uid 10001，所以示例显式 user: "0:0"。要保留镜像默认用户时，先
+# `chown 10001:10001` 两个宿主目录，再删掉 user 行。
+services:
+  aster-acme:
+    image: ghcr.io/astercommunity/aster-acme:latest
+    container_name: aster-acme
+    restart: always
+    user: "0:0"
+    volumes:
+      # 统一数据目录：config.toml、accounts/、certs/、providers/ 与 .locks/。
+      - aster-acme-config:/data
+      # deploy 目标目录示例；绑定到宿主目录供其他服务读取发布产物。
+      - aster-acme-ssl:/ssl
+
+volumes:
+  aster-acme-config:
+    name: aster-acme-config
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data
+  aster-acme-ssl:
+    name: aster-acme-ssl
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./ssl

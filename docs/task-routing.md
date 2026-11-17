@@ -19,6 +19,7 @@
 | deploy/reload | [CLI部署契约](cli-contract.md#证书部署)、[存储设计](design/storage.md) | CLI cert/deployment、cli_storage/issuance/deployment | 完整准备、逐文件替换、进程输出/取消、部分失败 |
 | 参数/交互/配置/输出 | [CLI契约](cli-contract.md)、[运行时](design/runtime.md) | CLI common、commands、config | 非TTY/JSON、缺省值、转义、最终报告与退出码 |
 | 构建/CI/依赖策略 | [Rust约定](rust-guidelines.md)、[测试](testing.md) | Cargo.toml、CLI build.rs、scripts、.github/workflows | 原生平台、编码、可复现构建、feature漂移 |
+| 容器镜像/compose/exec shim | [容器运行](docker.md)、[测试](testing.md) | Dockerfile、entrypoint.sh、examples/docker、.github/workflows/docker-image.yml | 本地构建版本戳、exec子命令、compose schema、shim与CLI顶层命令同步 |
 | 标签/仓库自动化/workflow 变更 | [GitHub 自动化](github-automation.md) | .github/aster-automation.json、.github/workflows、.github/ISSUE_TEMPLATE | workflow 名称与订阅契约、Action pin 一致、actionlint |
 | 文档 | [文档索引与规则](README.md) | docs及对应crate README | owner唯一、链接、双语和当前事实 |
 

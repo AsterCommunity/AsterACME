@@ -4,6 +4,7 @@
 
 - DNS自动发布：[Provider配置与清理](dns-providers.md)。
 - 使用CLI：[中文README](../README.zh.md)、[CLI契约](cli-contract.md)。
+- 容器运行与compose：[容器镜像](docker.md)。
 - 修改代码：[项目契约](project-contract.md) → [任务路由](task-routing.md) → 对应owner文档及crate README。
 - 理解结构：[架构概览](architecture.md)、[Rust与依赖约定](rust-guidelines.md)。
 - 查协议：[RFC参考与接入边界](rfc-reference.md)。
@@ -20,6 +21,7 @@
 | task-routing.md | 按任务定位文档、代码、验证范围 |
 | rust-guidelines.md | Rust组织、依赖及本仓库约束 |
 | dns-providers.md | DNS Provider Profile、凭据、CNAME、传播与清理操作 |
+| docker.md | 容器镜像标签与验签、数据目录、exec子命令shim、compose及reload边界 |
 | cli-contract.md | 参数、配置、交互、输出和退出码 |
 | certificate-lifecycle.md | 托管身份、续期、ARI、吊销与删除语义 |
 | design/account.md | 账户协议、确认及换钥恢复 |

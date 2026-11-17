@@ -1,6 +1,6 @@
 # DNS Provider 配置与自动发布
 
-本页描述当前源码中的 DNS-01 自动化入口：内置 Cloudflare，以及用户安装的 ADPP 外部 executable。它们共用 `dns_provider` solver、路由、回执、传播和清理流程。ADPP wire 见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，后端注册与状态机见[实现契约](design/dns-backends.md)。内置与外部后端已包含在 `0.1.0-alpha.2`；真实 Cloudflare/公网 CA 验收另行进行。
+本页描述当前源码中的 DNS-01 自动化入口：内置 Cloudflare，以及用户安装的 ADPP 外部 executable。它们共用 `dns_provider` solver、路由、回执、传播和清理流程。ADPP wire 见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，后端注册与状态机见[实现契约](design/dns-backends.md)。内置与外部后端已包含在 `0.1.0-alpha.2`；内置 Cloudflare 已在真实 DNS 与 Let's Encrypt production/staging 环境完成验收，除 DNS-PERSIST-01 草案外的全部 challenge 方法已走真实 CA 签发，草案真实 CA 签发验收另行进行。
 
 ## 内置 Cloudflare
 

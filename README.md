@@ -74,6 +74,14 @@ cd AsterACME
 cargo install --path crates/aster_acme_cli --locked
 ```
 
+Run the published container image instead of installing (multi-arch; `latest` tracks stable releases):
+
+```sh
+docker run -d --name aster-acme -v aster-acme-config:/data ghcr.io/astercommunity/aster-acme:latest
+```
+
+The container runs the maintenance daemon by default; one-off commands run as `docker exec aster-acme cert list`. See [containers](docs/docker.md).
+
 Register an account, review the CA terms, then request a certificate. The default CA is **Let's Encrypt production**.
 
 ```sh

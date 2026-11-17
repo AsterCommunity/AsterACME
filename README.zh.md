@@ -74,6 +74,14 @@ cd AsterACME
 cargo install --path crates/aster_acme_cli --locked
 ```
 
+不本地安装时可直接运行已发布的容器镜像（多架构；`latest` 只跟随稳定版本）：
+
+```sh
+docker run -d --name aster-acme -v aster-acme-config:/data ghcr.io/astercommunity/aster-acme:latest
+```
+
+容器默认运行维护 daemon；一次性命令用 `docker exec aster-acme cert list` 执行。详见[容器镜像](docs/docker.md)。
+
 先注册账户并阅读 CA 条款，再申请证书。默认使用 **Let's Encrypt 生产环境**。
 
 ```sh
