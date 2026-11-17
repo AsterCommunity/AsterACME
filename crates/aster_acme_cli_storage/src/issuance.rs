@@ -37,7 +37,7 @@ pub mod removal;
 const MAX_JOURNAL: u64 = 1024 * 1024;
 const JOURNAL_VERSION: u32 = 1;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSolverId {
     Current,
     LegacyExternal,

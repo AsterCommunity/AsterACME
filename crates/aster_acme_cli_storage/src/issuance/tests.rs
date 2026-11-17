@@ -23,6 +23,22 @@ use aster_acme::{
 };
 use aster_acme_core::{account::AccountRecordState, protocol::AccountStatus};
 use aster_acme_protocol::{jws::FlattenedJws, url::AcmeUrl};
+
+#[test]
+fn provider_solver_ids_preserve_current_legacy_and_unknown_categories() {
+    assert_eq!(
+        ProviderSolverId::from_saved_id("dns_provider"),
+        ProviderSolverId::Current
+    );
+    assert_eq!(
+        ProviderSolverId::from_saved_id("dns_external"),
+        ProviderSolverId::LegacyExternal
+    );
+    assert_eq!(
+        ProviderSolverId::from_saved_id("manual_dns"),
+        ProviderSolverId::Other
+    );
+}
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rcgen::PublicKeyData as _;
 use rcgen::{CertificateParams, DistinguishedName, Issuer, KeyPair};
