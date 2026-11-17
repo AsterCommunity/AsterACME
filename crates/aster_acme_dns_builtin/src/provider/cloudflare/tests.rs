@@ -1,4 +1,4 @@
-use crate::cloudflare::{BACKEND_ID, Cloudflare, CloudflareConfig};
+use crate::provider::cloudflare::{BACKEND_ID, Cloudflare, CloudflareConfig};
 use aster_acme_dns::{
     CleanupRequest, CleanupStatus, DnsRecord, ProviderErrorCode, RecordOwnership, SideEffect,
     operation::{
@@ -261,7 +261,7 @@ fn changed_record_or_publication_tag_never_authorizes_delete_or_create() {
             .start(
                 ProviderAction::Cleanup(CleanupRequest {
                     publication_id: record_for_id(),
-                    record: crate::cloudflare::tests::record(),
+                    record: crate::provider::cloudflare::tests::record(),
                     receipt: receipt.clone(),
                 }),
                 Some(saved.clone()),
@@ -497,7 +497,7 @@ fn unknown_backend_config_version_is_not_interpreted_as_current() {
         ..BackendConfig::default()
     };
     assert!(
-        crate::cloudflare::CloudflareBackend
+        crate::provider::cloudflare::CloudflareBackend
             .validate(&config)
             .is_err()
     );

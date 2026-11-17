@@ -14,7 +14,7 @@ use aster_acme_dns::{
     propagation::PropagationPolicy,
     routing::{DnsLookup, LookupError},
 };
-use aster_acme_dns_builtin::cloudflare::BACKEND_ID;
+use aster_acme_dns_builtin::provider::cloudflare::BACKEND_ID;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{

@@ -1,5 +1,5 @@
 //! Cloudflare publication reconciliation and exact-object cleanup transitions.
-use crate::cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone};
+use crate::provider::cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone};
 use aster_acme_dns::{
     CleanupStatus, ProviderError, ProviderErrorCode, PublicationReceipt, RecordOwnership,
     SideEffect,

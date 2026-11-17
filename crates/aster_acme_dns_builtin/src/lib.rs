@@ -10,8 +10,7 @@
         clippy::todo
     )
 )]
-#[cfg(feature = "cloudflare")]
-pub mod cloudflare;
+pub mod provider;
 pub mod rrset;
 
 #[cfg(test)]
