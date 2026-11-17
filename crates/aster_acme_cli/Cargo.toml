@@ -19,7 +19,7 @@ doc = false
 # tag-driven workflow; platforms follow the workflow matrix naming.
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-{ target }"
-bin-dir = "aster-acme-v{ version }-{ target }"
+bin-dir = "aster-acme-v{ version }-{ target }{ binary-ext }"
 pkg-fmt = "bin"
 
 [package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
@@ -33,6 +33,14 @@ pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-macos
 
 [package.metadata.binstall.overrides.aarch64-apple-darwin]
 pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-macos-arm64"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-windows-amd64.exe"
+bin-dir = "aster-acme-v{ version }-windows-amd64.exe"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-windows-arm64.exe"
+bin-dir = "aster-acme-v{ version }-windows-arm64.exe"
 
 [features]
 default = ["precheck", "dns-cloudflare"]
