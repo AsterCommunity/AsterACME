@@ -1,10 +1,22 @@
 """Check optional prechecks independently so workspace feature unification cannot hide bugs."""
 from pathlib import Path
+import json
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILTIN_FEATURES = ("cloudflare", "aliyun", "tencent_cloud", "huawei_cloud")
-CLI_FEATURES = ("dns-cloudflare", "dns-aliyun", "dns-tencent-cloud", "dns-huawei-cloud")
+METADATA = json.loads(subprocess.run(
+    ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+    cwd=ROOT, check=True, text=True, encoding="utf-8", capture_output=True,
+).stdout)
+PACKAGE_FEATURES = {package["name"]: package["features"] for package in METADATA["packages"]}
+# Public builtin features select vendors; underscore-prefixed features are internal capabilities.
+BUILTIN_FEATURES = tuple(sorted(
+    feature for feature in PACKAGE_FEATURES["aster_acme_dns_builtin"]
+    if feature != "default" and not feature.startswith("_")
+))
+CLI_FEATURES = tuple(sorted(
+    feature for feature in PACKAGE_FEATURES["aster_acme_cli"] if feature.startswith("dns-")
+))
 CASES = [
     ("aster_acme", None),
     ("aster_acme", "precheck"),

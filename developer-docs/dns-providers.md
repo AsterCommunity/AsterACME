@@ -38,11 +38,13 @@ CLI 默认已包含这两个后端；源码可用 `cargo run --locked -p aster_a
 
 交互终端运行 `provider add NAME --backend BACKEND_ID`，两个凭据字段均隐藏输入。自动化把两项写入私有 TOML 文件，再传入 `--settings-file /absolute/path/settings.toml --json`。阿里云 RAM 权限覆盖 `DescribeDomains`、`DescribeDomainInfo`、`DescribeDomainRecords`、`DescribeDomainRecordInfo`、`AddDomainRecord` 和 `DeleteDomainRecord`。DNSPod CAM 权限覆盖 `DescribeDomainList`、`DescribeRecordList`、`DescribeRecord`、`CreateRecord` 和 `DeleteRecord`。请限制写权限到实际发布 zone。
 
-两者按最终 TXT owner 逐页查找最长匹配 zone，并在写入前保存该 zone 身份。阿里云从 `DescribeDomainInfo.MinTtl` 取下限，最高为 86400 秒。DNSPod 使用覆盖免费套餐的 600 秒下限和 604800 秒上限。Profile 展示请求值，签发 journal 的 `effective_ttl_seconds` 保存厂商读回值。
+两者按最终 TXT owner 逐页查找最长匹配 zone，并在写入前保存该 zone 身份。阿里云调用 `DescribeDomainInfo` 时显式传 `NeedDetailAttributes=true`，从返回的 `MinTtl` 取下限，最高为 86400 秒；缺失或非法下限在写入前拒绝。DNSPod 使用覆盖免费套餐的 600 秒下限和 604800 秒上限。Profile 展示请求值，签发 journal 的 `effective_ttl_seconds` 保存厂商读回值。
 
 - **阿里云**保存写入前发现的同值 ID 并保留记录。若创建响应丢失，重启会重读同值记录并停在“所有权无法证明”。创建返回的 ID 落盘后才可签发和清理。记录级备注需要额外请求。
 - **DNSPod**在创建请求中写入 `asteracme:<publication_id>` 备注。重启可据此恢复同一条记录的 ID。唯一一条已启用的默认线路用户同值记录可保留为 `preexisting`，其他 publication 的同值记录会触发冲突。
-- 两者在删除前重读 ID 和记录元组。核验与删除是两次 API 请求，应避免同时从其他工具修改托管记录。
+- 两者在删除前重读 ID 和记录元组。阿里云记录详情可省略 `DomainId`，仍按保存的记录 ID、域名、主机名、值和线路核验；返回 `DomainId` 时也必须匹配。核验与删除是两次 API 请求，应避免同时从其他工具修改托管记录。
+
+四家内置 provider 共用有界只读重试预算，具体触发条件归厂商：阿里云与 DNSPod 的已保存 ID 暂不可见、DNSPod 与 Cloudflare 的创建对账标记暂不可见，以 5 秒间隔最多等待 6 次；华为云 pending RRset 保持 1 秒间隔最多等待 8 次。宿主取消、操作期限与 Profile timeout 仍优先生效。参数错误、响应格式错误和身份冲突不进入等待；重试耗尽保留原 checkpoint，不重发不确定创建。阿里云丢失创建响应且没有保存 ID 时，仍不能根据后来出现的记录推断所有权。
 
 ## 内置华为云 DNS（不保证并发安全）
 

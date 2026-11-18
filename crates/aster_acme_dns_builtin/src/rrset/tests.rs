@@ -13,7 +13,7 @@ struct Protocol;
 impl RrsetProtocol for Protocol {
     fn read(&self, _: &DnsRecord) -> Result<HttpRequest, ProviderError> {
         Ok(HttpRequest {
-            method: "GET".into(),
+            method: aster_acme_dns::operation::HttpMethod::Get,
             url: "https://dns.example/rrset".into(),
             headers: vec![],
             body: vec![],
@@ -30,7 +30,7 @@ impl RrsetProtocol for Protocol {
         values: &BTreeSet<String>,
     ) -> Result<HttpRequest, ProviderError> {
         Ok(HttpRequest {
-            method: "PUT".into(),
+            method: aster_acme_dns::operation::HttpMethod::Put,
             url: "https://dns.example/rrset".into(),
             headers: vec![("If-Match".into(), snapshot.revision.clone())],
             body: serde_json::to_vec(&json!({"values":values,"metadata":snapshot.metadata}))

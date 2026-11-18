@@ -1,9 +1,9 @@
 //! Tencent Cloud `DNSPod` API 2021-03-23 using TC3-HMAC-SHA256.
 use crate::provider::{
-    HttpMethod,
     individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, Zone},
     rpc::{api_error, decode, hex, hmac256, invalid, key_field, settings, sha256, validate_keys},
 };
+use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
     CleanupStatus, DnsRecord, ProviderError, ProviderErrorCode,
     backend::{
@@ -15,7 +15,6 @@ use aster_acme_dns::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::Duration;
 use time::OffsetDateTime;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -161,7 +160,7 @@ impl Keys {
         let timestamp = OffsetDateTime::now_utc().unix_timestamp();
         let authorization = self.authorization(HOST, SERVICE, action.wire(), timestamp, &body)?;
         Ok(HttpRequest {
-            method: HttpMethod::Post.wire().into(),
+            method: HttpMethod::Post,
             url: format!("https://{HOST}/"),
             body,
             mutation,
@@ -266,10 +265,6 @@ struct InspectedRecord {
 
 impl IndividualApi for Keys {
     const MARKED: bool = true;
-
-    fn reconcile_delay(&self) -> Option<Duration> {
-        Some(Duration::from_secs(5))
-    }
 
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(

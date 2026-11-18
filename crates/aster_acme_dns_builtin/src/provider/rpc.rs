@@ -1,5 +1,5 @@
 //! Common wire helpers for native signed RPC APIs. No raw vendor messages escape.
-#[cfg(any(feature = "aliyun", feature = "tencent_cloud"))]
+#[cfg(feature = "_individual-records")]
 use aster_acme_dns::operation::HttpFailure;
 use aster_acme_dns::{
     ProviderError, ProviderErrorCode, SideEffect, backend::configuration_error,
@@ -120,7 +120,7 @@ pub(super) const fn possible_effect(mutation: bool) -> SideEffect {
     }
 }
 
-#[cfg(any(feature = "aliyun", feature = "tencent_cloud"))]
+#[cfg(feature = "_individual-records")]
 pub(super) fn transport(failure: HttpFailure) -> ProviderError {
     error(
         failure.code,
@@ -269,7 +269,7 @@ fn status_code(status: u16) -> ProviderErrorCode {
     }
 }
 
-#[cfg(any(feature = "aliyun", feature = "tencent_cloud"))]
+#[cfg(feature = "_individual-records")]
 pub(super) fn decode<T: DeserializeOwned>(
     value: serde_json::Value,
     mutation: bool,

@@ -1,8 +1,9 @@
 //! Cloudflare publication reconciliation and exact-object cleanup transitions.
 use crate::provider::{
-    HttpMethod,
     cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone},
+    retry::ReadRetry,
 };
+use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
     CleanupStatus, ProviderError, ProviderErrorCode, PublicationReceipt, RecordOwnership,
     SideEffect,
@@ -91,6 +92,7 @@ impl OperationFactory for Cloudflare {
             automatic: self.config.zone_id.is_empty(),
             candidate: 0,
             rejection: None,
+            read_retry: ReadRetry::new(6, std::time::Duration::from_secs(5)),
         }))
     }
 }
@@ -110,6 +112,7 @@ enum Stage {
     SaveRejection,
     Delete,
     Done,
+    Reconcile,
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +148,7 @@ struct Operation {
     rejection: Option<ProviderError>,
     automatic: bool,
     candidate: usize,
+    read_retry: ReadRetry,
 }
 
 #[derive(Deserialize)]
@@ -260,6 +264,11 @@ impl Operation {
             return self.receipt(record, ownership);
         }
         if self.creation_uncertain {
+            if let Some(until) = self.read_retry.next() {
+                self.page = 1;
+                self.stage = Stage::Reconcile;
+                return Ok(ProviderEffect::WaitUntil(until));
+            }
             return Err(uncertain_creation());
         }
         self.stage = Stage::Intent;
@@ -446,7 +455,7 @@ impl Operation {
             .map_err(|_| configuration_error("cannot encode Cloudflare request"))?
             .unwrap_or_default();
         Ok(ProviderEffect::Http(HttpRequest {
-            method: action.method().wire().into(),
+            method: action.method(),
             url: url.into(),
             headers: vec![
                 ("Authorization".into(), format!("Bearer {token}")),
@@ -547,6 +556,7 @@ impl ProviderOperation for Operation {
             (Stage::SaveZone, ProviderEvent::CheckpointSaved) => self.begin_zone(),
             (Stage::Zone, ProviderEvent::Http(response)) => self.zone_response(response),
             (Stage::List, ProviderEvent::Http(response)) => self.list_response(response),
+            (Stage::Reconcile, ProviderEvent::Timer) => self.list(),
             (Stage::Intent, ProviderEvent::CheckpointSaved) => {
                 self.stage = Stage::Create;
                 self.request(CloudflareAction::CreateTxtRecord, "/dns_records", Some(json!({"type":"TXT", "name": self.record().name.trim_end_matches('.'),

@@ -58,7 +58,7 @@ impl HttpExecutor for Cloud {
             }
         } else if request.url.ends_with(ZONE) {
             json!({"id":ZONE,"name":"validation.net"})
-        } else if request.method == "POST" {
+        } else if request.method == aster_acme_dns::operation::HttpMethod::Post {
             let mut record: Value = serde_json::from_slice(&request.body).unwrap();
             record["id"] = json!("11111111111111111111111111111111");
             remote.insert("11111111111111111111111111111111".into(), record.clone());
@@ -73,7 +73,7 @@ impl HttpExecutor for Cloud {
                 execution.cancellation.cancel();
             }
             record
-        } else if request.method == "DELETE" {
+        } else if request.method == aster_acme_dns::operation::HttpMethod::Delete {
             self.deletes.fetch_add(1, Ordering::SeqCst);
             remote.remove("11111111111111111111111111111111");
             json!({"id":"11111111111111111111111111111111"})

@@ -6,6 +6,8 @@
 
 `aster_acme_dns_builtin` 保存厂商配置、签名、API 解析和状态机，无网络或文件访问。默认 feature 为空；提供 `cloudflare`、`aliyun`、`tencent_cloud`、`huawei_cloud` 厂商 feature。它同时提供 `ConditionalRrsetFactory`，供具备真实条件更新能力的后端复用；这不代表已实现其他厂商。`aster_acme_dns_adpp` 通过同一注册表提供外部后端，保留自己的 wire/process 错误语义。
 
+供应商 feature 在 Cargo 中自动启用 `_http`、`_signed-api`、`_individual-records` 等内部能力，共享模块只判断能力开关，不枚举所有使用它的厂商。下划线前缀的 feature 是实现细节，宿主只选供应商 feature。`HttpRequest.method` 使用 `aster_acme_dns::operation::HttpMethod`，类型及其完整动词集合不按厂商裁剪；仅签名和 HTTP 传输边界转换为 wire 表示。
+
 `aster_acme_dns::operation` 拥有通用 runner，解释 HTTP、保存检查点、读取凭据、等待和完成等 effect，将执行结果作为 event 送回厂商状态机。每次写请求必须消耗一个已经持久化确认的检查点；没有检查点、保存失败、取消或超时均不能启动后续写。宿主限制整批期限和步数，逐记录保留成功与失败，不把 HTTP 200 当作 DNS 或 CA 成功。
 
 `aster_acme_dns_http` 通过 Forge 执行完整请求，不重新序列化签名后的 body，拒绝会被 URL parser 隐式规范化的已签名目标，不重试、不跟随重定向，限制收发大小并覆盖响应 body 的取消和期限。CLI 拥有凭据文件读取策略和命令生命周期内的惰性共享池。嵌入者注入自己的 `HttpExecutor` 与 `PublicationStore`。

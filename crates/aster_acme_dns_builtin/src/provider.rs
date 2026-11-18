@@ -1,23 +1,7 @@
-//! Feature-selected DNS provider backends; each vendor is an independent feature.
+//! Vendor features automatically enable the shared capabilities they use.
+#[cfg(feature = "_http")]
+mod retry;
 
-#[derive(Clone, Copy)]
-pub(super) enum HttpMethod {
-    Get,
-    Post,
-    Put,
-    Delete,
-}
-
-impl HttpMethod {
-    pub(super) const fn wire(self) -> &'static str {
-        match self {
-            Self::Get => "GET",
-            Self::Post => "POST",
-            Self::Put => "PUT",
-            Self::Delete => "DELETE",
-        }
-    }
-}
 #[cfg(feature = "aliyun")]
 pub mod aliyun;
 #[cfg(feature = "cloudflare")]
@@ -27,13 +11,9 @@ pub mod huawei_cloud;
 #[cfg(feature = "tencent_cloud")]
 pub mod tencent_cloud;
 
-#[cfg(any(feature = "aliyun", feature = "tencent_cloud"))]
+#[cfg(feature = "_individual-records")]
 mod individual;
-#[cfg(any(
-    feature = "aliyun",
-    feature = "tencent_cloud",
-    feature = "huawei_cloud"
-))]
+#[cfg(feature = "_signed-api")]
 mod rpc;
-#[cfg(all(test, any(feature = "aliyun", feature = "tencent_cloud")))]
+#[cfg(all(test, feature = "_individual-records"))]
 mod tests;

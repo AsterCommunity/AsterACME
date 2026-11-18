@@ -1,11 +1,11 @@
 //! Alibaba Cloud DNS RPC, API version 2015-01-09, signed with ACS3.
 use crate::provider::{
-    HttpMethod,
     individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, Zone, valid_id},
     rpc::{
         api_error, decode, hex, hmac256, invalid, key_field, query, settings, sha256, validate_keys,
     },
 };
+use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
     CleanupStatus, DnsRecord, ProviderError, ProviderErrorCode,
     backend::{
@@ -141,7 +141,7 @@ impl Keys {
         let signature =
             hex(hmac256(self.access_key_secret.as_bytes(), to_sign.as_bytes()).as_ref());
         HttpRequest {
-            method: HttpMethod::Get.wire().into(),
+            method: HttpMethod::Get,
             url: format!("https://{HOST}/?{query}"),
             headers: vec![
                 ("host".into(), HOST.into()),
@@ -188,6 +188,24 @@ impl ListedZone {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
+struct DomainInfo {
+    #[serde(flatten)]
+    zone: ListedZone,
+    min_ttl: u32,
+}
+
+#[derive(Deserialize)]
+enum RecordStatus {
+    #[serde(alias = "ENABLE")]
+    Enable,
+    #[serde(alias = "DISABLE")]
+    Disable,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
 struct AliRecord {
     record_id: String,
     domain_name: String,
@@ -200,8 +218,17 @@ struct AliRecord {
     value: String,
     #[serde(rename = "TTL")]
     ttl: u32,
-    status: String,
+    status: RecordStatus,
     line: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RecordInfo {
+    #[serde(flatten)]
+    record: AliRecord,
+    // The live API can omit DomainId even though the documentation lists it.
+    domain_id: Option<String>,
 }
 
 impl AliRecord {
@@ -222,7 +249,7 @@ impl AliRecord {
             value: self.value,
             ttl: self.ttl,
             marker: None,
-            enabled: self.status == "ENABLE",
+            enabled: matches!(self.status, RecordStatus::Enable),
             default_line: self.line == "default",
         })
     }
@@ -287,23 +314,21 @@ impl IndividualApi for Keys {
     fn verify_zone(&self, zone: &Zone) -> Result<Option<HttpRequest>, ProviderError> {
         self.request(
             AliyunAction::DescribeDomainInfo,
-            &[("DomainName", zone.name.trim_end_matches('.'))],
+            &[
+                ("DomainName", zone.name.trim_end_matches('.')),
+                ("NeedDetailAttributes", "true"),
+            ],
             false,
         )
         .map(Some)
     }
 
     fn checked_zone(&self, response: HttpResponse, zone: &Zone) -> Result<u32, ProviderError> {
-        let body = payload(&response, false)?;
-        let observed: ListedZone = decode(body.clone(), false)?;
-        if observed.zone()? != *zone {
+        let observed: DomainInfo = decode(payload(&response, false)?, false)?;
+        if observed.zone.zone()? != *zone || !(1..=MAX_TTL).contains(&observed.min_ttl) {
             return Err(invalid(false));
         }
-        body["MinTtl"]
-            .as_u64()
-            .and_then(|ttl| u32::try_from(ttl).ok())
-            .filter(|ttl| (1..=MAX_TTL).contains(ttl))
-            .ok_or_else(|| invalid(false))
+        Ok(observed.min_ttl)
     }
 
     fn list(&self, zone: &Zone, relative: &str, page: u32) -> Result<HttpRequest, ProviderError> {
@@ -367,12 +392,11 @@ impl IndividualApi for Keys {
         if missing(&response) {
             return Ok(None);
         }
-        let body = payload(&response, false)?;
-        if body["DomainId"].as_str() != Some(&zone.id) {
+        let body: RecordInfo = decode(payload(&response, false)?, false)?;
+        if body.domain_id.as_ref().is_some_and(|id| id != &zone.id) {
             return Err(invalid(false));
         }
-        let record: AliRecord = decode(body, false)?;
-        record.into_record(zone).map(Some)
+        body.record.into_record(zone).map(Some)
     }
 
     fn create(
@@ -431,8 +455,12 @@ fn record_id(response: &HttpResponse) -> Result<String, ProviderError> {
 
 fn missing(response: &HttpResponse) -> bool {
     matches!(response.status, 400 | 404)
-        && serde_json::from_slice::<Value>(&response.body)
-            .is_ok_and(|body| body["Code"].as_str() == Some("InvalidRecordId.NotFound"))
+        && serde_json::from_slice::<Value>(&response.body).is_ok_and(|body| {
+            matches!(
+                body["Code"].as_str(),
+                Some("InvalidRecordId.NotFound" | "InvalidRR.NoExist")
+            )
+        })
 }
 
 fn payload(response: &HttpResponse, mutation: bool) -> Result<Value, ProviderError> {

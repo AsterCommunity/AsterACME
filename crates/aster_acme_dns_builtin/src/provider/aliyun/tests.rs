@@ -44,7 +44,7 @@ fn list(entries: Vec<Value>) -> Value {
 
 fn row(id: &str, value: &str) -> Value {
     json!({"RecordId":id,"DomainId":"child-id","DomainName":"child.validation.net",
-           "RR":"target","Type":"TXT","Value":value,"TTL":300,"Status":"ENABLE","Line":"default"})
+           "RR":"target","Type":"TXT","Value":value,"TTL":300,"Status":"Enable","Line":"default"})
 }
 
 fn initial(machine: &mut dyn ProviderOperation) -> RecoveryState {
@@ -92,7 +92,11 @@ fn read_zone(machine: &mut dyn ProviderOperation, event: ProviderEvent, next: &s
         "DescribeDomainInfo",
         false,
     );
-    assert!(request.url.ends_with("?DomainName=child.validation.net"));
+    assert!(
+        request
+            .url
+            .ends_with("?DomainName=child.validation.net&NeedDetailAttributes=true")
+    );
     http(
         reply(machine, &zone("child-id", "child.validation.net")).unwrap(),
         "x-acs-action",
@@ -118,7 +122,7 @@ fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
         "AddDomainRecord",
         true,
     );
-    assert_eq!(request.method, "GET");
+    assert_eq!(request.method.as_str(), "GET");
     assert_eq!(request.body, [] as [u8; 0]);
     assert!(request.url.ends_with("DomainName=child.validation.net&Line=default&RR=target&TTL=300&Type=TXT&Value=challenge-value"));
     cp
@@ -367,4 +371,152 @@ fn rejects_wrong_zone_before_using_a_saved_ali_dns_name() {
         .side_effect,
         SideEffect::None
     );
+}
+
+#[test]
+fn detailed_domain_info_requires_a_valid_ttl_before_any_write() {
+    use crate::provider::individual::{IndividualApi, Zone};
+    let api = keys();
+    let expected = Zone::new("child-id".into(), "child.validation.net").unwrap();
+    for ttl in [1, 300, 86400] {
+        let mut body = zone("child-id", "child.validation.net");
+        body["MinTtl"] = json!(ttl);
+        assert_eq!(
+            api.checked_zone(response(200, &body), &expected).unwrap(),
+            ttl
+        );
+    }
+    for ttl in [
+        json!(null),
+        json!(0),
+        json!(86401),
+        json!(-1),
+        json!("300"),
+        json!(4_294_967_296_u64),
+    ] {
+        let mut body = zone("child-id", "child.validation.net");
+        body["MinTtl"] = ttl;
+        assert!(api.checked_zone(response(200, &body), &expected).is_err());
+    }
+    let mut body = zone("child-id", "child.validation.net");
+    body.as_object_mut().unwrap().remove("MinTtl");
+    assert!(api.checked_zone(response(200, &body), &expected).is_err());
+}
+
+#[test]
+fn documented_record_statuses_and_unknown_values_control_readback_readiness() {
+    use crate::provider::individual::{IndividualApi, Zone};
+    let api = keys();
+    let expected = Zone::new("child-id".into(), "child.validation.net").unwrap();
+    for (status, enabled) in [
+        ("Enable", true),
+        ("ENABLE", true),
+        ("Disable", false),
+        ("DISABLE", false),
+        ("future-status", false),
+    ] {
+        let mut body = row("64", "challenge-value");
+        body["Status"] = json!(status);
+        let record = api
+            .inspected(response(200, &body), &expected)
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.enabled, enabled, "{status}");
+    }
+}
+
+#[test]
+fn live_record_info_without_domain_id_keeps_domain_and_record_identity_checks() {
+    use crate::provider::individual::{IndividualApi, Zone};
+    let api = keys();
+    let expected = Zone::new("child-id".into(), "child.validation.net").unwrap();
+    let mut body = row("64", "challenge-value");
+    body.as_object_mut().unwrap().remove("DomainId");
+    body["Status"] = json!("ENABLE");
+    let record = api
+        .inspected(response(200, &body), &expected)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.id, "64");
+    assert!(record.enabled);
+    for (field, value) in [
+        ("DomainId", json!("other-zone")),
+        ("DomainId", json!(42)),
+        ("DomainName", json!("other.example")),
+    ] {
+        let mut changed = body.clone();
+        changed[field] = value;
+        assert!(api.inspected(response(200, &changed), &expected).is_err());
+    }
+}
+
+#[test]
+fn saved_record_id_retries_only_readback_and_recovers_after_visibility_delay() {
+    let factory = factory();
+    let mut created = initial(
+        factory
+            .start(ProviderAction::Present(record()), None)
+            .unwrap()
+            .as_mut(),
+    );
+    created.data["phase"] = json!({"state":"created","id":"64"});
+    let mut op = factory
+        .start(ProviderAction::Present(record()), Some(created))
+        .unwrap();
+    read_zone(
+        op.as_mut(),
+        ProviderEvent::Start,
+        "DescribeDomainRecordInfo",
+    );
+    let absent = response(400, &json!({"Code":"InvalidRR.NoExist"}));
+    assert!(matches!(
+        op.advance(ProviderEvent::Http(Ok(absent))).unwrap(),
+        ProviderEffect::WaitUntil(_)
+    ));
+    let request = http(
+        op.advance(ProviderEvent::Timer).unwrap(),
+        "x-acs-action",
+        "DescribeDomainRecordInfo",
+        false,
+    );
+    assert!(request.url.ends_with("?RecordId=64"));
+    let receipt = receipt(reply(op.as_mut(), &row("64", "challenge-value")).unwrap());
+    assert_eq!(receipt.record_id, "64");
+}
+
+#[test]
+fn missing_saved_record_exhausts_read_budget_without_creating_again() {
+    let factory = factory();
+    let mut created = initial(
+        factory
+            .start(ProviderAction::Present(record()), None)
+            .unwrap()
+            .as_mut(),
+    );
+    created.data["phase"] = json!({"state":"created","id":"64"});
+    let mut op = factory
+        .start(ProviderAction::Present(record()), Some(created))
+        .unwrap();
+    read_zone(
+        op.as_mut(),
+        ProviderEvent::Start,
+        "DescribeDomainRecordInfo",
+    );
+    for _ in 0..6 {
+        let absent = response(400, &json!({"Code":"InvalidRecordId.NotFound"}));
+        assert!(matches!(
+            op.advance(ProviderEvent::Http(Ok(absent))).unwrap(),
+            ProviderEffect::WaitUntil(_)
+        ));
+        http(
+            op.advance(ProviderEvent::Timer).unwrap(),
+            "x-acs-action",
+            "DescribeDomainRecordInfo",
+            false,
+        );
+    }
+    let absent = response(400, &json!({"Code":"InvalidRecordId.NotFound"}));
+    let error = fail(op.advance(ProviderEvent::Http(Ok(absent))));
+    assert_eq!(error.code, ProviderErrorCode::RecordNotOwned);
+    assert_eq!(error.side_effect, SideEffect::Unknown);
 }

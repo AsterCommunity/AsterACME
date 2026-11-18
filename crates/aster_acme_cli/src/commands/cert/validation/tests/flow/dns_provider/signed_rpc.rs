@@ -175,7 +175,7 @@ impl Cloud {
     #[cfg(feature = "dns-aliyun")]
     fn ali(&self, request: &HttpRequest, action: &str, remote: &mut Option<Value>) -> Value {
         assert!(request.url.starts_with("https://alidns.aliyuncs.com/"));
-        assert_eq!(request.method, "GET");
+        assert_eq!(request.method.as_str(), "GET");
         let (_, query) = request.url.split_once('?').unwrap();
         let params: std::collections::BTreeMap<_, _> = query
             .split('&')
@@ -189,6 +189,7 @@ impl Cloud {
             }
             "DescribeDomainInfo" => {
                 assert_eq!(params["DomainName"], ZONE);
+                assert_eq!(params["NeedDetailAttributes"], "true");
                 zone
             }
             "DescribeDomainRecords" => {
@@ -202,14 +203,16 @@ impl Cloud {
                 assert!(remote.is_none());
                 *remote = Some(
                     json!({"DomainId":"ali-zone-id","DomainName":ZONE,"RR":"delegated","Type":"TXT",
-                    "Value":params["Value"],"RecordId":"23","TTL":300,"Line":"default","Status":"ENABLE"}),
+                    "Value":params["Value"],"RecordId":"23","TTL":300,"Line":"default","Status":"Enable"}),
                 );
                 self.writes.fetch_add(1, Ordering::SeqCst);
                 json!({"RecordId":"23"})
             }
             "DescribeDomainRecordInfo" => {
                 assert_eq!(params["RecordId"], "23");
-                remote.clone().unwrap()
+                let mut body = remote.clone().unwrap();
+                body.as_object_mut().unwrap().remove("DomainId");
+                body
             }
             "DeleteDomainRecord" => {
                 assert_eq!(params["RecordId"], "23");
@@ -224,7 +227,7 @@ impl Cloud {
     #[cfg(feature = "dns-tencent-cloud")]
     fn dnspod(&self, request: &HttpRequest, action: &str, remote: &mut Option<Value>) -> Value {
         assert_eq!(request.url, "https://dnspod.tencentcloudapi.com/");
-        assert_eq!(request.method, "POST");
+        assert_eq!(request.method.as_str(), "POST");
         let body: Value = serde_json::from_slice(&request.body).unwrap();
         if action != "DescribeDomainList" {
             assert_eq!(body["DomainId"], 42);
@@ -374,7 +377,7 @@ impl HttpExecutor for Cloud {
             .find(|(key, _)| matches!(key.as_str(), "x-acs-action" | "x-tc-action"))
             .map_or("", |(_, value)| value.as_str());
         let creating = matches!(action, "AddDomainRecord" | "CreateTXTRecord")
-            || request.method == "POST" && action.is_empty();
+            || request.method == aster_acme_dns::operation::HttpMethod::Post && action.is_empty();
         if request.mutation {
             let cp = self.checkpoint();
             assert_eq!(cp["record"]["name"], OWNER);

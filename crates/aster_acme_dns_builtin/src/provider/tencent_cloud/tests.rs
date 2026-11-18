@@ -99,7 +99,7 @@ fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
         "CreateTXTRecord",
         true,
     );
-    assert_eq!(request.method, "POST");
+    assert_eq!(request.method.as_str(), "POST");
     let body: Value = serde_json::from_slice(&request.body).unwrap();
     assert_eq!(body["Domain"], "child.validation.net");
     assert_eq!(body["Remark"], "asteracme:publication-1");

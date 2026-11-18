@@ -1,13 +1,14 @@
 //! Best-effort Huawei `RRset` lifecycle; it never invents an atomic revision.
 use crate::provider::{
-    HttpMethod,
     huawei_cloud::{
         Config,
         api::{SignedRequest, decode_body, marker_from_next, payload},
         txt::{add_marker, has_foreign_marker, has_marker, remove_marker, txt_decode, txt_encode},
     },
+    retry::ReadRetry,
     rpc::{error, invalid, sha256},
 };
+use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
     CleanupStatus, DnsRecord, ProviderError, ProviderErrorCode, RecordOwnership, SideEffect,
     backend::configuration_error,
@@ -143,7 +144,7 @@ struct Operation {
     write_kind: WriteKind,
     outcome: Option<ProviderOutcome>,
     failure: Option<ProviderError>,
-    polls: u8,
+    read_retry: ReadRetry,
     writes: u8,
     confirm_cleanup: bool,
 }
@@ -341,18 +342,15 @@ impl Operation {
     }
 
     fn poll(&mut self) -> Result<ProviderEffect, ProviderError> {
-        self.polls += 1;
-        if self.polls > 8 {
-            return Err(error(
+        let until = self.read_retry.next().ok_or_else(|| {
+            error(
                 ProviderErrorCode::ProviderUnavailable,
                 "Huawei DNS RRset remains pending",
                 SideEffect::Unknown,
-            ));
-        }
+            )
+        })?;
         self.stage = Stage::Poll;
-        Ok(ProviderEffect::WaitUntil(
-            std::time::Instant::now() + std::time::Duration::from_secs(1),
-        ))
+        Ok(ProviderEffect::WaitUntil(until))
     }
 
     fn write_failure(&mut self, failure: ProviderError) -> Result<ProviderEffect, ProviderError> {
@@ -395,7 +393,7 @@ impl Operation {
             write_kind: WriteKind::Create,
             outcome: None,
             failure: None,
-            polls: 0,
+            read_retry: ReadRetry::new(8, std::time::Duration::from_secs(1)),
             writes: 0,
             confirm_cleanup: false,
         }
@@ -431,7 +429,7 @@ impl Operation {
         let date = hws_date();
         SignedRequest {
             endpoint: &self.endpoint(),
-            method: action.method().wire(),
+            method: action.method(),
             path,
             query,
             body,
@@ -451,7 +449,7 @@ impl Operation {
         let date = hws_date();
         SignedRequest {
             endpoint: &endpoint,
-            method: HuaweiAction::ListProjects.method().wire(),
+            method: HuaweiAction::ListProjects.method(),
             path: "/v3/projects",
             query: &[("name", self.config.region.as_str())],
             body: &[],

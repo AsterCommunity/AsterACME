@@ -9,6 +9,8 @@ Provider-owned DNS state machines without network or filesystem access. The embe
 | `tencent_cloud` | `com.astercosm.acme.dns.tencent-cloud` | Individual TXT objects with publication remarks |
 | `huawei_cloud` | `com.astercosm.acme.dns.huawei-cloud` | Best-effort whole RRset writes; no atomic guarantee |
 
+Vendor features automatically enable their shared support: `_http`, `_signed-api` and `_individual-records` are internal capability features defined in `Cargo.toml`. Hosts select vendor features only. Shared HTTP methods live in `aster_acme_dns::operation::HttpMethod`, and `HttpRequest.method` uses that enum without vendor-specific variant gates.
+
 From a source checkout, select only the implementation needed by the embedding application:
 
 ```toml

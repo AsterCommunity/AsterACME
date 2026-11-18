@@ -22,7 +22,7 @@ use std::{
 #[test]
 fn request_diagnostics_keep_safe_actions_and_status_but_never_url_queries() {
     let request = HttpRequest {
-        method: "POST".into(),
+        method: crate::operation::HttpMethod::Post,
         url: "https://api.example.test/v2/zones?token=secret-sentinel".into(),
         headers: vec![("x-tc-action".into(), "DescribeRecordList".into())],
         body: b"secret-sentinel".to_vec(),
@@ -156,7 +156,7 @@ impl ProviderOperation for SpecialOperation {
             }
             (SpecialMode::MutationWithoutCheckpoint, ProviderEvent::Start) => {
                 Ok(ProviderEffect::Http(HttpRequest {
-                    method: "POST".into(),
+                    method: crate::operation::HttpMethod::Post,
                     url: "https://dns.example/mutation".into(),
                     headers: vec![],
                     body: vec![],
@@ -336,7 +336,7 @@ impl ProviderOperation for Operation {
             }
             ProviderEvent::Start | ProviderEvent::CheckpointSaved => {
                 Ok(ProviderEffect::Http(HttpRequest {
-                    method: "POST".into(),
+                    method: crate::operation::HttpMethod::Post,
                     url: format!("https://dns.example/{}", self.record.publication_id),
                     headers: vec![],
                     body: vec![],

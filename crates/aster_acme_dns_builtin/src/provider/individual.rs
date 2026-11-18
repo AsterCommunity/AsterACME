@@ -1,5 +1,8 @@
 //! Shared lifecycle for vendors that create and delete individual DNS records.
-use crate::provider::rpc::{error, invalid, transport};
+use crate::provider::{
+    retry::ReadRetry,
+    rpc::{error, invalid, transport},
+};
 use aster_acme_dns::{
     CleanupStatus, DnsRecord, ProviderError, ProviderErrorCode, PublicationReceipt,
     RecordOwnership, SideEffect,
@@ -11,11 +14,7 @@ use aster_acme_dns::{
     routing::absolute_name,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeSet,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 pub(super) const PAGE_SIZE: u32 = 100;
 const MAX_PAGES: u32 = 100;
@@ -69,9 +68,6 @@ pub(super) struct Page<T> {
 
 pub(super) trait IndividualApi: Send + Sync {
     const MARKED: bool;
-    fn reconcile_delay(&self) -> Option<Duration> {
-        None
-    }
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError>;
     fn zones(&self, response: HttpResponse, page: u32) -> Result<Page<Zone>, ProviderError>;
     fn verify_zone(&self, _zone: &Zone) -> Result<Option<HttpRequest>, ProviderError> {
@@ -155,7 +151,7 @@ struct Operation<A> {
     borrowable: Option<Record>,
     total: Option<u32>,
     minimum_ttl: u32,
-    reconcile_attempts: u8,
+    read_retry: ReadRetry,
 }
 
 impl<A: IndividualApi + 'static> OperationFactory for IndividualFactory<A> {
@@ -250,7 +246,7 @@ impl<A: IndividualApi + 'static> OperationFactory for IndividualFactory<A> {
             borrowable: None,
             total: None,
             minimum_ttl: 0,
-            reconcile_attempts: 0,
+            read_retry: ReadRetry::new(6, Duration::from_secs(5)),
         }))
     }
 }
@@ -461,17 +457,16 @@ impl<A: IndividualApi> Operation<A> {
             return self.save_created(record.id);
         }
         if uncertain {
-            if let Some(delay) = self.api.reconcile_delay()
-                && self.reconcile_attempts < 6
+            if A::MARKED
+                && let Some(until) = self.read_retry.next()
             {
-                self.reconcile_attempts += 1;
                 self.seen.clear();
                 self.same_value.clear();
                 self.marked = None;
                 self.borrowable = None;
                 self.total = None;
                 self.stage = Stage::Reconcile;
-                return Ok(ProviderEffect::WaitUntil(Instant::now() + delay));
+                return Ok(ProviderEffect::WaitUntil(until));
             }
             return Err(not_owned(true));
         }
@@ -518,6 +513,10 @@ impl<A: IndividualApi> Operation<A> {
         let record = self.api.inspected(response, &saved.zone)?;
         let cleanup = matches!(self.action, ProviderAction::Cleanup(_));
         let Some(record) = record else {
+            if !cleanup && let Some(until) = self.read_retry.next() {
+                self.stage = Stage::Reconcile;
+                return Ok(ProviderEffect::WaitUntil(until));
+            }
             return if cleanup {
                 Ok(ProviderEffect::Complete(ProviderOutcome::Cleaned(
                     CleanupStatus::AlreadyAbsent,

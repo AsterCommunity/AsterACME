@@ -57,7 +57,7 @@ fn http(effect: ProviderEffect, method: &str) -> aster_acme_dns::operation::Http
     let ProviderEffect::Http(request) = effect else {
         panic!("expected HTTP")
     };
-    assert_eq!(request.method, method);
+    assert_eq!(request.method.as_str(), method);
     assert!(
         request
             .headers
@@ -482,10 +482,40 @@ fn unknown_creation_without_a_visible_tag_never_replays_post() {
     };
     for records in [json!([]), json!([remote(None, "txt-value")])] {
         let mut machine = begin(Some(saved.clone()));
+        let mut result = machine.advance(response(records.clone()));
+        for _ in 0..6 {
+            if !matches!(result, Ok(ProviderEffect::WaitUntil(_))) {
+                break;
+            }
+            http(machine.advance(ProviderEvent::Timer).unwrap(), "GET");
+            result = machine.advance(response(records.clone()));
+        }
         assert!(
-            matches!(machine.advance(response(records)),Err(error) if error.code==ProviderErrorCode::RecordNotOwned && error.side_effect==SideEffect::Unknown)
+            matches!(result,Err(error) if error.code==ProviderErrorCode::RecordNotOwned && error.side_effect==SideEffect::Unknown)
         );
     }
+}
+
+#[test]
+fn delayed_owned_marker_reconciles_by_reading_without_recreating() {
+    let mut machine = begin(Some(RecoveryState {
+        version: 1,
+        data: json!({"create_intent":true}),
+    }));
+    assert!(matches!(
+        machine.advance(response(json!([]))).unwrap(),
+        ProviderEffect::WaitUntil(_)
+    ));
+    http(machine.advance(ProviderEvent::Timer).unwrap(), "GET");
+    let effect = machine
+        .advance(response(json!([remote(
+            Some("asteracme:publication-1"),
+            "txt-value"
+        )])))
+        .unwrap();
+    assert!(
+        matches!(effect, ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) if receipt.ownership == RecordOwnership::Created)
+    );
 }
 
 #[test]
@@ -573,8 +603,12 @@ fn automatic_zone_discovery_uses_delegated_target_and_persists_for_recovery() {
             .unwrap(),
         "GET",
     );
-    let err = recovered.advance(response(json!([]))).err().unwrap();
-    assert_eq!(err.side_effect, SideEffect::Unknown);
+    assert!(matches!(
+        recovered.advance(response(json!([]))).unwrap(),
+        ProviderEffect::WaitUntil(_)
+    ));
+    let next = http(recovered.advance(ProviderEvent::Timer).unwrap(), "GET");
+    assert!(next.url.contains(ZONE));
 }
 
 #[test]

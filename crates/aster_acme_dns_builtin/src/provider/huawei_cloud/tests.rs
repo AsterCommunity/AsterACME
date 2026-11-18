@@ -47,7 +47,7 @@ fn http(effect: ProviderEffect, method: &str) -> aster_acme_dns::operation::Http
     let ProviderEffect::Http(request) = effect else {
         panic!("expected {method} request");
     };
-    assert_eq!(request.method, method);
+    assert_eq!(request.method.as_str(), method);
     assert_eq!(request.mutation, method != "GET");
     request
 }
@@ -104,7 +104,7 @@ fn receipt(op: &mut dyn ProviderOperation) -> aster_acme_dns::PublicationReceipt
 fn official_hws_get_and_post_signatures_use_exact_wire_bytes() {
     let get = SignedRequest {
         endpoint: "https://example.huaweicloud.com",
-        method: "GET",
+        method: aster_acme_dns::operation::HttpMethod::Get,
         path: "/path",
         query: &[("limit", "1")],
         body: &[],
@@ -119,7 +119,7 @@ fn official_hws_get_and_post_signatures_use_exact_wire_bytes() {
     );
     let post = SignedRequest {
         endpoint: "https://example.huaweicloud.com",
-        method: "POST",
+        method: aster_acme_dns::operation::HttpMethod::Post,
         path: "/path",
         query: &[("key", "value")],
         body: b"{\"Name\":\"test\",\"Id\":1}\n",

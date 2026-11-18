@@ -12,9 +12,31 @@ use std::{sync::Arc, time::Instant};
 /// Host-side publication batch bound, independent of external wire versions.
 pub const MAX_PUBLICATIONS: usize = 100;
 
+/// HTTP verbs supported by DNS provider effects, independent of vendor features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+impl HttpMethod {
+    /// Exact HTTP token used by transports and request signers.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Delete => "DELETE",
+        }
+    }
+}
+
 /// Fully prepared request. Headers/body may contain credentials; deliberately no Debug.
 pub struct HttpRequest {
-    pub method: String,
+    pub method: HttpMethod,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -349,7 +371,7 @@ fn request_diagnostic(request: &HttpRequest) -> String {
                     .all(|byte| byte.is_ascii_alphanumeric() || b"/-_.{}".contains(&byte))
         })
         .map_or_else(|| "<path unavailable>".into(), str::to_owned);
-    format!("{} {path}", request.method)
+    format!("{} {path}", request.method.as_str())
 }
 
 fn safe_action(action: &str) -> bool {

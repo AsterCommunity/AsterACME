@@ -3,14 +3,14 @@ use crate::provider::rpc::{api_error, hex, hmac256, invalid};
 use aster_acme_dns::{
     ProviderError, ProviderErrorCode,
     backend::configuration_error,
-    operation::{HttpRequest, HttpResponse},
+    operation::{HttpMethod, HttpRequest, HttpResponse},
 };
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 pub(super) struct SignedRequest<'a> {
     pub(super) endpoint: &'a str,
-    pub(super) method: &'a str,
+    pub(super) method: HttpMethod,
     pub(super) path: &'a str,
     pub(super) query: &'a [(&'a str, &'a str)],
     pub(super) body: &'a [u8],
@@ -42,7 +42,7 @@ impl SignedRequest<'_> {
         let canonical_uri = canonical_uri(self.path);
         let canonical = format!(
             "{}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{content_hash}",
-            self.method
+            self.method.as_str()
         );
         let string_to_sign = format!(
             "SDK-HMAC-SHA256\n{date}\n{}",
@@ -68,7 +68,7 @@ impl SignedRequest<'_> {
             headers.push(("x-project-id".into(), id.into()));
         }
         Ok(HttpRequest {
-            method: self.method.into(),
+            method: self.method,
             url,
             headers,
             body: self.body.to_vec(),

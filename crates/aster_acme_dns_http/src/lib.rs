@@ -12,7 +12,7 @@
 )]
 use aster_acme_dns::{
     ProviderErrorCode, ProviderExecution, SideEffect,
-    operation::{HttpExecutor, HttpFailure, HttpRequest, HttpResponse},
+    operation::{HttpExecutor, HttpFailure, HttpMethod, HttpRequest, HttpResponse},
 };
 use async_trait::async_trait;
 use std::{sync::Arc, time::Duration};
@@ -47,11 +47,7 @@ impl HttpExecutor for ForgeDnsHttp {
         let header_bytes = request.headers.iter().fold(0usize, |total, (name, value)| {
             total.saturating_add(name.len()).saturating_add(value.len())
         });
-        if request.method.len() > 32
-            || request.body.len() > 1024 * 1024
-            || request.url.len() > 8192
-            || header_bytes > 65536
-        {
+        if request.body.len() > 1024 * 1024 || request.url.len() > 8192 || header_bytes > 65536 {
             return Err(before);
         }
         let url = reqwest::Url::parse(&request.url).map_err(|_| before)?;
@@ -71,7 +67,12 @@ impl HttpExecutor for ForgeDnsHttp {
         {
             return Err(before);
         }
-        let method = reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|_| before)?;
+        let method = match request.method {
+            HttpMethod::Get => reqwest::Method::GET,
+            HttpMethod::Post => reqwest::Method::POST,
+            HttpMethod::Put => reqwest::Method::PUT,
+            HttpMethod::Delete => reqwest::Method::DELETE,
+        };
         let exchange = async {
             let client = self
                 .client
