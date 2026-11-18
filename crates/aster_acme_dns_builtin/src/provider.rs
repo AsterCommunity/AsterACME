@@ -1,4 +1,5 @@
 //! Vendor features automatically enable the shared capabilities they use.
+mod marker;
 #[cfg(feature = "_http")]
 mod retry;
 

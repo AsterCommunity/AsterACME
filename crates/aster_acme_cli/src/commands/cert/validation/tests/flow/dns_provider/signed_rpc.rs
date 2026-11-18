@@ -208,6 +208,16 @@ impl Cloud {
                 self.writes.fetch_add(1, Ordering::SeqCst);
                 json!({"RecordId":"23"})
             }
+            "UpdateDomainRecordRemark" => {
+                assert_eq!(params["RecordId"], "23");
+                let remark = params["Remark"].replace("%3A", ":");
+                assert!(remark.starts_with("asteracme:"));
+                let record = remote
+                    .as_mut()
+                    .expect("remark update requires created record");
+                record["Remark"] = json!(remark);
+                json!({"RequestId":"ali-remark-request"})
+            }
             "DescribeDomainRecordInfo" => {
                 assert_eq!(params["RecordId"], "23");
                 let mut body = remote.clone().unwrap();
@@ -378,6 +388,7 @@ impl HttpExecutor for Cloud {
             .map_or("", |(_, value)| value.as_str());
         let creating = matches!(action, "AddDomainRecord" | "CreateTXTRecord")
             || request.method == aster_acme_dns::operation::HttpMethod::Post && action.is_empty();
+        let remarking = action == "UpdateDomainRecordRemark";
         if request.mutation {
             let cp = self.checkpoint();
             assert_eq!(cp["record"]["name"], OWNER);
@@ -397,6 +408,8 @@ impl HttpExecutor for Cloud {
                     phase["state"],
                     if creating {
                         "create_intent"
+                    } else if remarking {
+                        "remark_intent"
                     } else {
                         "delete_intent"
                     }

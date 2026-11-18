@@ -1,6 +1,7 @@
 //! Cloudflare publication reconciliation and exact-object cleanup transitions.
 use crate::provider::{
     cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone},
+    marker::publication,
     retry::ReadRetry,
 };
 use aster_acme_dns::operation::HttpMethod;
@@ -419,7 +420,7 @@ impl Operation {
         }
     }
     fn tag(&self) -> String {
-        format!("asteracme:{}", self.record().publication_id)
+        publication(&self.record().publication_id)
     }
     fn request(
         &self,

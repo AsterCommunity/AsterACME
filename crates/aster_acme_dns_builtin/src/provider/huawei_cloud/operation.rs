@@ -5,8 +5,9 @@ use crate::provider::{
         api::{SignedRequest, decode_body, marker_from_next, payload},
         txt::{add_marker, has_foreign_marker, has_marker, remove_marker, txt_decode, txt_encode},
     },
+    marker::publication_value,
     retry::ReadRetry,
-    rpc::{error, invalid, sha256},
+    rpc::{error, invalid},
 };
 use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
@@ -407,11 +408,7 @@ impl Operation {
     }
 
     fn marker(&self) -> String {
-        format!(
-            "asteracme:{}={}",
-            self.record().publication_id,
-            sha256(self.record().value.as_bytes())
-        )
+        publication_value(&self.record().publication_id, &self.record().value)
     }
 
     fn endpoint(&self) -> String {

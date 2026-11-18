@@ -47,6 +47,12 @@ fn row(id: &str, value: &str) -> Value {
            "RR":"target","Type":"TXT","Value":value,"TTL":300,"Status":"Enable","Line":"default"})
 }
 
+fn owned_row(id: &str, value: &str) -> Value {
+    let mut row = row(id, value);
+    row["Remark"] = json!("asteracme:publication-1");
+    row
+}
+
 fn initial(machine: &mut dyn ProviderOperation) -> RecoveryState {
     let request = http(
         machine.advance(ProviderEvent::Start).unwrap(),
@@ -128,6 +134,29 @@ fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
     cp
 }
 
+fn mark_created(machine: &mut dyn ProviderOperation) -> RecoveryState {
+    let remark_intent = saved(
+        reply(machine, &json!({"RecordId":"64"})).unwrap(),
+        "remark_intent",
+    );
+    assert_eq!(remark_intent.data["phase"]["id"], "64");
+    let request = http(
+        machine.advance(ProviderEvent::CheckpointSaved).unwrap(),
+        "x-acs-action",
+        "UpdateDomainRecordRemark",
+        true,
+    );
+    assert!(
+        request
+            .url
+            .ends_with("?RecordId=64&Remark=asteracme%3Apublication-1")
+    );
+    saved(
+        reply(machine, &json!({"RequestId":"remark-request"})).unwrap(),
+        "marked",
+    )
+}
+
 #[test]
 fn acs3_signs_exact_rfc3986_query_and_empty_wire_body() {
     // Independent Python hashlib/hmac + urllib reference based on the ACS3 canonical request.
@@ -159,20 +188,16 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
         .start(ProviderAction::Present(record()), None)
         .unwrap();
     intent(present.as_mut());
-    let created = saved(
-        reply(present.as_mut(), &json!({"RecordId":"64"})).unwrap(),
-        "created",
-    );
-    assert_eq!(created.data["phase"]["id"], "64");
+    let marked = mark_created(present.as_mut());
     let mut resumed = factory
-        .start(ProviderAction::Present(record()), Some(created.clone()))
+        .start(ProviderAction::Present(record()), Some(marked.clone()))
         .unwrap();
     read_zone(
         resumed.as_mut(),
         ProviderEvent::Start,
         "DescribeDomainRecordInfo",
     );
-    let receipt = receipt(reply(resumed.as_mut(), &row("64", "challenge-value")).unwrap());
+    let receipt = receipt(reply(resumed.as_mut(), &owned_row("64", "challenge-value")).unwrap());
     assert_eq!(receipt.effective_ttl_seconds, Some(300));
     assert_eq!(receipt.ownership, RecordOwnership::Created);
     assert!(
@@ -190,7 +215,7 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
         let mut op = factory
             .start(
                 ProviderAction::Cleanup(cleanup(receipt.clone())),
-                Some(created.clone()),
+                Some(marked.clone()),
             )
             .unwrap();
         read_zone(
@@ -198,7 +223,7 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
             ProviderEvent::Start,
             "DescribeDomainRecordInfo",
         );
-        let mut edited = row("64", "challenge-value");
+        let mut edited = owned_row("64", "challenge-value");
         edited[field] = value;
         assert_eq!(
             fail(reply(op.as_mut(), &edited)).code,
@@ -208,7 +233,7 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
     let mut op = factory
         .start(
             ProviderAction::Cleanup(cleanup(receipt.clone())),
-            Some(created),
+            Some(marked),
         )
         .unwrap();
     read_zone(
@@ -217,7 +242,7 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
         "DescribeDomainRecordInfo",
     );
     let deleting = saved(
-        reply(op.as_mut(), &row("64", "challenge-value")).unwrap(),
+        reply(op.as_mut(), &owned_row("64", "challenge-value")).unwrap(),
         "delete_intent",
     );
     let request = http(
@@ -247,6 +272,54 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
         .unwrap(),
         ProviderEffect::Complete(ProviderOutcome::Cleaned(CleanupStatus::AlreadyAbsent))
     ));
+}
+
+#[test]
+fn remark_failure_retries_the_update_without_repeating_record_creation() {
+    let factory = factory();
+    let mut present = factory
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    intent(present.as_mut());
+    let remark_intent = saved(
+        reply(present.as_mut(), &json!({"RecordId":"64"})).unwrap(),
+        "remark_intent",
+    );
+    let request = http(
+        present.advance(ProviderEvent::CheckpointSaved).unwrap(),
+        "x-acs-action",
+        "UpdateDomainRecordRemark",
+        true,
+    );
+    assert!(request.url.contains("RecordId=64"));
+    let error = fail(present.advance(ProviderEvent::Http(Err(HttpFailure {
+        code: ProviderErrorCode::ProviderTimeout,
+        side_effect: SideEffect::Unknown,
+    }))));
+    assert_eq!(error.side_effect, SideEffect::Unknown);
+
+    let mut resumed = factory
+        .start(ProviderAction::Present(record()), Some(remark_intent))
+        .unwrap();
+    let request = http(
+        resumed.advance(ProviderEvent::Start).unwrap(),
+        "x-acs-action",
+        "UpdateDomainRecordRemark",
+        true,
+    );
+    assert!(request.url.contains("RecordId=64"));
+    let marked = saved(
+        reply(resumed.as_mut(), &json!({"RequestId":"remark-request"})).unwrap(),
+        "marked",
+    );
+    read_zone(
+        resumed.as_mut(),
+        ProviderEvent::CheckpointSaved,
+        "DescribeDomainRecordInfo",
+    );
+    let receipt = receipt(reply(resumed.as_mut(), &owned_row("64", "challenge-value")).unwrap());
+    assert_eq!(receipt.record_id, "64");
+    assert_eq!(marked.data["phase"]["id"], "64");
 }
 
 #[test]

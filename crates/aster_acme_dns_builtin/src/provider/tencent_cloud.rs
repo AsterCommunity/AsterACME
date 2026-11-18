@@ -1,6 +1,6 @@
 //! Tencent Cloud `DNSPod` API 2021-03-23 using TC3-HMAC-SHA256.
 use crate::provider::{
-    individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, Zone},
+    individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, RecordMarking, Zone},
     rpc::{api_error, decode, hex, hmac256, invalid, key_field, settings, sha256, validate_keys},
 };
 use aster_acme_dns::operation::HttpMethod;
@@ -264,7 +264,7 @@ struct InspectedRecord {
 }
 
 impl IndividualApi for Keys {
-    const MARKED: bool = true;
+    const MARKING: RecordMarking = RecordMarking::Inline;
 
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(

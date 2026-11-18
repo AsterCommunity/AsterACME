@@ -38,7 +38,7 @@ aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
 
 - The token must cover the target zone with Zone Read and DNS Edit
 - With no zone ID, the zone is discovered from the longest suffix of the final publication target; the discovered zone is saved per publication and reused by recovery and cleanup
-- Created records carry an `asteracme:<publication_id>` comment for reconciliation; deletion verifies every record attribute first
+- All four built-in providers use `asteracme:<publication_id>` as the common remark/ownership marker; Huawei Cloud appends `=<sha256(txt_value)>` for value binding inside an RRset; deletion verifies every record attribute first
 - Existing same-value records owned by another AsterACME publication are never borrowed; the user's own unmarked records are preserved
 - Credential rotation is allowed; a saved certificate's backend and zone-selection mode are not
 
@@ -53,7 +53,7 @@ Both backends are available in the default CLI build. A smaller source build can
 | `com.astercosm.acme.dns.aliyun` | `access_key_id`, `access_key_secret` |
 | `com.astercosm.acme.dns.tencent-cloud` | `secret_id`, `secret_key` |
 
-Run `provider add NAME --backend BACKEND_ID` to enter both credentials at hidden prompts. Automation can pass a private TOML file with `--settings-file`. Both backends discover the zone from the final TXT target and record the observed TTL in the receipt. DNSPod recovers from a lost create response using the publication remark. Alibaba Cloud DNS requires a saved create-response `RecordId`. When that ID is unavailable, recovery stops and leaves the remote record in place.
+Run `provider add NAME --backend BACKEND_ID` to enter both credentials at hidden prompts. Automation can pass a private TOML file with `--settings-file`. Both backends discover the zone from the final TXT target and record the observed TTL in the receipt. DNSPod writes the common remark in its create request; Alibaba Cloud DNS writes it with `UpdateDomainRecordRemark` after `AddDomainRecord` succeeds. A failed Alibaba remark update is checkpointed and retries only the remark request, never the TXT creation. Alibaba Cloud DNS requires a saved create-response `RecordId`; when that ID is unavailable, recovery stops and leaves the remote record in place.
 
 See the [permissions, TTL and recovery guide](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md).
 

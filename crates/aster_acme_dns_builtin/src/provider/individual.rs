@@ -1,5 +1,6 @@
 //! Shared lifecycle for vendors that create and delete individual DNS records.
 use crate::provider::{
+    marker::publication,
     retry::ReadRetry,
     rpc::{error, invalid, transport},
 };
@@ -66,8 +67,25 @@ pub(super) struct Page<T> {
     pub total: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RecordMarking {
+    Inline,
+    AfterCreate,
+}
+
 pub(super) trait IndividualApi: Send + Sync {
-    const MARKED: bool;
+    const MARKING: RecordMarking;
+    fn marker(&self, publication_id: &str) -> String {
+        publication(publication_id)
+    }
+    fn set_remark(&self, _id: &str, _marker: &str) -> Result<HttpRequest, ProviderError> {
+        Err(configuration_error(
+            "provider does not support a separate remark request",
+        ))
+    }
+    fn remarked(&self, _response: HttpResponse) -> Result<(), ProviderError> {
+        Err(invalid(true))
+    }
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError>;
     fn zones(&self, response: HttpResponse, page: u32) -> Result<Page<Zone>, ProviderError>;
     fn verify_zone(&self, _zone: &Zone) -> Result<Option<HttpRequest>, ProviderError> {
@@ -119,6 +137,8 @@ enum Phase {
     CreateIntent,
     Rejected,
     Created { id: String },
+    RemarkIntent { id: String },
+    Marked { id: String },
     DeleteIntent { id: String },
 }
 
@@ -131,6 +151,7 @@ enum Stage {
     Inspect,
     Send(HttpRequest),
     Created,
+    Remarked,
     Deleted,
     Finish(Result<ProviderOutcome, ProviderError>),
     Done,
@@ -197,7 +218,10 @@ impl<A: IndividualApi + 'static> OperationFactory for IndividualFactory<A> {
                             && ids.len() <= MAX_SNAPSHOT
                             && ids.iter().all(|id| valid_id(id))
                     }
-                    Phase::Created { id } | Phase::DeleteIntent { id } => valid_id(id),
+                    Phase::Created { id }
+                    | Phase::RemarkIntent { id }
+                    | Phase::Marked { id }
+                    | Phase::DeleteIntent { id } => valid_id(id),
                     _ => true,
                 };
                 if !valid_phase {
@@ -223,14 +247,14 @@ impl<A: IndividualApi + 'static> OperationFactory for IndividualFactory<A> {
                     ));
                 }
                 if receipt.ownership == RecordOwnership::Created
-                    && !matches!(phase, Some(Phase::Created { id } | Phase::DeleteIntent { id }) if id == &receipt.record_id)
+                    && !matches!(phase, Some(Phase::Created { id } | Phase::RemarkIntent { id } | Phase::Marked { id } | Phase::DeleteIntent { id }) if id == &receipt.record_id)
                 {
                     return Err(not_owned(false));
                 }
             }
             ProviderAction::Present(_) => {}
         }
-        let marker = format!("asteracme:{}", record.publication_id);
+        let marker = self.0.marker(&record.publication_id);
         Ok(Box::new(Operation {
             api: self.0.clone(),
             action,
@@ -377,6 +401,9 @@ impl<A: IndividualApi> Operation<A> {
             )));
         }
         if let Some(saved) = &self.saved {
+            if let Phase::RemarkIntent { id } = &saved.phase {
+                return Ok(self.http(self.api.set_remark(id, &self.marker)?, Stage::Remarked));
+            }
             if let Some(request) = self.api.verify_zone(&saved.zone)? {
                 return Ok(self.http(request, Stage::VerifyZone));
             }
@@ -389,9 +416,10 @@ impl<A: IndividualApi> Operation<A> {
     fn read(&mut self) -> Result<ProviderEffect, ProviderError> {
         let saved = self.saved()?;
         let (request, next) = match &saved.phase {
-            Phase::Created { id } | Phase::DeleteIntent { id } => {
-                (self.api.inspect(&saved.zone, id)?, Stage::Inspect)
-            }
+            Phase::Created { id }
+            | Phase::RemarkIntent { id }
+            | Phase::Marked { id }
+            | Phase::DeleteIntent { id } => (self.api.inspect(&saved.zone, id)?, Stage::Inspect),
             _ => (
                 self.api.list(&saved.zone, self.relative()?, 1)?,
                 Stage::List(1),
@@ -424,12 +452,13 @@ impl<A: IndividualApi> Operation<A> {
                     return Err(invalid(false));
                 }
             }
-            if A::MARKED && record.marker.as_deref() == Some(&self.marker) {
+            if A::MARKING == RecordMarking::Inline && record.marker.as_deref() == Some(&self.marker)
+            {
                 if !same || self.marked.is_some() {
                     return Err(not_owned(true));
                 }
                 self.marked = Some(record);
-            } else if A::MARKED
+            } else if A::MARKING == RecordMarking::Inline
                 && same
                 && record.enabled
                 && record.default_line
@@ -457,7 +486,7 @@ impl<A: IndividualApi> Operation<A> {
             return self.save_created(record.id);
         }
         if uncertain {
-            if A::MARKED
+            if A::MARKING == RecordMarking::Inline
                 && let Some(until) = self.read_retry.next()
             {
                 self.seen.clear();
@@ -502,12 +531,21 @@ impl<A: IndividualApi> Operation<A> {
         if !valid_id(&id) {
             return Err(invalid(true));
         }
-        self.checkpoint(Phase::Created { id }, Stage::Start)
+        let phase = if A::MARKING == RecordMarking::AfterCreate {
+            Phase::RemarkIntent { id }
+        } else {
+            Phase::Created { id }
+        };
+        self.checkpoint(phase, Stage::Start)
     }
 
     fn inspected(&mut self, response: HttpResponse) -> Result<ProviderEffect, ProviderError> {
         let saved = self.saved()?;
-        let (Phase::Created { id } | Phase::DeleteIntent { id }) = &saved.phase else {
+        let (Phase::Created { id }
+        | Phase::Marked { id }
+        | Phase::RemarkIntent { id }
+        | Phase::DeleteIntent { id }) = &saved.phase
+        else {
             return Err(invalid_checkpoint());
         };
         let record = self.api.inspected(response, &saved.zone)?;
@@ -528,7 +566,9 @@ impl<A: IndividualApi> Operation<A> {
         if &record.id != id
             || !self.same_value(&record)?
             || !record.default_line
-            || (A::MARKED && record.marker.as_deref() != Some(&self.marker))
+            || ((A::MARKING == RecordMarking::Inline
+                || matches!(saved.phase, Phase::Marked { .. }))
+                && record.marker.as_deref() != Some(&self.marker))
         {
             return Err(not_owned(false));
         }
@@ -542,6 +582,15 @@ impl<A: IndividualApi> Operation<A> {
         Ok(ProviderEffect::Complete(
             self.receipt(record, RecordOwnership::Created),
         ))
+    }
+
+    fn remarked(&mut self, response: HttpResponse) -> Result<ProviderEffect, ProviderError> {
+        self.api.remarked(response)?;
+        let id = match &self.saved()?.phase {
+            Phase::RemarkIntent { id } => id.clone(),
+            _ => return Err(invalid_checkpoint()),
+        };
+        self.checkpoint(Phase::Marked { id }, Stage::Start)
     }
 
     fn receipt(&self, record: Record, ownership: RecordOwnership) -> ProviderOutcome {
@@ -574,6 +623,9 @@ impl<A: IndividualApi> ProviderOperation for Operation<A> {
             (Stage::Reconcile, ProviderEvent::Timer) => self.read(),
             (Stage::Inspect, ProviderEvent::Http(response)) => {
                 self.inspected(response.map_err(transport)?)
+            }
+            (Stage::Remarked, ProviderEvent::Http(response)) => {
+                self.remarked(response.map_err(transport)?)
             }
             (Stage::Send(request), ProviderEvent::CheckpointSaved) => {
                 let next = if matches!(self.action, ProviderAction::Present(_)) {

@@ -38,7 +38,7 @@ aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
 
 - Token 须覆盖目标 zone,具备 Zone Read 和 DNS Edit
 - Zone ID 省略时按 CNAME 最终发布目标的最长后缀自动发现,发现结果按发布保存,恢复与清理沿用同一 zone
-- 创建记录写入 `asteracme:<publication_id>` comment 用于对账;删除前逐项核对记录身份
+- 四家内置 provider 统一使用 `asteracme:<publication_id>` 作为备注/所有权标记用于对账;华为云 RRset 追加 `=<sha256(txt_value)>` 绑定具体 TXT 值;删除前逐项核对记录身份
 - 同值已有记录若是别的 AsterACME 发布所有,拒绝借用;用户自己的无标记记录保留
 - 凭据轮换允许;已保存证书的后端和 zone 选择模式不能更换
 
@@ -53,7 +53,7 @@ CLI 默认启用 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod 和华�
 | `com.astercosm.acme.dns.aliyun` | `access_key_id`、`access_key_secret` |
 | `com.astercosm.acme.dns.tencent-cloud` | `secret_id`、`secret_key` |
 
-运行 `provider add NAME --backend BACKEND_ID` 以隐藏输入填写两项凭据。自动化可通过 `--settings-file` 读取私有 TOML 文件。两家后端根据最终 TXT 目标发现 zone，并在回执中记录实际 TTL。DNSPod 用创建时写入的备注恢复丢失的创建响应。阿里云以收到并保存的 `RecordId` 证明所有权，丢失该 ID 时暂停恢复并保留远端记录。
+运行 `provider add NAME --backend BACKEND_ID` 以隐藏输入填写两项凭据。自动化可通过 `--settings-file` 读取私有 TOML 文件。两家后端根据最终 TXT 目标发现 zone，并在回执中记录实际 TTL。DNSPod 在创建请求中写入统一备注，阿里云在 `AddDomainRecord` 成功后通过 `UpdateDomainRecordRemark` 写入同一备注；阿里云备注更新失败时会保存阶段并只重试备注请求，不重复创建 TXT。阿里云以收到并保存的 `RecordId` 证明所有权，丢失该 ID 时暂停恢复并保留远端记录。
 
 详见[权限、TTL 和恢复说明](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md)。
 

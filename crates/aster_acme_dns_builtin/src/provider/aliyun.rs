@@ -1,6 +1,9 @@
 //! Alibaba Cloud DNS RPC, API version 2015-01-09, signed with ACS3.
 use crate::provider::{
-    individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, Zone, valid_id},
+    individual::{
+        IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, RecordMarking, Zone, valid_id,
+    },
+    marker::publication,
     rpc::{
         api_error, decode, hex, hmac256, invalid, key_field, query, settings, sha256, validate_keys,
     },
@@ -33,6 +36,7 @@ enum AliyunAction {
     DescribeDomainRecords,
     DescribeDomainRecordInfo,
     AddDomainRecord,
+    UpdateDomainRecordRemark,
     DeleteDomainRecord,
 }
 
@@ -44,6 +48,7 @@ impl AliyunAction {
             Self::DescribeDomainRecords => "DescribeDomainRecords",
             Self::DescribeDomainRecordInfo => "DescribeDomainRecordInfo",
             Self::AddDomainRecord => "AddDomainRecord",
+            Self::UpdateDomainRecordRemark => "UpdateDomainRecordRemark",
             Self::DeleteDomainRecord => "DeleteDomainRecord",
         }
     }
@@ -220,6 +225,8 @@ struct AliRecord {
     ttl: u32,
     status: RecordStatus,
     line: String,
+    #[serde(rename = "Remark")]
+    remark: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -248,7 +255,7 @@ impl AliRecord {
             kind: self.kind,
             value: self.value,
             ttl: self.ttl,
-            marker: None,
+            marker: self.remark,
             enabled: matches!(self.status, RecordStatus::Enable),
             default_line: self.line == "default",
         })
@@ -273,7 +280,33 @@ impl Pagination {
 }
 
 impl IndividualApi for Keys {
-    const MARKED: bool = false;
+    const MARKING: RecordMarking = RecordMarking::AfterCreate;
+
+    fn marker(&self, publication_id: &str) -> String {
+        // A compact, deterministic marker also fits short vendor remark fields.
+        publication(publication_id)
+    }
+
+    fn set_remark(&self, id: &str, marker: &str) -> Result<HttpRequest, ProviderError> {
+        self.request(
+            AliyunAction::UpdateDomainRecordRemark,
+            &[("RecordId", id), ("Remark", marker)],
+            true,
+        )
+    }
+
+    fn remarked(&self, response: HttpResponse) -> Result<(), ProviderError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct UpdatedRemark {
+            request_id: String,
+        }
+        let result: UpdatedRemark = decode(payload(&response, true)?, true)?;
+        if result.request_id.is_empty() {
+            return Err(invalid(true));
+        }
+        Ok(())
+    }
 
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(
