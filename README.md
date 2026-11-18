@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="https://acme.astercosm.com"><img alt="Website" src="https://img.shields.io/badge/website-AsterACME-2563EB?style=for-the-badge"></a>
+  <a href="https://acme.docs.astercosm.com"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-Astro_Starlight-7C3AED?style=for-the-badge&logo=astro&logoColor=white"></a>
   <a href="README.zh.md"><img alt="中文 README" src="https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-E11D48?style=for-the-badge"></a>
   <a href="docs/architecture.md"><img alt="Architecture" src="https://img.shields.io/badge/architecture-overview-0F172A?style=for-the-badge"></a>
   <a href="docs/rfc-reference.md"><img alt="RFC Reference" src="https://img.shields.io/badge/ACME-RFC%208555-059669?style=for-the-badge"></a>
@@ -127,12 +128,28 @@ Adding a binding deploys immediately; later successful renewals use it automatic
 
 ## Documentation
 
-- [CLI and configuration](docs/cli-contract.md): commands, prompts, JSON, timeouts, and `--debug`.
-- [Certificate lifecycle](docs/certificate-lifecycle.md): renewal, ARI, revocation, and removal.
-- [Developer guide](docs/README.md): project contract, task routing, architecture, crate ownership, and tests.
-- [RFC reference](docs/rfc-reference.md) and [changelog](CHANGELOG.md).
+The user and operations documentation is published with Astro Starlight at [acme.docs.astercosm.com](https://acme.docs.astercosm.com/).
+
+- [Quick start](https://acme.docs.astercosm.com/start/quick-start/)
+- [Installation](https://acme.docs.astercosm.com/start/install/)
+- [Choosing a validation method](https://acme.docs.astercosm.com/using/challenges/)
+- [Accounts](https://acme.docs.astercosm.com/using/accounts/)
+- [Issuance and recovery](https://acme.docs.astercosm.com/using/issuance/)
+- [Renewal and ARI](https://acme.docs.astercosm.com/using/renewal/)
+- [Deployment and reload](https://acme.docs.astercosm.com/using/deploy/)
+- [DNS provider automation](https://acme.docs.astercosm.com/admin/dns-providers/)
+- [Resident daemon and cron](https://acme.docs.astercosm.com/admin/daemon/)
+- [Running the container](https://acme.docs.astercosm.com/admin/docker/)
+- [CLI reference](https://acme.docs.astercosm.com/reference/cli/)
+- [Developer guide](docs/README.md): project contract, task routing, architecture, crate ownership, and tests
+- [RFC reference](docs/rfc-reference.md) and [changelog](CHANGELOG.md)
 
 State is stored in the platform directory for `com.astercosm.acme`; use `--data-dir PATH` or `ASTER_ACME_DATA_DIR` to select another root (`--data-dir` takes precedence). `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
+
+## Security
+
+- Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/AsterCommunity/AsterACME/security/advisories/new) or `report@esaps.net` — see [SECURITY.md](SECURITY.md) for the full policy
+- Published advisories: [github.com/AsterCommunity/AsterACME/security/advisories](https://github.com/AsterCommunity/AsterACME/security/advisories)
 
 ## License
 

@@ -1,0 +1,69 @@
+---
+title: 签发与恢复
+description: cert issue、中断恢复、证书查看与失败申请清理。
+---
+
+## 签发一张新证书
+
+```sh
+aster-acme cert issue -n example-cert -a default \
+  -d example.com -d '*.example.com' \
+  -c dns_provider --provider cf-prod
+```
+
+- `-n/--name`:长期托管证书名称。缺省时用首个域名加随机后缀;显式指定的名称已存在会拒绝
+- `-a/--account`:签发账户
+- `-d/--domain`:域名,可重复;通配符写 `*.example.com`,通配符只能走 DNS 验证
+- `-c/--challenge`:验证实现,见[验证方式](/using/challenges/)
+- `-k/--key-type`:证书公钥算法,默认 ecdsa-p256;支持 ecdsa-p384/p521、ed25519、rsa-2048/3072/4096/8192。CA 拒绝时保留实际错误,不自动换算法重试
+
+签发为每个世代固定生成密钥与 CSR:恢复不生成替代材料,续期沿用同一域名/账户/算法。新密钥与 CSR 在任何 CA 请求前生成;取消交互不会留下半初始化的身份。
+
+**相似订单防重复**:新请求没有显式名称时,若库里存在完整定义匹配的未完成候选,终端默认选择恢复或新建;脚本遇到唯一匹配会直接失败并给出精确恢复命令,避免静默重复下单。
+
+## 中断恢复
+
+签发过程中的每一步(意图、订单 URL、验证材料、最终产物)都先持久化再推进。网络超时、取消、超时或轮询上限到达后,申请保留在原检查点:
+
+```sh
+aster-acme cert issue --resume example-cert
+aster-acme cert issue --resume example-cert --operation FULL-OPERATION-ID
+```
+
+- `--resume [NAME]`:终端缺省名称时列出未完成申请供选择;脚本必须提供名称或完整 `--operation`
+- 已完成版本不参与恢复选择
+- 人工验证(manual_dns/manual_http)在恢复时先重新展示待发布材料;`--yes` 只在材料已展示过后确认,不会把没见过的材料当已发布
+- 进入终态失败的订单(invalid)不再参与恢复;错误详情用 `cert show` 查看
+
+**结果不确定不自动重放**:比如创建订单后响应丢失,AsterACME 保留"创建不确定"状态而不是盲目再下一单;恢复时按保存的证据对账。
+
+## 查看证书
+
+```sh
+aster-acme cert list
+aster-acme cert list --history
+aster-acme cert show example-cert
+aster-acme cert show example-cert --history
+aster-acme cert show example-cert --verify
+aster-acme cert show --operation OPERATION-ID
+```
+
+`list` 默认每份托管证书一行,`--history` 展开全部版本。`show` 默认展示当前使用(in_use)的版本:域名、有效期、验证方式、部署绑定、吊销状态与续期计划。默认全部离线;`--verify` 向 CA 查询订单与授权并刷新快照——它不代表本次查询了吊销状态或 OCSP/CRL。
+
+时间字段区分**订单状态**与**证书到期**;列表和详情的 NEXT RENEWAL 来自续期计划(见[续期与 ARI](/using/renewal/))。
+
+## 清理失败申请
+
+```sh
+aster-acme cert remove example-cert --failed --yes
+```
+
+`--failed` 只删除**明确失败且不可恢复**的未签发申请:订单创建被 CA 明确 4xx 拒绝、固定 CSR 被拒(badCSR)、订单/授权进入终态、订单已过期。网络超时、408/429 限流、结果未知的申请保留,不误删。它不访问 CA、不自动清理 DNS 或 webroot 材料,也保留已签发版本。
+
+## 调试诊断
+
+```sh
+aster-acme cert issue --resume example-cert --yes --debug
+```
+
+`--debug` 打开安全级别的 DEBUG 日志:检查点阶段、订单意图保存、请求类别、HTTP 状态与耗时、nonce 重试序号。它**不**记录私钥、CSR/JWS 正文、响应正文或带凭据的 URL。JSON 模式下诊断关闭,需要人类诊断时去掉 `--json`。

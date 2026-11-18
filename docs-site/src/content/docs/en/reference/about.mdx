@@ -1,0 +1,67 @@
+---
+title: About AsterACME
+description: Project positioning, protocol support, CA boundaries, and licensing.
+---
+
+AsterACME is AsterCommunity's certificate infrastructure project: an embeddable Rust ACME client and CLI. It proxies no traffic and terminates no TLS — it manages the certificate lifecycle and publishes artifacts as regular files.
+
+## Design stance
+
+- **Recovery first**: remote operations persist intent first; interruptions continue from checkpoints; outcome-uncertain operations are never replayed automatically
+- **Fixed material per generation**: recovery never generates replacement keys or CSRs; audit records keep both keys and logs
+- **Explicit boundaries**: local observations are never presented as remote state; advisory prechecks are never presented as CA validation; deployment status is never presented as service health
+- **Pure library kernel**: core has no network/file/runtime dependencies, protocol owns named wire types, and embedders can replace storage, signers, and solvers
+
+## Protocol support
+
+| Protocol | Status |
+| --- | --- |
+| RFC 8555 (ACME) | Core flow: accounts, orders, authorizations, challenges, finalize, revocation |
+| RFC 9773 (ARI) | Implemented: renewal suggestion windows, `replaces`, persisted plans |
+| RFC 8737 (TLS-ALPN-01) | Implemented |
+| RFC 8738 (IP certificates) | Subject to CA policy; identifiers passed through as wire values |
+| draft-ietf-acme-dns-persist-02 | Implemented against draft -02; requires a CA on the same revision |
+| RFC 5280 revocation reasons | All assigned codes |
+| External DNS providers | ADPP (AsterACME DNS Provider Protocol), pre-release protocol |
+
+Normative conclusions and per-extension testing status live in the in-repo [RFC reference and integration boundaries](https://github.com/AsterCommunity/AsterACME/blob/main/docs/rfc-reference.md).
+
+## CA and endpoint boundaries
+
+- Built-in CA profiles cover the public production entries only: **Let's Encrypt** (default), **ZeroSSL**, and **Google Trust Services**
+- Other CAs and test environments go through `--ca-directory` with an explicit directory URL — there is no build-mode switch
+- Endpoints always come from the CA's directory, Location, or resource fields; conventional URLs are never assembled
+- CAs requiring EAB are supported through the paired `--eab-kid` / `--eab-key-file`
+
+## Certificate key algorithms
+
+Account and certificate keys are chosen independently from one shared set: ecdsa-p256 (default), ecdsa-p384, ecdsa-p521, ed25519, rsa-2048, rsa-3072, rsa-4096, rsa-8192. Acceptance is the CA's call; rejections surface the original error with no silent downgrade. Let's Encrypt currently accepts P-256/P-384 and RSA 2048/3072/4096.
+
+## Crate layout
+
+```text
+crates/
+├── aster_acme_core/          # pure decisions: state machines, admission, no IO
+├── aster_acme_protocol/      # named ACME wire types and encoding
+├── aster_acme/               # orchestration: account/issuance/renewal/revocation services, maintenance
+├── aster_acme_cli_storage/   # file layout, leases, atomic IO, typed queries
+├── aster_acme_cli/           # interaction, output sessions, process boundaries
+└── aster_acme_dns_*          # DNS solver, built-in Cloudflare, ADPP transport
+```
+
+The HTTP stack reuses AsterForge/rustls/AWS-LC with no OpenSSL dependency. Embedding entry points and crate boundaries are described in the in-repo [architecture overview](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md).
+
+## Distribution channels
+
+- crates.io: `aster_acme_cli` (CLI) and the `aster_acme` library crates
+- Homebrew: `astercommunity/tap/aster-acme`
+- Containers: `ghcr.io/astercommunity/aster-acme` (cosign keyless signing, SBOM/provenance)
+- Changelog: [CHANGELOG.md](https://github.com/AsterCommunity/AsterACME/blob/main/CHANGELOG.md)
+
+## License
+
+Dual-licensed under MIT OR Apache-2.0, at your option. See [LICENSE-MIT](https://github.com/AsterCommunity/AsterACME/blob/main/LICENSE-MIT) / [LICENSE-APACHE](https://github.com/AsterCommunity/AsterACME/blob/main/LICENSE-APACHE) in the repository.
+
+## Security
+
+Report vulnerabilities privately through GitHub Security Advisories or `report@esaps.net`; the full policy is in [SECURITY.md](https://github.com/AsterCommunity/AsterACME/blob/main/SECURITY.md).

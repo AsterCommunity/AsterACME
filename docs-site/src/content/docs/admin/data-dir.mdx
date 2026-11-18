@@ -1,0 +1,64 @@
+---
+title: 数据目录与备份
+description: 默认位置、目录布局、config.toml、备份与迁移。
+---
+
+## 默认位置
+
+状态默认保存在 `com.astercosm.acme` 的平台目录:
+
+| 平台 | 路径 |
+| --- | --- |
+| macOS | `~/Library/Application Support/com.astercosm.acme` |
+| Linux | `~/.local/share/com.astercosm.acme` |
+| Windows | `%APPDATA%\AsterCosm\acme` |
+
+`--data-dir PATH` 或环境变量 `ASTER_ACME_DATA_DIR` 指定其他根目录;命令行参数优先于环境变量。容器镜像固定 `/data`。`version`/`help` 不加载状态目录。
+
+## 目录布局
+
+```text
+<data-dir>/
+├── config.toml          # 唯一配置文件
+├── accounts/<name>/     # account.toml + account-key.pk8
+├── certs/<name>/        # cert.toml + 各签发世代(operation)
+├── providers/<name>.toml    # DNS Provider Profile
+│   └── .publications/   # 内置后端发布检查点(不含凭据)
+└── .locks/              # 跨进程锁(账户/证书/daemon/registry)
+```
+
+- `.locks/` 不属于对象数据:锁文件释放后保留,不通过删除锁文件释放锁
+- 证书的每个世代目录保存自己的订单观察、固定密钥/CSR、产物与续期计划
+- 用户放进 certs/、accounts/ 的额外文件不会被托管删除触碰;不递归清理未证明归属的内容
+
+## config.toml
+
+首次使用自动生成。AsterACME 用定点修改(`toml_edit`)写这个文件,**保留你的注释与排版**;未知版本或损坏文件拒绝自动重置。
+
+| 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `version` | `1` | 配置版本 |
+| `request_timeout` | `30` | 单个 HTTP 请求上限(秒,1–300) |
+| `operation_timeout` | `600` | 单次签发/恢复/吊销预算(秒,1–86400) |
+| `max_polls` | `30` | 订单轮询轮数(1–1000) |
+| `poll_interval` | `5` | 轮询间隔(秒,1–300) |
+| `daemon_interval` | `60` | 常驻 daemon 周期间隔(秒,1–86400) |
+
+CLI 显式参数优先于配置,配置缺省回退内置默认;CLI 不把单次覆盖写回配置。
+
+## 权限
+
+- Unix:内部密钥/元数据使用私有权限;Profile 与 settings 文件 `0600`,目录私有;链接或不安全权限直接拒绝
+- Windows:继承目录权限并校验 reparse point/hard-link;显式 Unix mode 报不支持
+- CLI 不放松目录本身的访问控制——data-dir 的所有权与访问控制由操作者负责
+
+## 备份与迁移
+
+备份/迁移以整个 data-dir 为单位(停掉 daemon 后整目录复制即可):
+
+- 必须包含:`config.toml`、`accounts/`、`certs/`、`providers/`;私钥只存在这里,没有远程副本
+- `.locks/` 可以不备份
+- 恢复到新机器后先 `cert list` 核对库存,再 `daemon run-once` 验证一轮
+- 同时运行的两个实例必须使用不同 data-dir;同一 data-dir 的并发由文件锁协调
+
+预发布版本(0.1.0-alpha.x)的内部格式(`operation journal`、吊销记录等)可能在版本间演进:**升级前备份 data-dir**,格式不兼容时工具会失败关闭,不会猜测或迁移旧字段。

@@ -1,0 +1,68 @@
+---
+title: Running the Container
+description: Image tags, cosign verification, the data directory, command shims, and Compose.
+---
+
+## Images
+
+Multi-arch images (linux/amd64, linux/arm64) are published to `ghcr.io/astercommunity/aster-acme`, mirrored to Docker Hub and GitHub Releases. `latest` tracks stable release tags only; pre-releases keep only their version tags.
+
+Images are cosign keyless-signed and ship SBOM and provenance attestations:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/AsterCommunity/AsterACME/\.github/workflows/' \
+  ghcr.io/astercommunity/aster-acme:latest
+```
+
+## Data directory
+
+The image pins the state root to `/data` (that is `ASTER_ACME_DATA_DIR`). `config.toml`, `accounts/`, `certs/`, `providers/`, and `.locks/` all live underneath, so **the mount must be persistent**:
+
+```sh
+docker run -d --name aster-acme -v aster-acme-config:/data \
+  ghcr.io/astercommunity/aster-acme:latest
+```
+
+The default entrypoint is the resident maintenance daemon (`daemon run`), running in the foreground and restarted by your restart policy.
+
+## One-off commands and command shims
+
+`docker run` with arguments executes them as an `aster-acme` subcommand:
+
+```sh
+docker run --rm aster-acme:latest cert list
+```
+
+`docker exec` bypasses the entrypoint, so the image ships same-named shims for every top-level subcommand (`account`, `cert`, `daemon`, `help`, `provider`, `version`):
+
+```sh
+docker exec -it aster-acme version
+docker exec aster-acme cert list
+docker exec aster-acme provider add cloudflare --backend com.astercosm.acme.dns.cloudflare
+```
+
+For a full shell, `docker exec -it aster-acme sh`.
+
+## Compose example
+
+A copy-paste example lives in the repository at [`docker/docker-compose.yml`](https://github.com/AsterCommunity/AsterACME/blob/main/docker/docker-compose.yml), with bind mounts for the data directory and published artifacts. Mind the host directory owner: the image's default user is uid 10001, so either `chown 10001:10001` the host directory or set `user: "0:0"` explicitly in compose (running as root does not loosen key file permissions — the CLI still tightens file permissions per its contract).
+
+## Deployment and reload boundaries
+
+Target directories for `cert deploy` must be mounted into the container (like `/ssl` in the example); bindings and file permissions publish as usual.
+
+Reload commands execute **inside the container**, which requires the executable to exist in the image; scripts that reach the host service (for example through a socket to the host's systemctl) must be mounted by you. The final semantics of container mounts and how reload updates services belong to the operator — AsterACME publishes files and runs the configured command, nothing more.
+
+## Example: issue inside the container, deploy to a mounted directory
+
+```sh
+docker exec -it aster-acme account register default --contact admin@example.com
+docker exec aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare
+docker exec -it aster-acme cert issue -n example-cert -a default \
+  -d example.com -d '*.example.com' -c dns_provider --provider cf-prod
+docker exec aster-acme cert deploy add example-cert -n web --target /ssl/example
+```
+
+Mount the same volume into your host reverse proxy and read the published files under `/ssl/example/`.

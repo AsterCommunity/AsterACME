@@ -1,0 +1,111 @@
+---
+title: CLI Reference
+description: Command tree, common flags, confirmation semantics, exit codes, and execution limits.
+---
+
+## Command tree
+
+```text
+aster-acme
+├── account
+│   ├── list [--verify]
+│   ├── show [NAME] [--verify]
+│   ├── switch [NAME]
+│   ├── register [NAME] [-m CONTACT] [-k KEY_TYPE] [--ca|--ca-directory] [--accept-terms] [--eab-*]
+│   ├── recover [NAME]
+│   ├── update-contact [NAME] (-m CONTACT|--clear-contacts)
+│   ├── rotate-key [NAME] [-k KEY_TYPE]
+│   ├── deactivate [NAME]
+│   └── remove [NAME]
+├── cert
+│   ├── issue (-n NAME | --resume NAME [--operation ID]) -d DOMAIN... -a ACCOUNT
+│   │          -c CHALLENGE [-w WEBROOT | --listen-address ADDR] [--provider PROFILE] [-k KEY_TYPE]
+│   ├── list [-n NAME] [--history]
+│   ├── show [NAME] [--operation ID | --history] [--verify]
+│   ├── renew (NAME | --all) [--now]
+│   ├── revoke [NAME] [--operation ID] [--sign-with account|certificate-key] [--reason REASON]
+│   ├── remove [NAME] [--operation ID | --history | --revoked | --failed | --all]
+│   └── deploy
+│       ├── add [CERT_NAME] [-n DEPLOY_NAME] (--target DIR | --*-path ...) [--reload-cmd CMD]
+│       ├── list [CERT_NAME]
+│       ├── show [CERT_NAME] [DEPLOY_NAME]
+│       ├── update CERT_NAME -n DEPLOY_NAME (target/reload/permission changes)
+│       ├── run [CERT_NAME] [-n DEPLOY_NAME]
+│       └── remove CERT_NAME -n DEPLOY_NAME
+├── provider
+│   ├── backends
+│   ├── add NAME (--backend ID | --exec PATH) [--arg VALUE] [--allow-zone ZONE]
+│   ├── list
+│   ├── show NAME
+│   ├── update NAME (change flags | edit menu)
+│   ├── remove NAME
+│   └── cleanup NAME
+├── daemon
+│   ├── run [--interval SECONDS]
+│   └── run-once
+├── version
+└── help [COMMAND]
+```
+
+Every business command takes at most one positional argument — `cert deploy show` is the documented exception with two.
+
+## Short flags
+
+| Short | Long | Purpose |
+| --- | --- | --- |
+| `-n` | `--name` | Account/certificate/deployment target or filter |
+| `-a` | `--account` | `cert issue` account |
+| `-d` | `--domain` | Domain, repeatable |
+| `-c` | `--challenge` | Validation implementation |
+| `-k` | `--key-type` | Key algorithm (account/certificate independent) |
+| `-m` | `--contact` | Contact email, repeatable |
+| `-w` | `--webroot` | Webroot directory |
+| `-y` | `--yes` | Operation confirmation |
+
+## Confirmation semantics
+
+`--yes` auto-accepts only the current command's **operation confirmations**. It never selects targets, fills missing input, accepts CA terms, bypasses validation, or forces replays. `--accept-terms` exists solely for terms acceptance during registration. JSON and non-TTY sessions never prompt.
+
+| Command | What `--yes` confirms |
+| --- | --- |
+| `account register` | Reusing/continuing an existing local identity |
+| `account update-contact` | Replacing or explicitly clearing contacts |
+| `account rotate-key` | Rotating or reconciling the rotation transaction |
+| `account deactivate` | Deactivating the CA account (irreversible) |
+| `account remove` | Deleting the local profile and key |
+| `cert revoke` | Permanently revoking the selected generation |
+| `cert remove` | The selected cleanup scope (never revokes at the CA) |
+| `cert issue --resume` | Skipping the "have you published the TXT values?" confirmation |
+| `cert deploy remove` | Removing the deployment binding |
+
+`list`/`show`/`switch`/`recover`/`version` have no dangerous confirmations and do not use `--yes`.
+
+## Global and HTTP flags
+
+- `--data-dir PATH` / `ASTER_ACME_DATA_DIR`: state-root override (all account/cert/daemon commands)
+- `--json`: one structured result; interaction and human logs disabled
+- `--debug`: safe-level diagnostic logging (never private keys, bodies, or credentials)
+- `--user-agent`, `--request-timeout`: HTTP-only commands; on `show`/`list` they require `--verify`
+- `--operation-timeout`: total budget per issuance/recovery/revocation
+- `--poll-interval`, `--max-polls`: polling rhythm and limits
+
+## Execution limits
+
+| CLI flag | config.toml field | Default | Range |
+| --- | --- | --- | --- |
+| `--request-timeout` | `request_timeout` | 30 s | 1–300; a single HTTP request |
+| `--operation-timeout` | `operation_timeout` | 600 s | 1–86400; one issuance/recovery execution budget |
+| `--max-polls` | `max_polls` | 30 rounds | 1–1000; order polling per certificate per invocation |
+| `--poll-interval` | `poll_interval` | 5 s | 1–300; local polling interval |
+| `daemon run --interval` | `daemon_interval` | 60 s | 1–86400; resident cycle interval |
+
+Precedence: explicit CLI flag > config.toml > built-in default. The CA's `Retry-After` always wins over the local polling interval.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success; `cert issue`'s action_required is also 0 — **scripts must check the `status` field** |
+| `1` | General error (including batch partial_failure) |
+| `2` | Argument parse error |
+| `130` | Interactive cancellation |

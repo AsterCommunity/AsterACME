@@ -1,0 +1,21 @@
+---
+title: Operations
+description: DNS providers, the daemon, containers, and the data directory.
+---
+
+This section covers turning AsterACME into an unattended certificate service:
+
+- [DNS Provider Automation](/en/admin/dns-providers/) — built-in Cloudflare and ADPP external executables: configuration, credentials, and cleanup
+- [Daemon and Scheduling](/en/admin/daemon/) — `daemon run` / `daemon run-once`, systemd, cron, and failure retries
+- [Running the Container](/en/admin/docker/) — image tags, verification, data mounts, and command shims
+- [Data Directory and Backups](/en/admin/data-dir/) — layout, config.toml, backups, and migration
+
+## Operating principles
+
+**Keep the data directory private**: private keys, account profiles, and provider credentials all live under the data-dir. Give the service user exclusive access; on Unix the CLI sets key files to `0600`, but directory access control is the operator's responsibility.
+
+**Least-privilege credentials**: DNS provider tokens should carry Zone Read + DNS Edit for the target zones only; `--allow-zone` is an extra guard rail, not a substitute for minimizing the credentials themselves.
+
+**Review reload commands**: reload runs without a shell as a fixed argv, but the process still starts with the runner's privileges. Review the command before configuring it; its output is displayed verbatim, never auto-redacted.
+
+**Staging before production**: when onboarding a new DNS provider executable or validation chain, walk through the full issuance, recovery, and cleanup flow against Let's Encrypt staging (`--ca-directory`) and a zone you control before switching to the production CA.

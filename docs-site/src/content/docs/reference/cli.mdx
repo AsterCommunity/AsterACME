@@ -1,0 +1,111 @@
+---
+title: CLI 命令参考
+description: 命令树、公共参数、确认语义、退出码与执行限制。
+---
+
+## 命令树
+
+```text
+aster-acme
+├── account
+│   ├── list [--verify]
+│   ├── show [NAME] [--verify]
+│   ├── switch [NAME]
+│   ├── register [NAME] [-m CONTACT] [-k KEY_TYPE] [--ca|--ca-directory] [--accept-terms] [--eab-*]
+│   ├── recover [NAME]
+│   ├── update-contact [NAME] (-m CONTACT|--clear-contacts)
+│   ├── rotate-key [NAME] [-k KEY_TYPE]
+│   ├── deactivate [NAME]
+│   └── remove [NAME]
+├── cert
+│   ├── issue (-n NAME | --resume NAME [--operation ID]) -d DOMAIN... -a ACCOUNT
+│   │          -c CHALLENGE [-w WEBROOT | --listen-address ADDR] [--provider PROFILE] [-k KEY_TYPE]
+│   ├── list [-n NAME] [--history]
+│   ├── show [NAME] [--operation ID | --history] [--verify]
+│   ├── renew (NAME | --all) [--now]
+│   ├── revoke [NAME] [--operation ID] [--sign-with account|certificate-key] [--reason REASON]
+│   ├── remove [NAME] [--operation ID | --history | --revoked | --failed | --all]
+│   └── deploy
+│       ├── add [CERT_NAME] [-n DEPLOY_NAME] (--target DIR | --*-path ...) [--reload-cmd CMD]
+│       ├── list [CERT_NAME]
+│       ├── show [CERT_NAME] [DEPLOY_NAME]
+│       ├── update CERT_NAME -n DEPLOY_NAME (目标/reload/权限修改)
+│       ├── run [CERT_NAME] [-n DEPLOY_NAME]
+│       └── remove CERT_NAME -n DEPLOY_NAME
+├── provider
+│   ├── backends
+│   ├── add NAME (--backend ID | --exec PATH) [--arg VALUE] [--allow-zone ZONE]
+│   ├── list
+│   ├── show NAME
+│   ├── update NAME (变更参数 | 编辑菜单)
+│   ├── remove NAME
+│   └── cleanup NAME
+├── daemon
+│   ├── run [--interval SECONDS]
+│   └── run-once
+├── version
+└── help [COMMAND]
+```
+
+除 `cert deploy show` 允许两个位置参数外,每个业务命令最多一个位置参数。
+
+## 短参数
+
+| 短 | 长 | 用途 |
+| --- | --- | --- |
+| `-n` | `--name` | 账户/证书/部署目标或筛选 |
+| `-a` | `--account` | `cert issue` 的账户 |
+| `-d` | `--domain` | 域名,可重复 |
+| `-c` | `--challenge` | 验证实现 |
+| `-k` | `--key-type` | 密钥算法(账户/证书独立) |
+| `-m` | `--contact` | 联系人邮箱,可重复 |
+| `-w` | `--webroot` | webroot 目录 |
+| `-y` | `--yes` | 操作确认 |
+
+## 确认语义
+
+`--yes` 只自动接受当前命令的**操作确认**,不选目标、不填写缺失输入、不同意 CA 条款、不绕过校验、不强制重放。`--accept-terms` 仅用于注册时的条款同意。JSON/非 TTY 从不弹提示。
+
+| 命令 | `--yes` 确认什么 |
+| --- | --- |
+| `account register` | 复用/继续已存在的本地身份 |
+| `account update-contact` | 替换或显式清空联系人 |
+| `account rotate-key` | 轮换或对账换钥事务 |
+| `account deactivate` | 停用 CA 账户(不可逆) |
+| `account remove` | 删除本地账户资料及私钥 |
+| `cert revoke` | 永久吊销所选版本 |
+| `cert remove` | 确认所选清理范围(不吊销 CA 证书) |
+| `cert issue --resume` | 跳过"已发布 TXT?"确认 |
+| `cert deploy remove` | 删除部署绑定 |
+
+`list`/`show`/`switch`/`recover`/`version` 没有危险确认,不使用 `--yes`。
+
+## 全局与 HTTP 参数
+
+- `--data-dir PATH` / `ASTER_ACME_DATA_DIR`:状态根覆盖(所有 account/cert/daemon 命令)
+- `--json`:一份结构化结果,禁交互与人类日志
+- `--debug`:安全级别诊断日志(不记录私钥/正文/凭据)
+- `--user-agent`、`--request-timeout`:仅需要 HTTP 的命令;`show`/`list` 上要求配合 `--verify`
+- `--operation-timeout`:单次签发/恢复/吊销总预算
+- `--poll-interval`、`--max-polls`:轮询节奏与上限
+
+## 执行限制
+
+| CLI 参数 | config.toml 字段 | 默认 | 范围 |
+| --- | --- | --- | --- |
+| `--request-timeout` | `request_timeout` | 30 秒 | 1–300;单个 HTTP 请求 |
+| `--operation-timeout` | `operation_timeout` | 600 秒 | 1–86400;单次签发/恢复执行预算 |
+| `--max-polls` | `max_polls` | 30 轮 | 1–1000;每份证书每次调用的订单轮询 |
+| `--poll-interval` | `poll_interval` | 5 秒 | 1–300;本地轮询间隔 |
+| `daemon run --interval` | `daemon_interval` | 60 秒 | 1–86400;常驻周期间隔 |
+
+优先级:显式 CLI > config.toml > 内置默认。CA 的 `Retry-After` 始终优先于本地轮询间隔。
+
+## 退出码
+
+| 码 | 含义 |
+| --- | --- |
+| `0` | 成功;`cert issue` 的 action_required 也是 0——**脚本必须检查 `status` 字段** |
+| `1` | 一般错误(含批量 partial_failure) |
+| `2` | 参数解析错误 |
+| `130` | 交互取消 |

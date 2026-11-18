@@ -1,0 +1,55 @@
+---
+title: Revocation and Removal
+description: The two revocation signing identities, RFC 5280 reasons, and local removal semantics.
+---
+
+## Revoking a certificate
+
+```sh
+# Default: use the saved issuing account
+aster-acme cert revoke web --reason superseded --yes
+
+# Key-compromise scenario: use the certificate key, no ACME account needed
+aster-acme cert revoke web --sign-with certificate-key --reason key-compromise --yes
+
+# Target a historical generation
+aster-acme cert revoke web --operation OPERATION-ID --sign-with certificate-key --yes
+```
+
+### Two signing identities
+
+| `--sign-with` | Key used | Scenario |
+| --- | --- | --- |
+| `account` (default) | The bound issuing account key | Routine revocation |
+| `certificate-key` | The selected generation's certificate private key | Account unavailable or suspected compromised, while the certificate can still be revoked |
+
+`certificate-key` mode uses only the managed generation's key — arbitrary file input is not accepted, and the account directory is never read. A failed attempt does not silently fall back to the other identity.
+
+### Revocation reasons
+
+`--reason` accepts every assigned RFC 5280 code: `unspecified (0)`, `key-compromise (1)`, `ca-compromise (2)`, `affiliation-changed (3)`, `superseded (4)`, `cessation-of-operation (5)`, `certificate-hold (6)`, `remove-from-crl (8)`, `privilege-withdrawn (9)`, `aa-compromise (10)`. Omitting `--reason` omits the reason. CAs may reject specific reasons under their own policy. No submitted reason ever "restores" a confirmed-revoked certificate.
+
+### Process and states
+
+The confirmation dialog shows the certificate name, CA, reason, signing identity, and fingerprint; the CA is not contacted before confirmation. The revocation intent is persisted before sending, and success is only confirmed by HTTP 200 or a definitive alreadyRevoked response. **Network timeouts, 5xx responses, or failed confirmation saves keep the pending (unconfirmed) state — nothing is replayed automatically.** Running the same command again explicitly confirms or retries; the reason is fixed while pending.
+
+Revocation **does not delete local files, remove deployed copies, reload services, or rotate keys**. Confirmed-revoked certificates stop being renewal candidates.
+
+## Local removal
+
+`cert remove` deletes locally managed applications, generations, and keys. It **never calls the CA, never revokes remote certificates, never cleans DNS, and never withdraws deployed copies**:
+
+```sh
+aster-acme cert remove example-cert --yes              # pick one application
+aster-acme cert remove example-cert --history --yes    # non-current generations
+aster-acme cert remove example-cert --revoked --yes    # confirmed-revoked generations
+aster-acme cert remove example-cert --all --yes        # everything under this name
+aster-acme cert remove example-cert --operation ID --yes
+```
+
+- `--history`/`--revoked`/`--all` and `--operation` are mutually exclusive
+- Removing the current generation clears the in-use selection without falling back to an older certificate
+- The confirmation dialog states clearly that keys have no backup and removal is unrecoverable
+- Failed-application cleanup uses `--failed` (see [Issuance and Recovery](/en/using/issuance/)) and is a separate scope from issued generations
+
+With multiple candidates the terminal asks; scripts must pass `--operation` or an explicit scope flag — `--yes` never guesses targets.

@@ -1,0 +1,55 @@
+---
+title: 吊销与本地删除
+description: 两种吊销签名身份、RFC 5280 吊销原因与本地删除语义。
+---
+
+## 吊销证书
+
+```sh
+# 默认:使用保存的签发账户
+aster-acme cert revoke web --reason superseded --yes
+
+# 密钥泄露场景:使用证书私钥,不需要原 ACME 账户
+aster-acme cert revoke web --sign-with certificate-key --reason key-compromise --yes
+
+# 指定历史版本
+aster-acme cert revoke web --operation OPERATION-ID --sign-with certificate-key --yes
+```
+
+### 两种签名身份
+
+| `--sign-with` | 使用的密钥 | 适用场景 |
+| --- | --- | --- |
+| `account`(默认) | 绑定的签发账户密钥 | 常规吊销 |
+| `certificate-key` | 所选世代的证书私钥 | 账户不可用/疑似泄露,仍能吊销对应证书 |
+
+`certificate-key` 模式只用托管世代的私钥,不接受任意文件输入,不读取账户目录。失败不会自动切换签名身份。
+
+### 吊销原因
+
+`--reason` 支持 RFC 5280 全部已分配代码:`unspecified (0)`、`key-compromise (1)`、`ca-compromise (2)`、`affiliation-changed (3)`、`superseded (4)`、`cessation-of-operation (5)`、`certificate-hold (6)`、`remove-from-crl (8)`、`privilege-withdrawn (9)`、`aa-compromise (10)`。缺省省略原因;CA 可按自己的政策拒绝特定原因。提交任何原因都不会把已确认吊销的证书"恢复"回来。
+
+### 吊销过程与状态
+
+确认对话展示证书名称、CA、原因、签名方式和指纹;确认前不访问 CA。发送前先持久化吊销意图,只有 HTTP 200 或明确的 alreadyRevoked 判定确认成功。**网络超时、5xx 或确认保存失败保留未确认(pending)状态,不自动重放**;显式再次执行同一命令可确认或重试,pending 时不允许换原因。
+
+吊销**不删除本地文件、不移除部署副本、不 reload、不换钥**。已确认吊销的证书不再是续期候选。
+
+## 本地删除
+
+`cert remove` 删除本地托管的申请、版本与密钥,**从不调用 CA、不吊销远端证书、不清理 DNS、不撤回部署副本**:
+
+```sh
+aster-acme cert remove example-cert --yes              # 选择一个申请删除
+aster-acme cert remove example-cert --history --yes    # 非当前版本的历史
+aster-acme cert remove example-cert --revoked --yes    # 已确认吊销的版本
+aster-acme cert remove example-cert --all --yes        # 该名称下全部内容
+aster-acme cert remove example-cert --operation ID --yes
+```
+
+- `--history`/`--revoked`/`--all` 与 `--operation` 互斥
+- 删除当前版本只清空 in_use 选择,不自动回退到旧版本
+- 确认对话明确提示:密钥无备份,删除后不可恢复
+- 失败申请的清理走 `--failed`(见[签发与恢复](/using/issuance/)),不属于这里的已签发范围
+
+多候选时终端交互选择;脚本必须用 `--operation` 或明确的范围参数,`--yes` 不猜目标。

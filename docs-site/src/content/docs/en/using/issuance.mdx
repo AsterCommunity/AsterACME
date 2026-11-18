@@ -1,0 +1,69 @@
+---
+title: Issuance and Recovery
+description: cert issue, interrupted recovery, certificate inspection, and failed-application cleanup.
+---
+
+## Issuing a new certificate
+
+```sh
+aster-acme cert issue -n example-cert -a default \
+  -d example.com -d '*.example.com' \
+  -c dns_provider --provider cf-prod
+```
+
+- `-n/--name`: the long-lived managed certificate name. Defaults to the first normalized domain plus a random suffix; an explicitly requested existing name is rejected
+- `-a/--account`: the issuing account
+- `-d/--domain`: repeatable; wildcards are written `*.example.com` and require DNS validation
+- `-c/--challenge`: the validation implementation — see [Validation Methods](/en/using/challenges/)
+- `-k/--key-type`: certificate public key algorithm, ecdsa-p256 by default; also ecdsa-p384/p521, ed25519, rsa-2048/3072/4096/8192. If the CA rejects the choice, the actual error is preserved — AsterACME never retries with a different algorithm
+
+Each generation gets fixed keys and a fixed CSR: recovery never generates replacement material, and renewal reuses the same domains, account, and algorithm. Keys and CSRs are generated before any CA request, so cancelling the interactive flow leaves no half-initialized identity.
+
+**Similar-order protection**: when a new request has no explicit name and an unfinished candidate with a fully matching definition exists, the terminal offers to resume or create fresh; scripts fail with the exact resume command instead of silently duplicating the order.
+
+## Interrupted recovery
+
+Every step of issuance — intents, order URLs, validation material, final artifacts — is persisted before it is advanced. Network timeouts, cancellation, timeouts, and exhausted polling all leave the application at its checkpoint:
+
+```sh
+aster-acme cert issue --resume example-cert
+aster-acme cert issue --resume example-cert --operation FULL-OPERATION-ID
+```
+
+- `--resume [NAME]`: the terminal lists unfinished applications when the name is omitted; scripts must pass a name or a full `--operation`
+- Completed generations never participate in resume selection
+- Manual validations (manual_dns/manual_http) re-display the pending material on resume; `--yes` only confirms after the material has been shown — unseen material is never accepted as published
+- Orders that reached terminal failure (invalid) no longer participate in recovery; inspect the error details with `cert show`
+
+**Uncertain outcomes are not replayed**: for example, if the response to order creation is lost, AsterACME keeps the "creation uncertain" state rather than blindly placing another order; recovery reconciles against the saved evidence.
+
+## Inspecting certificates
+
+```sh
+aster-acme cert list
+aster-acme cert list --history
+aster-acme cert show example-cert
+aster-acme cert show example-cert --history
+aster-acme cert show example-cert --verify
+aster-acme cert show --operation OPERATION-ID
+```
+
+`list` shows one row per managed certificate by default; `--history` expands all generations. `show` displays the current in-use generation: domains, validity, validation method, deployment bindings, revocation state, and the renewal plan. Everything is offline by default; `--verify` queries the CA for the order and authorizations — it does not imply revocation status was checked, nor OCSP/CRL.
+
+Time fields distinguish **order status** from **certificate expiry**; the NEXT RENEWAL column comes from the renewal plan (see [Renewal and ARI](/en/using/renewal/)).
+
+## Cleaning up failed applications
+
+```sh
+aster-acme cert remove example-cert --failed --yes
+```
+
+`--failed` removes only **clearly failed, unrecoverable** unfinished applications: order creation explicitly rejected with 4xx by the CA, the fixed CSR rejected (badCSR), terminal order/authorization states, and expired orders. Applications with network timeouts, 408/429 rate limiting, or unknown outcomes are kept. The command never touches the CA, never cleans DNS or webroot material on its own, and preserves issued generations.
+
+## Debug diagnostics
+
+```sh
+aster-acme cert issue --resume example-cert --yes --debug
+```
+
+`--debug` enables safe DEBUG-level logging: checkpoint phases, order-intent persistence, request categories, HTTP status and durations, nonce retry sequences. It **never** logs private keys, CSR/JWS bodies, response bodies, or URLs carrying credentials. Diagnostics are suppressed in JSON mode; drop `--json` when you need human-readable diagnostics.

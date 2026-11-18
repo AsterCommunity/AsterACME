@@ -1,0 +1,67 @@
+---
+title: 关于 AsterACME
+description: 项目定位、协议支持、CA 边界与许可。
+---
+
+AsterACME 是 AsterCommunity 的证书基础设施项目:一个可嵌入的 Rust ACME 客户端与 CLI。它不代理流量、不终止 TLS,只管理证书生命周期,并把产物发布为普通文件。
+
+## 设计立场
+
+- **可恢复优先**:每次远端操作先持久化意图;中断从检查点继续;结果不确定的操作不自动重放
+- **每个世代固定材料**:恢复不生成替代密钥或 CSR;审计记录保留双钥与日志
+- **显式边界**:本地观察不冒充远端现状;建议性预检不冒充 CA 验证;部署状态不冒充服务健康
+- **纯库内核**:core 无网络/文件/runtime 依赖,protocol 拥有具名 wire 类型,嵌入者可替换存储、签名器与 solver
+
+## 协议支持
+
+| 协议 | 状态 |
+| --- | --- |
+| RFC 8555(ACME) | 核心流程:账户、订单、授权、挑战、finalize、吊销 |
+| RFC 9773(ARI) | 已实现:续期建议窗口、`replaces`、持久化计划 |
+| RFC 8737(TLS-ALPN-01) | 已实现 |
+| RFC 8738(IP 证书) | 依赖 CA 政策;identifier 按 wire 原样传递 |
+| draft-ietf-acme-dns-persist-02 | 已按草案 -02 实现;要求 CA 实现相同修订 |
+| RFC 5280 吊销原因 | 全部已分配代码 |
+| 外部 DNS provider | ADPP(AsterACME DNS Provider Protocol)预发布协议 |
+
+规范性结论以 [RFC 参考与接入边界](https://github.com/AsterCommunity/AsterACME/blob/main/docs/rfc-reference.md)为准,包含每项扩展的实测状态与已知缺口。
+
+## CA 与端点边界
+
+- 内置 CA 配置只有公开生产入口:**Let's Encrypt**(默认)、**ZeroSSL**、**Google Trust Services**
+- 其他 CA 或测试环境通过 `--ca-directory` 显式指定 directory URL,不按构建模式自动切换
+- 端点一律来自 CA 的 directory/Location/资源字段,不拼接惯例 URL
+- 要求 EAB 的 CA 通过成对的 `--eab-kid` / `--eab-key-file` 支持
+
+## 证书密钥算法
+
+账户与证书独立选择,共用一组实现:ecdsa-p256(默认)、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。CA 是否接受由 CA 决定;被拒绝时保留原始错误,不自动降级。Let's Encrypt 当前接受 P-256/P-384 与 RSA 2048/3072/4096。
+
+## Crate 布局
+
+```text
+crates/
+├── aster_acme_core/          # 纯决策:状态机、准入、无 IO
+├── aster_acme_protocol/      # 具名 ACME wire 类型与编解码
+├── aster_acme/               # 协议编排:账户/签发/续期/吊销服务,maintenance
+├── aster_acme_cli_storage/   # 文件布局、租约、原子 IO、类型化查询
+├── aster_acme_cli/           # 交互、输出会话、进程边界
+└── aster_acme_dns_*          # DNS solver、内置 Cloudflare、ADPP 传输
+```
+
+HTTP 栈复用 AsterForge/rustls/AWS-LC;无 OpenSSL 依赖。嵌入入口与 crate 边界见仓库[架构概览](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md)。
+
+## 发布渠道
+
+- crates.io:`aster_acme_cli`(CLI)与 `aster_acme` 等库 crate
+- Homebrew:`astercommunity/tap/aster-acme`
+- 容器:`ghcr.io/astercommunity/aster-acme`(cosign keyless 签名,SBOM/provenance)
+- 更新日志:[CHANGELOG.md](https://github.com/AsterCommunity/AsterACME/blob/main/CHANGELOG.md)
+
+## 许可
+
+MIT OR Apache-2.0 双许可,任选其一。详情见仓库 [LICENSE-MIT](https://github.com/AsterCommunity/AsterACME/blob/main/LICENSE-MIT) / [LICENSE-APACHE](https://github.com/AsterCommunity/AsterACME/blob/main/LICENSE-APACHE)。
+
+## 安全
+
+漏洞请私密报告:GitHub Security Advisories 或 `report@esaps.net`,政策见 [SECURITY.md](https://github.com/AsterCommunity/AsterACME/blob/main/SECURITY.md)。

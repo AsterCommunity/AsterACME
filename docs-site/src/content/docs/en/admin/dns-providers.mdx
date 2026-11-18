@@ -1,0 +1,100 @@
+---
+title: DNS Provider Automation
+description: Built-in Cloudflare, ADPP external executables, credentials, CNAME delegation, and cleanup.
+---
+
+The `dns_provider` validation implementation is driven by a DNS Provider Profile: a configuration stored at `<data-dir>/providers/<name>.toml` describing which backend publishes TXT records in which zone. Built-in and external backends share the same publication, receipt, propagation, and cleanup flow.
+
+```sh
+aster-acme provider backends          # backends supported by this build and their fields
+aster-acme provider list
+aster-acme provider show NAME
+```
+
+`provider backends` is the authority: backend IDs and fields are whatever it displays.
+
+## Built-in Cloudflare
+
+```sh
+aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare
+aster-acme cert issue -a default -d example.com -d '*.example.com' \
+  -c dns_provider --provider cf-prod
+```
+
+The interactive flow prompts field by field per the backend descriptor, with the API token entered hidden. For automation, use a private TOML file so the token never appears on the command line:
+
+```toml
+# Optional; when omitted the zone is auto-discovered from the final publication target
+# zone_id = "0123456789abcdef0123456789abcdef"
+# Credentials: exactly one of the two
+api_token = "your-cloudflare-api-token"
+# token_file = "/absolute/path/private-cloudflare-token"
+```
+
+```sh
+aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
+  --settings-file /absolute/path/cf-settings.toml --json
+```
+
+- The token must cover the target zone with Zone Read and DNS Edit
+- With no zone ID, the zone is discovered from the longest suffix of the final publication target; the discovered zone is saved per publication and reused by recovery and cleanup
+- Created records carry an `asteracme:<publication_id>` comment for reconciliation; deletion verifies every record attribute first
+- Existing same-value records owned by another AsterACME publication are never borrowed; the user's own unmarked records are preserved
+- Credential rotation is allowed; a saved certificate's backend and zone-selection mode are not
+
+## ADPP external executables
+
+Other providers implement [ADPP](https://github.com/AsterCommunity/AsterACME/blob/main/docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md) (AsterACME DNS Provider Protocol), a stdin/stdout JSON protocol:
+
+```sh
+aster-acme provider add dns-prod --exec /absolute/path/my-dns-provider
+aster-acme provider add dns-prod --exec /absolute/path/my-dns-provider \
+  --arg --production --allow-zone example.com
+```
+
+- `--exec` takes an absolute path; the process starts directly without a shell, and `--arg` is repeatable
+- The subprocess **does not inherit the host environment**: scripts should use absolute interpreter paths and must not rely on PATH, HOME, proxy, or cloud-credential variables
+- `--allow-zone` restricts where TXT records may land (the zone or its subdomains, matched on whole labels); omit it for no restriction
+- The executable manages its own credentials (Keychain, secret manager, its own config); non-sensitive selection information may live in the profile's `provider_custom`
+
+A reference Python implementation with tests lives in the repository at [`examples/dns-providers/`](https://github.com/AsterCommunity/AsterACME/tree/main/examples/dns-providers) (Cloudflare ADPP adapter).
+
+## Profile configuration
+
+A profile created by `provider add` (excerpt):
+
+```toml
+provider_profile_version = 1
+backend_id = "com.astercosm.acme.adpp"
+executable = "/absolute/path/my-dns-provider"
+args = []
+allowed_zones = []          # empty = unrestricted
+timeout_seconds = 30        # per provider call (1–300)
+ttl_seconds = 120           # requested value; vendors may clamp
+propagation_timeout = 5     # single local check budget (1–3600)
+propagation_interval = 5    # wait before the check (1–60)
+```
+
+`provider_custom` is interpreted by the corresponding backend and treated as a **sensitive object**: fully hidden in every output, never logged or journaled, never forwarded via argv or ENV. The whole profile is capped at 64KiB.
+
+## CNAME delegation and explicit targets
+
+Existing CNAME delegation of `_acme-challenge` is supported out of the box — for example `_acme-challenge.example.com. CNAME acme.validation.net.`. AsterACME follows the CNAME (up to 8 hops, loops detected) and publishes at the final location; add `--allow-zone validation.net` to constrain writes. When DNS cannot resolve, new issuances can map targets explicitly with `--dns-target 'DOMAIN=TXT_NAME'`.
+
+## Propagation and cleanup
+
+After `present` succeeds, AsterACME waits 5 seconds by default, then runs one advisory local TXT check (5-second budget by default). When every expected value is visible it requests CA validation immediately; missing values, resolver errors, or timeouts only warn, and the CA request proceeds after a further 10 seconds. Local visibility never implies CA approval.
+
+Temporary TXT records are cleaned up automatically once the order completes or reaches a terminal failure: only records this publication created and left unchanged are deleted; pre-existing same-value records (`preexisting`) are preserved. Failed cleanup keeps a retryable state:
+
+```sh
+aster-acme provider cleanup dns-prod
+```
+
+`cleanup` loads no account keys and calls no CA; applications with unknown outcomes are not cleaned. Profiles referenced by certificate definitions cannot be removed (`provider remove` protects renewals).
+
+## Security notes
+
+- Profile files are `0600` in a private directory on Unix; links or unsafe permissions are rejected outright
+- Putting tokens in `provider_custom` means they are genuinely stored in that file; preferring executable-managed credentials keeps the profile to selection info only
+- Onboard new executables against a controlled zone and a staging CA first

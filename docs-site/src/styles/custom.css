@@ -1,0 +1,21 @@
+/* AsterACME documentation site branding.
+   Accent follows the AsterACME website badge blue (#2563EB); the neutral
+   surfaces keep Starlight defaults so both themes stay readable. */
+
+:root {
+	--sl-color-accent-low: #17233c;
+	--sl-color-accent: #3b82f6;
+	--sl-color-accent-high: #bfdbfe;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #dbeafe;
+	--sl-color-accent: #2563eb;
+	--sl-color-accent-high: #1e3a8a;
+}
+
+/* Keep the wordmark logo at a stable height in the header. */
+.site-title img {
+	max-height: 2rem;
+	width: auto;
+}

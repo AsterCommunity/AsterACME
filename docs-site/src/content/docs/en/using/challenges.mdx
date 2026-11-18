@@ -1,0 +1,71 @@
+---
+title: Validation Methods
+description: Comparing, choosing, and configuring the seven validation implementations.
+---
+
+`cert issue -c` selects the validation implementation. The protocol layer is a standard ACME challenge; the implementation layer decides **who publishes the validation material**. Two questions drive the choice: do you need wildcards (DNS protocols only), and do you need unattended renewal (automated implementations).
+
+## Comparison
+
+| Implementation | Protocol | Material published by | Wildcards | Unattended renewal | Typical use |
+| --- | --- | --- | --- | --- | --- |
+| `dns_provider` | DNS-01 | DNS API automatically | ✓ | ✓ | Supported DNS provider, full automation |
+| `manual_dns` | DNS-01 | You publish TXT records | ✓ | Reusable while values unchanged | One-off issuance; no DNS API automation |
+| `dns_persist` | DNS-PERSIST-01 (draft) | You configure long-lived TXT | ✓ | ✓ (reuses the same TXT) | Wildcards without handing the client DNS API credentials |
+| `webroot` | HTTP-01 | Written into the web root | ✗ | ✓ | Existing HTTP service with a stable webroot |
+| `standalone` | HTTP-01 | Temporary listener on port 80 | ✗ | ✓ | No existing HTTP service |
+| `tls_alpn` | TLS-ALPN-01 | Temporary listener on port 443 | ✗ | ✓ | Port 80 busy, port 443 available |
+| `manual_http` | HTTP-01 | You place the response file | ✗ | Reusable after first confirmation | Environments where files cannot be written automatically |
+
+## DNS implementations
+
+### dns_provider — automatic publication
+
+TXT records are published and cleaned up automatically by a DNS Provider Profile. Cloudflare is built in; other providers integrate through an ADPP external executable:
+
+```sh
+aster-acme cert issue -a default -d example.com -d '*.example.com' -c dns_provider --provider cf-prod
+```
+
+Interactive sessions pick a profile on first issuance; scripts pass `--provider NAME` explicitly. Saved certificate definitions keep referencing the same profile across renewals. Configuration details: [DNS Provider Automation](/en/admin/dns-providers/).
+
+### manual_dns — you publish
+
+AsterACME prints the TXT name and value; you publish and confirm. On renewal, if the CA requires the same values as last time, `daemon`/`renew` reuse them without re-confirming. New material always comes back as a pending action first — unpublished values are never treated as ready.
+
+### dns_persist — persistent TXT
+
+For CAs implementing the [DNS-PERSIST-01 draft](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-persist/): you publish one long-lived TXT record (with `policy=wildcard` for wildcards) and keep it. Renewal reuses it directly without rotating values. The CA must implement the same draft revision AsterACME does; issuer/prefix changes requested by the CA come back as new material. Remove the TXT record manually to withdraw the authorization.
+
+## HTTP / TLS implementations
+
+### webroot — write into the web root
+
+```sh
+aster-acme cert issue -d example.com -c webroot -w /var/www/html
+```
+
+Challenge files are written under `<webroot>/.well-known/acme-challenge/` and cleaned up after successful issuance — only files AsterACME created and that remained unmodified. Your web server must serve `/.well-known/acme-challenge/` without authentication or rewrites, with port 80 reachable from the internet.
+
+### standalone / tls_alpn — temporary listeners
+
+```sh
+aster-acme cert issue -d example.com -c standalone
+aster-acme cert issue -d example.com -c tls_alpn
+```
+
+They temporarily listen on `0.0.0.0:80` / `0.0.0.0:443` with no existing web server required. `--listen-address IP:PORT` changes the local bind address (for example `[::]:80`), but the **public entry stays on 80/443**: custom local ports require your own forwarding that preserves Host/SNI and all published A/AAAA routes. Only IPv4 is bound by default; dual-stack is not implied. Port conflicts or missing privileges fail explicitly — AsterACME never escalates or stops other services.
+
+The listeners live only for the current invocation and close on success, cancellation, or failure. TLS-ALPN negotiates `acme-tls/1` on matching SNI and serves the RFC 8737 challenge certificate.
+
+### manual_http — you place the file
+
+AsterACME prints the URL, path, and content; you place the file and confirm with `--resume`. For deployments where neither automatic file writes nor a temporary listener are possible.
+
+## Unattended admission
+
+The resident daemon and `cert renew --all` auto-renew only implementations that admit automation: `webroot`, `standalone`, `tls_alpn`, `dns_provider`, and configured `dns_persist` (reusing identical long-lived records without confirmation). `manual_dns` and `manual_http` are reported as skipped — unconfirmed manual material is never treated as published. Admission rules: [Renewal and ARI](/en/using/renewal/).
+
+## Advisory prechecks
+
+CLI builds with default features include advisory prechecks: CAA record inspection (before newOrder), DNS TXT local visibility, and HTTP URL reachability (after the challenge is published). Prechecks only produce WARN/INFO observations and **never replace CA validation** — DNS failures, CAA mismatches, and timeouts warn and continue, with the CA as the sole arbiter. CLI builds with `--no-default-features` and library default builds exclude prechecks.

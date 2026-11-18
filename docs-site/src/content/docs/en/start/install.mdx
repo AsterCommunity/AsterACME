@@ -1,0 +1,50 @@
+---
+title: Installation
+description: Homebrew, crates.io, source builds, and container images.
+---
+
+## Homebrew (macOS / Linux)
+
+```sh
+brew install astercommunity/tap/aster-acme
+```
+
+## crates.io
+
+Install the published CLI from crates.io. With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), a matching prebuilt binary is used when available, falling back to a source build:
+
+```sh
+cargo binstall aster_acme_cli
+```
+
+Without cargo-binstall, install through Cargo directly:
+
+```sh
+cargo install aster_acme_cli
+```
+
+## Build from source
+
+Requires Rust 1.99+ (pinned by the repository's `rust-toolchain.toml`):
+
+```sh
+git clone https://github.com/AsterCommunity/AsterACME.git
+cd AsterACME
+cargo install --path crates/aster_acme_cli --locked
+```
+
+## Container image
+
+Multi-arch images are published to `ghcr.io/astercommunity/aster-acme`, mirrored to Docker Hub and GitHub Releases; `latest` tracks stable release tags only. The default entrypoint is the resident maintenance daemon, which suits long-running renewal services:
+
+```sh
+docker run -d --name aster-acme -v aster-acme-config:/data ghcr.io/astercommunity/aster-acme:latest
+```
+
+Data directory layout, command shims, image verification, and the Compose example are covered in [Running the Container](/en/admin/docker/).
+
+## After installation
+
+- State is stored in the platform directory for `com.astercosm.acme`; `--data-dir PATH` or the `ASTER_ACME_DATA_DIR` environment variable selects another root, with the CLI flag taking precedence. See [Data Directory and Backups](/en/admin/data-dir/).
+- `aster-acme version` confirms the install; `aster-acme --help` and `aster-acme help <command>` show command help.
+- To run a first issuance, see [Quick Start](/en/start/quick-start/).

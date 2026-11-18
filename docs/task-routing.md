@@ -22,5 +22,6 @@
 | 容器镜像/compose/exec shim | [容器运行](docker.md)、[测试](testing.md) | docker/{Dockerfile,entrypoint.sh,docker-compose.yml}、.github/workflows/docker-image.yml | 本地构建版本戳、exec子命令、compose schema、shim与CLI顶层命令同步 |
 | 标签/仓库自动化/workflow 变更 | [GitHub 自动化](github-automation.md) | .github/aster-automation.json、.github/workflows、.github/ISSUE_TEMPLATE | workflow 名称与订阅契约、Action pin 一致、actionlint |
 | 文档 | [文档索引与规则](README.md) | docs及对应crate README | owner唯一、链接、双语和当前事实 |
+| 对外文档站内容 | [文档站](../docs-site/)、[文档索引与规则](README.md) | docs-site/src/content/docs/{,en/}、astro.config.mts侧边栏 | 中英页面对等、站内链接由starlight-links-validator校验、内容对应当前CLI行为 |
 
 验证命令集中在[测试指南](testing.md)。Review先绑定被审查revision，对照当前代码验证；同类问题从共享所有权入口修复，不按评论数量创建重复分支。

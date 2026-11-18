@@ -1,0 +1,71 @@
+---
+title: 验证方式
+description: 七种验证实现的对比、选型与限制。
+---
+
+`cert issue -c` 选择验证实现。协议层是标准的 ACME 挑战;实现层决定**验证材料由谁发布**。选型主要看两点:是否需要通配符(DNS 协议),以及是否需要无人值守续期(自动化实现)。
+
+## 对比表
+
+| 实现 | 协议 | 材料发布 | 通配符 | 无人值守续期 | 适用场景 |
+| --- | --- | --- | --- | --- | --- |
+| `dns_provider` | DNS-01 | DNS API 自动发布 | ✓ | ✓ | 有受支持 DNS 服务商,想要全自动 |
+| `manual_dns` | DNS-01 | 你手动发布 TXT | ✓ | 材料不变时可复用 | 一次性签发;DNS 不支持自动化 |
+| `dns_persist` | DNS-PERSIST-01(草案) | 你手动配置长期 TXT | ✓ | ✓(复用同一 TXT) | 想要通配符但不想给客户端 DNS API 凭据 |
+| `webroot` | HTTP-01 | 自动写入 web 目录 | ✗ | ✓ | 已有 HTTP 服务与稳定 webroot |
+| `standalone` | HTTP-01 | 临时监听 80 端口 | ✗ | ✓ | 没有现成 HTTP 服务 |
+| `tls_alpn` | TLS-ALPN-01 | 临时监听 443 端口 | ✗ | ✓ | 80 端口被占用、443 可托管 |
+| `manual_http` | HTTP-01 | 你手动放置响应文件 | ✗ | 首次确认后可复用 | 无法自动写文件的环境 |
+
+## DNS 实现
+
+### dns_provider — 自动发布
+
+由 DNS Provider Profile 自动发布/清理 TXT。内置 Cloudflare 后端;其他服务商通过 ADPP 外部 executable 接入。签发命令:
+
+```sh
+aster-acme cert issue -a default -d example.com -d '*.example.com' -c dns_provider --provider cf-prod
+```
+
+首次签发交互选择 Profile;脚本显式 `--provider NAME`。保存证书定义后,续期沿用同一 Profile 引用。配置细节见 [DNS Provider 自动发布](/admin/dns-providers/)。
+
+### manual_dns — 手动发布
+
+AsterACME 输出 TXT 名称与值,你发布后确认。续期时如果 CA 要求的值与上次相同,`daemon`/`renew` 可免确认复用;新材料仍会先返回待办,不会把未发布的值当作已就绪。
+
+### dns_persist — 持久 TXT
+
+为支持 [DNS-PERSIST-01 草案](https://datatracker.ietf.org/doc/draft-ietf-acme-dns-persist/)的 CA 准备:你手动发布一条带 `policy=wildcard`(通配符时)的长期 TXT 记录并保留,续期直接复用,不再轮换值。要求 CA 实现与 AsterACME 相同的草案版本;CA 侧的 issuer/prefix 变化会返回新材料待办。撤回授权时需手动删除对应 TXT 记录。
+
+## HTTP / TLS 实现
+
+### webroot — 写入 web 目录
+
+```sh
+aster-acme cert issue -d example.com -c webroot -w /var/www/html
+```
+
+验证文件写入 `<webroot>/.well-known/acme-challenge/`;成功签发后自动清理**本次拥有且未修改**的文件。Web 服务器须对 `/.well-known/acme-challenge/` 禁用认证、重写规则;80 端口入口须公网可达。
+
+### standalone / tls_alpn — 临时监听
+
+```sh
+aster-acme cert issue -d example.com -c standalone
+aster-acme cert issue -d example.com -c tls_alpn
+```
+
+分别临时监听 `0.0.0.0:80` / `0.0.0.0:443`,不需要现有 Web 服务。`--listen-address IP:PORT` 可改本地监听地址(如 `[::]:80`),但**公网入口仍是 80/443**:自定义本地端口必须自行转发,保留 Host/SNI 与全部已公布 A/AAAA 路由。默认只绑 IPv4,不承诺 IPv6 双栈。端口占用或权限不足会明确报错,不提权、不停其他服务。
+
+监听器只在当前调用内存活,签发完成、取消或失败都会关闭。TLS-ALPN 仅按匹配 SNI 协商 `acme-tls/1`,提供 RFC 8737 挑战证书。
+
+### manual_http — 手动放置
+
+AsterACME 输出 URL、path 和内容,你放置后 `--resume` 确认。适合 AsterACME 无法直接写文件、也无法临时接管的部署。
+
+## 无人值守与准入
+
+常驻 daemon 与 `cert renew --all` 只对**自动准入**的实现执行自动续期:`webroot`、`standalone`、`tls_alpn`、`dns_provider`(含已配置的 `dns_persist` 免确认复用)。`manual_dns`、`manual_http` 会报告为跳过,不会把未确认的人工材料当已发布。准入规则见[续期与 ARI](/using/renewal/)。
+
+## 建议性预检
+
+CLI 默认构建包含建议性预检:CAA 记录核对(newOrder 前)、DNS TXT 本地可见性、HTTP URL 可达性(挑战发布后)。预检只产生 WARN/INFO 观察,**不能替代 CA 验证**;DNS 解析失败、CAA 不匹配等只提示并继续,CA 仍是唯一裁决者。`--no-default-features` 构建的 CLI 与库默认构建不含预检。

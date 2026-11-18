@@ -1,0 +1,21 @@
+---
+title: 运维管理
+description: DNS Provider、守护进程、容器与数据目录的运维主题。
+---
+
+本组覆盖把 AsterACME 变成无人值守证书服务所需的主题:
+
+- [DNS Provider 自动发布](/admin/dns-providers/) — 内置 Cloudflare 与 ADPP 外部 executable 的配置、凭据与清理
+- [常驻守护与定时任务](/admin/daemon/) — `daemon run` / `daemon run-once`、systemd、cron 与失败重试
+- [容器运行](/admin/docker/) — 镜像标签、验签、数据挂载与子命令 shim
+- [数据目录与备份](/admin/data-dir/) — 目录布局、config.toml、备份与迁移
+
+## 运维原则
+
+**数据目录私有**:私钥、账户资料和 provider 凭据都在 data-dir 下。让服务用户独占读写;Unix 下 CLI 会把密钥文件设为 `0600`,但目录本身的访问控制由操作者负责。
+
+**凭据最小授权**:DNS provider token 只授予目标 zone 的 Zone Read + DNS Edit;`--allow-zone` 是附加限制,不能替代凭据本身的最小化。
+
+**审查 reload 命令**:reload 不经 shell 按固定 argv 执行,但命令仍以运行者权限启动进程。配置前确认命令内容;输出会原样展示,不自动脱敏。
+
+**先 staging 后生产**:接入新的 DNS provider executable 或新验证链路时,先用 Let's Encrypt staging(`--ca-directory`)和受控 zone 走通完整签发、恢复与清理,再切生产 CA。

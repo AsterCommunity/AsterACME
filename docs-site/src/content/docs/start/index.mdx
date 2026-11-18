@@ -1,0 +1,33 @@
+---
+title: 开始使用
+description: AsterACME 是什么、适合谁,以及三种使用方式。
+---
+
+AsterACME 管理证书的完整生命周期:注册 ACME 账户、申请证书、续期、把证书发布到你的服务、需要时吊销。它是一个**客户端**:证书从公网 CA(Let's Encrypt、ZeroSSL、Google Trust Services)签发,验证材料和私钥都保存在你自己的机器上。
+
+## 适合什么时候用
+
+- 你需要从 Let's Encrypt 等公网 CA 获取 TLS 证书,并把文件发布给 nginx、Caddy、HAProxy、Postfix 或任何读取证书文件的服务
+- 你希望续期完全自动,但在签发被中断时能从保存的检查点继续,而不是猜测远端状态
+- 你要把签发、续期、部署逻辑嵌入自己的 Rust 程序,注入自己的存储、签名器和验证适配器
+- 你在意私钥权限、凭据脱敏和可审计的操作记录,不想让自动化工具悄悄重试不确定的远端操作
+
+## 不适合什么时候用
+
+- 你需要一个内嵌 ACME 的反向代理(Traefik、Caddy 已经内置)。AsterACME 不代理流量,只管理证书文件
+- 你需要 managed SaaS 或托管续期服务
+- 你的 CA 只支持私有 API 而不支持 ACME——AsterACME 只讲 ACME 协议
+
+## 三种使用方式
+
+**CLI 交互**:终端里运行 `aster-acme`,缺什么补什么。`account register`、`cert issue` 等命令在缺省参数时给出选择提示;危险操作默认否。
+
+**脚本与自动化**:提供完整参数配合 `--json`,输出一份结构化结果;JSON/非 TTY 从不弹提示。`--yes` 只接受操作确认,不选择目标、不填写缺失输入、不代替条款同意。
+
+**嵌入 Rust 库**:以 `aster_acme` 为主的 crate 家族提供纯决策的 core、具名 wire 类型的 protocol、协议编排服务,以及文件存储实现;嵌入者注入自己的存储、签名器和 ChallengeSolver。
+
+## 下一步
+
+- [快速开始](/start/quick-start/) — 五分钟签发第一张证书
+- [安装](/start/install/) — Homebrew、crates.io、源码与容器的安装方式
+- [验证方式](/using/challenges/) — 按你的部署形态选验证实现

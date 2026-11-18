@@ -1,0 +1,33 @@
+---
+title: Start Here
+description: What AsterACME is, who it is for, and the three ways to use it.
+---
+
+AsterACME manages the full certificate lifecycle: registering ACME accounts, requesting certificates, renewing them, publishing the files to your services, and revoking them when needed. It is a **client**: certificates are issued by public CAs (Let's Encrypt, ZeroSSL, Google Trust Services), while validation material and private keys stay on your own machine.
+
+## Good fit when
+
+- You need TLS certificates from public CAs and publish them as files to nginx, Caddy, HAProxy, Postfix, or any service that reads certificate files
+- You want renewal to be fully automatic, but issuance interrupted mid-flight should continue from saved checkpoints instead of guessing remote state
+- You want to embed issuance, renewal, and deployment logic into your own Rust program with your own storage, signer, and validation adapters
+- You care about private key permissions, credential redaction, and auditable operations — and you do not want automation silently retrying uncertain remote operations
+
+## Not a fit when
+
+- You want a reverse proxy with ACME built in (Traefik and Caddy already do that). AsterACME proxies no traffic; it manages certificate files
+- You need a managed SaaS or hosted renewal service
+- Your CA only speaks a private API rather than ACME — AsterACME only speaks ACME
+
+## Three ways to use it
+
+**Interactive CLI**: run `aster-acme` in a terminal and fill in what is missing. Commands like `account register` and `cert issue` prompt for missing values; dangerous operations default to "no".
+
+**Scripts and automation**: provide full arguments with `--json` for a single structured result. JSON and non-TTY sessions never prompt. `--yes` only accepts operation confirmations — it does not select targets, fill missing input, or accept CA terms.
+
+**Embedded Rust library**: the crate family led by `aster_acme` provides a pure-decision core, named wire types in the protocol crate, orchestration services, and a file storage implementation. Embedders inject their own storage, signer, and ChallengeSolver.
+
+## Next steps
+
+- [Quick start](/en/start/quick-start/) — issue your first certificate in five minutes
+- [Installation](/en/start/install/) — Homebrew, crates.io, source builds, and containers
+- [Validation methods](/en/using/challenges/) — pick an implementation for your deployment shape

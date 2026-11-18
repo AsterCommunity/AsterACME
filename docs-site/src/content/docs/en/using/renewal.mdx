@@ -1,0 +1,46 @@
+---
+title: Renewal and ARI
+description: Renewal plans, RFC 9773 ARI, single and batch renewal, and failure backoff.
+---
+
+## Where the renewal plan comes from
+
+After issuance completes, AsterACME builds a renewal plan for the current generation, preferring **ARI (RFC 9773)**:
+
+1. When the CA directory advertises `renewalInfo` and the certificate carries an AKI identifier, AsterACME queries the CA's suggested renewal window and picks `renew_at` **uniformly at random** within it; refreshing within the same window keeps the chosen time
+2. Without ARI support, a local fallback applies: certificates valid for 10+ days renew at 2/3 of their lifetime, shorter ones at 1/2, randomly advanced within the last day before the target
+
+`cert show` and `cert list` derive NEXT RENEWAL from this plan, including its source (ARI / fallback). ARI queries are unsigned GETs; failures keep the previous plan and schedule a re-check in six hours, never touching the issued certificate.
+
+## Single renewal
+
+```sh
+aster-acme cert renew example-cert
+aster-acme cert renew example-cert --now
+aster-acme cert renew example-cert --json
+```
+
+- **Due-only by default**: an undue certificate returns `not_due` — no new generation, no CA request. `--now` renews early
+- The renewal definition is fixed: saved domains, account, key algorithm, and validation method; overrides are not accepted
+- Each renewal generation fixes new keys and a CSR; the new certificate switches to in-use only after full validation and persistence, and the old generation is kept
+- When the CA supports ARI, `replaces` is sent; failures schedule retries from the CA's Retry-After and local backoff
+
+**Failure backoff**: after each failure AsterACME waits 1 minute, then 10 minutes, then 100 minutes, then once per day; a valid CA `Retry-After` wins when later. Backoff state is persisted, so repeated cron triggers never reset a failure to a first attempt. `--now` bypasses the local backoff but never the CA's Retry-After.
+
+## Batch renewal
+
+```sh
+aster-acme cert renew --all
+```
+
+Processes managed certificates in name order; one failure does not stop the rest. Undue certificates report not_due, manual-validation certificates are skipped and counted separately, and first-time manual material still comes back as a pending action. Human output is one summary table; JSON emits a single report: `partial_failure` exits 1, full completion exits 0, cancellation exits 130.
+
+## Daemon auto-renewal admission
+
+The resident daemon and `daemon run-once` auto-renew only certificates that satisfy every condition:
+
+- Currently in use, completed, not revoked, not expired, and due for renewal
+- Validation implementation in: `webroot`, `standalone`, `tls_alpn`, `dns_provider`; `dns_persist` only when reusing a long-lived TXT identical to the issued predecessor
+- `manual_dns` and `manual_http` are reported as `manual validation` skipped — no renewal generation is created
+
+The daemon is safe alongside foreground `cert renew`: file locks ensure only one side creates the renewal generation. For systemd/cron scheduling shapes, see [Daemon and Scheduling](/en/admin/daemon/).

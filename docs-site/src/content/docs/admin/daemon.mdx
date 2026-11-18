@@ -1,0 +1,73 @@
+---
+title: 常驻守护与定时任务
+description: daemon run、daemon run-once、systemd、cron 与失败重试。
+---
+
+无人值守维护由 `daemon` 命令组承担。每个维护周期做三件事,按序执行:
+
+1. **ARI 刷新** — 对当前使用、已完成、未吊销且查询期限已到的证书刷新 ARI 建议
+2. **自动续期** — 对续期时间已到且满足[准入规则](/using/renewal/)的证书执行续期
+3. **部署重试** — 对到期部署失败(发布/reload 失败)的绑定重试发布
+
+单项失败不阻断其他证书;周期报告汇总结果。
+
+## 常驻模式
+
+```sh
+aster-acme daemon run
+aster-acme daemon run --interval 300
+```
+
+前台常驻:启动立即检查一轮,之后按间隔开始下一轮。间隔默认 60 秒(1–86400),`--interval` 或 `config.toml` 的 `daemon_interval` 可覆盖;修改配置后需重启 daemon。
+
+- 同一 data-dir 只允许一个常驻 daemon(独占锁)
+- Unix 下 `Ctrl-C` / `SIGTERM` 协作退出:停止新周期,已启动的工作等待完成并保留结果;Windows 支持 `Ctrl-C`
+- 人类日志与签发相同的时间戳+级别格式;`--json` 输出 JSON Lines(`started`/`cycle`/`stopped` 逐行事件)
+
+## cron 模式
+
+```sh
+aster-acme daemon run-once
+aster-acme daemon run-once --data-dir /srv/aster-acme --json
+```
+
+执行一个非交互维护周期后退出,适合 cron。程序不安装 crontab,路径由你替换:
+
+```text
+*/15 * * * * /usr/local/bin/aster-acme daemon run-once --data-dir /srv/aster-acme
+```
+
+cron 频率只决定何时检查保存的期限,不会绕过 CA 的 Retry-After 或续期计划。无续期/部署工作时 run-once 直接输出空周期报告,适合更高频率的检查。
+
+## systemd 示例
+
+```ini
+[Unit]
+Description=AsterACME certificate maintenance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/aster-acme daemon run --data-dir /srv/aster-acme
+Restart=on-failure
+User=aster-acme
+
+[Install]
+WantedBy=multi-user.target
+```
+
+开机启动、重启策略和日志收集交给系统服务管理器;daemon 本身不安装或修改系统服务。
+
+## 自动续期准入
+
+daemon 只自动续期:当前使用、已完成、未吊销、未过期、到期,且验证实现属于 `webroot`、`standalone`、`tls_alpn`、`dns_provider`;`dns_persist` 仅复用与前任完全一致的长期 TXT。`manual_dns`、`manual_http` 在报告中标记跳过。
+
+与前台 `cert renew` 并发安全:文件锁保证只有一方创建续期世代。
+
+## 失败重试
+
+- **续期失败**:本地退避依次 1 分钟、10 分钟、100 分钟,之后每日;CA `Retry-After` 有效时取较晚者;状态持久化,cron 重复触发不重置计数
+- **部署失败**:按绑定与世代独立退避,节奏同上;daemon 只重试发布/reload 明确失败的绑定,不重新签发
+- **reload 不确定**(`ReloadUncertain`):可能已影响服务,**永不自动重试**;先检查服务,再显式 `cert deploy run CERT -n BINDING`
+
+`--now`(单次或批量)可越过本地退避提前重试,但不能绕过 CA Retry-After。

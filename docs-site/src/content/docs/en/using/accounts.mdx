@@ -1,0 +1,82 @@
+---
+title: Accounts
+description: Registration, recovery, contacts, key rotation, deactivation, and local removal.
+---
+
+An AsterACME account is a **named identity**: a stable name bound to one account key pair and the account ID/kid assigned by the CA. Contact addresses receive CA expiry notices; they are not logins. Every account command verifies local identity first, and only `register` can create a missing local identity.
+
+Account names are 1–64 ASCII letters, digits, underscores, or hyphens. Account commands accept a positional `[NAME]` or `-n/--name`, mutually exclusive.
+
+## Registration
+
+```sh
+aster-acme account register default --contact admin@example.com
+```
+
+- Terms acceptance is always explicit: confirm interactively or pass `--accept-terms` in scripts; `--yes` does not accept terms
+- `--ca` selects letsencrypt (default) / zerossl / google; `--ca-directory` points at any directory URL (such as staging); the two are mutually exclusive
+- `--contact` is repeatable and acts as a full replacement list
+- `--eab-kid` and `--eab-key-file` are provided as a pair for CAs that require EAB; secrets are read from files, never command-line arguments
+
+When a local identity with the same name exists, the terminal confirms before reusing/continuing it (`--yes` skips the confirmation); it is never silently recreated.
+
+## Key algorithms
+
+`-k/--key-type` supports ecdsa-p256 (default), ecdsa-p384, ecdsa-p521, ed25519, rsa-2048, rsa-3072, rsa-4096, and rsa-8192. New accounts default to P-256. Existing identities reject a different explicit type rather than rotating during reuse. Account and certificate key algorithms are chosen independently.
+
+## Recovery
+
+```sh
+aster-acme account recover default
+```
+
+When the local account key still exists but the account URL/kid is missing or needs reconciliation, `recover` re-establishes the account observation using the saved key. It never creates a new key or a new CA account. Without the key, ordinary inspection and recovery fail closed — registration is the only entry point for creating an account identity.
+
+## Inspection
+
+```sh
+aster-acme account list
+aster-acme account list --verify
+aster-acme account show default
+aster-acme account show default --verify
+```
+
+`list` and `show` are offline by default and present the local snapshot; `--verify` queries the CA and refreshes observations. Verification output only expresses what was actually queried (`CA query: account refreshed`) — local data is never presented as current remote state. `account switch NAME` only changes the local default account and performs no CA operations.
+
+## Contacts
+
+```sh
+aster-acme account update-contact default -m new-admin@example.com
+aster-acme account update-contact default --clear-contacts --yes
+```
+
+`--contact` is a full replacement list; `--clear-contacts` empties it explicitly. The two are mutually exclusive, and a missing value is never treated as a clear. `--yes` confirms replacing or clearing existing contacts.
+
+## Key rotation
+
+```sh
+aster-acme account rotate-key default
+aster-acme account rotate-key default -k ecdsa-p384
+```
+
+Rotation follows the ACME keyChange flow: intent is persisted before the request, and network interruptions do not auto-replay. The new key type defaults to the current one. The rotation transaction keeps both keys and its log; **explicitly-not-sent** and **outcome-unknown** are tracked separately. `--yes` confirms a rotation or reconciles a saved rotation transaction.
+
+## Deactivation and removal
+
+```sh
+aster-acme account deactivate default --yes
+aster-acme account remove default --yes
+```
+
+`deactivate` deactivates the account at the CA, irreversibly; the account can no longer issue. `remove` deletes only the locally managed account profile and key — it never calls the CA (local removal does not mean the account is deactivated remotely). Both default to "no" and require `--yes` in scripts.
+
+## Operation summary
+
+| Command | What it does | What `--yes` confirms |
+| --- | --- | --- |
+| `account register` | Create or continue a local account identity | Reusing/continuing an existing local identity |
+| `account recover` | Rebuild the account observation with the saved key | (no dangerous confirmation) |
+| `account update-contact` | Replace/clear contacts | Replacing or explicitly clearing |
+| `account rotate-key` | ACME keyChange rotation | Rotating or reconciling the transaction |
+| `account deactivate` | Deactivate the CA account (irreversible) | Deactivation |
+| `account remove` | Delete the local profile and key | Local removal |

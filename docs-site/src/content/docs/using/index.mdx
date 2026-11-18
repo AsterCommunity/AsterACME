@@ -1,0 +1,40 @@
+---
+title: 使用概览
+description: AsterACME 的证书生命周期操作与共同约定。
+---
+
+AsterACME 把"一张证书"建模为一个**托管证书**:稳定的本地管理身份,拥有自己的域名集合、账户绑定、验证方式和当前使用的版本。日常操作围绕它展开:
+
+```text
+注册账户 -> 签发(cert issue) -> 部署(cert deploy) -> 自动续期(daemon/renew) -> 需要时吊销(cert revoke)
+```
+
+## 本组内容
+
+- [账户管理](/using/accounts/) — 注册、找回、联系人、换钥、停用
+- [验证方式](/using/challenges/) — 七种验证实现的选型与配置
+- [签发与恢复](/using/issuance/) — `cert issue`、中断恢复、查看与失败清理
+- [续期与 ARI](/using/renewal/) — 续期计划、ARI、单次与批量续期
+- [证书部署](/using/deploy/) — 发布绑定、文件权限、reload
+- [吊销与本地删除](/using/revocation/) — 两种吊销签名身份与本地删除语义
+
+## 所有命令共有的约定
+
+**状态根**:`--data-dir PATH`(或 `ASTER_ACME_DATA_DIR`)选择数据目录;未指定时使用 `com.astercosm.acme` 的平台默认目录。配置固定为状态根中的 `config.toml`。
+
+**确认、输入、输出分别控制**:
+
+| 参数 | 含义 | 不包含的权限 |
+| --- | --- | --- |
+| `-y / --yes` | 自动接受当前命令所有操作确认 | 不选目标、不填缺失输入、不同意条款、不绕过校验 |
+| `--accept-terms` | 注册时同意所选 CA 条款 | 不确认复用已有账户 |
+| `--verify` | 查询 CA 当前状态并刷新观察快照 | 不启动验证、不新建订单 |
+| `--json` | 输出一份结构化结果,禁止提示 | 不隐含确认或强制 |
+
+JSON 或非 TTY 环境从不弹提示;脚本应提供完整参数。取消交互退出码为 130。
+
+**退出码**:0 表示成功(`cert issue` 的 action_required 也是 0,脚本必须检查 `status` 字段);一般错误为 1;参数解析错误为 2;交互取消为 130。
+
+**时间**:人类输出为 `YYYY-MM-DD HH:MM:SS UTC`;JSON/TOML 保存 RFC3339。
+
+**超时与轮询**:`--request-timeout`(单请求,默认 30 秒)、`--operation-timeout`(单次签发/恢复预算,默认 600 秒)、`--max-polls`(订单轮询轮数,默认 30)、`--poll-interval`(轮询间隔,默认 5 秒)。显式 CLI 参数优先于 `config.toml`,配置缺省回退内置默认。完整字段见 [CLI 命令参考](/reference/cli/)。

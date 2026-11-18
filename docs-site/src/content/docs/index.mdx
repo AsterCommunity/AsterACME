@@ -1,0 +1,48 @@
+---
+title: AsterACME 文档
+description: 可嵌入的 Rust ACME 客户端与 CLI，覆盖账户管理、验证、签发、续期、部署和无人值守维护。
+template: doc
+---
+
+AsterACME 是一个可嵌入的 Rust ACME 客户端与 CLI，管理 ACME 账户、证书签发、续期、部署和吊销。它围绕**可恢复性**设计：每次请求先保存意图再发出，中断后从保存的检查点继续，不自动重放结果不确定的操作。
+
+核心能力一览:
+
+- 具名 CA 账户：注册、找回、联系人、换钥、停用
+- 单域名、多 SAN 与通配符证书；账户与证书密钥独立选择
+- 七种验证实现覆盖 DNS-01、DNS-PERSIST-01（草案）、HTTP-01、TLS-ALPN-01
+- 保存申请后恢复、ARI（RFC 9773）刷新、单次与批量续期、无人值守维护
+- 每张证书多个部署绑定，续期后自动发布与有界 reload
+- 交互、JSON、离线查看三种输出形态
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<CardGrid staggered>
+	<Card title="快速开始">
+		从 Homebrew 或 crates.io 安装 CLI，注册账户，签发第一张证书。
+		<LinkCard title="快速开始" href="/start/quick-start/" />
+	</Card>
+	<Card title="验证方式">
+		DNS-01、HTTP-01、TLS-ALPN-01 与 DNS-PERSIST-01 的七种实现，如何为你的部署形态选型。
+		<LinkCard title="验证方式" href="/using/challenges/" />
+	</Card>
+	<Card title="无人值守续期">
+		ARI 续期计划、常驻 daemon 与 cron 两种调度形态，以及自动续期准入规则。
+		<LinkCard title="续期与 ARI" href="/using/renewal/" />
+	</Card>
+	<Card title="部署与 reload">
+		把签发的证书发布到固定路径，续期后自动替换，reload 不经 shell 执行。
+		<LinkCard title="证书部署" href="/using/deploy/" />
+	</Card>
+</CardGrid>
+
+## 文档结构
+
+- **开始** — 安装与第一次签发
+- **使用** — 账户、验证、签发、续期、部署、吊销的完整生命周期操作
+- **管理** — DNS Provider、守护进程、容器、数据目录的运维主题
+- **参考** — CLI 命令参考、常见问题与项目信息
+
+## 与开发者文档的关系
+
+本站面向使用 AsterACME 的人。修改 AsterACME 代码、理解 crate 边界或协议契约时，请阅读仓库内的[开发者文档](https://github.com/AsterCommunity/AsterACME/tree/main/docs)（中文）：项目契约、任务路由、架构概览、CLI 契约、RFC 参考与测试入口都在那里。

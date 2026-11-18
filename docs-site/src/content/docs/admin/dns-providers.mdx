@@ -1,0 +1,100 @@
+---
+title: DNS Provider 自动发布
+description: 内置 Cloudflare、ADPP 外部 executable、凭据、CNAME 委派与清理。
+---
+
+`dns_provider` 验证实现由 DNS Provider Profile 驱动:一份保存在 `<data-dir>/providers/<name>.toml` 的配置,描述用哪个后端在哪个 zone 发布 TXT。两类后端共用同一套发布、回执、传播和清理流程。
+
+```sh
+aster-acme provider backends          # 查看本次构建支持的后端及配置字段
+aster-acme provider list
+aster-acme provider show NAME
+```
+
+`provider backends` 是权威入口:后端 ID 与字段以它展示的为准。
+
+## 内置 Cloudflare
+
+```sh
+aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare
+aster-acme cert issue -a default -d example.com -d '*.example.com' \
+  -c dns_provider --provider cf-prod
+```
+
+交互按后端描述符逐字段输入,API token 使用隐藏输入。自动化改用私有 TOML 文件,token 不进命令行:
+
+```toml
+# 可选;省略时按最终发布域名自动发现 zone
+# zone_id = "0123456789abcdef0123456789abcdef"
+# 凭据二选一:
+api_token = "your-cloudflare-api-token"
+# token_file = "/absolute/path/private-cloudflare-token"
+```
+
+```sh
+aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
+  --settings-file /absolute/path/cf-settings.toml --json
+```
+
+- Token 须覆盖目标 zone,具备 Zone Read 和 DNS Edit
+- Zone ID 省略时按 CNAME 最终发布目标的最长后缀自动发现,发现结果按发布保存,恢复与清理沿用同一 zone
+- 创建记录写入 `asteracme:<publication_id>` comment 用于对账;删除前逐项核对记录身份
+- 同值已有记录若是别的 AsterACME 发布所有,拒绝借用;用户自己的无标记记录保留
+- 凭据轮换允许;已保存证书的后端和 zone 选择模式不能更换
+
+## ADPP 外部 executable
+
+非 Cloudflare 服务商实现 [ADPP](https://github.com/AsterCommunity/AsterACME/blob/main/docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)(AsterACME DNS Provider Protocol),通过 stdin/stdout JSON 交互:
+
+```sh
+aster-acme provider add dns-prod --exec /absolute/path/my-dns-provider
+aster-acme provider add dns-prod --exec /absolute/path/my-dns-provider \
+  --arg --production --allow-zone example.com
+```
+
+- `--exec` 是绝对路径;进程直接启动,不经 shell,可重复 `--arg` 追加 argv
+- 子进程**不继承宿主 ENV**:脚本用绝对解释器路径,不依赖 PATH/HOME/云凭据环境变量
+- `--allow-zone` 限制最终 TXT 写入位置(域或其子域,按完整标签匹配);省略则不限制
+- executable 自行访问其凭据(Keychain、secret manager、自有配置);也可把非敏感选择信息写在 Profile 的 `provider_custom`
+
+官方 Python 参考实现与测试见仓库 [`examples/dns-providers/`](https://github.com/AsterCommunity/AsterACME/tree/main/examples/dns-providers)(Cloudflare ADPP 适配器)。
+
+## Profile 配置
+
+首次 `provider add` 生成的 Profile(节选):
+
+```toml
+provider_profile_version = 1
+backend_id = "com.astercosm.acme.adpp"
+executable = "/absolute/path/my-dns-provider"
+args = []
+allowed_zones = []          # 空 = 不限制
+timeout_seconds = 30        # 每次 provider 调用上限(1–300)
+ttl_seconds = 120           # 请求值;厂商可能有自己的范围
+propagation_timeout = 5     # 单次本地检查预算(1–3600)
+propagation_interval = 5    # 检查前等待(1–60)
+```
+
+`provider_custom` 由对应后端解释,按**敏感对象**处理:所有输出全量隐藏、不进日志/journal、不通过 argv/ENV 转发。整个 Profile 上限 64KiB。
+
+## CNAME 委派与手动指定目标
+
+`_acme-challenge` 的既有 CNAME 委派直接支持,例如 `_acme-challenge.example.com. CNAME acme.validation.net.` — AsterACME 跟随 CNAME(最多 8 跳,检测环)在最终位置发布;配 `--allow-zone validation.net` 限制写入域。DNS 无法解析时,新签发可用 `--dns-target 'DOMAIN=TXT_NAME'` 手动指定发布目标。
+
+## 传播与清理
+
+`present` 成功后默认等 5 秒,再做一次本地 TXT 建议性检查(预算默认 5 秒);全部预期值可见立即请求 CA,缺值或超时只警告,再等 10 秒后照常请求 CA。本地可见性不代表 CA 通过。
+
+订单完成或进入终态失败后自动清理临时 TXT:只删除本次创建且未变化的记录,同值预存记录(`preexisting`)保留。清理失败保留待重试状态,单独重试:
+
+```sh
+aster-acme provider cleanup dns-prod
+```
+
+`cleanup` 不加载账户私钥、不调用 CA;结果未知的申请不会清理。Profile 被证书定义引用时不能删除(`provider remove` 保护续期)。
+
+## 安全要点
+
+- Profile 文件 Unix `0600` + 私有目录;链接或不安全权限直接拒绝
+- token/secret 写进 `provider_custom` 就意味着确实保存在该文件里;更推荐 executable 自行管理凭据,Profile 只存选择信息
+- 接入新 executable 先在受控 zone + staging CA 走通完整链路

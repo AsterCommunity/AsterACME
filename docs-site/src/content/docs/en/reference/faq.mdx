@@ -1,0 +1,64 @@
+---
+title: FAQ
+description: Validation, recovery, renewal, and deployment questions.
+---
+
+### Which validation do wildcards require?
+
+Only the DNS implementations support wildcards: `dns_provider`, `manual_dns`, and `dns_persist`. HTTP-01 and TLS-ALPN-01 cannot validate `*.example.com`. When a multi-SAN certificate mixes in a wildcard, the whole certificate needs DNS validation.
+
+### The listener fails on port 80/443, or the CA cannot reach my server?
+
+The public entry for `standalone`/`tls_alpn` is always port 80/443. `--listen-address` changes only the local bind: a custom local port requires your own forwarding that preserves the original Host/SNI and all published A/AAAA records. Also check firewalls, ISP blocking of 80/443, and whether the DNS A/AAAA records point at the machine running AsterACME. Only IPv4 is bound by default.
+
+### I published the TXT records — why is it still waiting?
+
+The local DNS check is **advisory**: missing values, resolver failures, and timeouts only produce a warning, and AsterACME proceeds to the CA after a further 10 seconds. The CA is the arbiter — recursive resolver caches, TTLs, and regional propagation delays can keep the CA from seeing records right away. Wait it out; there is nothing to resume.
+
+### Does `--resume` place a new order?
+
+No. Resume continues the saved order from its checkpoint. The exception is **outcome-unknown** states such as "order created but response lost": AsterACME keeps the evidence instead of blindly re-sending newOrder; inspect it as prompted and decide explicitly. Use `cert show` / `--debug` to see the saved evidence.
+
+### `cert issue` exited 0 but there is no certificate?
+
+action_required (for example, waiting for manual TXT publication) also exits 0. Scripts must check the JSON `status` field (`action_required` / `completed`), not just the exit code.
+
+### What does `cert renew` reporting not_due mean?
+
+The certificate is not due yet per its ARI window or fallback plan. That is a successful result and creates no generation; use `--now` to renew early.
+
+### Will the daemon re-prompt for TXT values I already confirmed?
+
+No. The same material (identical TXT names and values) is reused without re-confirmation once confirmed. Only **new material** required by the CA — changed values or added authorizations — comes back as a pending action. The same applies to a `dns_persist` long-lived record.
+
+### Is a CAA warning (WARN) an issuance failure?
+
+No. The CAA/TXT/HTTP prechecks are advisory observations: mismatches, failures, and timeouts warn and continue, with CA validation as the final word. If the CA genuinely rejects issuance over CAA, the issuance fails with the CA's concrete problem record.
+
+### Can I delete the `dns_persist` TXT record after issuance?
+
+No. The whole point of `dns_persist` is to **keep** that record for future renewals. Deleting it makes the next renewal come back with new material. To withdraw the authorization, delete the TXT manually — the authorization lapses with it.
+
+### What do I do after ReloadUncertain?
+
+The reload process may already have executed (timeouts and cancellation cannot guarantee clean process boundaries). Inspect the service's actual state first (was the configuration reloaded?), then retry explicitly with `cert deploy run CERT -n BINDING`. AsterACME never auto-retries an uncertain reload — it refuses to trigger the same service twice on a guess.
+
+### Deployment "succeeded" but the service still shows the old certificate?
+
+Deployment status is a **saved local execution record**, not a health probe. Check whether the service actually reads the bound target path (not some other configured path), whether the reload command acts on the right service instance (container or host), and what `cert deploy show` reports as the saved execution state.
+
+### Can two processes renew the same certificate concurrently?
+
+They will not double-issue. Certificate-level file locks ensure only the lock holder creates a renewal generation; the other side reuses the result or reports lock contention. daemon + cron and daemon + manual `cert renew` are both safe.
+
+### How do I revoke on a machine whose account is gone?
+
+Use `cert revoke --sign-with certificate-key`: it uses the certificate private key stored on this machine and needs no ACME account. If the account itself is suspected compromised, `account rotate-key` / `account deactivate` from a machine that can still reach it; the two paths are independent.
+
+### Is a staging environment supported?
+
+Yes. `--ca-directory` points at any directory URL (such as Let's Encrypt staging); built-in `--ca` offers production endpoints only for letsencrypt/zerossl/google, with no build-mode switching. Accounts bind to their CA: an existing account explicitly paired with a different CA is rejected.
+
+### Where do I start when embedding the Rust library?
+
+`aster_acme` is the protocol orchestration entry (account, issuance, renewal, revocation services, and `maintenance::run_cycle`); `aster_acme_core` is the pure decision layer, and `aster_acme_protocol` owns the wire types. Embedders inject storage, signers, and ChallengeSolver. Crate ownership is described in the in-repo [architecture overview](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md).

@@ -1,0 +1,68 @@
+---
+title: 容器运行
+description: 镜像标签、cosign 验签、数据目录、子命令 shim 与 Compose。
+---
+
+## 镜像
+
+多架构镜像(linux/amd64、linux/arm64)发布在 `ghcr.io/astercommunity/aster-acme`,同步 Docker Hub 与 GitHub Release。`latest` 只跟随稳定版本 tag,预发布只保留版本 tag。
+
+镜像经 cosign keyless 签名,附带 SBOM 与 provenance 证明:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/AsterCommunity/AsterACME/\.github/workflows/' \
+  ghcr.io/astercommunity/aster-acme:latest
+```
+
+## 数据目录
+
+镜像把数据根固定为 `/data`(即 `ASTER_ACME_DATA_DIR`)。`config.toml`、`accounts/`、`certs/`、`providers/`、`.locks/` 都在其下,**必须持久化挂载**:
+
+```sh
+docker run -d --name aster-acme -v aster-acme-config:/data \
+  ghcr.io/astercommunity/aster-acme:latest
+```
+
+默认 entrypoint 是常驻维护 daemon(`daemon run`),前台运行、随 restart 策略拉起。
+
+## 一次性命令与子命令 shim
+
+`docker run` 带参数时作为 `aster-acme` 子命令执行:
+
+```sh
+docker run --rm aster-acme:latest cert list
+```
+
+`docker exec` 不经过 entrypoint,所以镜像为每个顶层子命令内置同名 shim(`account`、`cert`、`daemon`、`help`、`provider`、`version`):
+
+```sh
+docker exec -it aster-acme version
+docker exec aster-acme cert list
+docker exec aster-acme provider add cloudflare --backend com.astercosm.acme.dns.cloudflare
+```
+
+需要完整 shell 时 `docker exec -it aster-acme sh`。
+
+## Compose 示例
+
+可复制示例见仓库 [`docker/docker-compose.yml`](https://github.com/AsterCommunity/AsterACME/blob/main/docker/docker-compose.yml):bind 目录分别暴露数据目录和部署产物。注意宿主目录属主:镜像默认用户是 uid 10001,保留默认用户时先 `chown 10001:10001` 宿主目录,或在 compose 中显式 `user: "0:0"`(root 运行不放松密钥文件权限,CLI 仍按契约收紧文件权限)。
+
+## 部署与 reload 边界
+
+`cert deploy` 的目标目录必须挂载进容器(如示例中的 `/ssl`);绑定与文件权限随部署发布。
+
+reload 命令在**容器内**执行,要求镜像内存在对应可执行文件;操作宿主服务的脚本(如经 socket 控制宿主 systemctl)由你自行挂载。容器挂载与 reload 更新服务的最终语义由操作者负责——AsterACME 只发布文件和执行配置的命令。
+
+## 示例:容器内签发 + 部署到挂载目录
+
+```sh
+docker exec -it aster-acme account register default --contact admin@example.com
+docker exec aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare
+docker exec -it aster-acme cert issue -n example-cert -a default \
+  -d example.com -d '*.example.com' -c dns_provider --provider cf-prod
+docker exec aster-acme cert deploy add example-cert -n web --target /ssl/example
+```
+
+宿主的反向代理挂载同一卷读取 `/ssl/example/` 下的发布文件。

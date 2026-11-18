@@ -1,0 +1,40 @@
+---
+title: Using AsterACME
+description: Certificate lifecycle operations and conventions shared by all commands.
+---
+
+AsterACME models a certificate as a **managed certificate**: a stable local identity with its own domain set, account binding, validation method, and current in-use generation. Day-to-day operations revolve around it:
+
+```text
+register account -> issue (cert issue) -> deploy (cert deploy) -> auto-renew (daemon/renew) -> revoke when needed (cert revoke)
+```
+
+## In this section
+
+- [Accounts](/en/using/accounts/) — registration, recovery, contacts, key rotation, deactivation
+- [Validation Methods](/en/using/challenges/) — choosing and configuring the seven implementations
+- [Issuance and Recovery](/en/using/issuance/) — `cert issue`, interrupted recovery, inspection, failed-application cleanup
+- [Renewal and ARI](/en/using/renewal/) — renewal plans, ARI, single and batch renewal
+- [Certificate Deployment](/en/using/deploy/) — publication bindings, file permissions, reload
+- [Revocation and Removal](/en/using/revocation/) — the two revocation signing identities and local removal semantics
+
+## Conventions shared by all commands
+
+**State root**: `--data-dir PATH` (or `ASTER_ACME_DATA_DIR`) selects the data directory; the platform default directory for `com.astercosm.acme` is used otherwise. Configuration lives at `config.toml` in the state root.
+
+**Confirmation, input, and output are controlled separately**:
+
+| Flag | Meaning | What it does not grant |
+| --- | --- | --- |
+| `-y / --yes` | Auto-accept all operation confirmations for this command | Does not select targets, fill missing input, accept terms, or bypass checks |
+| `--accept-terms` | Accept the CA's currently published terms during registration | Does not confirm reusing an existing account |
+| `--verify` | Query CA state and refresh the observation snapshot | Does not start validation, finalize, or create orders |
+| `--json` | Emit one structured result; prompts disabled | Does not imply confirmation or force |
+
+JSON and non-TTY sessions never prompt; scripts should pass complete arguments. Cancelling an interaction exits with code 130.
+
+**Exit codes**: 0 means success (`cert issue`'s action_required is also 0 — scripts must check the `status` field); 1 is a general error; 2 is a Clap parse error; 130 is interactive cancellation.
+
+**Times**: human output uses `YYYY-MM-DD HH:MM:SS UTC`; JSON/TOML keeps RFC3339 with full precision.
+
+**Timeouts and polling**: `--request-timeout` (per request, 30 s default), `--operation-timeout` (per issuance/recovery budget, 600 s default), `--max-polls` (order polling rounds, 30 default), `--poll-interval` (5 s default). Explicit CLI flags override `config.toml`, which falls back to built-in defaults. Full fields are in the [CLI Reference](/en/reference/cli/).

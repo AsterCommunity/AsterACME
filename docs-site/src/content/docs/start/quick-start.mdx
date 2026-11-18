@@ -1,0 +1,62 @@
+---
+title: 快速开始
+description: 安装 CLI,注册账户,签发第一张证书。
+---
+
+本页从零开始:安装 CLI,注册 Let's Encrypt 账户,用手动 DNS 验证签发第一张证书。全程约五分钟,只需要一个你控制的域名。
+
+## 1. 安装 CLI
+
+```sh
+brew install astercommunity/tap/aster-acme
+```
+
+其他安装方式见[安装](/start/install/)。
+
+## 2. 注册账户
+
+```sh
+aster-acme account register default --contact admin@example.com
+```
+
+终端会展示所选 CA 当前实际公布的条款 URL。条款同意必须明确给出:交互中明确确认,脚本中显式传 `--accept-terms`;`--yes` 不代替条款接受。
+
+默认 CA 是 Let's Encrypt 生产环境。`--ca` 可选 letsencrypt / zerossl / google;`--ca-directory` 可显式指定任意 ACME directory URL,测试环境（如 Let's Encrypt staging）也通过它指定,不按构建模式切换。
+
+账户身份是密钥及稳定账户 ID/kid;联系人邮箱用于 CA 到期提醒,不是登录身份。
+
+## 3. 签发第一张证书
+
+```sh
+aster-acme cert issue -n example-cert -a default -d example.com -c manual_dns
+```
+
+`-n` 是长期托管证书名称;`-a` 选择签发账户;`-d` 是域名,可重复传入多 SAN;`-c manual_dns` 表示由你手动发布 TXT 记录。
+
+输出会列出待发布的 TXT 名称和值,然后等待确认。登录你的 DNS 服务商控制台,发布这些 TXT 记录。
+
+## 4. 发布 TXT 并继续
+
+发布完成后确认提示,AsterACME 做本地 DNS 建议性检查、请求 CA 验证、轮询订单并下载证书:
+
+```sh
+aster-acme cert issue --resume example-cert
+```
+
+`--resume` 会先问"是否已发布这些 TXT 值?"(默认否),确认后继续同一订单,不重新下单。中断、超时或轮询上限都不会丢失已保存的申请;再次 `--resume` 即可继续。
+
+完成输出包含证书路径、证书有效期和下次续期时间(Next renewal)。
+
+## 5. 查看证书
+
+```sh
+aster-acme cert show example-cert
+```
+
+`cert show` 默认离线展示当前使用的版本、域名、有效期、部署绑定与续期计划;`--verify` 会向 CA 查询订单与授权状态并刷新观察快照。
+
+## 6. 下一步
+
+- 把验证换成自动化:阅读[验证方式](/using/challenges/)与 [DNS Provider 自动发布](/admin/dns-providers/)
+- 让续期无人值守:阅读[续期与 ARI](/using/renewal/)与[常驻守护与定时任务](/admin/daemon/)
+- 把证书发布给服务:阅读[证书部署](/using/deploy/)

@@ -1,0 +1,62 @@
+---
+title: Quick Start
+description: Install the CLI, register an account, and issue your first certificate.
+---
+
+This page goes from zero to a certificate: install the CLI, register a Let's Encrypt account, and issue your first certificate with manual DNS validation. It takes about five minutes and needs one domain you control.
+
+## 1. Install the CLI
+
+```sh
+brew install astercommunity/tap/aster-acme
+```
+
+Other installation options are covered in [Installation](/en/start/install/).
+
+## 2. Register an account
+
+```sh
+aster-acme account register default --contact admin@example.com
+```
+
+The terminal shows the terms of service URL the CA currently publishes. Accepting terms is always explicit: confirm interactively, or pass `--accept-terms` in scripts. `--yes` does not accept terms.
+
+The default CA is Let's Encrypt production. `--ca` selects letsencrypt / zerossl / google; `--ca-directory` points at any ACME directory URL, which is also how you use a staging environment — there is no build-mode switch.
+
+An account identity is its key pair plus the stable account ID/kid issued by the CA. Contact addresses are for CA expiry notices, not logins.
+
+## 3. Issue your first certificate
+
+```sh
+aster-acme cert issue -n example-cert -a default -d example.com -c manual_dns
+```
+
+`-n` is the long-lived managed certificate name; `-a` picks the issuing account; `-d` is the domain, repeatable for multi-SAN; `-c manual_dns` means you publish the TXT records yourself.
+
+The output lists the TXT name and value to publish, then waits for confirmation. Publish the record in your DNS provider's console.
+
+## 4. Publish and continue
+
+Once published, confirm the prompt. AsterACME runs an advisory local DNS check, asks the CA to validate, polls the order, and downloads the certificate:
+
+```sh
+aster-acme cert issue --resume example-cert
+```
+
+`--resume` first asks "Have you published these TXT values?" (default: no), then continues the same order without creating a new one. Interruptions, timeouts, and exhausted polling never lose the saved application — run `--resume` again to continue.
+
+The final output shows the certificate path, validity, and the next renewal time.
+
+## 5. Inspect the certificate
+
+```sh
+aster-acme cert show example-cert
+```
+
+`cert show` is offline by default and displays the current generation, domains, validity, deployment bindings, and renewal plan. Add `--verify` to query the CA for order and authorization status and refresh the observation snapshot.
+
+## 6. Next steps
+
+- Automate validation: see [Validation Methods](/en/using/challenges/) and [DNS Provider Automation](/en/admin/dns-providers/)
+- Make renewal unattended: see [Renewal and ARI](/en/using/renewal/) and [Daemon and Scheduling](/en/admin/daemon/)
+- Publish certificates to services: see [Certificate Deployment](/en/using/deploy/)

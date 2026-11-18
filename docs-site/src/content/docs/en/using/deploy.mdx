@@ -1,0 +1,81 @@
+---
+title: Certificate Deployment
+description: Publication bindings, target directories, file permissions, and bounded reload.
+---
+
+Issued certificates need to reach your services. `cert deploy` stores **deployment bindings** per managed certificate: issuance artifacts are written to stable paths, and every successful renewal republishes them automatically.
+
+## Adding a binding
+
+Directory mode (recommended) writes four standard files into the target directory:
+
+```sh
+aster-acme cert deploy add example-cert -n nginx \
+  --target /etc/nginx/certs/example \
+  --reload-cmd "systemctl reload nginx"
+```
+
+Files written: `fullchain.pem`, `cert.pem`, `ca.pem`, `private-key.pem`. The parent directory must already exist and be controlled by the deployment operator.
+
+Exact-path mode covers partial artifacts or existing file layouts; any non-empty combination works:
+
+```sh
+aster-acme cert deploy add example-cert -n haproxy \
+  --cert-path /etc/haproxy/certs/example.pem \
+  --key-path /etc/haproxy/certs/example.key \
+  --key-mode 0640
+```
+
+Directory and exact-path modes are mutually exclusive, and all exact paths must differ. Both modes **publish regular files at stable directory paths** — no deployment symlinks, no directory swaps, no all-or-nothing group switching.
+
+Adding a binding performs the first publication immediately; every successful renewal republishes afterwards.
+
+## File permissions
+
+- Unix default: `0600` for the private key and likewise for cert/CA/fullchain files
+- `--file-mode 0644` sets the certificate group; `--key-mode 0640` sets the private key separately. Values are 3–4 octal digits (000–777)
+- Permissions are saved with the binding and reused on renewal; parent directory permissions are never modified
+- Windows uses inherited permissions; explicit Unix modes are rejected
+
+The service user must be able to read the published private key.
+
+## Reload
+
+`--reload-cmd` is split into program and argv **without a shell**: no quote parsing, variable expansion, or pipes. `"systemctl reload nginx"` is a fixed systemctl argv.
+
+- Without a reload command, publication completing is the end — no process is started
+- `--reload-timeout`: per-reload process and output-collection limit, 30 s default (1–3600)
+- `--max-retries`: extra attempts for explicit start failures or known non-zero exits, 3 default (0–10)
+- stdout/stderr is shown per target and attempt; each stream keeps up to 64KiB per attempt (overflow marked truncated); output is never auto-redacted
+
+**Uncertain states need a human**: `Reloading`/`ReloadUncertain` means the reload process may already have affected the service. Timeouts and cancellation terminate owned process groups, but daemons that detach from the group cannot be reaped. These states are **never retried automatically** — inspect the service first, then retry explicitly:
+
+```sh
+aster-acme cert deploy run example-cert -n nginx
+```
+
+Publication failures (`PublishFailed`/`ReloadFailed`) are retried automatically by the daemon with backoff (1 min → 10 min → 100 min → daily); a successful deployment of the new generation clears the failure count.
+
+## Inspecting and managing
+
+```sh
+aster-acme cert deploy list [CERT_NAME]
+aster-acme cert deploy show example-cert nginx
+aster-acme cert deploy update example-cert -n nginx --reload-cmd "systemctl reload nginx"
+aster-acme cert deploy run example-cert
+aster-acme cert deploy remove example-cert -n nginx --yes
+```
+
+- `show` displays the full binding configuration and saved execution state, read-only
+- `update` modifies configuration: target flags replace the whole path set; `--clear-reload` removes the reload command; changes apply on the next explicit run or renewal
+- `remove` deletes only the binding — **published files stay**, certificates are untouched
+- Deployment status reflects saved local execution records, not service health; verifying the service is your job
+
+## nginx example
+
+```text
+ssl_certificate     /etc/nginx/certs/example/fullchain.pem;
+ssl_certificate_key /etc/nginx/certs/example/private-key.pem;
+```
+
+Point nginx at the stable published paths and let `--reload-cmd "systemctl reload nginx"` handle rotation. Multiple bindings are independent: one target failing never loses other targets' results or the issued certificate.

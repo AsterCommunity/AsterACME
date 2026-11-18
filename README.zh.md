@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="https://acme.astercosm.com"><img alt="官网" src="https://img.shields.io/badge/website-AsterACME-2563EB?style=for-the-badge"></a>
+  <a href="https://acme.docs.astercosm.com"><img alt="文档站" src="https://img.shields.io/badge/docs-Astro_Starlight-7C3AED?style=for-the-badge&logo=astro&logoColor=white"></a>
   <a href="README.md"><img alt="English" src="https://img.shields.io/badge/README-English-E11D48?style=for-the-badge"></a>
   <a href="docs/architecture.md"><img alt="架构设计" src="https://img.shields.io/badge/architecture-overview-0F172A?style=for-the-badge"></a>
   <a href="docs/rfc-reference.md"><img alt="RFC 参考" src="https://img.shields.io/badge/ACME-RFC%208555-059669?style=for-the-badge"></a>
@@ -127,12 +128,28 @@ aster-acme cert deploy show example-cert nginx
 
 ## 文档
 
-- [CLI 与配置](docs/cli-contract.md)：命令、交互、JSON、超时及 `--debug`。
-- [证书生命周期](docs/certificate-lifecycle.md)：续期、ARI、吊销和删除。
-- [开发文档](docs/README.md)：项目契约、任务路由、架构、crate 归属与测试。
-- [RFC 参考](docs/rfc-reference.md)与[更新日志](CHANGELOG.zh.md)。
+用户与运维文档使用 Astro Starlight 发布在 [acme.docs.astercosm.com](https://acme.docs.astercosm.com/)。
+
+- [快速开始](https://acme.docs.astercosm.com/start/quick-start/)
+- [安装](https://acme.docs.astercosm.com/start/install/)
+- [选择验证方式](https://acme.docs.astercosm.com/using/challenges/)
+- [账户管理](https://acme.docs.astercosm.com/using/accounts/)
+- [签发与恢复](https://acme.docs.astercosm.com/using/issuance/)
+- [续期与 ARI](https://acme.docs.astercosm.com/using/renewal/)
+- [部署与 reload](https://acme.docs.astercosm.com/using/deploy/)
+- [DNS Provider 自动发布](https://acme.docs.astercosm.com/admin/dns-providers/)
+- [常驻守护与定时任务](https://acme.docs.astercosm.com/admin/daemon/)
+- [容器运行](https://acme.docs.astercosm.com/admin/docker/)
+- [CLI 命令参考](https://acme.docs.astercosm.com/reference/cli/)
+- [开发文档](docs/README.md)：项目契约、任务路由、架构、crate 归属与测试
+- [RFC 参考](docs/rfc-reference.md)与[更新日志](CHANGELOG.zh.md)
 
 状态默认保存在 `com.astercosm.acme` 的平台目录；可通过 `--data-dir PATH` 或 `ASTER_ACME_DATA_DIR` 指定其他根目录（命令行参数优先）。`list/show` 默认离线；`--json` 禁止交互，只输出一份结构化结果。
+
+## 安全
+
+- 请通过 [GitHub Security Advisories](https://github.com/AsterCommunity/AsterACME/security/advisories/new) 或 `report@esaps.net` 私密报告漏洞，完整政策见 [SECURITY.md](SECURITY.md)
+- 已发布的安全公告：[github.com/AsterCommunity/AsterACME/security/advisories](https://github.com/AsterCommunity/AsterACME/security/advisories)
 
 ## 许可
 

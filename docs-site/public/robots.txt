@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://acme.docs.astercosm.com/sitemap-index.xml

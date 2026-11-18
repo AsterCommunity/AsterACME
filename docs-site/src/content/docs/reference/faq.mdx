@@ -1,0 +1,64 @@
+---
+title: 常见问题
+description: 验证、恢复、续期与部署的常见疑问。
+---
+
+### 通配符证书用什么验证?
+
+只有 DNS 类实现支持通配符:`dns_provider`、`manual_dns`、`dns_persist`。HTTP-01 和 TLS-ALPN-01 不能验证 `*.example.com`。多 SAN 里混有通配符时,整张证书都需要走 DNS 验证。
+
+### 80/443 端口监听失败,或 CA 说无法访问我的服务?
+
+`standalone`/`tls_alpn` 的公网入口固定是 80/443。`--listen-address` 只改本地绑定地址:改了本地端口就必须自行做端口转发,且保留原始 Host/SNI 和全部已公布 A/AAAA 记录。另外检查防火墙、运营商是否封锁 80/443,以及 DNS A/AAAA 是否指向运行 AsterACME 的机器。默认只绑 IPv4。
+
+### TXT 已经发布了,为什么还在等?
+
+本地 DNS 检查是**建议性**的:缺值、解析失败或超时只产生警告,AsterACME 会再等 10 秒后照常请求 CA。真正的裁决者是 CA——递归解析器缓存、TTL、区域性生效延迟都可能导致 CA 侧暂时看不到记录。等待即可,不必反复 resume。
+
+### 中断后 `--resume` 会重新下单吗?
+
+不会。恢复从保存的检查点继续同一订单。例外是"创建订单但响应丢失"这类**结果未知**状态:AsterACME 保留证据而不是盲目重发 newOrder;按提示检查后显式决定。用 `cert show` / `--debug` 查看保存的证据。
+
+### `cert issue` 退出码是 0 但没拿到证书?
+
+action_required(例如等待人工发布 TXT)也是退出码 0。脚本必须检查 JSON 的 `status` 字段(`action_required` / `completed`),不能只看退出码。
+
+### `cert renew` 显示 not_due 是什么?
+
+证书还没到续期时间(ARI 窗口或回退计划)。这是成功结果,不创建新版本;要提前续期用 `--now`。
+
+### daemon 会不会把我手动确认过的 TXT 又弹一遍?
+
+不会。同一材料(相同名称与值的 TXT)确认过一次后,续期/daemon 免确认复用;只有 CA 要求**新材料**(值变化、新增授权)时才再次返回待办。`dns_persist` 的长期 TXT 同理。
+
+### CAA 警告(WARN)是签发失败了吗?
+
+不是。CAA/TXT/HTTP 预检都是建议性观察,失败、不匹配或超时只提示并继续,CA 验证才是最终裁决。如果 CA 真的因 CAA 拒绝,签发会以 CA 返回的具体 problem 失败。
+
+### `dns_persist` 的 TXT 记录签发完能删吗?
+
+不能。`dns_persist` 的整点就是**保留**这条记录供后续续期复用。删除后下次续期会返回新材料待办。想撤回授权时手动删除该 TXT 即可——授权随之消失。
+
+### ReloadUncertain 之后该做什么?
+
+reload 进程可能已经执行(超时/取消时不保证进程边界清晰)。先检查服务实际状态(配置是否已重载),再显式 `cert deploy run CERT -n BINDING` 重试。AsterACME 不自动重试不确定的 reload,避免对同一服务重复触发。
+
+### 部署"成功"了,但服务证书没变?
+
+部署状态是**保存的本地执行记录**,不代表服务健康。检查:服务是否读取绑定的目标路径(而不是自己的其他配置路径)、reload 命令是否真的作用于该服务实例(容器内外)、`cert deploy show` 里保存的执行状态。
+
+### 两个进程同时续期同一张证书会冲突吗?
+
+不会重复签发。证书级文件锁保证只有持锁一方创建续期世代;另一方复用已有结果或报告锁竞争。daemon 与 cron 并发、daemon 与手动 `cert renew` 并发都是安全的。
+
+### 如何吊销一台已经丢失账户的机器上的证书?
+
+用 `cert revoke --sign-with certificate-key`:它使用本机保存的证书私钥,不需要 ACME 账户。账户疑似泄露时,在还能访问账户的机器上 `account rotate-key` / `account deactivate`;两张路径互不依赖。
+
+### 支持 staging 环境吗?
+
+支持。`--ca-directory` 显式指定任意 directory URL(例如 Let's Encrypt staging);内置 `--ca` 只有 letsencrypt/zerossl/google 的生产端点,不按构建模式切换。账户与 CA 绑定:已有账户显式传不同 CA 会被拒绝。
+
+### 嵌入 Rust 库时从哪个 crate 开始?
+
+`aster_acme` 是协议编排入口(账户、签发、续期、吊销服务与 `maintenance::run_cycle`);`aster_acme_core` 是纯决策层,`aster_acme_protocol` 拥有 wire 类型。嵌入者注入存储、签名器与 ChallengeSolver。crate 归属见仓库[架构概览](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md)。

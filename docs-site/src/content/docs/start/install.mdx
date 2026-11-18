@@ -1,0 +1,50 @@
+---
+title: 安装
+description: Homebrew、crates.io、源码构建与容器镜像的安装方式。
+---
+
+## Homebrew(macOS / Linux)
+
+```sh
+brew install astercommunity/tap/aster-acme
+```
+
+## crates.io
+
+从 crates.io 安装已发布的 CLI。若有匹配的预编译二进制,[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 会优先使用,否则回退到源码构建:
+
+```sh
+cargo binstall aster_acme_cli
+```
+
+没有 cargo-binstall 时直接用 Cargo:
+
+```sh
+cargo install aster_acme_cli
+```
+
+## 从源码构建
+
+需要 Rust 1.99+(工具链由仓库的 `rust-toolchain.toml` 钉住):
+
+```sh
+git clone https://github.com/AsterCommunity/AsterACME.git
+cd AsterACME
+cargo install --path crates/aster_acme_cli --locked
+```
+
+## 容器镜像
+
+多架构镜像发布在 `ghcr.io/astercommunity/aster-acme`,同时同步 Docker Hub 与 GitHub Release;`latest` 只跟随稳定版本 tag。默认 entrypoint 是常驻维护 daemon,适合作为长期运行的续期服务:
+
+```sh
+docker run -d --name aster-acme -v aster-acme-config:/data ghcr.io/astercommunity/aster-acme:latest
+```
+
+容器的数据目录、子命令 shim、镜像验签与 Compose 示例见[容器运行](/admin/docker/)。
+
+## 安装之后
+
+- 数据默认保存在 `com.astercosm.acme` 的平台目录;`--data-dir PATH` 或环境变量 `ASTER_ACME_DATA_DIR` 可指定其他根目录,命令行参数优先。目录布局见[数据目录与备份](/admin/data-dir/)。
+- `aster-acme version` 确认安装;`aster-acme --help` 与 `aster-acme help <command>` 查看命令帮助。
+- 想先跑通一次签发,见[快速开始](/start/quick-start/)。

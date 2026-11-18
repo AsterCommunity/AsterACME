@@ -1,0 +1,73 @@
+---
+title: Daemon and Scheduling
+description: daemon run, daemon run-once, systemd, cron, and failure retries.
+---
+
+Unattended maintenance lives in the `daemon` command group. Each maintenance cycle does three things in order:
+
+1. **ARI refresh** — refresh ARI suggestions for in-use, completed, non-revoked certificates whose check deadline has passed
+2. **Automatic renewal** — renew certificates that are due and satisfy the [admission rules](/en/using/renewal/)
+3. **Deployment retry** — republish bindings whose deployment failed (publish/reload) and whose retry deadline has passed
+
+One item failing never blocks the others; the cycle report summarizes the results.
+
+## Resident mode
+
+```sh
+aster-acme daemon run
+aster-acme daemon run --interval 300
+```
+
+Runs in the foreground: an immediate check on startup, then the next cycle after each interval. The interval defaults to 60 seconds (1–86400), overridable with `--interval` or `daemon_interval` in `config.toml`; changing the configuration requires restarting the daemon.
+
+- Only one resident daemon per data-dir (exclusive lock)
+- On Unix, `Ctrl-C` / `SIGTERM` shut down cooperatively: no new cycles start, in-flight work finishes and its results are kept; Windows supports `Ctrl-C`
+- Human logs use the same timestamped-level format as issuance; `--json` emits JSON Lines (`started`/`cycle`/`stopped` events)
+
+## Cron mode
+
+```sh
+aster-acme daemon run-once
+aster-acme daemon run-once --data-dir /srv/aster-acme --json
+```
+
+Runs one non-interactive maintenance cycle and exits — the shape for cron. AsterACME never installs crontabs; replace paths yourself:
+
+```text
+*/15 * * * * /usr/local/bin/aster-acme daemon run-once --data-dir /srv/aster-acme
+```
+
+Cron frequency only decides when saved deadlines are checked; it never bypasses CA Retry-After or the renewal plan. When there is no renewal or deployment work, run-once simply reports an empty cycle, so higher frequencies are fine.
+
+## systemd example
+
+```ini
+[Unit]
+Description=AsterACME certificate maintenance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/aster-acme daemon run --data-dir /srv/aster-acme
+Restart=on-failure
+User=aster-acme
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Boot startup, restart policy, and log collection belong to the system service manager; the daemon itself never installs or modifies system services.
+
+## Auto-renewal admission
+
+The daemon auto-renews only certificates that are in use, completed, not revoked, not expired, and due, with a validation implementation of `webroot`, `standalone`, `tls_alpn`, or `dns_provider`; `dns_persist` only when reusing a long-lived TXT identical to the predecessor. `manual_dns` and `manual_http` are marked skipped in the report.
+
+Concurrent foreground `cert renew` runs are safe: file locks ensure only one side creates a renewal generation.
+
+## Failure retries
+
+- **Renewal failures**: local backoff of 1 minute, 10 minutes, 100 minutes, then daily; a valid CA `Retry-After` wins when later. State is persisted — repeated cron triggers never reset the count
+- **Deployment failures**: backoff per binding and generation at the same rhythm; the daemon retries only bindings with explicit publish/reload failures, never re-issuing
+- **Uncertain reload** (`ReloadUncertain`): the service may already have been affected — **never retried automatically**. Inspect the service first, then run `cert deploy run CERT -n BINDING` explicitly
+
+`--now` (single or batch) bypasses the local backoff for early retries but never the CA's Retry-After.

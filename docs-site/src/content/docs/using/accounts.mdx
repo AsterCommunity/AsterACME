@@ -1,0 +1,82 @@
+---
+title: 账户管理
+description: 注册、找回、联系人、换钥、停用与本地删除。
+---
+
+AsterACME 的账户是**具名身份**:一个稳定名称对应一对账户密钥和 CA 分配的账户 ID/kid。联系人邮箱用于 CA 的到期提醒,不是登录身份。所有账户命令都先验证本地身份;只有 `register` 能创建缺失的本地身份。
+
+账户名称为 1–64 位 ASCII 字母、数字、下划线或连字符。账户命令支持位置参数 `[NAME]` 或 `-n/--name`,两者互斥。
+
+## 注册
+
+```sh
+aster-acme account register default --contact admin@example.com
+```
+
+- 条款同意必须明确:交互中确认,脚本中显式 `--accept-terms`;`--yes` 不代替条款接受
+- `--ca` 选择 letsencrypt(默认)/ zerossl / google;`--ca-directory` 显式指定 directory URL(如 staging),两者互斥
+- `--contact` 可重复,是完整替换列表
+- `--eab-kid` 与 `--eab-key-file` 成对提供,用于要求 EAB 的 CA;密钥从文件读取,不进命令行参数
+
+已在本地存在的同名身份:终端确认后复用/继续(`--yes` 跳过确认),不会静默重建。
+
+## 密钥算法
+
+`-k/--key-type` 支持 ecdsa-p256(默认)、ecdsa-p384、ecdsa-p521、ed25519、rsa-2048、rsa-3072、rsa-4096、rsa-8192。新账户缺省 P-256;已有身份显式传不同类型会被拒绝,不会复用时换钥。账户密钥算法与证书密钥算法相互独立。
+
+## 找回
+
+```sh
+aster-acme account recover default
+```
+
+当本地账户密钥仍在、而账户 URL/kid 等信息缺失或需要与 CA 对账时,`recover` 用保存的密钥重新建立账户观察。它不创建新密钥、不创建新 CA 账户。缺密钥时普通查看/恢复失败关闭——注册是创建账户身份的唯一入口。
+
+## 查看
+
+```sh
+aster-acme account list
+aster-acme account list --verify
+aster-acme account show default
+aster-acme account show default --verify
+```
+
+`list`/`show` 默认离线,展示本地快照;`--verify` 向 CA 查询并刷新观察。核验输出只表达本次实际查询的范围(`CA query: account refreshed`),不把本地数据冒充远端现状。`account switch NAME` 仅切换本地默认账户,不做任何 CA 操作。
+
+## 联系人
+
+```sh
+aster-acme account update-contact default -m new-admin@example.com
+aster-acme account update-contact default --clear-contacts --yes
+```
+
+`--contact` 是完整替换列表;`--clear-contacts` 显式清空,两者互斥,缺省输入不当作清空。`--yes` 确认替换或清空已有联系人。
+
+## 换钥
+
+```sh
+aster-acme account rotate-key default
+aster-acme account rotate-key default -k ecdsa-p384
+```
+
+换钥走 ACME keyChange 流程:先保存意图再发请求,网络中断后不自动重放;新密钥类型缺省沿用原类型。轮换事务保存双钥及日志,**明确未发送**与**结果未知**分开;`--yes` 确认轮换或对账已保存的换钥事务。
+
+## 停用与删除
+
+```sh
+aster-acme account deactivate default --yes
+aster-acme account remove default --yes
+```
+
+`deactivate` 向 CA 停用账户,不可逆;之后该账户不能再签发。`remove` 只删除本地托管的账户资料及私钥,不调用 CA(本地删除不代表 CA 侧已停用)。两者都默认否确认,脚本必须 `--yes`。
+
+## 操作摘要
+
+| 命令 | 做什么 | `--yes` 确认什么 |
+| --- | --- | --- |
+| `account register` | 创建或继续本地账户身份 | 复用/继续已存在的本地身份 |
+| `account recover` | 用保存的密钥重建账户观察 | (无危险确认) |
+| `account update-contact` | 替换/清空联系人 | 替换或显式清空 |
+| `account rotate-key` | ACME keyChange 换钥 | 轮换或对账事务 |
+| `account deactivate` | 停用 CA 账户(不可逆) | 停用 |
+| `account remove` | 删除本地账户资料及私钥 | 本地删除 |

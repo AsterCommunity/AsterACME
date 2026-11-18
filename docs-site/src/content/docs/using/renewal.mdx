@@ -1,0 +1,46 @@
+---
+title: 续期与 ARI
+description: 续期计划、RFC 9773 ARI、单次与批量续期、失败退避。
+---
+
+## 续期计划从哪里来
+
+签发完成后,AsterACME 为当前版本生成续期计划,优先使用 **ARI(RFC 9773)**:
+
+1. CA directory 公布 `renewalInfo` 且证书带有 AKI 标识时,向 CA 查询建议的续期窗口,在窗口内**均匀随机**选定 `renew_at` 并保存;同一窗口刷新时保留已选时间
+2. CA 不支持 ARI 时,使用本地回退策略:有效期 ≥10 天取生命周期的 2/3,不足 10 天取 1/2;在目标点前一天内随机提前
+
+`cert show` 与 `cert list` 的 NEXT RENEWAL 都来自这份计划,并标注来源(ARI / fallback)。ARI 查询是无签名 GET,失败只保留原计划并安排六小时后重查,不影响已签发的证书。
+
+## 单次续期
+
+```sh
+aster-acme cert renew example-cert
+aster-acme cert renew example-cert --now
+aster-acme cert renew example-cert --json
+```
+
+- 默认**到期才执行**:未到期返回 `not_due`,不创建版本、不发 CA 请求;`--now` 提前续期
+- 续期定义固定:沿用保存的域名、账户、密钥算法与验证实现,不接受覆盖
+- 每个续期世代固定新密钥与 CSR;新证书完整校验并落盘后才切换为当前版本,旧版本保留
+- CA 支持 ARI 时发送 `replaces`;续期失败时自动按 CA Retry-After 与本地退避安排重试
+
+**失败退避**:每次失败后依次等 1 分钟、10 分钟、100 分钟,然后每天一次;CA 给出有效 `Retry-After` 时取较晚者。退避状态持久化,cron 重复触发不会把同一失败当作首次尝试。`--now` 可越过本地退避,但不能绕过 CA Retry-After。
+
+## 批量续期
+
+```sh
+aster-acme cert renew --all
+```
+
+按托管名称顺序执行;一项失败继续后续项。未到期的返回 not_due,人工验证方式的被跳过并单独计数,首次人工材料仍返回待办。人类输出是一张汇总表;JSON 输出一份完整报告:`partial_failure` 退出 1,全部完成退出 0,取消退出 130。
+
+## daemon 自动续期准入
+
+常驻 daemon 与 `daemon run-once` 只自动续期满足全部条件的证书:
+
+- 当前使用(in_use)、已完成、未吊销、未过期、续期时间已到
+- 验证实现属于:`webroot`、`standalone`、`tls_alpn`、`dns_provider`;`dns_persist` 仅当长期 TXT 与已签发前任完全一致时免确认复用
+- `manual_dns`、`manual_http` 报告为 `manual validation` 跳过,不创建续期世代
+
+daemon 与前台 `cert renew` 并发安全:锁保证只有一方创建续期世代。调度形态(systemd / cron)见[常驻守护与定时任务](/admin/daemon/)。

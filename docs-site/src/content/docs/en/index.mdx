@@ -1,0 +1,48 @@
+---
+title: AsterACME Documentation
+description: An embeddable Rust ACME client and CLI covering account management, validation, issuance, renewal, deployment, and unattended maintenance.
+template: doc
+---
+
+AsterACME is an embeddable Rust ACME client and CLI that manages ACME accounts, certificate issuance, renewal, deployment, and revocation. It is built around **recoverability**: every request is persisted as intent before it is sent, interruptions continue from saved checkpoints, and operations with uncertain outcomes are never replayed automatically.
+
+At a glance:
+
+- Named CA accounts: registration, recovery, contacts, key rotation, deactivation
+- Single-domain, multi-SAN, and wildcard certificates; account and certificate keys chosen independently
+- Seven validation implementations covering DNS-01, DNS-PERSIST-01 (draft), HTTP-01, and TLS-ALPN-01
+- Saved issuance recovery, ARI (RFC 9773) refresh, single and batch renewal, unattended maintenance
+- Multiple deployment targets per certificate with automatic publication after renewal and bounded reload
+- Interactive, JSON, and offline inspection output modes
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<CardGrid staggered>
+	<Card title="Quick Start">
+		Install the CLI from Homebrew or crates.io, register an account, and issue your first certificate.
+		<LinkCard title="Quick Start" href="/en/start/quick-start/" />
+	</Card>
+	<Card title="Validation Methods">
+		Seven implementations across DNS-01, HTTP-01, TLS-ALPN-01, and DNS-PERSIST-01 — how to choose for your deployment shape.
+		<LinkCard title="Validation Methods" href="/en/using/challenges/" />
+	</Card>
+	<Card title="Unattended Renewal">
+		ARI renewal plans, the resident daemon and cron scheduling modes, and automatic renewal admission rules.
+		<LinkCard title="Renewal and ARI" href="/en/using/renewal/" />
+	</Card>
+	<Card title="Deployment and Reload">
+		Publish issued certificates to stable paths, replace them automatically after renewal, and reload without a shell.
+		<LinkCard title="Certificate Deployment" href="/en/using/deploy/" />
+	</Card>
+</CardGrid>
+
+## Documentation Structure
+
+- **Start** — installation and your first issuance
+- **Using** — the full certificate lifecycle: accounts, validation, issuance, renewal, deployment, revocation
+- **Administration** — DNS providers, the daemon, containers, and the data directory
+- **Reference** — CLI reference, FAQ, and project information
+
+## Relation to Developer Documentation
+
+This site is for people *using* AsterACME. To modify the code, understand crate boundaries, or read protocol contracts, use the in-repo developer documentation (Chinese): the project contract, task routing, architecture overview, CLI contract, RFC reference, and testing entries live in [docs/](https://github.com/AsterCommunity/AsterACME/tree/main/docs).

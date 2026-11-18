@@ -1,0 +1,64 @@
+---
+title: Data Directory and Backups
+description: Default locations, directory layout, config.toml, backups, and migration.
+---
+
+## Default location
+
+State lives in the platform directory for `com.astercosm.acme` by default:
+
+| Platform | Path |
+| --- | --- |
+| macOS | `~/Library/Application Support/com.astercosm.acme` |
+| Linux | `~/.local/share/com.astercosm.acme` |
+| Windows | `%APPDATA%\AsterCosm\acme` |
+
+`--data-dir PATH` or the `ASTER_ACME_DATA_DIR` environment variable selects another root, with the CLI flag taking precedence. Container images pin `/data`. `version` and `help` never load the state directory.
+
+## Directory layout
+
+```text
+<data-dir>/
+├── config.toml          # the only configuration file
+├── accounts/<name>/     # account.toml + account-key.pk8
+├── certs/<name>/        # cert.toml + per-issuance generations (operations)
+├── providers/<name>.toml    # DNS Provider Profile
+│   └── .publications/   # built-in backend publication checkpoints (no credentials)
+└── .locks/              # cross-process locks (accounts/certs/daemon/registry)
+```
+
+- `.locks/` is not object data: lock files survive release, and locks are never released by deleting files
+- Each certificate generation directory keeps its own order observation, fixed key/CSR, artifacts, and renewal plan
+- Extra files you place under certs/ or accounts/ are never touched by managed deletion; content of unproven ownership is never recursively cleaned
+
+## config.toml
+
+Generated on first use. AsterACME edits this file with targeted rewrites (`toml_edit`) that **preserve your comments and formatting**; unknown versions or corrupted files fail closed instead of being reset.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `version` | `1` | Configuration version |
+| `request_timeout` | `30` | Per-HTTP-request limit (seconds, 1–300) |
+| `operation_timeout` | `600` | Issuance/recovery/revocation budget (seconds, 1–86400) |
+| `max_polls` | `30` | Order polling rounds (1–1000) |
+| `poll_interval` | `5` | Polling interval (seconds, 1–300) |
+| `daemon_interval` | `60` | Resident daemon cycle interval (seconds, 1–86400) |
+
+Explicit CLI flags override the configuration; a missing configuration falls back to built-in defaults. The CLI never writes one-off overrides back into the file.
+
+## Permissions
+
+- Unix: internal keys and metadata use private permissions; profile and settings files are `0600` inside private directories — links or unsafe permissions are rejected
+- Windows: inherits directory permissions with reparse-point/hard-link checks; explicit Unix modes are rejected
+- The CLI never loosens the directory's own access control — ownership and access control of the data-dir belong to the operator
+
+## Backups and migration
+
+Back up or migrate the whole data-dir as a unit (stop the daemon, copy the directory):
+
+- Must include: `config.toml`, `accounts/`, `certs/`, `providers/`; private keys exist only here, with no remote copy
+- `.locks/` can be skipped
+- After restoring, verify inventory with `cert list`, then run one `daemon run-once` cycle
+- Two simultaneously running instances must use different data-dirs; concurrency within one data-dir is coordinated by file locks
+
+Internal formats (operation journals, revocation records, and similar) may evolve between pre-release versions (0.1.0-alpha.x): **back up the data-dir before upgrading**. Incompatible formats fail closed — the tools never guess or migrate old fields.

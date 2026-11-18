@@ -1,0 +1,81 @@
+---
+title: 证书部署
+description: 发布绑定、目标目录、文件权限与有界 reload。
+---
+
+签发的证书要发布给服务读取。`cert deploy` 为每张托管证书保存**部署绑定**:签发产物写入固定路径,后续续期成功后自动重新发布。
+
+## 添加绑定
+
+目录模式(推荐):目标目录写入四个标准文件:
+
+```sh
+aster-acme cert deploy add example-cert -n nginx \
+  --target /etc/nginx/certs/example \
+  --reload-cmd "systemctl reload nginx"
+```
+
+写入的文件:`fullchain.pem`、`cert.pem`、`ca.pem`、`private-key.pem`。父目录必须预先存在,由部署操作者控制。
+
+精确路径模式:只需要部分产物或已有固定文件布局时,任意非空组合独立指定:
+
+```sh
+aster-acme cert deploy add example-cert -n haproxy \
+  --cert-path /etc/haproxy/certs/example.pem \
+  --key-path /etc/haproxy/certs/example.key \
+  --key-mode 0640
+```
+
+目录模式与精确路径互斥;所有精确目标互不相同。两种模式都**直接发布普通文件并保持目录路径**,不使用部署链接或目录交换,不承诺整组原子切换。
+
+添加绑定会立即执行首次发布;之后每次续期成功自动发布。
+
+## 文件权限
+
+- Unix 默认私钥 `0600`,证书/CA链/fullchain 同样 `0600`
+- `--file-mode 0644` 设置证书组文件,`--key-mode 0640` 单独设置私钥;值为 3–4 位八进制(000–777)
+- 权限随绑定保存,后续续期沿用;不修改父目录权限
+- Windows 使用继承权限,显式 mode 报不支持
+
+服务运行用户必须能读取发布后的私钥。
+
+## reload
+
+`--reload-cmd` 把命令按引用拆成程序与 argv,**不经 shell**:没有引号解析、变量展开、管道。示例 `"systemctl reload nginx"` 是固定 argv 的 systemctl。
+
+- 未配置 reload:发布完成即结束,不启动进程
+- `--reload-timeout`:每次 reload 进程与输出收集的上限,默认 30 秒(1–3600)
+- `--max-retries`:明确启动失败或已知非零退出时的额外尝试次数,默认 3(0–10)
+- stdout/stderr 按目标与尝试次数展示;每次尝试每路最多保留 64KiB,超限标记截断;输出不自动脱敏
+
+**不确定状态需要人**:`Reloading`/`ReloadUncertain` 表示 reload 进程可能已影响服务;超时或取消会终止拥有的进程组,但主动脱离进程组的 daemon 无法回收。这类状态**不会自动重试**,必须先检查服务,再显式执行:
+
+```sh
+aster-acme cert deploy run example-cert -n nginx
+```
+
+发布失败(`PublishFailed`/`ReloadFailed`)则由 daemon 按退避(1 分钟 → 10 分钟 → 100 分钟 → 每日)自动重试;新世代部署成功会清除失败计数。
+
+## 查看与管理
+
+```sh
+aster-acme cert deploy list [CERT_NAME]
+aster-acme cert deploy show example-cert nginx
+aster-acme cert deploy update example-cert -n nginx --reload-cmd "systemctl reload nginx"
+aster-acme cert deploy run example-cert
+aster-acme cert deploy remove example-cert -n nginx --yes
+```
+
+- `show` 展示完整绑定配置与保存的执行状态,只读
+- `update` 修改配置:目标参数整体替换路径集合;`--clear-reload` 清除 reload 命令;配置变化后由下一次显式 run 或续期应用
+- `remove` 只删除绑定,**不删除已发布文件**,不影响证书
+- 部署状态是保存的本地执行记录,不宣称服务当前健康;服务读取与 reload 生效由你验证
+
+## nginx 示例
+
+```text
+ssl_certificate     /etc/nginx/certs/example/fullchain.pem;
+ssl_certificate_key /etc/nginx/certs/example/private-key.pem;
+```
+
+让 nginx 直接读取绑定发布的固定路径,`--reload-cmd "systemctl reload nginx"` 完成轮换。多绑定互不影响:单目标失败不丢失其他目标的结果或已签发证书。
