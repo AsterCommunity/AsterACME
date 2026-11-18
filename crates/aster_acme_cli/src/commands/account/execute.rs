@@ -526,8 +526,13 @@ async fn remote(
             saved
                 .as_ref()
                 .and_then(|record| record.accepted_terms_url.as_ref())
-                .is_some_and(|accepted| accepted != current)
+                .is_none_or(|accepted| accepted != current)
         });
+    let auto_accept_applied_to_existing = saved
+        .as_ref()
+        .is_some_and(|record| record.account_url.is_some())
+        && terms_changed_before_registration
+        && (auto_accept_requested || auto_accept_already_authorized);
     let service = AccountService::new(client, context.store);
     let account = match operation {
         Operation::Register => {
@@ -564,8 +569,7 @@ async fn remote(
         auto_accepted_terms: matches!(
             action,
             crate::commands::account::report::RemoteAction::Register
-        ) && (auto_accept_requested || auto_accept_already_authorized)
-            && terms_changed_before_registration,
+        ) && auto_accept_applied_to_existing,
         reused,
     })
 }

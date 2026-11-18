@@ -291,6 +291,42 @@ async fn no_terms_and_recovery_do_not_invent_an_update_or_grant_consent() {
     }
 }
 
+#[tokio::test]
+async fn authorized_account_reports_first_terms_url_when_ca_adds_terms_later() {
+    let fixture = Fixture::new().await;
+    fixture.mount(None, false).await;
+    let mut options = fixture.options();
+    options.auto_accept_new_terms = true;
+    let first = fixture.run(options, Operation::Register).await.unwrap();
+    assert_eq!(
+        render::tests::json_value(&first)["auto_accepted_terms"],
+        false
+    );
+    assert!(fixture.record().await.auto_accept_terms_updates);
+    assert_eq!(fixture.record().await.accepted_terms_url, None);
+
+    fixture
+        .mount(Some("https://ca.example/terms/first-published"), true)
+        .await;
+    let report = fixture
+        .run(fixture.options(), Operation::Register)
+        .await
+        .unwrap();
+    assert_eq!(
+        render::tests::json_value(&report)["auto_accepted_terms"],
+        true
+    );
+    assert!(
+        render::render(&report, crate::common::session::Format::plain(false))
+            .unwrap()
+            .contains("Automatically accepted the updated CA terms")
+    );
+    assert_eq!(
+        fixture.record().await.accepted_terms_url.unwrap().as_str(),
+        "https://ca.example/terms/first-published"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 #[ignore = "native PTY registration-consent fixture"]
