@@ -141,7 +141,7 @@ export default defineConfig({
 				en: { label: 'English', lang: 'en' }
 			},
 			editLink: {
-				baseUrl: 'https://github.com/AsterCommunity/AsterACME/edit/main/docs-site/'
+				baseUrl: 'https://github.com/AsterCommunity/AsterACME/edit/main/docs/'
 			},
 			lastUpdated: true,
 			customCss: ['./src/styles/custom.css'],

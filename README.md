@@ -15,8 +15,8 @@
   <a href="https://acme.astercosm.com"><img alt="Website" src="https://img.shields.io/badge/website-AsterACME-2563EB?style=for-the-badge"></a>
   <a href="https://acme.docs.astercosm.com"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-Astro_Starlight-7C3AED?style=for-the-badge&logo=astro&logoColor=white"></a>
   <a href="README.zh.md"><img alt="中文 README" src="https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-E11D48?style=for-the-badge"></a>
-  <a href="docs/architecture.md"><img alt="Architecture" src="https://img.shields.io/badge/architecture-overview-0F172A?style=for-the-badge"></a>
-  <a href="docs/rfc-reference.md"><img alt="RFC Reference" src="https://img.shields.io/badge/ACME-RFC%208555-059669?style=for-the-badge"></a>
+  <a href="developer-docs/architecture.md"><img alt="Architecture" src="https://img.shields.io/badge/architecture-overview-0F172A?style=for-the-badge"></a>
+  <a href="developer-docs/rfc-reference.md"><img alt="RFC Reference" src="https://img.shields.io/badge/ACME-RFC%208555-059669?style=for-the-badge"></a>
   <a href="CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-unreleased-7C3AED?style=for-the-badge"></a>
 </p>
 
@@ -45,7 +45,7 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 | HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
 | TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
 
-`dns_persist` requires a CA implementing the [same draft revision](docs/rfc-reference.md#dns-persist-草案实现2026-11-14). Keep its TXT records for renewal. DNS provider writes and public-CA acceptance are separate capabilities.
+`dns_persist` requires a CA implementing the [same draft revision](developer-docs/rfc-reference.md#dns-persist-草案实现2026-11-14). Keep its TXT records for renewal. DNS provider writes and public-CA acceptance are separate capabilities.
 
 ## Quick start
 
@@ -81,7 +81,7 @@ Run the published container image instead of installing (multi-arch; `latest` tr
 docker run -d --name aster-acme -v aster-acme-config:/data ghcr.io/astercommunity/aster-acme:latest
 ```
 
-The container runs the maintenance daemon by default; one-off commands run as `docker exec aster-acme cert list`. See [containers](docs/docker.md).
+The container runs the maintenance daemon by default; one-off commands run as `docker exec aster-acme cert list`. See [containers](developer-docs/docker.md).
 
 Register an account, review the CA terms, then request a certificate. The default CA is **Let's Encrypt production**.
 
@@ -111,7 +111,7 @@ aster-acme cert renew --all
 
 The resident daemon holds an exclusive lock for its data directory. Set `daemon_interval = 60` in `config.toml` or override it with `daemon run --interval 60`. Human logs use the same timestamped levels as issuance; `--json` streams one JSON object per line.
 
-`renew` runs when due; add `--now` to renew early. Use resident `daemon run` or cron with `daemon run-once` for unattended maintenance using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](docs/cli-contract.md).
+`renew` runs when due; add `--now` to renew early. Use resident `daemon run` or cron with `daemon run-once` for unattended maintenance using supported validation methods. For other validation methods and script confirmation rules, see the [CLI contract](developer-docs/cli-contract.md).
 
 ## Certificate-key revocation
 
@@ -119,7 +119,7 @@ The resident daemon holds an exclusive lock for its data directory. Set `daemon_
 aster-acme cert revoke example-cert --sign-with certificate-key --reason key-compromise --yes
 ```
 
-Use the selected managed generation's certificate private key without the original ACME account or CSR. The default `--sign-with account` uses the issuing account. Both modes retain local and deployed files and do not rotate keys or reload services. See the [revocation contract](docs/certificate-lifecycle.md#吊销).
+Use the selected managed generation's certificate private key without the original ACME account or CSR. The default `--sign-with account` uses the issuing account. Both modes retain local and deployed files and do not rotate keys or reload services. See the [revocation contract](developer-docs/certificate-lifecycle.md#吊销).
 
 ## Deploy
 
@@ -132,7 +132,7 @@ aster-acme cert deploy add example-cert -n nginx \
 aster-acme cert deploy show example-cert nginx
 ```
 
-Adding a binding deploys immediately; later successful renewals use it automatically. Files are fully prepared before individual replacements, and reload runs only after publication succeeds. Deployment uses regular files at stable directory paths. Manage bindings, file permissions, exact paths, and retries through [`cert deploy`](docs/cli-contract.md#证书部署).
+Adding a binding deploys immediately; later successful renewals use it automatically. Files are fully prepared before individual replacements, and reload runs only after publication succeeds. Deployment uses regular files at stable directory paths. Manage bindings, file permissions, exact paths, and retries through [`cert deploy`](developer-docs/cli-contract.md#证书部署).
 
 ## Documentation
 
@@ -149,8 +149,8 @@ The user and operations documentation is published with Astro Starlight at [acme
 - [Resident daemon and cron](https://acme.docs.astercosm.com/admin/daemon/)
 - [Running the container](https://acme.docs.astercosm.com/admin/docker/)
 - [CLI reference](https://acme.docs.astercosm.com/reference/cli/)
-- [Developer guide](docs/README.md): project contract, task routing, architecture, crate ownership, and tests
-- [RFC reference](docs/rfc-reference.md) and [changelog](CHANGELOG.md)
+- [Developer guide](developer-docs/README.md): project contract, task routing, architecture, crate ownership, and tests
+- [RFC reference](developer-docs/rfc-reference.md) and [changelog](CHANGELOG.md)
 
 State is stored in the platform directory for `com.astercosm.acme`; use `--data-dir PATH` or `ASTER_ACME_DATA_DIR` to select another root (`--data-dir` takes precedence). `list` and `show` are offline by default. `--json` disables prompts and emits one structured result.
 
@@ -163,4 +163,4 @@ State is stored in the platform directory for `com.astercosm.acme`; use `--data-
 
 [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Contributions are dual-licensed under the same terms unless explicitly stated otherwise.
 
-External DNS profile setup, sensitive custom values, CNAME delegation, propagation, and cleanup: [DNS providers](docs/dns-providers.md).
+External DNS profile setup, sensitive custom values, CNAME delegation, propagation, and cleanup: [DNS providers](developer-docs/dns-providers.md).

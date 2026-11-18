@@ -24,7 +24,7 @@ AsterACME is AsterCommunity's certificate infrastructure project: an embeddable 
 | RFC 5280 revocation reasons | All assigned codes |
 | External DNS providers | ADPP (AsterACME DNS Provider Protocol), pre-release protocol |
 
-Normative conclusions and per-extension testing status live in the in-repo [RFC reference and integration boundaries](https://github.com/AsterCommunity/AsterACME/blob/main/docs/rfc-reference.md).
+Normative conclusions and per-extension testing status live in the in-repo [RFC reference and integration boundaries](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/rfc-reference.md).
 
 ## CA and endpoint boundaries
 
@@ -49,7 +49,7 @@ crates/
 └── aster_acme_dns_*          # DNS solver, built-in Cloudflare, ADPP transport
 ```
 
-The HTTP stack reuses AsterForge/rustls/AWS-LC with no OpenSSL dependency. Embedding entry points and crate boundaries are described in the in-repo [architecture overview](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md).
+The HTTP stack reuses AsterForge/rustls/AWS-LC with no OpenSSL dependency. Embedding entry points and crate boundaries are described in the in-repo [architecture overview](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/architecture.md).
 
 ## Distribution channels
 

@@ -15,8 +15,8 @@
   <a href="https://acme.astercosm.com"><img alt="官网" src="https://img.shields.io/badge/website-AsterACME-2563EB?style=for-the-badge"></a>
   <a href="https://acme.docs.astercosm.com"><img alt="文档站" src="https://img.shields.io/badge/docs-Astro_Starlight-7C3AED?style=for-the-badge&logo=astro&logoColor=white"></a>
   <a href="README.md"><img alt="English" src="https://img.shields.io/badge/README-English-E11D48?style=for-the-badge"></a>
-  <a href="docs/architecture.md"><img alt="架构设计" src="https://img.shields.io/badge/architecture-overview-0F172A?style=for-the-badge"></a>
-  <a href="docs/rfc-reference.md"><img alt="RFC 参考" src="https://img.shields.io/badge/ACME-RFC%208555-059669?style=for-the-badge"></a>
+  <a href="developer-docs/architecture.md"><img alt="架构设计" src="https://img.shields.io/badge/architecture-overview-0F172A?style=for-the-badge"></a>
+  <a href="developer-docs/rfc-reference.md"><img alt="RFC 参考" src="https://img.shields.io/badge/ACME-RFC%208555-059669?style=for-the-badge"></a>
   <a href="CHANGELOG.zh.md"><img alt="更新日志" src="https://img.shields.io/badge/changelog-unreleased-7C3AED?style=for-the-badge"></a>
 </p>
 
@@ -45,7 +45,7 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 | HTTP-01 | `manual_http`、`webroot`，或临时监听 80 端口的 `standalone` |
 | TLS-ALPN-01 | 临时监听 443 端口的 `tls_alpn` |
 
-`dns_persist`要求CA支持[对应草案版本](docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。TXT保留供续期使用；它不包含DNS provider自动写入，也不表示已通过公网CA验收。
+`dns_persist`要求CA支持[对应草案版本](developer-docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。TXT保留供续期使用；它不包含DNS provider自动写入，也不表示已通过公网CA验收。
 
 ## 快速开始
 
@@ -81,7 +81,7 @@ cargo install --path crates/aster_acme_cli --locked
 docker run -d --name aster-acme -v aster-acme-config:/data ghcr.io/astercommunity/aster-acme:latest
 ```
 
-容器默认运行维护 daemon；一次性命令用 `docker exec aster-acme cert list` 执行。详见[容器镜像](docs/docker.md)。
+容器默认运行维护 daemon；一次性命令用 `docker exec aster-acme cert list` 执行。详见[容器镜像](developer-docs/docker.md)。
 
 先注册账户并阅读 CA 条款，再申请证书。默认使用 **Let's Encrypt 生产环境**。
 
@@ -111,7 +111,7 @@ aster-acme cert renew --all
 
 常驻 daemon 会独占对应的 data-dir。可在 `config.toml` 设置 `daemon_interval = 60`，或用 `daemon run --interval 60` 覆盖。人类日志与签发使用相同的时间戳和级别格式；`--json` 逐行输出 JSON 对象。
 
-`renew` 默认到期才执行，`--now` 可提前续期。无人值守维护可使用常驻 `daemon run` 或由 cron 定期调用 `daemon run-once`，仅支持无需人工确认的验证方式。其他验证方式和脚本确认规则见 [CLI 契约](docs/cli-contract.md)。
+`renew` 默认到期才执行，`--now` 可提前续期。无人值守维护可使用常驻 `daemon run` 或由 cron 定期调用 `daemon run-once`，仅支持无需人工确认的验证方式。其他验证方式和脚本确认规则见 [CLI 契约](developer-docs/cli-contract.md)。
 
 ## 证书私钥吊销
 
@@ -119,7 +119,7 @@ aster-acme cert renew --all
 aster-acme cert revoke example-cert --sign-with certificate-key --reason key-compromise --yes
 ```
 
-使用所选托管世代的证书私钥，不依赖原ACME账户或CSR；默认`--sign-with account`继续使用签发账户。两种方式均保留本地文件和部署副本，不自动换钥或reload。详见[吊销契约](docs/certificate-lifecycle.md#吊销)。
+使用所选托管世代的证书私钥，不依赖原ACME账户或CSR；默认`--sign-with account`继续使用签发账户。两种方式均保留本地文件和部署副本，不自动换钥或reload。详见[吊销契约](developer-docs/certificate-lifecycle.md#吊销)。
 
 ## 部署
 
@@ -132,7 +132,7 @@ aster-acme cert deploy add example-cert -n nginx \
 aster-acme cert deploy show example-cert nginx
 ```
 
-添加绑定会立即部署，之后续期成功会自动使用它。全部文件准备完成后逐一替换，仅全部发布成功才执行 reload；部署直接使用普通文件，目录路径保持稳定。绑定管理、文件权限、精确路径和重试见 [`cert deploy`](docs/cli-contract.md#证书部署)。
+添加绑定会立即部署，之后续期成功会自动使用它。全部文件准备完成后逐一替换，仅全部发布成功才执行 reload；部署直接使用普通文件，目录路径保持稳定。绑定管理、文件权限、精确路径和重试见 [`cert deploy`](developer-docs/cli-contract.md#证书部署)。
 
 ## 文档
 
@@ -149,8 +149,8 @@ aster-acme cert deploy show example-cert nginx
 - [常驻守护与定时任务](https://acme.docs.astercosm.com/admin/daemon/)
 - [容器运行](https://acme.docs.astercosm.com/admin/docker/)
 - [CLI 命令参考](https://acme.docs.astercosm.com/reference/cli/)
-- [开发文档](docs/README.md)：项目契约、任务路由、架构、crate 归属与测试
-- [RFC 参考](docs/rfc-reference.md)与[更新日志](CHANGELOG.zh.md)
+- [开发文档](developer-docs/README.md)：项目契约、任务路由、架构、crate 归属与测试
+- [RFC 参考](developer-docs/rfc-reference.md)与[更新日志](CHANGELOG.zh.md)
 
 状态默认保存在 `com.astercosm.acme` 的平台目录；可通过 `--data-dir PATH` 或 `ASTER_ACME_DATA_DIR` 指定其他根目录（命令行参数优先）。`list/show` 默认离线；`--json` 禁止交互，只输出一份结构化结果。
 
@@ -163,4 +163,4 @@ aster-acme cert deploy show example-cert nginx
 
 采用 [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE)，任选其一。除非明确另行说明，提交的贡献遵循相同双重许可。
 
-外部DNS Profile配置、敏感自定义值、CNAME委派、传播等待及清理见[DNS Provider](docs/dns-providers.md)。
+外部DNS Profile配置、敏感自定义值、CNAME委派、传播等待及清理见[DNS Provider](developer-docs/dns-providers.md)。

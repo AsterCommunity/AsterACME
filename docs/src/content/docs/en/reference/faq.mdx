@@ -61,4 +61,4 @@ Yes. `--ca-directory` points at any directory URL (such as Let's Encrypt staging
 
 ### Where do I start when embedding the Rust library?
 
-`aster_acme` is the protocol orchestration entry (account, issuance, renewal, revocation services, and `maintenance::run_cycle`); `aster_acme_core` is the pure decision layer, and `aster_acme_protocol` owns the wire types. Embedders inject storage, signers, and ChallengeSolver. Crate ownership is described in the in-repo [architecture overview](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md).
+`aster_acme` is the protocol orchestration entry (account, issuance, renewal, revocation services, and `maintenance::run_cycle`); `aster_acme_core` is the pure decision layer, and `aster_acme_protocol` owns the wire types. Embedders inject storage, signers, and ChallengeSolver. Crate ownership is described in the in-repo [architecture overview](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/architecture.md).

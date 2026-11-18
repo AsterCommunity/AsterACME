@@ -24,7 +24,7 @@ AsterACME 是 AsterCommunity 的证书基础设施项目:一个可嵌入的 Rust
 | RFC 5280 吊销原因 | 全部已分配代码 |
 | 外部 DNS provider | ADPP(AsterACME DNS Provider Protocol)预发布协议 |
 
-规范性结论以 [RFC 参考与接入边界](https://github.com/AsterCommunity/AsterACME/blob/main/docs/rfc-reference.md)为准,包含每项扩展的实测状态与已知缺口。
+规范性结论以 [RFC 参考与接入边界](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/rfc-reference.md)为准,包含每项扩展的实测状态与已知缺口。
 
 ## CA 与端点边界
 
@@ -49,7 +49,7 @@ crates/
 └── aster_acme_dns_*          # DNS solver、内置 Cloudflare、ADPP 传输
 ```
 
-HTTP 栈复用 AsterForge/rustls/AWS-LC;无 OpenSSL 依赖。嵌入入口与 crate 边界见仓库[架构概览](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md)。
+HTTP 栈复用 AsterForge/rustls/AWS-LC;无 OpenSSL 依赖。嵌入入口与 crate 边界见仓库[架构概览](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/architecture.md)。
 
 ## 发布渠道
 

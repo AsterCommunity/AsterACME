@@ -16,7 +16,7 @@
 | 文档 | 唯一负责内容 |
 | --- | --- |
 | 根AGENTS.md | 加载顺序、任务入口及少量硬约束 |
-| ../docs-site/ | 面向用户/运维的对外文档站（Astro Starlight，中英双语）；构建与侧边栏见其 astro.config.mts |
+| ../docs/ | 面向用户/运维的对外文档站（Astro Starlight，中英双语）；构建与侧边栏见其 astro.config.mts |
 | project-contract.md | 长期产品/可靠性不变量 |
 | architecture.md | crate归属、依赖方向及当前调用链 |
 | task-routing.md | 按任务定位文档、代码、验证范围 |
@@ -43,4 +43,4 @@
 
 当前契约、未来设计和历史记录要明确区分。代码示例应对应当前API；无法执行的设想标为设计草案，不冒充现有用法。旧验收不能证明当前checkout，规范性结论链接RFC/供应商原文。
 
-README.md/README.zh.md与CHANGELOG.md/CHANGELOG.zh.md配对；开发者文档目前使用中文，不为文件数对称制造英文空页。对外文档站（docs-site/）承担用户/运维文档，本目录不复制其内容。新增/移动文档同时更新索引、任务路由和引用。链接校验：`python3 scripts/check-doc-links.py`（只检查本地路径，不联网）。
+README.md/README.zh.md与CHANGELOG.md/CHANGELOG.zh.md配对；开发者文档目前使用中文，不为文件数对称制造英文空页。对外文档站（docs/）承担用户/运维文档，本目录不复制其内容。新增/移动文档同时更新索引、任务路由和引用。链接校验：`python3 scripts/check-doc-links.py`（只检查本地路径，不联网）。

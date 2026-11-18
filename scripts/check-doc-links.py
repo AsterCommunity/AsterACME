@@ -25,7 +25,7 @@ def missing_links(path):
 
 def main():
     files = [ROOT / "AGENTS.md", ROOT / "README.md", ROOT / "README.zh.md"]
-    files.extend(sorted((ROOT / "docs").rglob("*.md")))
+    files.extend(sorted((ROOT / "developer-docs").rglob("*.md")))
     files.extend(sorted((ROOT / "crates").glob("*/README.md")))
     failures = [f"{path.relative_to(ROOT)}: missing local link {target}" for path in files for target in missing_links(path)]
     if failures:

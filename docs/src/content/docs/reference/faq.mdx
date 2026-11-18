@@ -61,4 +61,4 @@ reload 进程可能已经执行(超时/取消时不保证进程边界清晰)。�
 
 ### 嵌入 Rust 库时从哪个 crate 开始?
 
-`aster_acme` 是协议编排入口(账户、签发、续期、吊销服务与 `maintenance::run_cycle`);`aster_acme_core` 是纯决策层,`aster_acme_protocol` 拥有 wire 类型。嵌入者注入存储、签名器与 ChallengeSolver。crate 归属见仓库[架构概览](https://github.com/AsterCommunity/AsterACME/blob/main/docs/architecture.md)。
+`aster_acme` 是协议编排入口(账户、签发、续期、吊销服务与 `maintenance::run_cycle`);`aster_acme_core` 是纯决策层,`aster_acme_protocol` 拥有 wire 类型。嵌入者注入存储、签名器与 ChallengeSolver。crate 归属见仓库[架构概览](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/architecture.md)。
