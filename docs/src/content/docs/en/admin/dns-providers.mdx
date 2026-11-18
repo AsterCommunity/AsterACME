@@ -38,7 +38,7 @@ aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
 
 - The token must cover the target zone with Zone Read and DNS Edit
 - With no zone ID, the zone is discovered from the longest suffix of the final publication target; the discovered zone is saved per publication and reused by recovery and cleanup
-- All four built-in providers use `asteracme-<publication_id>` as the common remark/ownership marker; Huawei Cloud appends `=<sha256(txt_value)>` for value binding inside an RRset; deletion verifies every record attribute first
+- Built-in providers use `asteracme-<publication_id>` by default; Alibaba Cloud overrides this with `acme-<publication_id>` because its remark field is limited to 50 characters; Huawei Cloud appends `=<sha256(txt_value)>` for value binding inside an RRset; deletion verifies every record attribute first
 - Existing same-value records owned by another AsterACME publication are never borrowed; the user's own unmarked records are preserved
 - Credential rotation is allowed; a saved certificate's backend and zone-selection mode are not
 

@@ -38,7 +38,7 @@ aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
 
 - Token 须覆盖目标 zone,具备 Zone Read 和 DNS Edit
 - Zone ID 省略时按 CNAME 最终发布目标的最长后缀自动发现,发现结果按发布保存,恢复与清理沿用同一 zone
-- 四家内置 provider 统一使用 `asteracme-<publication_id>` 作为备注/所有权标记用于对账;华为云 RRset 追加 `=<sha256(txt_value)>` 绑定具体 TXT 值;删除前逐项核对记录身份
+- 内置 provider 默认使用 `asteracme-<publication_id>` 作为备注/所有权标记用于对账;阿里云因 50 字符备注上限覆盖为 `acme-<publication_id>`;华为云 RRset 追加 `=<sha256(txt_value)>` 绑定具体 TXT 值;删除前逐项核对记录身份
 - 同值已有记录若是别的 AsterACME 发布所有,拒绝借用;用户自己的无标记记录保留
 - 凭据轮换允许;已保存证书的后端和 zone 选择模式不能更换
 

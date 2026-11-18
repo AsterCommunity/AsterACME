@@ -211,7 +211,7 @@ impl Cloud {
             "UpdateDomainRecordRemark" => {
                 assert_eq!(params["RecordId"], "23");
                 let remark = params["Remark"].replace("%2D", "-");
-                assert!(remark.starts_with("asteracme-"));
+                assert!(remark.starts_with("acme-"));
                 let record = remote
                     .as_mut()
                     .expect("remark update requires created record");

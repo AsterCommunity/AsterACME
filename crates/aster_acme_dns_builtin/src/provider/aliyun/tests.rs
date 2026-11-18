@@ -1,6 +1,6 @@
 use crate::provider::{
     aliyun::{Keys, payload},
-    individual::IndividualFactory,
+    individual::{IndividualApi, IndividualFactory},
     tests::{cleanup, fail, http, receipt, record, reply, response, saved},
 };
 use aster_acme_dns::{
@@ -22,6 +22,13 @@ fn keys() -> Keys {
 
 fn factory() -> IndividualFactory<Keys> {
     IndividualFactory(Arc::new(keys()))
+}
+
+#[test]
+fn aliyun_marker_override_stays_within_the_fifty_character_limit() {
+    let marker = keys().marker(&"a".repeat(43));
+    assert_eq!(marker, format!("acme-{}", "a".repeat(43)));
+    assert_eq!(marker.len(), 48);
 }
 
 fn zone(id: &str, name: &str) -> Value {
@@ -149,7 +156,7 @@ fn mark_created(machine: &mut dyn ProviderOperation) -> RecoveryState {
     assert!(
         request
             .url
-            .ends_with("?RecordId=64&Remark=asteracme-publication-1")
+            .ends_with("?RecordId=64&Remark=acme-publication-1")
     );
     saved(
         reply(machine, &json!({"RequestId":"remark-request"})).unwrap(),

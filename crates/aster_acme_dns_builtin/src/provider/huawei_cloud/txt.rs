@@ -37,7 +37,9 @@ fn matches_publication_marker(actual: &str, expected: &str) -> bool {
     else {
         return false;
     };
-    actual == format!("asteracme:{expected_id}={expected_hash}")
+    actual == format!("acme-{expected_id}={expected_hash}")
+        || actual == format!("asteracme-{expected_id}={expected_hash}")
+        || actual == format!("asteracme:{expected_id}={expected_hash}")
         || matches_publication(actual, expected_id)
 }
 

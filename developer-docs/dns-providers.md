@@ -23,7 +23,7 @@ api_token = "your-cloudflare-api-token"
 
 Zone ID 可选：省略时按 CNAME 最终发布目标的最长后缀发现 zone，在任何 DNS 写入前保存发现结果，恢复和清理始终使用同一 zone。显式指定时固定使用该 zone。Token 须覆盖目标 zone，并具备 Zone Read 和 DNS Edit；DNS API 列表逐页读取。API 入口固定为 Cloudflare 官方 HTTPS，不提供生产配置覆盖。`token_file` 由宿主有界读取，Unix 拒绝非私有或链接文件；文件仅允许末尾 CR/LF。
 
-创建记录使用统一的 `asteracme-<publication_id>` comment/备注标记，重启以该标记对账；华为云 RRset 另追加 `=<sha256(txt_value)>` 绑定值。读取端兼容早期的 `asteracme:<publication_id>` 标记，但新写入不再使用冒号。创建结果不确定且仍查不到本次标记时，不自动重放 POST；须核查远端状态。明确未写入的拒绝会保存证明，之后才允许新尝试。无标记的已有同值记录保留；属于另一个 AsterACME publication 的同值记录拒绝借用。删除前核对 record ID、TXT 类型、域名、值和 comment/备注，并先保存删除意图。Cloudflare API 不提供本实现可用的条件删除：核验与删除之间的外部修改不具备原子隔离保证，操作者应避免并发修改托管记录。
+创建记录默认使用统一的 `asteracme-<publication_id>` comment/备注标记，provider 可以覆盖格式；阿里云因 50 字符备注上限使用 `acme-<publication_id>`，华为云 RRset 另追加 `=<sha256(txt_value)>` 绑定值。读取端兼容早期的冒号格式和其他内置 provider 标记。创建结果不确定且仍查不到本次标记时，不自动重放 POST；须核查远端状态。明确未写入的拒绝会保存证明，之后才允许新尝试。无标记的已有同值记录保留；属于另一个 AsterACME publication 的同值记录拒绝借用。删除前核对 record ID、TXT 类型、域名、值和 comment/备注，并先保存删除意图。Cloudflare API 不提供本实现可用的条件删除：核验与删除之间的外部修改不具备原子隔离保证，操作者应避免并发修改托管记录。
 
 `provider update cf-prod --settings-file /absolute/path/new-settings.toml` 原子替换配置；终端无变更参数时通过同一描述符编辑字段。Profile 中 `provider_custom` 全量脱敏，包含公开 zone ID 也不会单独回显。Token 可轮换；已保存证书定义的后端和 zone 选择模式不能被更换，自动发现的每次发布固定使用其已保存的 zone。
 

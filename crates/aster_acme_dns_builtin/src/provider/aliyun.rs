@@ -3,7 +3,6 @@ use crate::provider::{
     individual::{
         IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, RecordMarking, Zone, valid_id,
     },
-    marker::publication,
     rpc::{
         api_error, decode, hex, hmac256, invalid, key_field, query, settings, sha256, validate_keys,
     },
@@ -283,8 +282,8 @@ impl IndividualApi for Keys {
     const MARKING: RecordMarking = RecordMarking::AfterCreate;
 
     fn marker(&self, publication_id: &str) -> String {
-        // A compact, deterministic marker also fits short vendor remark fields.
-        publication(publication_id)
+        // Alibaba Cloud limits record remarks to 50 characters.
+        format!("acme-{publication_id}")
     }
 
     fn set_remark(&self, id: &str, marker: &str) -> Result<HttpRequest, ProviderError> {
