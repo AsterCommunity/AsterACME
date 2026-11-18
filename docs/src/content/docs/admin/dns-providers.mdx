@@ -1,6 +1,6 @@
 ---
 title: DNS Provider 自动发布
-description: 内置 Cloudflare、ADPP 外部 executable、凭据、CNAME 委派与清理。
+description: 内置 Cloudflare、阿里云、腾讯云 DNSPod、ADPP 外部 executable、凭据、CNAME 委派与清理。
 ---
 
 `dns_provider` 验证实现由 DNS Provider Profile 驱动:一份保存在 `<data-dir>/providers/<name>.toml` 的配置,描述用哪个后端在哪个 zone 发布 TXT。两类后端共用同一套发布、回执、传播和清理流程。
@@ -42,9 +42,32 @@ aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
 - 同值已有记录若是别的 AsterACME 发布所有,拒绝借用;用户自己的无标记记录保留
 - 凭据轮换允许;已保存证书的后端和 zone 选择模式不能更换
 
+CLI 默认启用 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod 和华为云 DNS。用 `provider backends` 查看当前构建。精简 CLI 可传 `--no-default-features` 并选取需要的 `dns-*` features；嵌入式 crate 默认无厂商 feature。
+
+## 内置阿里云和腾讯云 DNSPod
+
+两家在 CLI 默认构建中可用。精简源码构建时可分别加入 `--features dns-aliyun` 或 `--features dns-tencent-cloud`。
+
+| 后端 ID | 私有 settings 字段 |
+| --- | --- |
+| `com.astercosm.acme.dns.aliyun` | `access_key_id`、`access_key_secret` |
+| `com.astercosm.acme.dns.tencent-cloud` | `secret_id`、`secret_key` |
+
+运行 `provider add NAME --backend BACKEND_ID` 以隐藏输入填写两项凭据。自动化可通过 `--settings-file` 读取私有 TOML 文件。两家后端根据最终 TXT 目标发现 zone，并在回执中记录实际 TTL。DNSPod 用创建时写入的备注恢复丢失的创建响应。阿里云以收到并保存的 `RecordId` 证明所有权，丢失该 ID 时暂停恢复并保留远端记录。
+
+详见[权限、TTL 和恢复说明](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md)。
+
+## 华为云 DNS：不保证原子隔离
+
+CLI 默认构建已包含该后端，精简源码构建可启用 `dns-huawei-cloud`。后端 ID 为 `com.astercosm.acme.dns.huawei-cloud`。私有 settings 需要 `access_key_id`、`access_key_secret`；`project_id` 可选，省略时按 region 查询 IAM 唯一项目并持久化；`region` 可省略，默认 `cn-north-4`。
+
+**本后端无法保证外部并发写入时一定安全。** 华为云整组更新 RRset，没有公开的 revision 前置条件；读取与 PUT/DELETE 之间，控制台或外部客户端的新修改可能被覆盖或误删。请协调所有写入者，优先使用 ACME 专用 CNAME 目标。保留已观察的其他 TXT、核验标记、持久化意图和丢响应对账都不能将操作变成原子事务。
+
+详见[华为云配置与限制](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md)。
+
 ## ADPP 外部 executable
 
-非 Cloudflare 服务商实现 [ADPP](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)(AsterACME DNS Provider Protocol),通过 stdin/stdout JSON 交互:
+其他服务商可实现 [ADPP](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)(AsterACME DNS Provider Protocol),通过 stdin/stdout JSON 交互:
 
 ```sh
 aster-acme provider add dns-prod --exec /absolute/path/my-dns-provider

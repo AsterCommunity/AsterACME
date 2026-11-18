@@ -90,6 +90,7 @@ impl ProviderOperation for SpecialOperation {
                 if value == "token" {
                     Ok(ProviderEffect::Complete(ProviderOutcome::Presented(
                         crate::PublicationReceipt {
+                            effective_ttl_seconds: None,
                             record_id: "secret-record".into(),
                             ownership: RecordOwnership::Created,
                             record_name: self.record.name.clone(),
@@ -105,6 +106,7 @@ impl ProviderOperation for SpecialOperation {
             )),
             (SpecialMode::Wait, ProviderEvent::Timer) => Ok(ProviderEffect::Complete(
                 ProviderOutcome::Presented(crate::PublicationReceipt {
+                    effective_ttl_seconds: None,
                     record_id: "wait-record".into(),
                     ownership: RecordOwnership::Created,
                     record_name: self.record.name.clone(),
@@ -308,6 +310,7 @@ impl ProviderOperation for Operation {
             }
             ProviderEvent::Http(Ok(response)) if response.status == 200 => Ok(
                 ProviderEffect::Complete(ProviderOutcome::Presented(crate::PublicationReceipt {
+                    effective_ttl_seconds: None,
                     record_id: "record".into(),
                     ownership: RecordOwnership::Created,
                     record_name: self.record.name.clone(),

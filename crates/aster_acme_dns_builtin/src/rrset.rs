@@ -249,6 +249,7 @@ impl Operation {
     fn presented(&mut self, created: bool) -> Result<ProviderEffect, ProviderError> {
         let record = self.record();
         self.outcome = Some(ProviderOutcome::Presented(PublicationReceipt {
+            effective_ttl_seconds: None,
             record_id: identity(record),
             ownership: if created {
                 RecordOwnership::Created

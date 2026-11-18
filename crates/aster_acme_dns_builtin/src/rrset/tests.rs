@@ -270,6 +270,7 @@ fn repeated_revision_conflicts_stop_with_no_unconditional_write_fallback() {
 fn completed_cleanup_restore_never_deletes_a_later_recreated_rrset_value() {
     let publication = record();
     let receipt = aster_acme_dns::PublicationReceipt {
+        effective_ttl_seconds: None,
         record_id: identity_for_test(&publication),
         ownership: RecordOwnership::Created,
         record_name: publication.name.clone(),
@@ -313,6 +314,7 @@ fn identity_for_test(record: &DnsRecord) -> String {
 fn created_cleanup_requires_saved_ownership_and_exact_receipt_identity() {
     let record = record();
     let receipt = aster_acme_dns::PublicationReceipt {
+        effective_ttl_seconds: None,
         record_id: format!("rrset:{}", record.publication_id),
         ownership: RecordOwnership::Created,
         record_name: record.name.clone(),

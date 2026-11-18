@@ -13,12 +13,20 @@ keywords = ["acme", "dns", "dns-01", "cloudflare", "provider"]
 [features]
 default = []
 cloudflare = ["dep:linkme"]
+aliyun = ["dep:aws-lc-rs", "dep:httpdate", "dep:linkme", "dep:time", "dep:zeroize"]
+tencent_cloud = ["dep:aws-lc-rs", "dep:httpdate", "dep:linkme", "dep:time", "dep:zeroize"]
+huawei_cloud = ["dep:aws-lc-rs", "dep:httpdate", "dep:linkme", "dep:time", "dep:url", "dep:zeroize"]
 
 [dependencies]
 aster_acme_dns.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+aws-lc-rs = { workspace = true, optional = true }
+httpdate = { workspace = true, optional = true }
 linkme = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [lints]
 workspace = true

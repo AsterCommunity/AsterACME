@@ -199,6 +199,7 @@ impl DnsProvider for AdppProvider {
                         })?;
                         Ok(PublicationReceipt {
                             record_id,
+                            effective_ttl_seconds: None,
                             ownership,
                             record_name: routes
                                 .get(result.publication_id.as_str())

@@ -28,6 +28,8 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
+CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Huawei Cloud DNS by default. Huawei Cloud RRset updates cannot guarantee atomic isolation from external writers. Embedded applications select provider features explicitly. [DNS provider setup](developer-docs/dns-providers.md)
+
 **Available now:** AsterACME `0.1.0-alpha.2` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. It includes native Cloudflare and ADPP backends behind a unified DNS solver. Live DNS/public-CA acceptance is separate.
 
 ## Capabilities
@@ -40,7 +42,7 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 | Validation | Implementation |
 | --- | --- |
-| DNS-01 | `dns_provider --provider NAME`: native Cloudflare or ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
+| DNS-01 | `dns_provider --provider NAME`: native DNS or ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
 | DNS-PERSIST-01 (draft -02) | `dns_persist`: provision persistent TXT records manually, then reuse them for renewal; supports wildcards |
 | HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
 | TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |

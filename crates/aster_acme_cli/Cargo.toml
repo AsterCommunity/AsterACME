@@ -44,10 +44,19 @@ pkg-url = "{ repo }/releases/download/v{ version }/aster-acme-v{ version }-windo
 bin-dir = "aster-acme-v{ version }-windows-arm64.exe"
 
 [features]
-default = ["precheck", "dns-cloudflare"]
+default = [
+    "precheck",
+    "dns-cloudflare",
+    "dns-aliyun",
+    "dns-tencent-cloud",
+    "dns-huawei-cloud",
+]
 precheck = ["dep:aster_acme_validation", "aster_acme/precheck-http", "aster_acme_validation/precheck-caa", "aster_acme_validation/precheck-dns"]
 
 dns-cloudflare = ["aster_acme_dns_builtin/cloudflare"]
+dns-aliyun = ["aster_acme_dns_builtin/aliyun"]
+dns-tencent-cloud = ["aster_acme_dns_builtin/tencent_cloud"]
+dns-huawei-cloud = ["aster_acme_dns_builtin/huawei_cloud"]
 
 [dependencies]
 aster_acme_dns_builtin.workspace = true

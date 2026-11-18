@@ -1,10 +1,10 @@
 # DNS Provider 配置与自动发布
 
-本页描述当前源码中的 DNS-01 自动化入口：内置 Cloudflare，以及用户安装的 ADPP 外部 executable。它们共用 `dns_provider` solver、路由、回执、传播和清理流程。ADPP wire 见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，后端注册与状态机见[实现契约](design/dns-backends.md)。内置与外部后端已包含在 `0.1.0-alpha.2`；内置 Cloudflare 已在真实 DNS 与 Let's Encrypt production/staging 环境完成验收，除 DNS-PERSIST-01 草案外的全部 challenge 方法已走真实 CA 签发，草案真实 CA 签发验收另行进行。
+本页描述当前源码中的 DNS-01 自动化入口：内置 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod、华为云 DNS，以及用户安装的 ADPP 外部 executable。它们共用 `dns_provider` solver、路由、回执、传播和清理流程。ADPP wire 见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，后端注册与状态机见[实现契约](design/dns-backends.md)。Cloudflare 与 ADPP 自 `0.1.0-alpha.2` 起可用；内置 Cloudflare 已在真实 DNS 与 Let's Encrypt production/staging 环境完成验收，除 DNS-PERSIST-01 草案外的全部 challenge 方法已走真实 CA 签发，草案真实 CA 签发验收另行进行。
 
 ## 内置 Cloudflare
 
-运行 `aster-acme provider backends` 查看本次构建实际支持的后端及配置字段。CLI 默认启用 `dns-cloudflare` feature；嵌入式 crate 默认不启用厂商，按需选择 `cloudflare`，关闭后该后端也不会进入注册表。
+运行 `aster-acme provider backends` 查看本次构建实际支持的后端及配置字段。CLI 默认包含所有内置 provider：`dns-cloudflare`、`dns-aliyun`、`dns-tencent-cloud`、`dns-huawei-cloud`。如需精简 CLI，可用 `--no-default-features` 并显式选 feature；嵌入式 crate 默认不启用厂商，宿主按需选择 `cloudflare`、`aliyun`、`tencent_cloud` 或 `huawei_cloud`。
 
 ```sh
 aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare
@@ -26,6 +26,42 @@ Zone ID 可选：省略时按 CNAME 最终发布目标的最长后缀发现 zone
 创建记录写入 `asteracme:<publication_id>` comment，重启以该标记对账。创建结果不确定且仍查不到本次标记时，不自动重放 POST；须核查远端状态。明确未写入的拒绝会保存证明，之后才允许新尝试。无标记的已有同值记录保留；属于另一个 AsterACME publication 的同值记录拒绝借用。删除前核对 record ID、TXT 类型、域名、值和 comment，并先保存删除意图。Cloudflare API 不提供本实现可用的条件删除：核验与删除之间的外部修改不具备原子隔离保证，操作者应避免并发修改托管记录。
 
 `provider update cf-prod --settings-file /absolute/path/new-settings.toml` 原子替换配置；终端无变更参数时通过同一描述符编辑字段。Profile 中 `provider_custom` 全量脱敏，包含公开 zone ID 也不会单独回显。Token 可轮换；已保存证书定义的后端和 zone 选择模式不能被更换，自动发现的每次发布固定使用其已保存的 zone。
+
+## 内置阿里云云解析 DNS 与腾讯云 DNSPod
+
+CLI 默认已包含这两个后端；源码可用 `cargo run --locked -p aster_acme_cli -- provider backends` 检查。精简构建可用 `--no-default-features --features precheck,dns-aliyun,dns-tencent-cloud`。嵌入式 crate 对应 feature 为 `aliyun`、`tencent_cloud`。
+
+| 厂商 | 后端 ID | 私有 settings 字段 |
+| --- | --- | --- |
+| 阿里云云解析 DNS | `com.astercosm.acme.dns.aliyun` | `access_key_id`、`access_key_secret` |
+| 腾讯云 DNSPod | `com.astercosm.acme.dns.tencent-cloud` | `secret_id`、`secret_key` |
+
+交互终端运行 `provider add NAME --backend BACKEND_ID`，两个凭据字段均隐藏输入。自动化把两项写入私有 TOML 文件，再传入 `--settings-file /absolute/path/settings.toml --json`。阿里云 RAM 权限覆盖 `DescribeDomains`、`DescribeDomainInfo`、`DescribeDomainRecords`、`DescribeDomainRecordInfo`、`AddDomainRecord` 和 `DeleteDomainRecord`。DNSPod CAM 权限覆盖 `DescribeDomainList`、`DescribeRecordList`、`DescribeRecord`、`CreateRecord` 和 `DeleteRecord`。请限制写权限到实际发布 zone。
+
+两者按最终 TXT owner 逐页查找最长匹配 zone，并在写入前保存该 zone 身份。阿里云从 `DescribeDomainInfo.MinTtl` 取下限，最高为 86400 秒。DNSPod 使用覆盖免费套餐的 600 秒下限和 604800 秒上限。Profile 展示请求值，签发 journal 的 `effective_ttl_seconds` 保存厂商读回值。
+
+- **阿里云**保存写入前发现的同值 ID 并保留记录。若创建响应丢失，重启会重读同值记录并停在“所有权无法证明”。创建返回的 ID 落盘后才可签发和清理。记录级备注需要额外请求。
+- **DNSPod**在创建请求中写入 `asteracme:<publication_id>` 备注。重启可据此恢复同一条记录的 ID。唯一一条已启用的默认线路用户同值记录可保留为 `preexisting`，其他 publication 的同值记录会触发冲突。
+- 两者在删除前重读 ID 和记录元组。核验与删除是两次 API 请求，应避免同时从其他工具修改托管记录。
+
+## 内置华为云 DNS（不保证并发安全）
+
+CLI 默认已包含华为云；源码运行 `cargo run --locked -p aster_acme_cli -- provider backends` 可查看。精简构建可用 `--no-default-features --features precheck,dns-huawei-cloud`。嵌入式 feature 是 `huawei_cloud`。后端 ID 为 `com.astercosm.acme.dns.huawei-cloud`。`provider backends` 将 mutation model 显示为 `best_effort_rrsets`。
+
+**华为云公开 DNS API 没有可验证的原子条件写入能力，本后端无法保证一定安全。** 读后 PUT/DELETE 期间若控制台、其他程序或另一个 data-dir 修改同一 RRset，这些修改可能被覆盖或误删。请协调全部写入者，尽量使用 ACME 专用的 CNAME 委派目标；本地锁和写后重读无法消除这个风险。
+
+私有 `huawei-settings.toml`：
+
+```toml
+access_key_id = "YOUR_AK"
+access_key_secret = "YOUR_SK"
+region = "cn-north-4" # 国际站公网 DNS 通常使用 ap-southeast-3
+# project_id 可省略；首次调用会按 region 查询 IAM 项目，唯一匹配才继续
+```
+
+运行 `provider add huawei --backend com.astercosm.acme.dns.huawei-cloud --settings-file /absolute/path/huawei-settings.toml --json`；交互终端也可隐藏输入 AK/SK。`project_id` 可显式填写，也可留空；留空时按 `region` 调 IAM `/v3/projects?name=<region>`，零个或多个匹配都会失败关闭，唯一项目 ID 会随 publication checkpoint 保存。需要目标公网 zone 的 `dns:zone:list`、`dns:recordset:list`、`dns:recordset:create`、`dns:recordset:update`、`dns:recordset:delete` 及 IAM 项目列表读取权限；以实际 IAM 授权契约为准并限制作用范围。已保存请求从 checkpoint 恢复项目 ID，不能在恢复途中换项目。
+
+按最终发布 owner 分页发现最长 zone 并落盘，支持 CNAME 委派。新 RRset TTL 请求限制为 300–2147483647 秒，合并已有 RRset 保持厂商现有 TTL；回执记录实际 TTL，Profile 仍显示请求值。创建和清理读取完整集合，仅加入/减去本次值并保留其他值及用户描述。description 存储 publication 与值哈希标记，超过 255 字节时拒绝写入；同值属于其他 publication 时拒绝借用。结构化冲突最多重读合并四次。未知写入结果先对账，无法证明归属时暂停保留记录。详细所有权与非原子边界见[后端契约](design/dns-backends.md#华为云明确不保证原子性的-rrset-后端)。
 
 ## 创建和选择 Profile
 
@@ -133,7 +169,7 @@ aster-acme provider update dns-prod --clear-zones
 aster-acme provider remove dns-prod --yes
 ```
 
-Profile ID/schema、后端 ID、后端配置版本和非秘密远端 binding 保存在证书定义中，恢复/renew/daemon 复核当前配置。Cloudflare binding 是显式 zone ID 或自动发现模式，实际发现的 zone 按 publication 保存；ADPP binding 是 executable 路径与 argv，外部 executable 仍负责其 opaque custom 配置的账号/租户身份和旧回执的安全解释。后端或 binding 改变会拒绝恢复/续期/清理；保持身份的凭据轮换允许。更换目标应创建新 Profile 和新托管证书定义。
+Profile ID/schema、后端 ID、后端配置版本和非秘密远端 binding 保存在证书定义中，恢复/renew/daemon 复核当前配置。Cloudflare binding 是显式 zone ID 或自动发现模式。阿里云与 DNSPod 使用各自公网 API 的自动发现模式，实际 zone 身份按 publication 保存；ADPP binding 是 executable 路径与 argv，外部 executable 仍负责其 opaque custom 配置的账号/租户身份和旧回执的安全解释。后端或 binding 改变会拒绝恢复/续期/清理；保持身份的凭据轮换允许。更换目标应创建新 Profile 和新托管证书定义。
 
 本次预发布布局要求 Profile 的 `backend_id` 和 `backend_config_version`，solver ID 为 `dns_provider`，保存定义还要求后端 binding 字段。旧布局和 `dns_external` 不自动读取、转换或删除。ADPP 的 `protocol = "com.astercosm.acme.adpp"` 与 version 1 现在只传最终记录名，不再传 challenge 名称及 CNAME 链；旧 provider 应适配此预发布协议变更。
 

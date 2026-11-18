@@ -80,6 +80,9 @@ pub enum RecordOwnership {
 pub struct PublicationReceipt {
     /// Stable provider-side exact-record identity.
     pub record_id: String,
+    /// TTL read back from the vendor API, when the backend reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_ttl_seconds: Option<u32>,
     /// Whether cleanup may remove the record.
     pub ownership: RecordOwnership,
     /// Exact publication owner chosen when the DNS mutation occurred.

@@ -19,12 +19,27 @@ mod tests {
     fn linked_inventory_matches_the_vendor_feature_set() {
         let registry = aster_acme_dns::backend::ProviderRegistry::linked().unwrap();
         let descriptors = registry.descriptors();
+        let vendors = [
+            (
+                "com.astercosm.acme.dns.cloudflare",
+                cfg!(feature = "cloudflare"),
+            ),
+            ("com.astercosm.acme.dns.aliyun", cfg!(feature = "aliyun")),
+            (
+                "com.astercosm.acme.dns.tencent-cloud",
+                cfg!(feature = "tencent_cloud"),
+            ),
+            (
+                "com.astercosm.acme.dns.huawei-cloud",
+                cfg!(feature = "huawei_cloud"),
+            ),
+        ];
+        for (id, enabled) in vendors {
+            assert_eq!(descriptors.iter().any(|backend| backend.id == id), enabled);
+        }
         assert_eq!(
-            descriptors
-                .iter()
-                .any(|backend| backend.id == "com.astercosm.acme.dns.cloudflare"),
-            cfg!(feature = "cloudflare")
+            descriptors.len(),
+            vendors.iter().filter(|(_, enabled)| *enabled).count()
         );
-        assert_eq!(descriptors.len(), usize::from(cfg!(feature = "cloudflare")));
     }
 }

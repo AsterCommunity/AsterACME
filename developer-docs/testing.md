@@ -9,7 +9,8 @@
 ```sh
 cargo test -p aster_acme_cli_storage --locked issuance::deployment
 cargo test -p aster_acme_dns --locked
-cargo test -p aster_acme_dns_builtin --features cloudflare --locked
+cargo test -p aster_acme_dns_builtin --all-features --locked
+cargo test -p aster_acme_cli --features dns-aliyun,dns-tencent-cloud,dns-huawei-cloud --locked signed_
 cargo test -p aster_acme_dns_http --locked
 cargo test -p aster_acme_cli_storage --locked provider_publication
 cargo check --workspace --locked
@@ -53,3 +54,7 @@ Provider 原生终端回归：`python3 scripts/test-provider-terminal.py` 在 PT
 账户条款原生终端回归：`python3 scripts/test-account-terminal.py` 使用 loopback CA、真实账户文件和 inquire 提示，验证 `--yes --accept-terms` 不等待未来授权询问、显式同意、默认否、拒绝及取消；核对授权落盘、取消零 POST 和 termios 恢复。Linux/macOS CI 同步执行，不访问公网 CA。
 
 DNS 后端测试包括：registry 重复/未知 ID、编译 feature 集合、写请求前 checkpoint 确认、失败与部分结果、HTTP 精确字节/禁重试/禁重定向/收发上限/取消期限、Cloudflare 分页/同值所有权/错误脱敏/丢响应恢复/精确删除，以及条件 RRset 冲突重读、metadata 保留和不确定所有权。CLI loopback 测试使用真实 Cloudflare 状态机、实际文件恢复存储和 ACME 服务；PTY 额外核对后端选择及敏感输入不回显。真实 DNS/CA 验收不由这些 mock 代替。
+
+阿里云与 DNSPod 的 mock 测试验证签名字节、分页、所有权和清理边界。CLI 的 `signed_rpc` 测试把真实文件 checkpoint、跨进程租约、厂商 HTTP mock 和 ACME loopback 服务组合在同一签发流程中。覆盖已持久化 ID、创建响应丢失、恢复、TTL 回读和限频下限。独立 feature 矩阵验证未启用、单厂商启用和 registry 一致性。
+
+华为云测试对照官方 HWS GET/POST 签名向量，验证 marker 分页、TXT 引号/转义、多 publication 同 owner、意图与 ID 恢复、描述保留、最后一个值删除、变更身份拒绝、有界冲突与 pending、限频脱敏。CLI `signed_rpc` 同时覆盖华为云文件恢复、跨进程争用、丢响应和取消后的 ACME loopback 签发/清理。它证明本地契约，不证明云端 CAS 或真实厂商/公网 CA 验收。

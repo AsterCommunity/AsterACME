@@ -455,6 +455,7 @@ impl Operation {
         }
         let plan = self.record();
         let receipt = PublicationReceipt {
+            effective_ttl_seconds: None,
             record_id: record.id,
             ownership,
             record_name: plan.name.clone(),
