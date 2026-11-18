@@ -22,6 +22,8 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 注册的交互决策位于 commands/account/interaction：可注入提示接口测试邮箱选择和条款同意；终端适配使用 inquire，JSON/非终端从不提示。邮箱参数/配置/本地已有输入优先，空输入时可询问添加；条款依据已发现 URL 与已持久化接受 URL 比较，同意只作用于当前注册选项，由协议层保存实际 URL。--yes 与条款同意独立；拒绝条款时已完成 directory GET，但未发送账户 POST，本地身份及联系人保留。
 
+`--auto-accept-new-terms` 是显式的信任委托：接受当前 directory 条款，并保存 `auto_accept_terms_updates` 供后续 ensure 使用；未授权账户仍要求精确 URL 同意。此授权信任 directory 返回的任何条款 URL，ToS 比较不是 directory 被篡改时的安全边界。条款 URL 仍精确持久化；普通 register/隐式 ensure 保留已有授权。终端的未来授权询问默认否，`--yes` 跳过该可选询问且不隐含授权；首次接受与后续 URL 更新的报告分开。
+
 参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。switch 支持位置 NAME 或 -n/--name，无注册、网络选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
 
 配置只读写 <data-dir>/config.toml，不支持独立 --config 或配置内 data_dir。ca 为 letsencrypt/zerossl/google 生产预设，ca_directory 为显式自定义 URL，两者互斥。默认生产 Let’s Encrypt，生产代码无 staging/test 提供商或按构建类型切换。测试地址只在独立测试命令中显式传入。配置加载校验版本、账户名、URL、超时和邮箱；旧 directory/server 参数不保留别名。

@@ -146,7 +146,10 @@ pub(crate) async fn execute(
             }
             local(&context, signer.as_ref(), name, verify).await
         }
-        operation => remote(context, signer, name, options, operation, reused, cli).await,
+        operation => {
+            let transport = context.transport_options(&options)?;
+            remote(context, signer, options, operation, reused, transport, cli).await
+        }
     }
 }
 
@@ -427,13 +430,14 @@ async fn local(
 async fn remote(
     context: CliContext,
     signer: Arc<dyn JwsSigner>,
-    name: String,
     options: AccountArgs,
     operation: Operation,
     reused: bool,
+    transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
-    let transport = context.transport_options(&options)?;
+    let name = context.name.clone();
+    let yes = options.yes;
     let interactive = crate::common::terminal::interactive(options.json);
     let account_user_agent = options.user_agent.clone();
     let mut persist_contacts = !options.contact.is_empty();
@@ -503,6 +507,7 @@ async fn remote(
                 .as_ref()
                 .is_some_and(|record| record.auto_accept_terms_updates),
             interactive,
+            yes,
             &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
         )?;
     }
@@ -521,7 +526,7 @@ async fn remote(
             saved
                 .as_ref()
                 .and_then(|record| record.accepted_terms_url.as_ref())
-                != Some(current)
+                .is_some_and(|accepted| accepted != current)
         });
     let service = AccountService::new(client, context.store);
     let account = match operation {
@@ -639,3 +644,6 @@ pub(super) fn registration_options(
         external_account,
     })
 }
+
+#[cfg(test)]
+mod tests;

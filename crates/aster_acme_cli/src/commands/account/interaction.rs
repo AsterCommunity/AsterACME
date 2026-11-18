@@ -127,9 +127,14 @@ pub(super) fn auto_accept_terms_updates(
     current: Option<&AcmeUrl>,
     already_authorized: bool,
     interactive: bool,
+    yes: bool,
     prompts: &mut impl RegistrationPrompts,
 ) -> CliResult<()> {
-    if current.is_none() || options.auto_accept_terms_updates || already_authorized || !interactive
+    if current.is_none()
+        || options.auto_accept_terms_updates
+        || already_authorized
+        || !interactive
+        || yes
     {
         return Ok(());
     }
@@ -325,6 +330,43 @@ mod tests {
     }
 
     #[test]
+    fn yes_never_prompts_or_grants_future_consent_even_on_a_terminal() {
+        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+        for interactive in [false, true] {
+            let mut options = RegistrationOptions {
+                terms_accepted: true,
+                ..RegistrationOptions::default()
+            };
+            let mut never_prompt = prompts(&[], None);
+            auto_accept_terms_updates(
+                &mut options,
+                Some(&current),
+                false,
+                interactive,
+                true,
+                &mut never_prompt,
+            )
+            .unwrap();
+            assert!(!options.auto_accept_terms_updates);
+            assert_eq!(never_prompt.messages.len(), 0);
+        }
+        let mut explicit = RegistrationOptions {
+            auto_accept_terms_updates: true,
+            ..RegistrationOptions::default()
+        };
+        auto_accept_terms_updates(
+            &mut explicit,
+            Some(&current),
+            false,
+            true,
+            true,
+            &mut prompts(&[], None),
+        )
+        .unwrap();
+        assert!(explicit.auto_accept_terms_updates);
+    }
+
+    #[test]
     fn auto_accept_terms_requires_explicit_interactive_yes() {
         let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
         let mut options = RegistrationOptions::default();
@@ -333,6 +375,7 @@ mod tests {
             Some(&current),
             false,
             true,
+            false,
             &mut prompts(&[false], None),
         )
         .unwrap();
@@ -342,6 +385,7 @@ mod tests {
             Some(&current),
             false,
             true,
+            false,
             &mut prompts(&[true], None),
         )
         .unwrap();
@@ -349,6 +393,7 @@ mod tests {
         auto_accept_terms_updates(
             &mut RegistrationOptions::default(),
             Some(&current),
+            false,
             false,
             false,
             &mut prompts(&[], None),
@@ -360,6 +405,7 @@ mod tests {
             Some(&current),
             true,
             true,
+            false,
             &mut already,
         )
         .unwrap();

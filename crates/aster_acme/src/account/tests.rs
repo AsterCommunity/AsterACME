@@ -366,6 +366,74 @@ async fn auto_acceptance_updates_terms_url_and_survives_implicit_ensure() {
     assert!(no_terms_record.auto_accept_terms_updates);
     assert_eq!(no_terms_record.accepted_terms_url, None);
 }
+
+#[tokio::test]
+async fn enabling_delegation_on_existing_records_is_durable_and_failed_saves_never_post() {
+    let (server, mut client) = server(local_options()).await;
+    client.directory.meta.terms_of_service =
+        Some(AcmeUrl::new("https://ca.example/terms").unwrap());
+    let store = Arc::new(MemoryStore::default());
+    let service = AccountService::new(Arc::new(client), store.clone());
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let thumb = key.jwk().unwrap().thumbprint().unwrap();
+    let directory = service.client.directory_url();
+    let lease = Arc::new(()) as Arc<dyn AccountLease>;
+    let before = service
+        .load_or_prepare(
+            directory,
+            &thumb,
+            &RegistrationOptions {
+                terms_accepted: true,
+                ..RegistrationOptions::default()
+            },
+            key.algorithm(),
+            &lease,
+        )
+        .await
+        .unwrap();
+    assert!(!before.auto_accept_terms_updates);
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert!(
+        service
+            .register_or_recover(
+                &key,
+                RegistrationOptions {
+                    auto_accept_terms_updates: true,
+                    ..RegistrationOptions::default()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(*store.record.lock().await, Some(before));
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == "POST")
+            .count(),
+        0
+    );
+    store.fail_save.store(false, Ordering::SeqCst);
+    let authorized = service
+        .load_or_prepare(
+            directory,
+            &thumb,
+            &RegistrationOptions {
+                auto_accept_terms_updates: true,
+                ..RegistrationOptions::default()
+            },
+            key.algorithm(),
+            &lease,
+        )
+        .await
+        .unwrap();
+    assert!(authorized.auto_accept_terms_updates);
+    assert_eq!(*store.record.lock().await, Some(authorized));
+}
+
 #[async_trait]
 impl AccountStore for MemoryStore {
     async fn lock_account(

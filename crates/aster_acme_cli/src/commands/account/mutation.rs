@@ -80,6 +80,18 @@ pub(super) async fn update_contacts(
         &cli.output,
     )?;
     let transport = context.transport_options(&options)?;
+    submit_contacts(context, signer, contacts, transport, cli).await
+}
+
+/// Execute the confirmed replacement using explicit HTTP policy, leaving selection
+/// and terminal interaction in the command adapter above.
+pub(super) async fn submit_contacts(
+    context: CliContext,
+    signer: Arc<dyn aster_acme::crypto::JwsSigner>,
+    contacts: Vec<String>,
+    transport: aster_acme::transport::TransportOptions,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     let account = AccountService::new(client, context.store)
         .update_contacts(signer.as_ref(), contacts)
