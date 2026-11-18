@@ -344,7 +344,7 @@ fn missing_required_response_fields_unknown_error_codes_and_duplicate_keys_fail(
 #[test]
 fn accepted_rfc_json_examples_match_the_implemented_wire_schema() {
     let rfc = include_str!(
-        "../../../docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md"
+        "../../../developer-docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md"
     );
     assert_eq!(validate_rfc_examples(rfc), 7);
     assert_eq!(validate_rfc_examples(&rfc.replace('\n', "\r\n")), 7);

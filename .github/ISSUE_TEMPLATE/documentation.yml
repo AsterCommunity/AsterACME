@@ -10,7 +10,7 @@ body:
     attributes:
       label: Page or section
       description: Link the page, heading, or file path that needs work.
-      placeholder: e.g. docs/cli-contract.md, README.zh.md, or a crate README
+      placeholder: e.g. developer-docs/cli-contract.md, README.zh.md, or a crate README
     validations:
       required: true
 
