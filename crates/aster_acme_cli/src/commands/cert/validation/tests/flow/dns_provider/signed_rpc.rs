@@ -210,8 +210,8 @@ impl Cloud {
             }
             "UpdateDomainRecordRemark" => {
                 assert_eq!(params["RecordId"], "23");
-                let remark = params["Remark"].replace("%3A", ":");
-                assert!(remark.starts_with("asteracme:"));
+                let remark = params["Remark"].replace("%2D", "-");
+                assert!(remark.starts_with("asteracme-"));
                 let record = remote
                     .as_mut()
                     .expect("remark update requires created record");
@@ -258,7 +258,7 @@ impl Cloud {
                 assert_eq!(body["RecordLine"], "默认");
                 assert_eq!(body["TTL"], 600);
                 assert!(remote.is_none());
-                assert!(body["Remark"].as_str().unwrap().starts_with("asteracme:"));
+                assert!(body["Remark"].as_str().unwrap().starts_with("asteracme-"));
                 *remote = Some(
                     json!({"RecordId":23,"Name":"delegated","Type":"TXT","Value":body["Value"],
                     "Remark":body["Remark"],"TTL":600,"LineId":"0","Status":"ENABLE"}),

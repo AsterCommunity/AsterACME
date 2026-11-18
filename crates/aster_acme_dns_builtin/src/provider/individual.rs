@@ -1,6 +1,6 @@
 //! Shared lifecycle for vendors that create and delete individual DNS records.
 use crate::provider::{
-    marker::publication,
+    marker::{is_publication_marker, matches_publication, publication},
     retry::ReadRetry,
     rpc::{error, invalid, transport},
 };
@@ -452,7 +452,10 @@ impl<A: IndividualApi> Operation<A> {
                     return Err(invalid(false));
                 }
             }
-            if A::MARKING == RecordMarking::Inline && record.marker.as_deref() == Some(&self.marker)
+            if A::MARKING == RecordMarking::Inline
+                && record.marker.as_deref().is_some_and(|marker| {
+                    matches_publication(marker, &self.record().publication_id)
+                })
             {
                 if !same || self.marked.is_some() {
                     return Err(not_owned(true));
@@ -466,7 +469,7 @@ impl<A: IndividualApi> Operation<A> {
                 && record
                     .marker
                     .as_ref()
-                    .is_none_or(|marker| !marker.starts_with("asteracme:"))
+                    .is_none_or(|marker| !is_publication_marker(marker))
             {
                 self.borrowable = Some(record);
             }
@@ -568,7 +571,9 @@ impl<A: IndividualApi> Operation<A> {
             || !record.default_line
             || ((A::MARKING == RecordMarking::Inline
                 || matches!(saved.phase, Phase::Marked { .. }))
-                && record.marker.as_deref() != Some(&self.marker))
+                && !record.marker.as_deref().is_some_and(|marker| {
+                    matches_publication(marker, &self.record().publication_id)
+                }))
         {
             return Err(not_owned(false));
         }

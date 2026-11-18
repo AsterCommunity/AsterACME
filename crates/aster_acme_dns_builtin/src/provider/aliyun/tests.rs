@@ -149,7 +149,7 @@ fn mark_created(machine: &mut dyn ProviderOperation) -> RecoveryState {
     assert!(
         request
             .url
-            .ends_with("?RecordId=64&Remark=asteracme%3Apublication-1")
+            .ends_with("?RecordId=64&Remark=asteracme-publication-1")
     );
     saved(
         reply(machine, &json!({"RequestId":"remark-request"})).unwrap(),

@@ -1,23 +1,44 @@
 //! Huawei TXT presentation and value-bound publication markers.
+use crate::provider::marker::{is_publication_marker, matches_publication};
 use aster_acme_dns::{ProviderError, backend::configuration_error};
 pub(super) fn has_marker(description: &str, marker: &str) -> bool {
-    description.split(';').any(|part| part == marker)
+    description
+        .split(';')
+        .any(|part| matches_publication_marker(part, marker))
 }
 
 pub(super) fn has_foreign_marker(description: &str, marker: &str) -> bool {
+    let expected_hash = marker.split_once('=').map(|(_, hash)| hash);
     description
         .split(';')
-        .filter(|part| part.starts_with("asteracme:"))
+        .filter(|part| is_publication_marker(part))
         .any(|part| {
-            part != marker
-                && part.split_once('=').zip(marker.split_once('=')).is_none_or(
-                    |((_, left), (_, right))| {
-                        left.len() != 64
-                            || !left.bytes().all(|b| b.is_ascii_hexdigit())
-                            || left.eq_ignore_ascii_case(right)
-                    },
-                )
+            if matches_publication_marker(part, marker) {
+                return false;
+            }
+            let Some(expected_hash) = expected_hash else {
+                return true;
+            };
+            part.split_once('=').is_none_or(|(_, hash)| {
+                hash.len() != 64
+                    || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || hash.eq_ignore_ascii_case(expected_hash)
+            })
         })
+}
+
+fn matches_publication_marker(actual: &str, expected: &str) -> bool {
+    if actual == expected {
+        return true;
+    }
+    let Some((expected_id, expected_hash)) = expected
+        .strip_prefix("asteracme-")
+        .and_then(|value| value.split_once('='))
+    else {
+        return false;
+    };
+    actual == format!("asteracme:{expected_id}={expected_hash}")
+        || matches_publication(actual, expected_id)
 }
 
 pub(super) fn add_marker(description: &str, marker: &str) -> Result<String, ProviderError> {

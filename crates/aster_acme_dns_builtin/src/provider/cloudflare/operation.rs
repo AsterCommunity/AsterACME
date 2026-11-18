@@ -1,7 +1,7 @@
 //! Cloudflare publication reconciliation and exact-object cleanup transitions.
 use crate::provider::{
     cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone},
-    marker::publication,
+    marker::{is_publication_marker, matches_publication, publication},
     retry::ReadRetry,
 };
 use aster_acme_dns::operation::HttpMethod;
@@ -189,7 +189,10 @@ impl Operation {
         };
         if record.id != request.receipt.record_id
             || !self.same_record(&record)
-            || record.comment.as_deref() != Some(&self.tag())
+            || !record
+                .comment
+                .as_deref()
+                .is_some_and(|comment| matches_publication(comment, &self.record().publication_id))
         {
             return Err(error(
                 ProviderErrorCode::RecordNotOwned,
@@ -223,10 +226,14 @@ impl Operation {
                 return self.list();
             }
         }
-        let tag = self.tag();
         let mut candidates = Vec::new();
         for record in std::mem::take(&mut self.found) {
-            if record.comment.as_deref() == Some(&tag) && !self.same_record(&record) {
+            if record
+                .comment
+                .as_deref()
+                .is_some_and(|comment| matches_publication(comment, &self.record().publication_id))
+                && !self.same_record(&record)
+            {
                 return Err(error(
                     ProviderErrorCode::RecordConflict,
                     "Cloudflare publication tag refers to a different record",
@@ -245,23 +252,26 @@ impl Operation {
             ));
         }
         if let Some(record) = candidates.pop() {
-            let ownership = if record.comment.as_deref() == Some(&tag) {
-                RecordOwnership::Created
-            } else if self.creation_uncertain {
-                return Err(uncertain_creation());
-            } else if record
-                .comment
-                .as_ref()
-                .is_some_and(|comment| comment.starts_with("asteracme:"))
-            {
-                return Err(error(
-                    ProviderErrorCode::RecordConflict,
-                    "TXT value belongs to another active publication",
-                    SideEffect::None,
-                ));
-            } else {
-                RecordOwnership::Preexisting
-            };
+            let ownership =
+                if record.comment.as_deref().is_some_and(|comment| {
+                    matches_publication(comment, &self.record().publication_id)
+                }) {
+                    RecordOwnership::Created
+                } else if self.creation_uncertain {
+                    return Err(uncertain_creation());
+                } else if record
+                    .comment
+                    .as_ref()
+                    .is_some_and(|comment| is_publication_marker(comment))
+                {
+                    return Err(error(
+                        ProviderErrorCode::RecordConflict,
+                        "TXT value belongs to another active publication",
+                        SideEffect::None,
+                    ));
+                } else {
+                    RecordOwnership::Preexisting
+                };
             return self.receipt(record, ownership);
         }
         if self.creation_uncertain {
@@ -577,7 +587,9 @@ impl ProviderOperation for Operation {
                     Err(error) => return Err(error),
                 };
                 let record = response.result.ok_or_else(invalid_response)?;
-                if record.comment.as_deref() != Some(&self.tag()) {
+                if !record.comment.as_deref().is_some_and(|comment| {
+                    matches_publication(comment, &self.record().publication_id)
+                }) {
                     return Err(invalid_response());
                 }
                 self.receipt(record, RecordOwnership::Created)

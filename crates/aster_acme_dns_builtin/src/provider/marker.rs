@@ -5,7 +5,30 @@
     feature = "tencent_cloud"
 ))]
 pub(super) fn publication(id: &str) -> String {
-    format!("asteracme:{id}")
+    format!("asteracme-{id}")
+}
+
+#[cfg(any(
+    feature = "aliyun",
+    feature = "cloudflare",
+    feature = "huawei_cloud",
+    feature = "tencent_cloud"
+))]
+pub(super) fn is_publication_marker(marker: &str) -> bool {
+    marker
+        .strip_prefix("asteracme-")
+        .or_else(|| marker.strip_prefix("asteracme:"))
+        .is_some_and(|id| !id.is_empty())
+}
+
+#[cfg(any(
+    feature = "aliyun",
+    feature = "cloudflare",
+    feature = "huawei_cloud",
+    feature = "tencent_cloud"
+))]
+pub(super) fn matches_publication(marker: &str, id: &str) -> bool {
+    marker == publication(id) || marker == format!("asteracme:{id}")
 }
 
 #[cfg(feature = "huawei_cloud")]

@@ -84,7 +84,7 @@ fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
     );
     assert!(request.mutation);
     let body: Value = serde_json::from_slice(&request.body).unwrap();
-    assert_eq!(body["comment"], "asteracme:publication-1");
+    assert_eq!(body["comment"], "asteracme-publication-1");
     assert_eq!(body["content"], "txt-value");
     assert!(
         !serde_json::to_string(&saved)

@@ -47,7 +47,7 @@ Cloudflare 使用单记录对象及 publication comment，不使用 RRset 全量
 
 - 公网 zone 使用 marker 分页，按最终 TXT owner 的最长标签后缀选取。zone ID/名称随 publication 保存；重启继续使用该 zone。`project_id` 和 region 组成非秘密 binding，凭据可轮换。
 - 默认线路 RRset 的 `records` 按 TXT quoted-string 编码；读取能识别多 chunk 和十进制转义，同逻辑值有多个表示时拒绝歧义。合并保留当前其他 wire 值；PUT 只发送 `records` 和 description，使 TTL 和其他未修改字段留在服务端。
-- description 中的 `asteracme:<publication_id>=<sha256(value)>` 按分号分隔，保留用户原文和其他 publication 标记。marker 与值绑定，根域/通配符不同值可共享同一 RRset。超过 255 字节或所有权不一致时拒绝写入；不为扩容截断用户描述。
+- description 中的 `asteracme-<publication_id>=<sha256(value)>` 按分号分隔，保留用户原文和其他 publication 标记。读取兼容早期冒号格式；新写入使用连字符以满足阿里云备注格式约束。marker 与值绑定，根域/通配符不同值可共享同一 RRset。超过 255 字节或所有权不一致时拒绝写入；不为扩容截断用户描述。
 - 无标记同值保留为 preexisting；其他 publication 同值拒绝借用。创建/合并前保存意图，已知响应先保存真实 RRset ID，再重读 ACTIVE 状态、ID、zone、owner、TXT 值与 marker 后产生回执。响应丢失仅在本次意图和完整 marker 可对账时接管，不凭值存在重放写入。
 - 清理重新读当前集合，仅减去本 publication 有证据的值和 marker。有其他值时 PUT；没有剩余值才 DELETE。核验 ID 与 marker 后也存在外部竞态。写后再读取确认，后续重复清理使用终态 checkpoint，不再次删除后来重建的记录。华为云对空 description 的更新可能保留原值，因此不承诺清空最后一个 description 标记；过期标记仍不能绕过新 publication 的所有权校验。
 - 仅对结构化明确 409 拒绝保存证据后重读合并，单次调用最多四次写入；429/认证/授权等错误结构化脱敏，限频下限随签发 journal 持久化。不确定响应保留意图；pending 状态有界轮询，不能把 HTTP 200/202 当作完成。

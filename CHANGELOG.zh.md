@@ -8,7 +8,7 @@
 
 - **华为云 DNS** — CLI 默认构建包含该后端，嵌入式宿主使用 `huawei_cloud` 显式启用。`project_id` 可省略并按所选 region 通过 IAM 自动发现；`region` 可省略，默认 `cn-north-4`。公网 zone 发现、HWS 签名和持久 RRset 恢复采用尽力所有权：读取与 PUT/DELETE 之间的外部并发修改可能被覆盖或误删，不保证原子隔离（#41）。
 
-- **阿里云云解析 DNS 与腾讯云 DNSPod** — CLI 默认包含这两个后端，精简构建可分别选择 `dns-aliyun` 和 `dns-tencent-cloud`。四家内置 provider 统一使用 `asteracme:<publication_id>` 所有权备注/标记；阿里云在创建成功后通过 `UpdateDomainRecordRemark` 写入，并在备注失败时只重试备注阶段，不重复创建 TXT。两者发现并保存最终发布目标的 zone，在回执中记录实际 TXT TTL，并在清理前核验记录。DNSPod 用发布备注对账丢失的创建响应。阿里云显式请求域名详细属性以发现最小 TTL，识别文档定义的记录状态，须保存创建响应中的 `RecordId`，并拒绝借用已有同值记录。（#40、#39）
+- **阿里云云解析 DNS 与腾讯云 DNSPod** — CLI 默认包含这两个后端，精简构建可分别选择 `dns-aliyun` 和 `dns-tencent-cloud`。四家内置 provider 统一使用 `asteracme-<publication_id>` 所有权备注/标记，读取兼容早期冒号格式，新写入使用满足厂商格式约束的连字符格式；阿里云在创建成功后通过 `UpdateDomainRecordRemark` 写入，并在备注失败时只重试备注阶段，不重复创建 TXT。两者发现并保存最终发布目标的 zone，在回执中记录实际 TXT TTL，并在清理前核验记录。DNSPod 用发布备注对账丢失的创建响应。阿里云显式请求域名详细属性以发现最小 TTL，识别文档定义的记录状态，须保存创建响应中的 `RecordId`，并拒绝借用已有同值记录。（#40、#39）
 
 - **库嵌入签发示例** — `cargo run -p aster_acme --example embedded_issuance` 走完完整嵌入路径：CA 发现、经 `AccountService` 注册或复用账户、嵌入方实现的 HTTP-01 webroot `ChallengeSolver`、按 `IssueStore` 契约恢复已保存请求，以及产物提升。示例默认指向 Let's Encrypt staging 并使用临时 data-dir，随 workspace CI 编译；双语 README 快速开始将其作为 library-first 入口链接（#33）。
 - **DNS 发布 TTL** — 通过 `provider add/update --ttl-seconds` 配置 TXT 请求 TTL（默认 120，RFC 2181 范围 0–2147483647），恢复和 Profile 修改不改变已有发布计划中的 TTL。厂商限制仍归各 backend，本地传播观察保留现有建议性行为。

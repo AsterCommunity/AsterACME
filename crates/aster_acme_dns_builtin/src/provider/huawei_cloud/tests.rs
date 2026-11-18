@@ -434,7 +434,7 @@ fn descriptions_preserve_user_text_and_bound_markers() {
 
 fn marker(id: &str, value: &str) -> String {
     format!(
-        "asteracme:{id}={}",
+        "asteracme-{id}={}",
         crate::provider::rpc::sha256(value.as_bytes())
     )
 }
