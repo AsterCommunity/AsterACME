@@ -160,6 +160,28 @@ fn lost_create_response_reconciles_tag_without_repeating_post() {
 }
 
 #[test]
+fn api_errors_report_status_and_safe_provider_code_without_raw_messages() {
+    let mut machine = begin(None);
+    let Err(error) = machine.advance(ProviderEvent::Http(Ok(HttpResponse {
+        status: 403,
+        headers: vec![("cf-ray".into(), b"ray-123_abc".to_vec())],
+        body: serde_json::to_vec(&json!({
+            "success": false,
+            "errors": [{"code": 10000, "message": "secret-sentinel"}]
+        }))
+        .unwrap(),
+    }))) else {
+        panic!("API rejection unexpectedly succeeded")
+    };
+    assert_eq!(error.code, ProviderErrorCode::AuthorizationDenied);
+    assert_eq!(error.provider_code.as_deref(), Some("10000"));
+    assert!(error.message.contains("HTTP 403"));
+    assert!(error.message.contains("10000"));
+    assert!(error.message.contains("ray-123_abc"));
+    assert!(!error.message.contains("secret-sentinel"));
+}
+
+#[test]
 fn publication_id_respects_cloudflare_comment_length_limit() {
     let mut publication = record();
     publication.publication_id = "a".repeat(90);

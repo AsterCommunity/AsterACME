@@ -1,3 +1,4 @@
+use super::{annotate_provider_error, request_diagnostic};
 use crate::{
     DnsRecord, ProviderContext, ProviderError, ProviderErrorCode, ProviderExecution,
     RecordOwnership, SideEffect,
@@ -17,6 +18,40 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+#[test]
+fn request_diagnostics_keep_safe_actions_and_status_but_never_url_queries() {
+    let request = HttpRequest {
+        method: "POST".into(),
+        url: "https://api.example.test/v2/zones?token=secret-sentinel".into(),
+        headers: vec![("x-tc-action".into(), "DescribeRecordList".into())],
+        body: b"secret-sentinel".to_vec(),
+        mutation: false,
+    };
+    assert_eq!(request_diagnostic(&request), "DescribeRecordList");
+
+    let request = HttpRequest {
+        headers: vec![("x-tc-action".into(), "unsafe action\nsecret".into())],
+        ..request
+    };
+    let action = request_diagnostic(&request);
+    assert!(action.contains("/v2/zones"));
+    assert!(!action.contains("secret"));
+    let error = annotate_provider_error(
+        ProviderError {
+            code: ProviderErrorCode::InternalError,
+            message: "provider failure".into(),
+            side_effect: SideEffect::None,
+            retry_after_seconds: None,
+            provider_code: None,
+        },
+        Some(action),
+        Some(403),
+    );
+    assert!(error.message.contains("HTTP 403"));
+    assert!(!error.message.contains("secret-sentinel"));
+}
+
 #[derive(Default, PartialEq)]
 enum CancellationPoint {
     #[default]

@@ -275,6 +275,7 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
     };
     assert_eq!(cleanup.len(), 1);
     assert!(record.authorizations[0].cleanup_pending);
+    assert!(diagnostics.text().contains("Adding 1 DNS TXT record(s)"));
     assert!(
         diagnostics
             .text()

@@ -1,5 +1,6 @@
 //! Best-effort Huawei `RRset` lifecycle; it never invents an atomic revision.
 use crate::provider::{
+    HttpMethod,
     huawei_cloud::{
         Config,
         api::{SignedRequest, decode_body, marker_from_next, payload},
@@ -105,6 +106,27 @@ enum Stage {
     SaveOutcome,
     Poll,
     Done,
+}
+
+#[derive(Clone, Copy)]
+enum HuaweiAction {
+    ListProjects,
+    ListZones,
+    ListRecordsets,
+    CreateRecordset,
+    UpdateRecordset,
+    DeleteRecordset,
+}
+
+impl HuaweiAction {
+    const fn method(self) -> HttpMethod {
+        match self {
+            Self::ListProjects | Self::ListZones | Self::ListRecordsets => HttpMethod::Get,
+            Self::CreateRecordset => HttpMethod::Post,
+            Self::UpdateRecordset => HttpMethod::Put,
+            Self::DeleteRecordset => HttpMethod::Delete,
+        }
+    }
 }
 
 struct Operation {
@@ -400,7 +422,7 @@ impl Operation {
 
     fn request(
         &self,
-        method: &str,
+        action: HuaweiAction,
         path: &str,
         query: &[(&str, &str)],
         body: &[u8],
@@ -409,7 +431,7 @@ impl Operation {
         let date = hws_date();
         SignedRequest {
             endpoint: &self.endpoint(),
-            method,
+            method: action.method().wire(),
             path,
             query,
             body,
@@ -429,7 +451,7 @@ impl Operation {
         let date = hws_date();
         SignedRequest {
             endpoint: &endpoint,
-            method: "GET",
+            method: HuaweiAction::ListProjects.method().wire(),
             path: "/v3/projects",
             query: &[("name", self.config.region.as_str())],
             body: &[],
@@ -498,7 +520,7 @@ impl Operation {
         }
         self.stage = Stage::ZonePage(page);
         self.request(
-            "GET",
+            HuaweiAction::ListZones,
             "/v2/zones",
             &[
                 ("type", "public"),
@@ -606,7 +628,7 @@ impl Operation {
         let marker = self.next_marker.clone().unwrap_or_default();
         self.stage = Stage::Recordsets(page);
         self.request(
-            "GET",
+            HuaweiAction::ListRecordsets,
             &format!("/v2/zones/{}/recordsets", zone.id),
             &[
                 ("name", self.record().name.trim_end_matches('.')),
@@ -841,21 +863,21 @@ impl Operation {
         self.stage = Stage::Write;
         match self.write_kind {
             WriteKind::Create => self.request(
-                "POST",
+                HuaweiAction::CreateRecordset,
                 &format!("/v2/zones/{}/recordsets", zone.id),
                 &[],
                 &body_bytes,
                 true,
             ),
             WriteKind::Update => self.request(
-                "PUT",
+                HuaweiAction::UpdateRecordset,
                 &format!("/v2/zones/{}/recordsets/{}", zone.id, self.recordset_id()?),
                 &[],
                 &body_bytes,
                 true,
             ),
             WriteKind::Delete => self.request(
-                "DELETE",
+                HuaweiAction::DeleteRecordset,
                 &format!("/v2/zones/{}/recordsets/{}", zone.id, self.recordset_id()?),
                 &[],
                 &[],

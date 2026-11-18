@@ -113,6 +113,10 @@ impl ProviderDns {
         if records.is_empty() {
             return Ok(outcome);
         }
+        self.progress.output.progress(
+            MessageKind::Info,
+            &format!("Adding {} DNS TXT record(s)", records.len()),
+        );
         let results = match self
             .provider
             .present(&self.context, &records, &scope(execution))

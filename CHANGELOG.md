@@ -16,6 +16,8 @@
 
 ### Changed
 
+- **DNS provider diagnostics** — Include the API action, HTTP status, validated provider error code, and safe request ID in native backend failures when available. Raw response bodies and provider messages remain hidden; the same CLI path also displays safe provider codes from external backends.
+
 - **Deployment verification** — Verify the full published file set against staged content, identity and applicable permissions before reload. Report completed replacement paths on failure while retaining the partial-set/retry contract; no whole-set atomicity or automatic rollback is promised. Refuse configuration and deployment when an existing destination cannot be normalized to prove ownership; restore access or remove the stale binding before retrying.
 - **Optional validation dependencies** — An empty `aster_acme_validation` feature set no longer brings Tokio into production dependencies. Check and test optional feature combinations independently.
 

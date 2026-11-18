@@ -1,4 +1,23 @@
 //! Feature-selected DNS provider backends; each vendor is an independent feature.
+
+#[derive(Clone, Copy)]
+pub(super) enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+impl HttpMethod {
+    pub(super) const fn wire(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Delete => "DELETE",
+        }
+    }
+}
 #[cfg(feature = "aliyun")]
 pub mod aliyun;
 #[cfg(feature = "cloudflare")]

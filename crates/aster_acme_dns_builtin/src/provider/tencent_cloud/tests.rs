@@ -61,9 +61,33 @@ fn start(machine: &mut dyn ProviderOperation) {
         false,
     );
     let body: Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["Domain"], "child.validation.net");
     assert_eq!(body["DomainId"], 42);
     assert_eq!(body["SubDomain"], "target");
     assert_eq!(body["ErrorOnEmpty"], "no");
+}
+
+fn reconcile_failure(
+    machine: &mut dyn ProviderOperation,
+    records: &[Value],
+) -> aster_acme_dns::ProviderError {
+    let mut result = reply(machine, &list(records.to_owned()));
+    loop {
+        match result {
+            Err(error) => return error,
+            Ok(ProviderEffect::WaitUntil(_)) => {
+                let ProviderEffect::Http(request) = machine.advance(ProviderEvent::Timer).unwrap()
+                else {
+                    panic!("reconciliation timer must issue another list request")
+                };
+                assert!(request.headers.iter().any(|(name, value)| {
+                    name == "x-tc-action" && value == "DescribeRecordList"
+                }));
+                result = reply(machine, &list(records.to_owned()));
+            }
+            Ok(_) => panic!("unexpected reconciliation result"),
+        }
+    }
 }
 
 fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
@@ -72,14 +96,18 @@ fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
     let request = http(
         machine.advance(ProviderEvent::CheckpointSaved).unwrap(),
         "x-tc-action",
-        "CreateRecord",
+        "CreateTXTRecord",
         true,
     );
     assert_eq!(request.method, "POST");
     let body: Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(body["Domain"], "child.validation.net");
     assert_eq!(body["Remark"], "asteracme:publication-1");
+    assert_eq!(body["RecordLine"], "默认");
     assert_eq!(body["TTL"], 600);
+    assert_eq!(body["Status"], "ENABLE");
     assert_eq!(body["RecordLineId"], "0");
+    assert!(body.get("RecordType").is_none());
     cp
 }
 
@@ -91,14 +119,14 @@ fn tc3_signs_the_exact_json_bytes_with_utc_date_scope() {
         .authorization(
             "dnspod.tencentcloudapi.com",
             "dnspod",
-            "CreateRecord",
+            "CreateTXTRecord",
             1_551_113_065,
             body,
         )
         .unwrap();
     assert_eq!(
         authorization,
-        "TC3-HMAC-SHA256 Credential=AKID-example/2019-02-25/dnspod/tc3_request, SignedHeaders=content-type;host;x-tc-action, Signature=b18e43d156172ad009283b050d3fcca157142f57f74ce3fbf63cc353274138d6"
+        "TC3-HMAC-SHA256 Credential=AKID-example/2019-02-25/dnspod/tc3_request, SignedHeaders=content-type;host;x-tc-action, Signature=07ec967d2f8162c47e6d81785393aad535d8148fe19de841c78ed6c686fbac5c"
     );
     assert_ne!(
         authorization,
@@ -106,7 +134,7 @@ fn tc3_signs_the_exact_json_bytes_with_utc_date_scope() {
             .authorization(
                 "dnspod.tencentcloudapi.com",
                 "dnspod",
-                "CreateRecord",
+                "CreateTXTRecord",
                 1_551_113_065,
                 &[body, b"\n"].concat()
             )
@@ -207,7 +235,7 @@ fn matching_remark_recovers_lost_create_with_the_exact_id() {
             .unwrap();
         start(op.as_mut());
         assert_eq!(
-            fail(reply(op.as_mut(), &list(rows))).side_effect,
+            reconcile_failure(op.as_mut(), &rows).side_effect,
             SideEffect::Unknown
         );
     }
@@ -231,7 +259,7 @@ fn matching_remark_recovers_lost_create_with_the_exact_id() {
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&inspect.body).unwrap(),
-        json!({"DomainId":42,"RecordId":123})
+        json!({"Domain":"child.validation.net","DomainId":42,"RecordId":123})
     );
     let receipt = receipt(reply(op.as_mut(), &inspected()).unwrap());
     assert_eq!(receipt.ownership, RecordOwnership::Created);
@@ -247,7 +275,7 @@ fn cleanup_rechecks_the_saved_id_and_publication_marker() {
     let mut op = factory
         .start(ProviderAction::Present(record()), Some(created.clone()))
         .unwrap();
-    let inspect = http(
+    let _inspect = http(
         op.advance(ProviderEvent::Start).unwrap(),
         "x-tc-action",
         "DescribeRecord",
@@ -295,7 +323,10 @@ fn cleanup_rechecks_the_saved_id_and_publication_marker() {
         "DeleteRecord",
         true,
     );
-    assert_eq!(delete.body, inspect.body);
+    let delete_body: Value = serde_json::from_slice(&delete.body).unwrap();
+    assert_eq!(delete_body["Domain"], "child.validation.net");
+    assert_eq!(delete_body["DomainId"], 42);
+    assert_eq!(delete_body["RecordId"], 123);
     assert!(matches!(
         reply(op.as_mut(), &ok(json!({}))).unwrap(),
         ProviderEffect::Complete(ProviderOutcome::Cleaned(CleanupStatus::Removed))

@@ -128,7 +128,7 @@ fn intent(machine: &mut dyn ProviderOperation) -> RecoveryState {
 fn acs3_signs_exact_rfc3986_query_and_empty_wire_body() {
     // Independent Python hashlib/hmac + urllib reference based on the ACS3 canonical request.
     let request = keys().signed(
-        "AddDomainRecord",
+        crate::provider::aliyun::AliyunAction::AddDomainRecord,
         &[
             ("Value", "\"é +/=%~\""),
             ("RR", "_acme-challenge"),

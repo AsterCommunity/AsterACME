@@ -1,5 +1,6 @@
 //! Alibaba Cloud DNS RPC, API version 2015-01-09, signed with ACS3.
 use crate::provider::{
+    HttpMethod,
     individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, Zone, valid_id},
     rpc::{
         api_error, decode, hex, hmac256, invalid, key_field, query, settings, sha256, validate_keys,
@@ -24,6 +25,29 @@ pub const BACKEND_ID: &str = "com.astercosm.acme.dns.aliyun";
 const HOST: &str = "alidns.aliyuncs.com";
 const VERSION: &str = "2015-01-09";
 const MAX_TTL: u32 = 86400;
+
+#[derive(Clone, Copy)]
+enum AliyunAction {
+    DescribeDomains,
+    DescribeDomainInfo,
+    DescribeDomainRecords,
+    DescribeDomainRecordInfo,
+    AddDomainRecord,
+    DeleteDomainRecord,
+}
+
+impl AliyunAction {
+    const fn wire(self) -> &'static str {
+        match self {
+            Self::DescribeDomains => "DescribeDomains",
+            Self::DescribeDomainInfo => "DescribeDomainInfo",
+            Self::DescribeDomainRecords => "DescribeDomainRecords",
+            Self::DescribeDomainRecordInfo => "DescribeDomainRecordInfo",
+            Self::AddDomainRecord => "AddDomainRecord",
+            Self::DeleteDomainRecord => "DeleteDomainRecord",
+        }
+    }
+}
 
 const FIELDS: &[aster_acme_dns::backend::ConfigField] = &[
     key_field("access_key_id", "Alibaba Cloud AccessKey ID"),
@@ -81,7 +105,7 @@ impl DnsBackend for AliyunBackend {
 impl Keys {
     fn request(
         &self,
-        action: &str,
+        action: AliyunAction,
         parameters: &[(&str, &str)],
         mutation: bool,
     ) -> Result<HttpRequest, ProviderError> {
@@ -99,7 +123,7 @@ impl Keys {
 
     fn signed(
         &self,
-        action: &str,
+        action: AliyunAction,
         parameters: &[(&str, &str)],
         date: &str,
         nonce: &str,
@@ -110,19 +134,20 @@ impl Keys {
         let signed =
             "host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version";
         let canonical = format!(
-            "GET\n/\n{query}\nhost:{HOST}\nx-acs-action:{action}\nx-acs-content-sha256:{payload}\nx-acs-date:{date}\nx-acs-signature-nonce:{nonce}\nx-acs-version:{VERSION}\n\n{signed}\n{payload}"
+            "GET\n/\n{query}\nhost:{HOST}\nx-acs-action:{}\nx-acs-content-sha256:{payload}\nx-acs-date:{date}\nx-acs-signature-nonce:{nonce}\nx-acs-version:{VERSION}\n\n{signed}\n{payload}",
+            action.wire()
         );
         let to_sign = format!("ACS3-HMAC-SHA256\n{}", sha256(canonical.as_bytes()));
         let signature =
             hex(hmac256(self.access_key_secret.as_bytes(), to_sign.as_bytes()).as_ref());
         HttpRequest {
-            method: "GET".into(),
+            method: HttpMethod::Get.wire().into(),
             url: format!("https://{HOST}/?{query}"),
             headers: vec![
                 ("host".into(), HOST.into()),
                 ("accept".into(), "application/json".into()),
                 ("cache-control".into(), "no-store".into()),
-                ("x-acs-action".into(), action.into()),
+                ("x-acs-action".into(), action.wire().into()),
                 ("x-acs-content-sha256".into(), payload),
                 ("x-acs-date".into(), date.into()),
                 ("x-acs-signature-nonce".into(), nonce.into()),
@@ -225,7 +250,7 @@ impl IndividualApi for Keys {
 
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "DescribeDomains",
+            AliyunAction::DescribeDomains,
             &[
                 ("PageNumber", &page.to_string()),
                 ("PageSize", &PAGE_SIZE.to_string()),
@@ -261,7 +286,7 @@ impl IndividualApi for Keys {
 
     fn verify_zone(&self, zone: &Zone) -> Result<Option<HttpRequest>, ProviderError> {
         self.request(
-            "DescribeDomainInfo",
+            AliyunAction::DescribeDomainInfo,
             &[("DomainName", zone.name.trim_end_matches('.'))],
             false,
         )
@@ -283,7 +308,7 @@ impl IndividualApi for Keys {
 
     fn list(&self, zone: &Zone, relative: &str, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "DescribeDomainRecords",
+            AliyunAction::DescribeDomainRecords,
             &[
                 ("DomainName", zone.name.trim_end_matches('.')),
                 ("RRKeyWord", relative),
@@ -327,7 +352,11 @@ impl IndividualApi for Keys {
     }
 
     fn inspect(&self, _: &Zone, id: &str) -> Result<HttpRequest, ProviderError> {
-        self.request("DescribeDomainRecordInfo", &[("RecordId", id)], false)
+        self.request(
+            AliyunAction::DescribeDomainRecordInfo,
+            &[("RecordId", id)],
+            false,
+        )
     }
 
     fn inspected(
@@ -359,7 +388,7 @@ impl IndividualApi for Keys {
             .unwrap_or(600)
             .clamp(minimum_ttl, MAX_TTL);
         self.request(
-            "AddDomainRecord",
+            AliyunAction::AddDomainRecord,
             &[
                 ("DomainName", zone.name.trim_end_matches('.')),
                 ("RR", relative),
@@ -377,7 +406,7 @@ impl IndividualApi for Keys {
     }
 
     fn delete(&self, _: &Zone, id: &str) -> Result<HttpRequest, ProviderError> {
-        self.request("DeleteDomainRecord", &[("RecordId", id)], true)
+        self.request(AliyunAction::DeleteDomainRecord, &[("RecordId", id)], true)
     }
 
     fn deleted(&self, response: HttpResponse, id: &str) -> Result<CleanupStatus, ProviderError> {

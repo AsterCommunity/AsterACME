@@ -11,7 +11,11 @@ use aster_acme_dns::{
     routing::absolute_name,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 pub(super) const PAGE_SIZE: u32 = 100;
 const MAX_PAGES: u32 = 100;
@@ -65,6 +69,9 @@ pub(super) struct Page<T> {
 
 pub(super) trait IndividualApi: Send + Sync {
     const MARKED: bool;
+    fn reconcile_delay(&self) -> Option<Duration> {
+        None
+    }
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError>;
     fn zones(&self, response: HttpResponse, page: u32) -> Result<Page<Zone>, ProviderError>;
     fn verify_zone(&self, _zone: &Zone) -> Result<Option<HttpRequest>, ProviderError> {
@@ -124,6 +131,7 @@ enum Stage {
     Zones(u32),
     VerifyZone,
     List(u32),
+    Reconcile,
     Inspect,
     Send(HttpRequest),
     Created,
@@ -147,6 +155,7 @@ struct Operation<A> {
     borrowable: Option<Record>,
     total: Option<u32>,
     minimum_ttl: u32,
+    reconcile_attempts: u8,
 }
 
 impl<A: IndividualApi + 'static> OperationFactory for IndividualFactory<A> {
@@ -241,6 +250,7 @@ impl<A: IndividualApi + 'static> OperationFactory for IndividualFactory<A> {
             borrowable: None,
             total: None,
             minimum_ttl: 0,
+            reconcile_attempts: 0,
         }))
     }
 }
@@ -451,6 +461,18 @@ impl<A: IndividualApi> Operation<A> {
             return self.save_created(record.id);
         }
         if uncertain {
+            if let Some(delay) = self.api.reconcile_delay()
+                && self.reconcile_attempts < 6
+            {
+                self.reconcile_attempts += 1;
+                self.seen.clear();
+                self.same_value.clear();
+                self.marked = None;
+                self.borrowable = None;
+                self.total = None;
+                self.stage = Stage::Reconcile;
+                return Ok(ProviderEffect::WaitUntil(Instant::now() + delay));
+            }
             return Err(not_owned(true));
         }
         if !self.same_value.is_empty() {
@@ -550,6 +572,7 @@ impl<A: IndividualApi> ProviderOperation for Operation<A> {
             (Stage::List(page), ProviderEvent::Http(response)) => {
                 self.listed(response.map_err(transport)?, page)
             }
+            (Stage::Reconcile, ProviderEvent::Timer) => self.read(),
             (Stage::Inspect, ProviderEvent::Http(response)) => {
                 self.inspected(response.map_err(transport)?)
             }

@@ -1,5 +1,6 @@
 //! Tencent Cloud `DNSPod` API 2021-03-23 using TC3-HMAC-SHA256.
 use crate::provider::{
+    HttpMethod,
     individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, Zone},
     rpc::{api_error, decode, hex, hmac256, invalid, key_field, settings, sha256, validate_keys},
 };
@@ -11,9 +12,10 @@ use aster_acme_dns::{
     },
     operation::{HttpRequest, HttpResponse},
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use time::OffsetDateTime;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -22,6 +24,77 @@ const HOST: &str = "dnspod.tencentcloudapi.com";
 const SERVICE: &str = "dnspod";
 const VERSION: &str = "2021-03-23";
 const DEFAULT_LINE: &str = "0";
+
+#[derive(Clone, Copy)]
+enum DnsPodAction {
+    DescribeDomainList,
+    DescribeRecordList,
+    DescribeRecord,
+    CreateTxtRecord,
+    DeleteRecord,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct DescribeDomainListRequest {
+    offset: u32,
+    limit: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct DescribeRecordListRequest<'a> {
+    domain: &'a str,
+    domain_id: u64,
+    sub_domain: &'a str,
+    record_type: &'static str,
+    offset: u32,
+    limit: u32,
+    error_on_empty: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct DescribeRecordRequest<'a> {
+    domain: &'a str,
+    domain_id: u64,
+    record_id: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct DeleteRecordRequest<'a> {
+    domain: &'a str,
+    domain_id: u64,
+    record_id: u64,
+}
+
+impl DnsPodAction {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::DescribeDomainList => "DescribeDomainList",
+            Self::DescribeRecordList => "DescribeRecordList",
+            Self::DescribeRecord => "DescribeRecord",
+            Self::CreateTxtRecord => "CreateTXTRecord",
+            Self::DeleteRecord => "DeleteRecord",
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct CreateTxtRecordRequest<'a> {
+    domain: &'a str,
+    domain_id: u64,
+    sub_domain: &'a str,
+    record_line: &'static str,
+    record_line_id: &'static str,
+    value: &'a str,
+    #[serde(rename = "TTL")]
+    ttl: u32,
+    status: &'static str,
+    remark: &'a str,
+}
 
 const FIELDS: &[aster_acme_dns::backend::ConfigField] = &[
     key_field("secret_id", "Tencent Cloud SecretID"),
@@ -79,16 +152,16 @@ impl DnsBackend for TencentCloudBackend {
 impl Keys {
     fn request(
         &self,
-        action: &str,
-        body: &Value,
+        action: DnsPodAction,
+        body: &impl Serialize,
         mutation: bool,
     ) -> Result<HttpRequest, ProviderError> {
         let body = serde_json::to_vec(body)
             .map_err(|_| configuration_error("cannot encode DNSPod request"))?;
         let timestamp = OffsetDateTime::now_utc().unix_timestamp();
-        let authorization = self.authorization(HOST, SERVICE, action, timestamp, &body)?;
+        let authorization = self.authorization(HOST, SERVICE, action.wire(), timestamp, &body)?;
         Ok(HttpRequest {
-            method: "POST".into(),
+            method: HttpMethod::Post.wire().into(),
             url: format!("https://{HOST}/"),
             body,
             mutation,
@@ -98,7 +171,7 @@ impl Keys {
                     "content-type".into(),
                     "application/json; charset=utf-8".into(),
                 ),
-                ("x-tc-action".into(), action.into()),
+                ("x-tc-action".into(), action.wire().into()),
                 ("x-tc-timestamp".into(), timestamp.to_string()),
                 ("x-tc-version".into(), VERSION.into()),
                 ("authorization".into(), authorization),
@@ -194,10 +267,17 @@ struct InspectedRecord {
 impl IndividualApi for Keys {
     const MARKED: bool = true;
 
+    fn reconcile_delay(&self) -> Option<Duration> {
+        Some(Duration::from_secs(5))
+    }
+
     fn discover(&self, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "DescribeDomainList",
-            &json!({"Offset":(page - 1) * PAGE_SIZE, "Limit":PAGE_SIZE}),
+            DnsPodAction::DescribeDomainList,
+            &DescribeDomainListRequest {
+                offset: (page - 1) * PAGE_SIZE,
+                limit: PAGE_SIZE,
+            },
             false,
         )
     }
@@ -238,11 +318,16 @@ impl IndividualApi for Keys {
 
     fn list(&self, zone: &Zone, relative: &str, page: u32) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "DescribeRecordList",
-            &json!({
-                "DomainId": number(&zone.id)?, "SubDomain": relative, "RecordType": "TXT",
-                "Offset": (page - 1) * PAGE_SIZE, "Limit": PAGE_SIZE, "ErrorOnEmpty": "no",
-            }),
+            DnsPodAction::DescribeRecordList,
+            &DescribeRecordListRequest {
+                domain: zone.name.strip_suffix('.').unwrap_or(&zone.name),
+                domain_id: number(&zone.id)?,
+                sub_domain: relative,
+                record_type: "TXT",
+                offset: (page - 1) * PAGE_SIZE,
+                limit: PAGE_SIZE,
+                error_on_empty: "no",
+            },
             false,
         )
     }
@@ -292,8 +377,12 @@ impl IndividualApi for Keys {
 
     fn inspect(&self, zone: &Zone, id: &str) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "DescribeRecord",
-            &json!({"DomainId": number(&zone.id)?, "RecordId": number(id)?}),
+            DnsPodAction::DescribeRecord,
+            &DescribeRecordRequest {
+                domain: zone.name.strip_suffix('.').unwrap_or(&zone.name),
+                domain_id: number(&zone.id)?,
+                record_id: number(id)?,
+            },
             false,
         )
     }
@@ -332,12 +421,18 @@ impl IndividualApi for Keys {
         _: u32,
     ) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "CreateRecord",
-            &json!({
-                "DomainId": number(&zone.id)?, "SubDomain": relative, "RecordType": "TXT",
-                "RecordLineId": DEFAULT_LINE, "Value": record.value,
-                "TTL": record.ttl_seconds.unwrap_or(600).clamp(600, 604_800), "Remark": marker,
-            }),
+            DnsPodAction::CreateTxtRecord,
+            &CreateTxtRecordRequest {
+                domain: zone.name.strip_suffix('.').unwrap_or(&zone.name),
+                domain_id: number(&zone.id)?,
+                sub_domain: relative,
+                record_line: "默认",
+                record_line_id: DEFAULT_LINE,
+                value: &record.value,
+                ttl: record.ttl_seconds.unwrap_or(600).clamp(600, 604_800),
+                status: "ENABLE",
+                remark: marker,
+            },
             true,
         )
     }
@@ -353,8 +448,12 @@ impl IndividualApi for Keys {
 
     fn delete(&self, zone: &Zone, id: &str) -> Result<HttpRequest, ProviderError> {
         self.request(
-            "DeleteRecord",
-            &json!({"DomainId": number(&zone.id)?, "RecordId": number(id)?}),
+            DnsPodAction::DeleteRecord,
+            &DeleteRecordRequest {
+                domain: zone.name.strip_suffix('.').unwrap_or(&zone.name),
+                domain_id: number(&zone.id)?,
+                record_id: number(id)?,
+            },
             true,
         )
     }

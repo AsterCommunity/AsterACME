@@ -134,23 +134,34 @@ pub(super) fn api_error(
     mutation: bool,
     recognized: Option<(ProviderErrorCode, &'static str)>,
 ) -> ProviderError {
+    let body = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
+    let response_code = body.as_ref().and_then(safe_provider_code);
+    let request_id = body.as_ref().and_then(safe_request_id);
     // A vendor error from a server failure or timeout does not prove rejection.
     let trusted_rejection = matches!(response.status, 200 | 400..=499) && response.status != 408;
-    let (code, provider_code) = if trusted_rejection {
-        recognized.map_or_else(
-            || (status_code(response.status), None),
-            |(code, name)| (code, Some(name.into())),
-        )
+    let provider_code = response_code.or_else(|| {
+        trusted_rejection
+            .then_some(recognized)
+            .flatten()
+            .map(|(_, name)| name.into())
+    });
+    let code = if trusted_rejection {
+        recognized.map_or_else(|| status_code(response.status), |(code, _)| code)
     } else {
-        (status_code(response.status), None)
+        status_code(response.status)
     };
-    let side_effect = possible_effect(mutation && !(trusted_rejection && provider_code.is_some()));
-    let mut failure = error(
+    let side_effect = possible_effect(mutation && !(trusted_rejection && recognized.is_some()));
+    let mut failure = ProviderError {
         code,
-        "DNS API rejected or did not confirm the request",
+        message: api_message(
+            response.status,
+            provider_code.as_deref(),
+            request_id.as_deref(),
+        ),
         side_effect,
-    );
-    failure.provider_code = provider_code;
+        retry_after_seconds: None,
+        provider_code,
+    };
     if code == ProviderErrorCode::RateLimited {
         failure.retry_after_seconds = Some(
             response
@@ -177,6 +188,76 @@ pub(super) fn api_error(
     failure
 }
 
+fn api_message(status: u16, provider_code: Option<&str>, request_id: Option<&str>) -> String {
+    let mut message = match provider_code {
+        Some(provider_code) => format!(
+            "DNS API rejected or did not confirm the request (HTTP {status}, provider code {provider_code})"
+        ),
+        None => format!(
+            "DNS API rejected or did not confirm the request (HTTP {status}; provider code unavailable)"
+        ),
+    };
+    if let Some(request_id) = request_id {
+        use std::fmt::Write as _;
+        let _ = write!(message, ", request ID {request_id}");
+    }
+    message
+}
+
+fn safe_provider_code(body: &serde_json::Value) -> Option<String> {
+    let candidate = body
+        .get("Code")
+        .or_else(|| body.get("code"))
+        .or_else(|| body.get("error_code"))
+        .or_else(|| body.get("Error").and_then(|error| error.get("Code")))
+        .or_else(|| {
+            body.get("Response")
+                .and_then(|response| response.get("Error"))
+                .and_then(|error| error.get("Code"))
+        })
+        .and_then(serde_json::Value::as_str)?;
+    if (16..=128).contains(&candidate.len())
+        && (candidate.contains('.')
+            || matches!(
+                candidate,
+                "MissingParameter"
+                    | "InvalidParameter"
+                    | "RequestLimitExceeded"
+                    | "UnauthorizedOperation"
+                    | "InternalError"
+                    | "AuthFailure"
+            ))
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        Some(candidate.to_owned())
+    } else {
+        None
+    }
+}
+
+fn safe_request_id(body: &serde_json::Value) -> Option<String> {
+    let candidate = body
+        .get("RequestId")
+        .or_else(|| body.get("request_id"))
+        .or_else(|| body.get("requestId"))
+        .or_else(|| {
+            body.get("Response")
+                .and_then(|response| response.get("RequestId"))
+        })
+        .and_then(serde_json::Value::as_str)?;
+    if (16..=128).contains(&candidate.len())
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Some(candidate.to_owned())
+    } else {
+        None
+    }
+}
+
 fn status_code(status: u16) -> ProviderErrorCode {
     match status {
         401 => ProviderErrorCode::AuthenticationFailed,
@@ -194,4 +275,54 @@ pub(super) fn decode<T: DeserializeOwned>(
     mutation: bool,
 ) -> Result<T, ProviderError> {
     serde_json::from_value(value).map_err(|_| invalid(mutation))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{api_error, safe_provider_code, safe_request_id};
+    use aster_acme_dns::{ProviderErrorCode, SideEffect, operation::HttpResponse};
+    use serde_json::json;
+
+    #[test]
+    fn provider_api_errors_keep_safe_vendor_codes_without_echoing_messages() {
+        let response = HttpResponse {
+            status: 400,
+            headers: Vec::new(),
+            body: serde_json::to_vec(&json!({
+                "Response": {
+                    "Error": {
+                        "Code": "InvalidParameterValue.DomainId",
+                        "Message": "secret-key-must-never-appear"
+                    }
+                }
+            }))
+            .unwrap(),
+        };
+        let error = api_error(&response, false, None);
+        assert_eq!(error.code, ProviderErrorCode::InternalError);
+        assert_eq!(
+            error.provider_code.as_deref(),
+            Some("InvalidParameterValue.DomainId")
+        );
+        assert_eq!(error.side_effect, SideEffect::None);
+        assert!(error.message.contains("HTTP 400"));
+        assert!(error.message.contains("InvalidParameterValue.DomainId"));
+        assert!(!error.message.contains("secret-key"));
+    }
+
+    #[test]
+    fn unsafe_vendor_codes_are_not_exposed() {
+        let body = json!({"code": "bad code\nwith secret"});
+        assert_eq!(safe_provider_code(&body), None);
+        assert_eq!(safe_provider_code(&json!({"code": "dummysecret"})), None);
+    }
+
+    #[test]
+    fn provider_errors_include_safe_request_ids_but_reject_arbitrary_values() {
+        assert_eq!(
+            safe_request_id(&json!({"Response":{"RequestId":"req-123_abcdefghijk"}})).as_deref(),
+            Some("req-123_abcdefghijk")
+        );
+        assert_eq!(safe_request_id(&json!({"RequestId":"secret value"})), None);
+    }
 }

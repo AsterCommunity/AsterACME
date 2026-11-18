@@ -239,8 +239,10 @@ impl Cloud {
                 let count = usize::from(remote.is_some());
                 json!({"RecordCountInfo":{"TotalCount":count,"ListCount":count},"RecordList":remote.iter().collect::<Vec<_>>()})
             }
-            "CreateRecord" => {
+            "CreateTXTRecord" => {
+                assert_eq!(body["Domain"], "validation.net");
                 assert_eq!(body["SubDomain"], "delegated");
+                assert_eq!(body["RecordLine"], "默认");
                 assert_eq!(body["TTL"], 600);
                 assert!(remote.is_none());
                 assert!(body["Remark"].as_str().unwrap().starts_with("asteracme:"));
@@ -371,7 +373,7 @@ impl HttpExecutor for Cloud {
             .iter()
             .find(|(key, _)| matches!(key.as_str(), "x-acs-action" | "x-tc-action"))
             .map_or("", |(_, value)| value.as_str());
-        let creating = matches!(action, "AddDomainRecord" | "CreateRecord")
+        let creating = matches!(action, "AddDomainRecord" | "CreateTXTRecord")
             || request.method == "POST" && action.is_empty();
         if request.mutation {
             let cp = self.checkpoint();
