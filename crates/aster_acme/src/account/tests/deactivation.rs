@@ -32,6 +32,7 @@ pub(super) async fn fixture(
         deactivation: DeactivationState::NotRequested,
         key_rotation: None,
         accepted_terms_url: None,
+        auto_accept_terms_updates: false,
         state: AccountRecordState::Registered,
     });
     (

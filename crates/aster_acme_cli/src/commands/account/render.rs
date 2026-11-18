@@ -33,6 +33,7 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
             account,
             reused,
             action,
+            auto_accepted_terms,
         } => {
             use crate::commands::account::report::RemoteAction;
             match action {
@@ -48,7 +49,15 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
                         aster_acme_core::protocol::AccountStatus::Valid => String::new(),
                         other => format!(" Status: {}.", safe(&String::from(other.clone()))),
                     };
-                    success(&format!("{verb} account {}.{status}", safe(name)), color)
+                    let message = if *auto_accepted_terms {
+                        format!(
+                            "{verb} account {}.{status} Automatically accepted the updated CA terms and saved future-update consent.",
+                            safe(name)
+                        )
+                    } else {
+                        format!("{verb} account {}.{status}", safe(name))
+                    };
+                    success(&message, color)
                 }
             }
         }
@@ -288,6 +297,15 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
         if let Some(url) = &record.accepted_terms_url {
             lines.push(field("Accepted terms:", &safe(url.as_str()), color));
         }
+        lines.push(field(
+            "Automatic terms updates:",
+            if record.auto_accept_terms_updates {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            color,
+        ));
     }
     let (query, query_style) = if local.verified {
         ("account refreshed", Style::Green)
@@ -425,6 +443,7 @@ pub(super) mod tests {
             let report = AccountReport::Remote {
                 name: "work".into(),
                 account: account.clone(),
+                auto_accepted_terms: false,
                 reused: false,
                 action,
             };
@@ -440,6 +459,20 @@ pub(super) mod tests {
         let report = AccountReport::Remote {
             name: "work".into(),
             account: account.clone(),
+            auto_accepted_terms: true,
+            reused: false,
+            action: RemoteAction::Register,
+        };
+        let text = render(&report, crate::common::session::Format::plain(false)).unwrap();
+        assert!(text.contains("Automatically accepted the updated CA terms"));
+        assert_eq!(
+            json_value(&report)["auto_accepted_terms"].as_bool(),
+            Some(true)
+        );
+        let report = AccountReport::Remote {
+            name: "work".into(),
+            account: account.clone(),
+            auto_accepted_terms: false,
             reused: true,
             action: RemoteAction::Register,
         };
@@ -453,6 +486,7 @@ pub(super) mod tests {
         let report = AccountReport::Remote {
             name: "work".into(),
             account: inactive,
+            auto_accepted_terms: false,
             reused: false,
             action: RemoteAction::Recover,
         };
@@ -535,6 +569,7 @@ pub(super) mod tests {
             deactivation: DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            auto_accept_terms_updates: false,
             state: AccountRecordState::Registered,
         };
         let mut labels = Vec::new();

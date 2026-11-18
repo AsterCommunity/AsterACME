@@ -182,6 +182,7 @@ mod tests {
         };
         assert!(args.yes);
         assert!(!args.accept_terms);
+        assert!(!args.auto_accept_new_terms);
         let parsed = Args::try_parse_from([
             "aster-acme",
             "cert",

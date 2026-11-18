@@ -7,6 +7,7 @@
 ### Added
 
 - **DNS publication TTL** — Configure requested TXT TTL with `provider add/update --ttl-seconds` (default 120, RFC 2181 range 0–2147483647); retain each publication's saved TTL across recovery and profile edits. Backends own vendor-specific limits; local propagation observations keep their existing advisory behavior.
+- **Automatic CA terms updates** — `account register --auto-accept-new-terms` accepts the current directory terms and durably delegates future terms URL changes for unattended account ensure and renewal. The exact accepted URL remains visible in `account show`; `--yes`, JSON mode and implicit ensure never enable the delegation.
 
 ### Changed
 

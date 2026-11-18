@@ -120,6 +120,30 @@ pub(super) fn terms(
     Ok(())
 }
 
+/// Ask for the separate durable trust delegation after current terms consent.
+/// `--yes` and non-interactive output never reach this prompt.
+pub(super) fn auto_accept_terms_updates(
+    options: &mut RegistrationOptions,
+    current: Option<&AcmeUrl>,
+    already_authorized: bool,
+    interactive: bool,
+    yes: bool,
+    prompts: &mut impl RegistrationPrompts,
+) -> CliResult<()> {
+    if current.is_none()
+        || options.auto_accept_terms_updates
+        || already_authorized
+        || !interactive
+        || yes
+    {
+        return Ok(());
+    }
+    if prompts.confirm("Automatically accept future CA terms updates?")? {
+        options.auto_accept_terms_updates = true;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::commands::account::interaction::*;
@@ -303,5 +327,88 @@ mod tests {
             .unwrap_err()
             .is::<Canceled>()
         );
+    }
+
+    #[test]
+    fn yes_never_prompts_or_grants_future_consent_even_on_a_terminal() {
+        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+        for interactive in [false, true] {
+            let mut options = RegistrationOptions {
+                terms_accepted: true,
+                ..RegistrationOptions::default()
+            };
+            let mut never_prompt = prompts(&[], None);
+            auto_accept_terms_updates(
+                &mut options,
+                Some(&current),
+                false,
+                interactive,
+                true,
+                &mut never_prompt,
+            )
+            .unwrap();
+            assert!(!options.auto_accept_terms_updates);
+            assert_eq!(never_prompt.messages.len(), 0);
+        }
+        let mut explicit = RegistrationOptions {
+            auto_accept_terms_updates: true,
+            ..RegistrationOptions::default()
+        };
+        auto_accept_terms_updates(
+            &mut explicit,
+            Some(&current),
+            false,
+            true,
+            true,
+            &mut prompts(&[], None),
+        )
+        .unwrap();
+        assert!(explicit.auto_accept_terms_updates);
+    }
+
+    #[test]
+    fn auto_accept_terms_requires_explicit_interactive_yes() {
+        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+        let mut options = RegistrationOptions::default();
+        auto_accept_terms_updates(
+            &mut options,
+            Some(&current),
+            false,
+            true,
+            false,
+            &mut prompts(&[false], None),
+        )
+        .unwrap();
+        assert!(!options.auto_accept_terms_updates);
+        auto_accept_terms_updates(
+            &mut options,
+            Some(&current),
+            false,
+            true,
+            false,
+            &mut prompts(&[true], None),
+        )
+        .unwrap();
+        assert!(options.auto_accept_terms_updates);
+        auto_accept_terms_updates(
+            &mut RegistrationOptions::default(),
+            Some(&current),
+            false,
+            false,
+            false,
+            &mut prompts(&[], None),
+        )
+        .unwrap();
+        let mut already = prompts(&[], None);
+        auto_accept_terms_updates(
+            &mut RegistrationOptions::default(),
+            Some(&current),
+            true,
+            true,
+            false,
+            &mut already,
+        )
+        .unwrap();
+        assert_eq!(already.messages.len(), 0);
     }
 }

@@ -145,6 +145,9 @@ pub(crate) struct RegisterArgs {
     /// Explicitly accept the selected CA's current terms; otherwise ask interactively.
     #[arg(long)]
     pub(crate) accept_terms: bool,
+    /// Accept the current terms and persist consent to future CA terms URL updates.
+    #[arg(long)]
+    pub(crate) auto_accept_new_terms: bool,
     #[command(flatten)]
     pub(crate) http: HttpArgs,
     /// Confirm existing account reuse; does not accept terms or disable other prompts.
@@ -206,6 +209,10 @@ pub(crate) struct RotateKeyArgs {
 }
 
 /// Resolved execution input, shared by CLI parsing and interactive completion.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These booleans are independent command-wide output and confirmation switches"
+)]
 #[derive(Default)]
 pub(crate) struct AccountArgs {
     pub(crate) key_algorithm: Option<KeyAlgorithm>,
@@ -221,6 +228,8 @@ pub(crate) struct AccountArgs {
     pub(crate) contact: Vec<String>,
     /// Agree to the current terms published by the selected CA (register only).
     pub(crate) accept_terms: bool,
+    /// Accept current terms and future terms URL updates (register only).
+    pub(crate) auto_accept_new_terms: bool,
     /// EAB key ID; use --eab-key-file for its base64url HMAC key.
     pub(crate) eab_kid: Option<String>,
     /// Read the EAB secret from a file; never put the secret itself in CLI arguments.
@@ -266,6 +275,7 @@ impl From<RegisterArgs> for AccountArgs {
             key_algorithm: args.key_algorithm,
             contact: args.contact,
             accept_terms: args.accept_terms,
+            auto_accept_new_terms: args.auto_accept_new_terms,
             eab_kid: args.eab_kid,
             eab_key_file: args.eab_key_file,
             ..NetworkArgs {

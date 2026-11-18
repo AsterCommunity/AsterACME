@@ -541,6 +541,7 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
     for command in ["recover", "show", "switch"] {
         for arguments in [
             vec!["--accept-terms"],
+            vec!["--auto-accept-new-terms"],
             vec!["--yes"],
             vec!["--contact", "you@example.com"],
             vec!["--eab-kid", "id"],
@@ -635,7 +636,8 @@ impl From<crate::commands::account::args::AccountArgs>
 {
     fn from(mut args: crate::commands::account::args::AccountArgs) -> Self {
         let key_algorithm = args.key_algorithm;
-        let (yes, accept_terms) = (args.yes, args.accept_terms);
+        let (yes, accept_terms, auto_accept_new_terms) =
+            (args.yes, args.accept_terms, args.auto_accept_new_terms);
         let contact = std::mem::take(&mut args.contact);
         let eab_kid = args.eab_kid.take();
         let eab_key_file = args.eab_key_file.take();
@@ -648,6 +650,7 @@ impl From<crate::commands::account::args::AccountArgs>
             local: network.local,
             yes,
             accept_terms,
+            auto_accept_new_terms,
             contact,
             eab_kid,
             eab_key_file,
@@ -935,6 +938,16 @@ fn registration_normalizes_cli_and_config_contacts_with_cli_precedence() {
         options.contacts,
         ["mailto:cli@example.com", "mailto:second@example.com"]
     );
+    let options = registration_options(
+        AccountArgs {
+            auto_accept_new_terms: true,
+            ..AccountArgs::default()
+        },
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(options.terms_accepted);
+    assert!(options.auto_accept_terms_updates);
     assert!(registration_options(AccountArgs::default(), vec!["invalid".into()]).is_err());
 }
 
@@ -1008,6 +1021,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
                     deactivation: aster_acme_core::account::DeactivationState::NotRequested,
                     key_rotation: None,
                     accepted_terms_url: None,
+                    auto_accept_terms_updates: false,
                     state,
                 })
                 .await
@@ -1168,7 +1182,7 @@ fn parser_requires_commands_and_bounds_timeout_and_eab_pairs() {
             "aster-acme",
             "account",
             "register",
-            "--accept-terms",
+            "--auto-accept-new-terms",
             "--ca-directory",
             "https://custom.example/directory",
             "--user-agent",

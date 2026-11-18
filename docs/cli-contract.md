@@ -8,8 +8,11 @@
 | --- | --- | --- |
 | `-y / --yes` | 自动接受当前命令所有操作确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
 | `--accept-terms` | 注册时同意所选 CA 当前实际公布的条款 | 不确认复用已有账户，不作为永久自动接受配置 |
+| `--auto-accept-new-terms` | 注册时同意当前条款，并持久化授权自动接受未来条款 URL 更新 | 不由 `--yes`、JSON 或隐式 ensure 开启；授权一旦保存，普通 register/ensure 不会静默撤销 |
 | `--verify` | 查询已有资源的 CA 状态，更新观察快照 | 不启动验证、不 finalize、不新建订单 |
 | `--json` | 输出结构化命令结果/诊断，禁止提示、ANSI 和人类阶段日志 | 不隐含确认或强制，不猜测歧义目标 |
+
+未来条款更新授权在终端默认否；`--yes` 跳过这项可选授权询问并保持原授权状态，不代替当前条款同意。首次接受条款不报告为自动接受“更新”；只有先前已保存的条款 URL 改变才报告更新。
 
 没有通用的 `--skip-*` 同义参数。--yes 不等于“完全非交互”：终端里的名称选择、输入、独立条款同意仍有自己的条件；脚本应提供完整参数，JSON 或非 TTY 从不弹问题。没有 --yes 的危险操作在交互终端默认否，在脚本中立即给出确认要求。取消交互退出 130。
 
@@ -65,7 +68,7 @@
 | account list | --verify；--user-agent / --request-timeout 仅在 verify 时可用 |
 | account show | [NAME] / -n；--verify；已有账户 CA 选择；HTTP 参数要求 verify |
 | account switch | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
-| account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、HTTP、-y、成对 EAB |
+| account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、--auto-accept-new-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
 | account update-contact | [NAME] / -n、-m 或 --clear-contacts、已有账户 CA 选择、HTTP、-y |
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
@@ -247,7 +250,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 
 | 命令 | 当前交互入口 | 仍需显式指定的部分 |
 | --- | --- | --- |
-| account register | 新建/继续、账户名、CA、联系人、条款和复用确认 | EAB、密钥算法等高级选项 |
+| account register | 新建/继续、账户名、CA、联系人、条款、未来条款更新授权和复用确认 | EAB、密钥算法等高级选项 |
 | account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
 | account update-contact/rotate-key/deactivate/remove | 账户选择、联系人输入或操作确认 | key-type 等可选参数使用默认/显式值 |
 | cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |

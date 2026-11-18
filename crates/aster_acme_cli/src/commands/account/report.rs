@@ -30,6 +30,8 @@ pub(crate) enum AccountReport {
         name: String,
         account: AcmeAccount,
         action: RemoteAction,
+        /// The current directory terms URL changed and was accepted by persisted delegation.
+        auto_accepted_terms: bool,
         /// This register invocation explicitly reused a pre-existing local identity.
         reused: bool,
     },

@@ -76,6 +76,9 @@ pub struct AccountRecord {
     pub key_rotation: Option<KeyRotation>,
     /// Terms URL shown to the user and explicitly accepted.
     pub accepted_terms_url: Option<AcmeUrl>,
+    /// Persisted opt-in to accept future directory terms URL changes.
+    #[serde(default)]
+    pub auto_accept_terms_updates: bool,
     /// Local protocol stage.
     pub state: AccountRecordState,
 }
@@ -133,6 +136,8 @@ pub struct RegistrationOptions {
     pub contacts: Vec<String>,
     /// Explicit user acceptance of the current terms advertised by the CA directory.
     pub terms_accepted: bool,
+    /// Explicitly persist consent to accept future terms URL changes.
+    pub auto_accept_terms_updates: bool,
     /// Optional out-of-band CA EAB credentials; key bytes are never persisted.
     pub external_account: Option<ExternalAccountCredentials>,
 }

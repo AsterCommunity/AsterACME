@@ -146,7 +146,10 @@ pub(crate) async fn execute(
             }
             local(&context, signer.as_ref(), name, verify).await
         }
-        operation => remote(context, signer, name, options, operation, reused, cli).await,
+        operation => {
+            let transport = context.transport_options(&options)?;
+            remote(context, signer, options, operation, reused, transport, cli).await
+        }
     }
 }
 
@@ -420,16 +423,21 @@ async fn local(
     }))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Remote account execution keeps discovery, consent and service reporting together"
+)]
 async fn remote(
     context: CliContext,
     signer: Arc<dyn JwsSigner>,
-    name: String,
     options: AccountArgs,
     operation: Operation,
     reused: bool,
+    transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
-    let transport = context.transport_options(&options)?;
+    let name = context.name.clone();
+    let yes = options.yes;
     let interactive = crate::common::terminal::interactive(options.json);
     let account_user_agent = options.user_agent.clone();
     let mut persist_contacts = !options.contact.is_empty();
@@ -476,6 +484,13 @@ async fn remote(
     .await?;
     let client = Arc::new(cli.http.discover(context.directory, transport).await?);
     if let Some(registration) = &mut registration {
+        if saved
+            .as_ref()
+            .is_some_and(|record| record.auto_accept_terms_updates)
+        {
+            // Persisted delegation is explicit consent for a changed directory URL.
+            registration.terms_accepted = true;
+        }
         crate::commands::account::interaction::terms(
             registration,
             client.directory().meta.terms_of_service.as_ref(),
@@ -485,7 +500,39 @@ async fn remote(
             interactive,
             &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
         )?;
+        crate::commands::account::interaction::auto_accept_terms_updates(
+            registration,
+            client.directory().meta.terms_of_service.as_ref(),
+            saved
+                .as_ref()
+                .is_some_and(|record| record.auto_accept_terms_updates),
+            interactive,
+            yes,
+            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
+        )?;
     }
+    let auto_accept_requested = registration
+        .as_ref()
+        .is_some_and(|options| options.auto_accept_terms_updates);
+    let auto_accept_already_authorized = saved
+        .as_ref()
+        .is_some_and(|record| record.auto_accept_terms_updates);
+    let terms_changed_before_registration = client
+        .directory()
+        .meta
+        .terms_of_service
+        .as_ref()
+        .is_some_and(|current| {
+            saved
+                .as_ref()
+                .and_then(|record| record.accepted_terms_url.as_ref())
+                .is_none_or(|accepted| accepted != current)
+        });
+    let auto_accept_applied_to_existing = saved
+        .as_ref()
+        .is_some_and(|record| record.account_url.is_some())
+        && terms_changed_before_registration
+        && (auto_accept_requested || auto_accept_already_authorized);
     let service = AccountService::new(client, context.store);
     let account = match operation {
         Operation::Register => {
@@ -519,6 +566,10 @@ async fn remote(
         action,
         name,
         account,
+        auto_accepted_terms: matches!(
+            action,
+            crate::commands::account::report::RemoteAction::Register
+        ) && auto_accept_applied_to_existing,
         reused,
     })
 }
@@ -592,7 +643,11 @@ pub(super) fn registration_options(
         } else {
             options.contact
         })?,
-        terms_accepted: options.accept_terms,
+        terms_accepted: options.accept_terms || options.auto_accept_new_terms,
+        auto_accept_terms_updates: options.auto_accept_new_terms,
         external_account,
     })
 }
+
+#[cfg(test)]
+mod tests;

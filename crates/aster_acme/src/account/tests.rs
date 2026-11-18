@@ -135,6 +135,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
             deactivation: aster_acme_core::account::DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            auto_accept_terms_updates: false,
             state: AccountRecordState::RegistrationPending,
         });
         Mock::given(method("POST"))
@@ -285,6 +286,154 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
     assert_eq!(record.accepted_terms_url, Some(second));
     assert_eq!(*store.record.lock().await, Some(record));
 }
+
+#[tokio::test]
+async fn auto_acceptance_updates_terms_url_and_survives_implicit_ensure() {
+    let (_server, mut client) = server(local_options()).await;
+    let first = AcmeUrl::new("https://ca.example/terms/v1").unwrap();
+    let second = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+    client.directory.meta.terms_of_service = Some(first.clone());
+    let store = Arc::new(MemoryStore::default());
+    let directory = client.directory_url().clone();
+    let mut service = AccountService::new(Arc::new(client), store.clone());
+    let thumbprint = "thumbprint";
+    let record = service
+        .load_or_prepare(
+            &directory,
+            thumbprint,
+            &RegistrationOptions {
+                terms_accepted: true,
+                auto_accept_terms_updates: true,
+                ..RegistrationOptions::default()
+            },
+            KeyAlgorithm::EcdsaP256,
+            &(Arc::new(()) as Arc<dyn AccountLease>),
+        )
+        .await
+        .unwrap();
+    assert!(record.auto_accept_terms_updates);
+    Arc::get_mut(&mut service.client)
+        .unwrap()
+        .directory
+        .meta
+        .terms_of_service = Some(second.clone());
+    let updated = service
+        .load_or_prepare(
+            &directory,
+            thumbprint,
+            &RegistrationOptions::default(),
+            KeyAlgorithm::EcdsaP256,
+            &(Arc::new(()) as Arc<dyn AccountLease>),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.accepted_terms_url, Some(second));
+    assert!(updated.auto_accept_terms_updates);
+
+    Arc::get_mut(&mut service.client)
+        .unwrap()
+        .directory
+        .meta
+        .terms_of_service = None;
+    let without_terms = service
+        .load_or_prepare(
+            &directory,
+            thumbprint,
+            &RegistrationOptions::default(),
+            KeyAlgorithm::EcdsaP256,
+            &(Arc::new(()) as Arc<dyn AccountLease>),
+        )
+        .await
+        .unwrap();
+    assert_eq!(without_terms.accepted_terms_url, updated.accepted_terms_url);
+    assert!(without_terms.auto_accept_terms_updates);
+
+    let no_terms_service =
+        AccountService::new(service.client.clone(), Arc::new(MemoryStore::default()));
+    let no_terms_record = no_terms_service
+        .load_or_prepare(
+            &directory,
+            "no-terms-thumbprint",
+            &RegistrationOptions {
+                auto_accept_terms_updates: true,
+                ..RegistrationOptions::default()
+            },
+            KeyAlgorithm::EcdsaP256,
+            &(Arc::new(()) as Arc<dyn AccountLease>),
+        )
+        .await
+        .unwrap();
+    assert!(no_terms_record.auto_accept_terms_updates);
+    assert_eq!(no_terms_record.accepted_terms_url, None);
+}
+
+#[tokio::test]
+async fn enabling_delegation_on_existing_records_is_durable_and_failed_saves_never_post() {
+    let (server, mut client) = server(local_options()).await;
+    client.directory.meta.terms_of_service =
+        Some(AcmeUrl::new("https://ca.example/terms").unwrap());
+    let store = Arc::new(MemoryStore::default());
+    let service = AccountService::new(Arc::new(client), store.clone());
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
+    let thumb = key.jwk().unwrap().thumbprint().unwrap();
+    let directory = service.client.directory_url();
+    let lease = Arc::new(()) as Arc<dyn AccountLease>;
+    let before = service
+        .load_or_prepare(
+            directory,
+            &thumb,
+            &RegistrationOptions {
+                terms_accepted: true,
+                ..RegistrationOptions::default()
+            },
+            key.algorithm(),
+            &lease,
+        )
+        .await
+        .unwrap();
+    assert!(!before.auto_accept_terms_updates);
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert!(
+        service
+            .register_or_recover(
+                &key,
+                RegistrationOptions {
+                    auto_accept_terms_updates: true,
+                    ..RegistrationOptions::default()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(*store.record.lock().await, Some(before));
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == "POST")
+            .count(),
+        0
+    );
+    store.fail_save.store(false, Ordering::SeqCst);
+    let authorized = service
+        .load_or_prepare(
+            directory,
+            &thumb,
+            &RegistrationOptions {
+                auto_accept_terms_updates: true,
+                ..RegistrationOptions::default()
+            },
+            key.algorithm(),
+            &lease,
+        )
+        .await
+        .unwrap();
+    assert!(authorized.auto_accept_terms_updates);
+    assert_eq!(*store.record.lock().await, Some(authorized));
+}
+
 #[async_trait]
 impl AccountStore for MemoryStore {
     async fn lock_account(
