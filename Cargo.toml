@@ -22,7 +22,7 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 x509-parser = { version = "0.18.1", features = ["verify-aws"] }
 aster_forge_http = { version = "=0.1.0-alpha.2", default-features = false, features = ["json", "rustls-aws-lc-rs", "system-proxy"] }
 # Shared Forge crates use explicit published alpha versions.
-aster_forge_utils = { version = "=0.1.0-alpha.1" }
+aster_forge_utils = { version = "=0.1.0-alpha.2" }
 aster_forge_panic = { version = "=0.1.0-alpha.2", default-features = false }
 aster_forge_macros = { version = "=0.1.0-alpha.1" }
 aster_acme_protocol = { version = "0.1.0-alpha.2", path = "crates/aster_acme_protocol" }

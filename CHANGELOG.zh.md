@@ -6,6 +6,7 @@
 
 ### 新增
 
+- **库嵌入签发示例** — `cargo run -p aster_acme --example embedded_issuance` 走完完整嵌入路径：CA 发现、经 `AccountService` 注册或复用账户、嵌入方实现的 HTTP-01 webroot `ChallengeSolver`、按 `IssueStore` 契约恢复已保存请求，以及产物提升。示例默认指向 Let's Encrypt staging 并使用临时 data-dir，随 workspace CI 编译；双语 README 快速开始将其作为 library-first 入口链接（#33）。
 - **DNS 发布 TTL** — 通过 `provider add/update --ttl-seconds` 配置 TXT 请求 TTL（默认 120，RFC 2181 范围 0–2147483647），恢复和 Profile 修改不改变已有发布计划中的 TTL。厂商限制仍归各 backend，本地传播观察保留现有建议性行为。
 - **自动接受 CA 条款更新** — `account register --auto-accept-new-terms` 同意当前 directory 条款，并持久化授权未来条款 URL 更新，供无人值守账户 ensure 和续期使用。`account show` 展示精确已接受 URL 及授权状态；`--yes`、JSON 模式和隐式 ensure 不会开启授权。
 

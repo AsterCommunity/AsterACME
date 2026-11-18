@@ -45,6 +45,11 @@ url.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true
+# The embedded-issuance example composes the published file store as an
+# embedder would; it stays a dev-dependency so the library has no CLI-storage edge.
+aster_acme_cli_storage.workspace = true
+clap.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

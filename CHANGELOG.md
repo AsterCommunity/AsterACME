@@ -6,6 +6,7 @@
 
 ### Added
 
+- **Embedded issuance example** — `cargo run -p aster_acme --example embedded_issuance` walks the full embedding path: CA discovery, account registration or reuse through `AccountService`, an embedder-owned HTTP-01 webroot `ChallengeSolver`, saved-request resume via the `IssueStore` contract, and promoted artifacts. The example defaults to Let's Encrypt staging with a temporary data directory, compiles under workspace CI, and the bilingual README quick starts link it as the library-first entry point (#33).
 - **DNS publication TTL** — Configure requested TXT TTL with `provider add/update --ttl-seconds` (default 120, RFC 2181 range 0–2147483647); retain each publication's saved TTL across recovery and profile edits. Backends own vendor-specific limits; local propagation observations keep their existing advisory behavior.
 - **Automatic CA terms updates** — `account register --auto-accept-new-terms` accepts the current directory terms and durably delegates future terms URL changes for unattended account ensure and renewal. The exact accepted URL remains visible in `account show`; `--yes`, JSON mode and implicit ensure never enable the delegation.
 
