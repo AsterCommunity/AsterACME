@@ -11,7 +11,9 @@
   "readiness": {
     "name": "PR Readiness",
     "commentMarker": "<!-- asteracme-pr-readiness -->",
-    "requiredChecks": ["codecov/patch"],
+    "requiredChecks": [
+      "codecov/patch"
+    ],
     "requireResolvedThreads": true,
     "requireApproval": false,
     "highRiskLabel": "Risk: High"
@@ -172,25 +174,118 @@
       }
     },
     "applicability": {
-      "CI: Failure": ["issue"],
-      "CI: Infrastructure": ["issue"],
-      "CI: Flaky": ["issue"],
-      "CI: Running": ["pull_request"],
-      "CI: Passed": ["pull_request"]
+      "CI: Failure": [
+        "issue"
+      ],
+      "CI: Infrastructure": [
+        "issue"
+      ],
+      "CI: Flaky": [
+        "issue"
+      ],
+      "CI: Running": [
+        "pull_request"
+      ],
+      "CI: Passed": [
+        "pull_request"
+      ]
     },
     "rules": [
-      { "label": "Rust", "paths": ["crates/**", "**/*.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] },
-      { "label": "Python", "paths": ["scripts/**", "**/*.py"] },
-      { "label": "Documentation", "paths": ["docs/**", "README.md", "README.zh.md", "CHANGELOG.md", "CHANGELOG.zh.md", "crates/**/README.md"] },
-      { "label": "Dependencies", "paths": ["**/Cargo.toml", "**/Cargo.lock", "rust-toolchain.toml", ".github/dependabot.yml"] },
-      { "label": "Scope: Core", "paths": ["crates/aster_acme_core/**"] },
-      { "label": "Scope: Protocol", "paths": ["crates/aster_acme_protocol/**", "scripts/check-iana-acme-errors.py", "scripts/tests/test_iana_acme_errors.py", "docs/rfc-reference.md"] },
-      { "label": "Scope: Client", "paths": ["crates/aster_acme/**"] },
-      { "label": "Scope: Crypto", "paths": ["crates/aster_acme/src/crypto/**"] },
-      { "label": "Scope: Challenges", "paths": ["crates/aster_acme_validation/**", "crates/aster_acme/src/challenge/**", "crates/aster_acme/src/precheck/**", "crates/aster_acme_cli/src/commands/cert/validation/**", "crates/aster_acme_cli/src/commands/cert/precheck/**"] },
-      { "label": "Scope: Storage", "paths": ["crates/aster_acme_cli_storage/**"] },
-      { "label": "Scope: CLI", "paths": ["crates/aster_acme_cli/**"] },
-      { "label": "Scope: Deployment", "paths": ["**/deployment/**", "**/deployment*", "**/reload*", "**/publication/**"] },
+      {
+        "label": "Rust",
+        "paths": [
+          "crates/**",
+          "**/*.rs",
+          "Cargo.toml",
+          "Cargo.lock",
+          "rust-toolchain.toml"
+        ]
+      },
+      {
+        "label": "Python",
+        "paths": [
+          "scripts/**",
+          "**/*.py"
+        ]
+      },
+      {
+        "label": "Documentation",
+        "paths": [
+          "docs/**",
+          "README.md",
+          "README.zh.md",
+          "CHANGELOG.md",
+          "CHANGELOG.zh.md",
+          "crates/**/README.md"
+        ]
+      },
+      {
+        "label": "Dependencies",
+        "paths": [
+          "**/Cargo.toml",
+          "**/Cargo.lock",
+          "rust-toolchain.toml",
+          ".github/dependabot.yml"
+        ]
+      },
+      {
+        "label": "Scope: Core",
+        "paths": [
+          "crates/aster_acme_core/**"
+        ]
+      },
+      {
+        "label": "Scope: Protocol",
+        "paths": [
+          "crates/aster_acme_protocol/**",
+          "scripts/check-iana-acme-errors.py",
+          "scripts/tests/test_iana_acme_errors.py",
+          "docs/rfc-reference.md"
+        ]
+      },
+      {
+        "label": "Scope: Client",
+        "paths": [
+          "crates/aster_acme/**"
+        ]
+      },
+      {
+        "label": "Scope: Crypto",
+        "paths": [
+          "crates/aster_acme/src/crypto/**"
+        ]
+      },
+      {
+        "label": "Scope: Challenges",
+        "paths": [
+          "crates/aster_acme_validation/**",
+          "crates/aster_acme/src/challenge/**",
+          "crates/aster_acme/src/precheck/**",
+          "crates/aster_acme_cli/src/commands/cert/validation/**",
+          "crates/aster_acme_cli/src/commands/cert/precheck/**"
+        ]
+      },
+      {
+        "label": "Scope: Storage",
+        "paths": [
+          "crates/aster_acme_cli_storage/**"
+        ]
+      },
+      {
+        "label": "Scope: CLI",
+        "paths": [
+          "crates/aster_acme_cli/**"
+        ]
+      },
+      {
+        "label": "Scope: Deployment",
+        "paths": [
+          "**/deployment/**",
+          "**/deployment*",
+          "**/reload*",
+          "**/publication/**"
+        ]
+      },
       {
         "label": "Risk: High",
         "paths": [
@@ -212,8 +307,19 @@
     ]
   },
   "workflows": [
-    { "name": "Repository Automation", "paths": [".github/workflows/**", ".github/aster-automation.json"] },
-    { "name": "CI", "paths": ["**"] },
+    {
+      "name": "Repository Automation",
+      "paths": [
+        ".github/workflows/**",
+        ".github/aster-automation.json"
+      ]
+    },
+    {
+      "name": "CI",
+      "paths": [
+        "**"
+      ]
+    },
     {
       "name": "IANA ACME Registry",
       "paths": [
@@ -221,6 +327,13 @@
         "crates/aster_acme_protocol/src/problem.rs",
         "scripts/check-iana-acme-errors.py",
         "scripts/tests/test_iana_acme_errors.py"
+      ]
+    },
+    {
+      "name": "Docs Check",
+      "paths": [
+        "docs/**",
+        ".github/workflows/docs-check.yml"
       ]
     }
   ],
@@ -231,7 +344,10 @@
     "readyLabel": "Status: Ready",
     "inProgressLabel": "Status: In Progress",
     "mergedLabel": "Merged",
-    "mergedPullLabelsToRemove": ["Status: In Progress", "Status: Needs Decision"],
+    "mergedPullLabelsToRemove": [
+      "Status: In Progress",
+      "Status: Needs Decision"
+    ],
     "trackingPattern": "^Tracking-Issue:\\s*#(\\d+)\\s*$"
   },
   "incidents": {
@@ -244,15 +360,38 @@
   "dashboard": {
     "marker": "<!-- asteracme-milestone-dashboard -->",
     "title": "Release readiness dashboard",
-    "milestones": ["Not arranged"]
+    "milestones": [
+      "Not arranged"
+    ]
   },
   "diagnosticHints": [
-    { "pattern": "format|clippy|lint", "message": "格式或静态检查失败；先运行 cargo fmt --all --check 和 cargo clippy --workspace --all-targets 定位。" },
-    { "pattern": "check-workspace-deps|check-rust-imports|check-tls-backend|check-dependency-features|check-precheck-features", "message": "仓库自检脚本失败；对照 scripts/ 下对应检查输出，确认依赖 features、import 边界或 TLS backend 是否漂移。" },
-    { "pattern": "iana|registry|problem\\.rs", "message": "IANA ACME registry 校验失败；运行 scripts/check-iana-acme-errors.py 并同步 docs/rfc-reference.md。" },
-    { "pattern": "doc-links|check-doc-links", "message": "文档链接检查失败；运行 python3 scripts/check-doc-links.py 修复本地相对链接。" },
-    { "pattern": "codecov|coverage|llvm-cov", "message": "覆盖率检查失败；查看 Codecov patch 状态和 coverage summary，补齐新路径测试。" },
-    { "pattern": "unittest|scripts/tests", "message": "Python 脚本测试失败；运行 python3 -m unittest discover -s scripts/tests 复现。" },
-    { "pattern": "windows|macos|ubuntu|runner|timeout|rate limit|network|disk", "message": "日志包含 runner 或外部基础设施信号，先区分环境故障与代码回归再重跑。" }
+    {
+      "pattern": "format|clippy|lint",
+      "message": "格式或静态检查失败；先运行 cargo fmt --all --check 和 cargo clippy --workspace --all-targets 定位。"
+    },
+    {
+      "pattern": "check-workspace-deps|check-rust-imports|check-tls-backend|check-dependency-features|check-precheck-features",
+      "message": "仓库自检脚本失败；对照 scripts/ 下对应检查输出，确认依赖 features、import 边界或 TLS backend 是否漂移。"
+    },
+    {
+      "pattern": "iana|registry|problem\\.rs",
+      "message": "IANA ACME registry 校验失败；运行 scripts/check-iana-acme-errors.py 并同步 docs/rfc-reference.md。"
+    },
+    {
+      "pattern": "doc-links|check-doc-links",
+      "message": "文档链接检查失败；运行 python3 scripts/check-doc-links.py 修复本地相对链接。"
+    },
+    {
+      "pattern": "codecov|coverage|llvm-cov",
+      "message": "覆盖率检查失败；查看 Codecov patch 状态和 coverage summary，补齐新路径测试。"
+    },
+    {
+      "pattern": "unittest|scripts/tests",
+      "message": "Python 脚本测试失败；运行 python3 -m unittest discover -s scripts/tests 复现。"
+    },
+    {
+      "pattern": "windows|macos|ubuntu|runner|timeout|rate limit|network|disk",
+      "message": "日志包含 runner 或外部基础设施信号，先区分环境故障与代码回归再重跑。"
+    }
   ]
 }

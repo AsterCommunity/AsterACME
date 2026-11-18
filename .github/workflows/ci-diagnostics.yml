@@ -11,6 +11,7 @@ on:
     workflows:
       - Repository Automation
       - CI
+      - Docs Check
       - IANA ACME Registry
     types: [completed]
 
