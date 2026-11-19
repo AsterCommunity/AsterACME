@@ -16,7 +16,7 @@
 
 ### Changed
 
-- **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. Journal JSON snapshots retain null-valued order and authorization extensions. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget, including provider timeouts.
+- **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. Journal JSON snapshots retain null-valued order and authorization extensions. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget, including provider and host-process timeouts.
 
 - **DNS provider diagnostics** — Include the API action, HTTP status, validated provider error code, and safe request ID in native backend failures when available. Raw response bodies and provider messages remain hidden; the same CLI path also displays safe provider codes from external backends.
 

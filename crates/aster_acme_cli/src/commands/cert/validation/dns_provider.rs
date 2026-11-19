@@ -58,7 +58,10 @@ fn provider_failure(execution: &ExecutionContext, failure: ProviderFailure) -> I
         ProviderFailure::Provider(ProviderError {
             code: ProviderErrorCode::ProviderTimeout,
             ..
-        })
+        }) | ProviderFailure::Host {
+            code: aster_acme_dns::HostErrorCode::ProcessTimeout,
+            ..
+        }
     );
     if provider_timed_out
         && matches!(
@@ -488,6 +491,19 @@ mod tests {
         };
         assert!(matches!(
             provider_failure(&active, provider_error(ProviderErrorCode::ProviderTimeout)),
+            IssueError::DnsProvider(_)
+        ));
+
+        let host_timeout = || ProviderFailure::Host {
+            code: aster_acme_dns::HostErrorCode::ProcessTimeout,
+            side_effect: SideEffect::Unknown,
+        };
+        assert!(matches!(
+            provider_failure(&expired, host_timeout()),
+            IssueError::TimedOut
+        ));
+        assert!(matches!(
+            provider_failure(&active, host_timeout()),
             IssueError::DnsProvider(_)
         ));
 

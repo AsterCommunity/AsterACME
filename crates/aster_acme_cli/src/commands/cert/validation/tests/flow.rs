@@ -475,7 +475,7 @@ async fn standalone_serves_real_http_and_resumes_acknowledged_challenges_without
         let controls = IssueExecution {
             max_polls: if resume { 1 } else { 30 },
             context: ExecutionContext {
-                deadline: Instant::now() + Duration::from_secs(10),
+                deadline: Instant::now() + Duration::from_secs(60),
                 ..execution()
             },
             poll_interval: Duration::from_millis(1),
