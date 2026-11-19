@@ -25,6 +25,7 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 use zeroize::ZeroizeOnDrop;
 
+/// Backend identifier under which the Alibaba Cloud DNS provider registers.
 pub const BACKEND_ID: &str = "com.astercosm.acme.dns.aliyun";
 const HOST: &str = "alidns.aliyuncs.com";
 const VERSION: &str = "2015-01-09";
@@ -65,6 +66,7 @@ static REGISTRATION: BackendRegistration = BackendRegistration {
     create: || Arc::new(AliyunBackend),
 };
 
+/// Alibaba Cloud DNS backend over the ACS3-signed 2015-01-09 RPC API.
 pub struct AliyunBackend;
 
 #[derive(Deserialize, ZeroizeOnDrop)]

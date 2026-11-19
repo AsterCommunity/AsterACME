@@ -276,7 +276,7 @@ async fn dns_persist_changed_prefix_requires_manual_publication_and_account_reta
     let base = fixture.server.uri();
     Mock::given(method("GET")).and(path("/arbitrary-directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "newNonce":format!("{base}/nonce"), "newAccount":format!("{base}/account"), "newOrder":format!("{base}/orders/create"),
+            "newNonce":format!("{base}/nonce"), "newAccount":format!("{base}/account"), "newOrder":format!("{base}/orders/create"), "keyChange":format!("{base}/key-change"),
             "meta":{"issuerDomainNames":["authority.example"],"accountHashPrefix":"https://ca.example/new-prefix/"}
         }))).with_priority(1).mount(&fixture.server).await;
     rotate_account_identity(&mut fixture).await;
@@ -359,7 +359,7 @@ async fn dns_persist_missing_or_invalid_hash_prefix_fails_before_creating_remote
         let base = fixture.server.uri();
         Mock::given(method("GET")).and(path("/arbitrary-directory"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "newNonce":format!("{base}/nonce"), "newAccount":format!("{base}/account"), "newOrder":format!("{base}/orders/create"),
+                "newNonce":format!("{base}/nonce"), "newAccount":format!("{base}/account"), "newOrder":format!("{base}/orders/create"), "keyChange":format!("{base}/key-change"),
                 "meta":{"issuerDomainNames":["authority.example"],"accountHashPrefix":prefix}
             }))).with_priority(1).mount(&fixture.server).await;
         rotate_account_identity(&mut fixture).await;
@@ -490,7 +490,7 @@ async fn cancelled_persistent_publication_keeps_checkpoint_and_never_acknowledge
                 &controls
             )
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     assert_eq!(fixture.count("/persist-challenge").await, 0);
     assert_eq!(fixture.count("/orders/create").await, 1);

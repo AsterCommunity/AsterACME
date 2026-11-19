@@ -33,7 +33,8 @@ impl Fixture {
         self.server.reset().await;
         let mut directory = serde_json::json!({
             "newNonce": format!("{}/nonce", self.server.uri()),
-            "newAccount": format!("{}/new-account", self.server.uri())
+            "newAccount": format!("{}/new-account", self.server.uri()),
+            "keyChange": format!("{}/key-change", self.server.uri())
         });
         if let Some(terms) = terms {
             directory["meta"] = serde_json::json!({"termsOfService":terms});

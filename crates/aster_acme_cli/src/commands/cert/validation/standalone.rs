@@ -44,7 +44,7 @@ impl Standalone {
         requirements: &[ValidationRequirement],
         execution: &ExecutionContext,
     ) -> Result<(), IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let additions = validate(requirements)?;
         let mut listener = self.listener.lock().await;
         let mut table = self.requirements.write().await;

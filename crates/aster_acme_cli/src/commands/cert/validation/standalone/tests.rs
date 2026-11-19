@@ -221,11 +221,12 @@ async fn cancelled_expired_contexts_do_not_bind_and_active_services_stop() {
             context.cancellation.cancel();
         }
         let solver = Standalone::new(([127, 0, 0, 1], 0).into(), progress());
+        let result = solver
+            .ready(&publications(&[material("example.com", TOKEN)]), &context)
+            .await;
         assert!(matches!(
-            solver
-                .ready(&publications(&[material("example.com", TOKEN)]), &context)
-                .await,
-            Err(IssueError::Interrupted)
+            (expired, result),
+            (false, Err(IssueError::Cancelled)) | (true, Err(IssueError::TimedOut))
         ));
         assert!(solver.listener.lock().await.is_none());
     }

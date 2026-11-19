@@ -12,7 +12,7 @@ impl Lookup for Fake {
     async fn lookup(&self, name: &str) -> Result<Vec<Property>, LookupError> {
         self.queries.lock().unwrap().push(name.into());
         if self.fails {
-            return Err(LookupError);
+            return Err(LookupError::new("injected resolver failure"));
         }
         Ok(self.values.get(name).cloned().unwrap_or_default())
     }
@@ -101,6 +101,45 @@ async fn empty_tree_queries_tld_but_not_root_and_errors_do_not_mean_unrestricted
     fake.fails = true;
     assert!(check(&fake, "example.com", &req).await.is_err());
     assert!(check(&fake, "../bad", &req).await.is_err());
+}
+
+#[tokio::test]
+async fn observer_preserves_lookup_cause_as_lookup_failure() {
+    use aster_acme::precheck::Check;
+    use aster_acme_core::caa::Request;
+    use std::time::{Duration, Instant};
+    use tokio_util::sync::CancellationToken;
+
+    let lookup = Fake {
+        values: HashMap::new(),
+        queries: Mutex::new(Vec::new()),
+        fails: true,
+    };
+    let issuers = vec!["ca.example".into()];
+    let checker = Caa::new(
+        &lookup,
+        Request {
+            issuers: &issuers,
+            account_uri: None,
+            method: "dns-01",
+            wildcard: false,
+        },
+    );
+    let error = checker
+        .observe(
+            &"example.com".into(),
+            &aster_acme::solver::ExecutionContext {
+                cancellation: CancellationToken::new(),
+                deadline: Instant::now() + Duration::from_secs(1),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        aster_acme::precheck::Failure::LookupFailed { reason }
+            if reason.contains("injected resolver failure")
+    ));
 }
 
 #[tokio::test]

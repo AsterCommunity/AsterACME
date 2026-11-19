@@ -29,12 +29,12 @@ impl Listener {
         F: Fn(TcpStream) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let listener = tokio::select! {
             biased;
-            () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
+            () = execution.cancellation.cancelled() => return Err(IssueError::Cancelled),
             result = tokio::time::timeout_at(execution.deadline.into(), TcpListener::bind(address)) => {
-                result.map_err(|_| IssueError::Interrupted)?.map_err(|error| IssueError::Publication(format!("cannot bind {address}: {error}")))?
+                result.map_err(|_| IssueError::TimedOut)?.map_err(|error| IssueError::Publication(format!("cannot bind {address}: {error}")))?
             }
         };
         let address = listener.local_addr().map_err(|error| {

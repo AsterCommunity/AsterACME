@@ -62,4 +62,7 @@ pub struct AccountObject {
     /// EAB echoed when confirmed by a new-account response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_account_binding: Option<FlattenedJws>,
+    /// Fields introduced by CA extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }

@@ -7,7 +7,7 @@ use crate::{
         IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
         workflow::{Workflow, WorkflowObserver},
     },
-    solver::{ChallengeSolver, ExecutionContext},
+    solver::{ChallengeSolver, ExecutionContext, ReadyResult},
     storage::issuance::IssueSession,
     transport::{HttpPool, TransportOptions},
 };
@@ -20,12 +20,13 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio_util::sync::CancellationToken;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
 
-struct Session(Mutex<IssueRecord>);
+struct Session(Mutex<IssueRecord>, Mutex<Option<Vec<u8>>>);
 #[async_trait]
 impl IssueSession for Session {
     async fn record(&self) -> Result<IssueRecord, IssueError> {
@@ -36,11 +37,32 @@ impl IssueSession for Session {
         Ok(())
     }
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
-        panic!("manual publication must precede finalize")
+        Ok(b"fixed-csr".to_vec())
     }
 
-    async fn complete(&self, _: &IssueRecord, _: &[u8]) -> Result<IssueRecord, IssueError> {
-        panic!("not issued")
+    async fn complete(
+        &self,
+        record: &IssueRecord,
+        chain: &[u8],
+    ) -> Result<IssueRecord, IssueError> {
+        let mut completed = record.clone();
+        let now = time::OffsetDateTime::now_utc();
+        completed.is_in_use = true;
+        completed.renewal = Some(crate::renewal::RenewalPlan {
+            certificate_id: Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
+            not_before: now - time::Duration::days(30),
+            not_after: now + time::Duration::days(60),
+            renew_at: now - time::Duration::seconds(1),
+            source: crate::renewal::RenewalSource::Fallback,
+            suggested_window: None,
+            explanation_url: None,
+            last_checked_at: None,
+            next_check_at: None,
+            last_query_failed: false,
+        });
+        *self.0.lock().unwrap() = completed.clone();
+        *self.1.lock().unwrap() = Some(chain.to_vec());
+        Ok(completed)
     }
     async fn record_renewal_failure(
         &self,
@@ -51,8 +73,12 @@ impl IssueSession for Session {
         ))
     }
 }
-#[derive(Default)]
-struct Solver(AtomicUsize);
+struct Solver(AtomicUsize, bool);
+impl Default for Solver {
+    fn default() -> Self {
+        Self(AtomicUsize::new(0), false)
+    }
+}
 #[async_trait]
 impl ChallengeSolver for Solver {
     fn kind(&self) -> ChallengeKind {
@@ -62,8 +88,11 @@ impl ChallengeSolver for Solver {
         &self,
         _: &[crate::solver::ChallengePublication],
         _: &ExecutionContext,
-    ) -> Result<crate::solver::ReadyResult, IssueError> {
-        Ok(crate::solver::ReadyResult::default())
+    ) -> Result<ReadyResult, IssueError> {
+        Ok(ReadyResult {
+            ready: self.1,
+            ..ReadyResult::default()
+        })
     }
     async fn shutdown(&self) {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -101,7 +130,7 @@ impl Fixture {
     async fn new() -> Self {
         let server = MockServer::start().await;
         let url = |suffix: &str| format!("{}{suffix}", server.uri());
-        Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":url("/nonce"),"newAccount":url("/account"),"newOrder":url("/create"),"meta":{"caaIdentities":["ca.example"]}}))).mount(&server).await;
+        Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":url("/nonce"),"newAccount":url("/account"),"newOrder":url("/create"),"keyChange":url("/key-change"),"meta":{"caaIdentities":["ca.example"]}}))).mount(&server).await;
         Mock::given(method("HEAD"))
             .and(path("/nonce"))
             .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "fresh"))
@@ -130,7 +159,7 @@ impl Fixture {
         Self {
             server,
             identity: IssueIdentity { account, signer },
-            session: Session(Mutex::new(record)),
+            session: Session(Mutex::new(record), Mutex::new(None)),
             observer: Arc::new(Observer::default()),
         }
     }
@@ -200,6 +229,165 @@ async fn discovers_then_drives_protocol_and_always_shuts_down_without_recreating
     assert_eq!(f.count("/create").await, 1);
     assert_eq!(solver.0.load(Ordering::SeqCst), 2);
 }
+
+async fn mount_complete_ca(f: &Fixture) {
+    let url = |suffix: &str| format!("{}{suffix}", f.server.uri());
+    Mock::given(method("GET"))
+        .and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":url("/nonce"),"newAccount":url("/account"),"newOrder":url("/create"),
+            "keyChange":url("/key-change"),"renewalInfo":url("/ari")
+        })))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
+    let pending = serde_json::json!({
+        "status":"pending","expires":"2099-01-01T00:00:00Z",
+        "identifiers":[{"type":"dns","value":"example.com"}],
+        "authorizations":[],"finalize":url("/finalize")
+    });
+    let ready = serde_json::json!({
+        "status":"ready","expires":"2099-01-01T00:00:00Z",
+        "identifiers":[{"type":"dns","value":"example.com"}],
+        "authorizations":[],"finalize":url("/finalize")
+    });
+    let valid = serde_json::json!({
+        "status":"valid","expires":"2099-01-01T00:00:00Z",
+        "identifiers":[{"type":"dns","value":"example.com"}],
+        "authorizations":[],"finalize":url("/finalize"),"certificate":url("/certificate")
+    });
+    Mock::given(method("POST"))
+        .and(path("/create"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("Location", url("/order"))
+                .set_body_json(pending),
+        )
+        .with_priority(1)
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    let poll = Arc::new(AtomicUsize::new(0));
+    let poll_responses = poll.clone();
+    let ready_for_poll = ready.clone();
+    let valid_for_poll = valid.clone();
+    Mock::given(method("POST"))
+        .and(path("/order"))
+        .respond_with(move |_request: &wiremock::Request| {
+            if poll_responses.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(200).set_body_json(ready_for_poll.clone())
+            } else {
+                ResponseTemplate::new(200).set_body_json(valid_for_poll.clone())
+            }
+        })
+        .with_priority(1)
+        .expect(2)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/finalize"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ready))
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/certificate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(
+                    "Content-Type",
+                    "application/pem-certificate-chain; charset=utf-8",
+                )
+                .set_body_bytes(
+                    b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n".to_vec(),
+                ),
+        )
+        .expect(1)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .expect(1)
+        .mount(&f.server)
+        .await;
+}
+
+async fn cancel_when_ari_is_requested(server: &MockServer, cancellation: CancellationToken) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| request.url.path().starts_with("/ari/"))
+            {
+                cancellation.cancel();
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn finalize_download_and_complete_follow_the_real_http_transport() {
+    let mut f = Fixture::new().await;
+    mount_complete_ca(&f).await;
+    let solver = Solver(AtomicUsize::new(0), true);
+    let workflow = f.workflow();
+    let identity = f.identity();
+    let mut context = execution();
+    context.context.deadline = Instant::now() + Duration::from_secs(30);
+    let cancellation = context.context.cancellation.clone();
+    let server = &f.server;
+    let session = &mut f.session;
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let task = workflow.run(identity, session, &solver, &context);
+        tokio::pin!(task);
+        tokio::select! {
+            result = &mut task => panic!("workflow returned before ARI cancellation: {:?}", result.err()),
+            () = cancel_when_ari_is_requested(server, cancellation) => {
+                tokio::time::timeout(Duration::from_secs(1), task)
+                    .await
+                    .expect("workflow must stop promptly after cancellation")
+            }
+        }
+    })
+    .await
+    .expect("test must finish before the operation deadline");
+    assert!(
+        result.is_ok(),
+        "{:?}; requests: {:?}",
+        result.as_ref().err(),
+        f.server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| (request.method.clone(), request.url.path().to_owned()))
+            .collect::<Vec<_>>()
+    );
+    let IssueOutcome::Completed { record, .. } = result.unwrap() else {
+        panic!("workflow did not complete after recording the advisory cancellation");
+    };
+    assert_eq!(
+        f.session.1.lock().unwrap().as_deref(),
+        Some(b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n".as_slice())
+    );
+    assert_eq!(f.count("/finalize").await, 1);
+    assert_eq!(f.count("/certificate").await, 1);
+    assert_eq!(f.count("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE").await, 1);
+    let persisted = f.session.record().await.unwrap();
+    let returned_next_check_at = record.renewal.as_ref().unwrap().next_check_at;
+    let persisted_next_check_at = persisted.renewal.as_ref().unwrap().next_check_at;
+    assert!(persisted_next_check_at.is_some());
+    assert_eq!(returned_next_check_at, persisted_next_check_at);
+    assert_eq!(solver.0.load(Ordering::SeqCst), 1);
+}
 #[tokio::test]
 async fn uncertain_creation_fails_offline_and_cancelled_expired_inputs_never_discover() {
     for mode in ["uncertain", "cancelled", "expired"] {
@@ -224,6 +412,152 @@ async fn uncertain_creation_fails_offline_and_cancelled_expired_inputs_never_dis
         assert_eq!(f.count("/directory").await, 0);
         assert_eq!(solver.0.load(Ordering::SeqCst), 1);
     }
+}
+
+#[tokio::test]
+async fn inspect_honors_caller_cancellation_and_deadline_without_mutations() {
+    use crate::issuance::service::IssueService;
+    use aster_acme_protocol::url::AcmeUrl;
+
+    for mode in ["cancelled", "expired", "during_query"] {
+        let mut f = Fixture::new().await;
+        let client = HttpPool::default()
+            .discover(
+                f.identity.account.directory_url.clone(),
+                TransportOptions {
+                    allow_loopback_http: true,
+                    ..TransportOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let service = IssueService::new(Arc::new(client), f.identity()).unwrap();
+        f.session.0.lock().unwrap().order_url =
+            Some(AcmeUrl::new(&format!("{}/order", f.server.uri())).unwrap());
+        let before = serde_json::to_value(f.session.record().await.unwrap()).unwrap();
+        let mut scope = execution().context;
+        match mode {
+            "cancelled" => scope.cancellation.cancel(),
+            "expired" => scope.deadline = Instant::now(),
+            "during_query" => {
+                Mock::given(method("POST"))
+                    .and(path("/order"))
+                    .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+                    .with_priority(1)
+                    .mount(&f.server)
+                    .await;
+                scope.deadline = Instant::now() + Duration::from_millis(100);
+            }
+            _ => unreachable!(),
+        }
+        let result = service.inspect(&mut f.session, &scope).await;
+        assert!(matches!(
+            (mode, result),
+            ("cancelled", Err(IssueError::Cancelled))
+                | ("expired" | "during_query", Err(IssueError::TimedOut))
+        ));
+        assert_eq!(f.count("/order").await, usize::from(mode == "during_query"));
+        assert_eq!(f.count("/create").await, 0);
+        assert_eq!(f.count("/finalize").await, 0);
+        assert_eq!(
+            serde_json::to_value(f.session.record().await.unwrap()).unwrap(),
+            before
+        );
+    }
+}
+
+#[tokio::test]
+async fn inspect_returns_cancellation_during_ari_query() {
+    use crate::{
+        issuance::service::IssueService,
+        renewal::{RenewalPlan, RenewalSource},
+    };
+    use aster_acme_protocol::url::AcmeUrl;
+
+    let mut f = Fixture::new().await;
+    let url = |suffix: &str| format!("{}{suffix}", f.server.uri());
+    Mock::given(method("GET"))
+        .and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":url("/nonce"),"newAccount":url("/account"),"newOrder":url("/create"),
+            "keyChange":url("/key-change"),"renewalInfo":url("/ari")
+        })))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
+    let now = time::OffsetDateTime::now_utc();
+    {
+        let mut record = f.session.record().await.unwrap();
+        record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+        record.is_in_use = true;
+        record.order_url = Some(AcmeUrl::new(&url("/order")).unwrap());
+        record.renewal = Some(RenewalPlan {
+            certificate_id: Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
+            not_before: now - time::Duration::days(30),
+            not_after: now + time::Duration::days(60),
+            renew_at: now - time::Duration::seconds(1),
+            source: RenewalSource::Fallback,
+            suggested_window: None,
+            explanation_url: None,
+            last_checked_at: None,
+            next_check_at: None,
+            last_query_failed: false,
+        });
+        f.session.save(&record).await.unwrap();
+    }
+    Mock::given(method("POST"))
+        .and(path("/order"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status":"valid","expires":"2099-01-01T00:00:00Z",
+            "identifiers":[{"type":"dns","value":"example.com"}],
+            "authorizations":[],"finalize":url("/finalize"),"certificate":url("/certificate")
+        })))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .mount(&f.server)
+        .await;
+    let client = HttpPool::default()
+        .discover(
+            f.identity.account.directory_url.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let service = IssueService::new(Arc::new(client), f.identity()).unwrap();
+    let context = execution().context;
+    let cancellation = context.cancellation.clone();
+    let server = &f.server;
+    let session = &mut f.session;
+    let (result, ()) = tokio::join!(service.inspect(session, &context), async move {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|request| request.url.path().starts_with("/ari/"))
+                {
+                    cancellation.cancel();
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+    assert!(matches!(result, Err(IssueError::Cancelled)));
+    assert_eq!(f.count("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE").await, 1);
+    assert_eq!(f.count("/create").await, 0);
+    assert_eq!(f.count("/finalize").await, 0);
 }
 
 #[tokio::test]
@@ -325,7 +659,7 @@ async fn cancellation_during_discovery_stops_without_submitting_order_and_releas
         } => {},
     }
     execution.context.cancellation.cancel();
-    assert!(matches!(running.await, Err(IssueError::Interrupted)));
+    assert!(matches!(running.await, Err(IssueError::Cancelled)));
     assert_eq!(solver.0.load(Ordering::SeqCst), 1);
     assert_eq!(f.count("/create").await, 0);
 }

@@ -27,7 +27,7 @@ pub(crate) enum CertCommand {
         local: LocalArgs,
     },
     /// Show a local certificate request, or explicitly refresh its CA resources without advancing it.
-    #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","request_timeout"]).multiple(true).requires("verify")))]
+    #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","request_timeout","operation_timeout"]).multiple(true).requires("verify")))]
     Show {
         #[command(flatten)]
         target: SavedTargetArgs,
@@ -37,6 +37,9 @@ pub(crate) enum CertCommand {
         /// Query existing order/authorizations and refresh due ARI; never advance issuance.
         #[arg(long)]
         verify: bool,
+        /// Overall CA inspection budget in seconds; defaults to the configured operation timeout.
+        #[arg(long,value_parser=clap::value_parser!(u64).range(1..=86400))]
+        operation_timeout: Option<u64>,
         #[command(flatten)]
         http: HttpArgs,
         #[command(flatten)]
@@ -111,7 +114,7 @@ pub(crate) struct SavedTargetArgs {
     #[command(flatten)]
     pub identity: CertificateNameArgs,
     /// Exact request ID when the name has multiple generations.
-    #[arg(long,value_parser=parse_operation)]
+    #[arg(long, allow_hyphen_values = true,value_parser=parse_operation)]
     pub operation: Option<String>,
 }
 
@@ -194,7 +197,7 @@ pub(crate) struct IssueArgs {
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
     pub resume: Option<ResumeTarget>,
     /// Exact saved request ID; required for ambiguous noninteractive recovery.
-    #[arg(long, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
+    #[arg(long, allow_hyphen_values = true, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
     pub operation: Option<String>,
     #[command(flatten)]
     pub run: RunArgs,

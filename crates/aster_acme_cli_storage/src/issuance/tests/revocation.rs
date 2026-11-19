@@ -92,6 +92,7 @@ async fn revocation_service(
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
+            "keyChange":format!("{}/key-change",fixture.server.uri()),
             "revokeCert":format!("{}/vendor/revoke",fixture.server.uri()),"renewalInfo":format!("{}/ari",fixture.server.uri())
         }))).with_priority(1).mount(&fixture.server).await;
     Mock::given(method("POST"))

@@ -52,7 +52,7 @@ impl ChallengeSolver for Manual {
         publications: &[ChallengePublication],
         execution: &ExecutionContext,
     ) -> Result<ReadyResult, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let requirements = publications
             .iter()
             .map(|publication| publication.requirement.clone())
@@ -225,7 +225,8 @@ mod tests {
                 assert!(!result.unwrap().unwrap().ready);
             }
             "shutdown" => assert!(result.is_err()),
-            _ => assert!(matches!(result.unwrap(), Err(IssueError::Interrupted))),
+            "timeout" => assert!(matches!(result.unwrap(), Err(IssueError::TimedOut))),
+            _ => assert!(matches!(result.unwrap(), Err(IssueError::Cancelled))),
         }
         assert_eq!(
             execution.cancellation.is_cancelled(),

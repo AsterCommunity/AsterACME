@@ -115,6 +115,7 @@ fn wire_identifiers_preserve_unknown_types_and_handle_authorization_wildcards() 
             WireIdentifier {
                 kind: "dns".into(),
                 value: "Example.COM".into(),
+                extensions: std::collections::BTreeMap::new(),
             },
             wildcard,
         )
@@ -134,7 +135,8 @@ fn wire_identifiers_preserve_unknown_types_and_handle_authorization_wildcards() 
             authorization_identifier(
                 WireIdentifier {
                     kind: "dns".into(),
-                    value: "*.example.com".into()
+                    value: "*.example.com".into(),
+                    extensions: std::collections::BTreeMap::new(),
                 },
                 wildcard
             ),

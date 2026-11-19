@@ -15,9 +15,13 @@ pub const MAX_PUBLICATIONS: usize = 100;
 /// HTTP verbs supported by DNS provider effects, independent of vendor features.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpMethod {
+    /// `GET` token.
     Get,
+    /// `POST` token.
     Post,
+    /// `PUT` token.
     Put,
+    /// `DELETE` token.
     Delete,
 }
 
@@ -38,9 +42,13 @@ impl HttpMethod {
 pub struct HttpRequest {
     /// Optional provider-owned API operation name; the host validates it before display.
     pub operation: Option<String>,
+    /// Request verb as understood by the provider API.
     pub method: HttpMethod,
+    /// Fully qualified request URL, potentially containing credential query parameters.
     pub url: String,
+    /// Request headers; may carry auth credentials and are never logged by the host.
     pub headers: Vec<(String, String)>,
+    /// Raw request body; may carry credentials and is never logged by the host.
     pub body: Vec<u8>,
     /// Explicit operation semantics: a POST may be a read on some DNS APIs.
     pub mutation: bool,
@@ -48,8 +56,11 @@ pub struct HttpRequest {
 
 /// Bounded raw response, interpreted exclusively by the provider.
 pub struct HttpResponse {
+    /// HTTP status code as returned by the provider API.
     pub status: u16,
+    /// Raw response headers; interpreted exclusively by the provider.
     pub headers: Vec<(String, Vec<u8>)>,
+    /// Raw response body; interpreted exclusively by the provider.
     pub body: Vec<u8>,
 }
 
@@ -64,7 +75,9 @@ impl std::fmt::Debug for HttpResponse {
 /// Transport evidence, without a URL, credential or raw provider response.
 #[derive(Debug, Clone, Copy)]
 pub struct HttpFailure {
+    /// Transport failure classification from the shared provider error taxonomy.
     pub code: ProviderErrorCode,
+    /// Whether a mutation request may or may not have reached the provider API.
     pub side_effect: SideEffect,
 }
 
@@ -72,7 +85,9 @@ pub struct HttpFailure {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryState {
+    /// Provider-owned schema version; must be nonzero so empty checkpoints stay invalid.
     pub version: u32,
+    /// Opaque provider JSON payload, bounded by the host and never interpreted by it.
     pub data: serde_json::Value,
 }
 
@@ -87,39 +102,59 @@ impl std::fmt::Debug for RecoveryState {
 /// Desired outcome, independent of the provider's record or `RRset` mutation API.
 #[derive(Clone)]
 pub enum ProviderAction {
+    /// Publish the DNS validation records described by the request.
     Present(DnsRecord),
+    /// Remove the records published under the referenced publication identity.
     Cleanup(CleanupRequest),
 }
 
 /// Events include failures so the provider can reconcile rather than blindly replay.
 pub enum ProviderEvent {
+    /// Begin a fresh operation or resume from the last durable checkpoint.
     Start,
+    /// Outcome of an `Http` effect; failures carry side-effect evidence for reconciliation.
     Http(Result<HttpResponse, HttpFailure>),
+    /// The host durably committed the requested `Checkpoint` state.
     CheckpointSaved,
+    /// Contents of a `ReadSecret` credential file; never logged by the host.
     Secret(String),
+    /// The instant requested by `WaitUntil` has been reached.
     Timer,
 }
 
+/// Terminal state of one provider operation.
 pub enum ProviderOutcome {
+    /// The publication finished; carries the provider-owned receipt.
     Presented(PublicationReceipt),
+    /// The cleanup finished; carries the resulting record status.
     Cleaned(CleanupStatus),
 }
 
+/// Single effect the host must execute before the operation can advance again.
 pub enum ProviderEffect {
+    /// Perform one provider API request under the execution bounds.
     Http(HttpRequest),
+    /// Persist a recovery checkpoint; the host confirms with `CheckpointSaved`.
     Checkpoint(RecoveryState),
+    /// Read one private credential file through the host policy.
     ReadSecret(std::path::PathBuf),
+    /// Suspend until the given instant or cancellation, whichever comes first.
     WaitUntil(Instant),
+    /// Terminal outcome; the host stops driving the operation.
     Complete(ProviderOutcome),
 }
 
-/// Invocation-local state, reconstructed from durable observations on restart.
+/// Invocation-local state machine, reconstructed from durable observations on restart.
+///
+/// Implementations own the provider API protocol; the host drives effects and owns
+/// persistence, cancellation, and timeout boundaries.
 pub trait ProviderOperation: Send {
     /// # Errors
     /// Rejects invalid events and reports provider failures with side-effect evidence.
     fn advance(&mut self, event: ProviderEvent) -> Result<ProviderEffect, ProviderError>;
 }
 
+/// Creates provider operations for one native backend implementation.
 pub trait OperationFactory: Send + Sync {
     /// # Errors
     /// Rejects unsupported recovery versions or conflicting publication identities.
@@ -130,8 +165,16 @@ pub trait OperationFactory: Send + Sync {
     ) -> Result<Box<dyn ProviderOperation>, ProviderError>;
 }
 
+/// Transport boundary between the host and provider APIs; requests may carry credentials.
 #[async_trait]
 pub trait HttpExecutor: Send + Sync {
+    /// Perform one provider API request within the execution deadline.
+    ///
+    /// Failures report side-effect evidence instead of raw responses so credential
+    /// material never crosses back into provider-owned code.
+    ///
+    /// # Errors
+    /// Returns transport failures classified from the shared provider error taxonomy.
     async fn execute(
         &self,
         request: HttpRequest,
@@ -153,6 +196,7 @@ pub trait CredentialReader: Send + Sync {
 /// Session holds the host's mutation lease through all effects and persistence workers.
 #[async_trait]
 pub trait PublicationSession: Send + Sync {
+    /// Last durably committed checkpoint, or `None` before the first save.
     fn state(&self) -> Option<RecoveryState>;
     /// Save a recovery checkpoint and return only after the update is durably committed.
     ///
@@ -164,6 +208,7 @@ pub trait PublicationSession: Send + Sync {
     async fn save(&mut self, state: RecoveryState) -> Result<(), ProviderError>;
 }
 
+/// Opens durable mutation leases bound to backend, binding, and record identity.
 #[async_trait]
 pub trait PublicationStore: Send + Sync {
     /// Persist and validate backend/scope/record identity before returning the lease.
@@ -176,11 +221,16 @@ pub trait PublicationStore: Send + Sync {
     ) -> Result<Box<dyn PublicationSession>, ProviderError>;
 }
 
+/// Host-provided services and bounds for one registered provider.
 #[derive(Clone)]
 pub struct ProviderHost {
+    /// Wall-clock cap applied on top of every caller-supplied execution deadline.
     pub timeout: std::time::Duration,
+    /// HTTP transport used for all provider API requests.
     pub http: Arc<dyn HttpExecutor>,
+    /// Private credential-file access; `None` rejects `ReadSecret` effects.
     pub credentials: Option<Arc<dyn CredentialReader>>,
+    /// Durable publication lease store backing mutation checkpoints.
     pub publications: Arc<dyn PublicationStore>,
 }
 

@@ -14,11 +14,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// File-backed publication checkpoint store and per-remote-`RRset` mutation leases.
 #[derive(Clone)]
 pub struct ProviderPublicationStore {
     root: PathBuf,
 }
 impl ProviderPublicationStore {
+    /// Anchor all publication journals and lock files under this storage root.
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self { root }

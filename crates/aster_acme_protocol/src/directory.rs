@@ -48,7 +48,7 @@ impl Provider {
     }
 }
 
-/// Directory fields used by the account client; extension fields are ignored.
+/// Directory fields used by the ACME client; unknown extension fields are retained.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Directory {
@@ -71,6 +71,9 @@ pub struct Directory {
     /// Optional server metadata.
     #[serde(default)]
     pub meta: DirectoryMeta,
+    /// Fields introduced by directory extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// RFC 8555 directory metadata relevant to account registration.
@@ -101,6 +104,9 @@ pub struct DirectoryMeta {
     /// Whether registration requires EAB credentials.
     #[serde(default)]
     pub external_account_required: bool,
+    /// Fields introduced by directory metadata extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 fn optional_metadata<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>

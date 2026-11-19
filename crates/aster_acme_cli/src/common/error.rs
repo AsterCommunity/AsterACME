@@ -46,10 +46,6 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
                 "Account key rotation has an unfinished or uncertain result.".into(),
                 Some("Retain both keys and rerun account rotate-key to reconcile the saved rotation.".into()),
             ),
-            AccountError::KeyChangeUnavailable => (
-                "This CA does not advertise account key rotation.".into(),
-                None,
-            ),
             AccountError::DeactivationUncertain => (
                 "A previous deactivation request has an uncertain remote result.".into(),
                 Some("Use account show --verify to attempt reconciliation. A 401 does not prove deactivation; consult your CA if it cannot confirm the result. The saved key is retained.".into()),
@@ -57,6 +53,10 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
             AccountError::AccountNotActive => (
                 "This account is deactivated, revoked, or has an unsupported CA status.".into(),
                 Some("Choose another account name. ACME does not provide account reactivation.".into()),
+            ),
+            AccountError::KeyChangeUnavailable => (
+                "This CA does not advertise account key rotation.".into(),
+                None,
             ),
             AccountError::Transport(transport) => transport_diagnostic(transport),
             AccountError::TermsRequired(url) => (
@@ -135,7 +135,7 @@ fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option
         IssueError::InvalidOrder { problem } => self::problem::invalid_order(problem.as_deref()),
         IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; local readiness cannot bypass CA expiry.".into())),
         IssueError::CreationUncertain=>(issue.to_string(),Some("Use cert list to inspect the retained request. Keep its key/CSR; a missing Location cannot be reconstructed safely and no new order will be created automatically.".into())),
-        IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Saved validation files and records remain under your control.".into())),
+        IssueError::Cancelled | IssueError::TimedOut | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Saved validation files and records remain under your control.".into())),
         IssueError::RenewalAdmission(_) | IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and saved validation requirements. Retain the certificate key and CSR.".into())),
     }
 }
@@ -339,5 +339,21 @@ mod tests {
         let (message, _) =
             diagnostic(&aster_acme::issuance::IssueError::InvalidOrder { problem: None });
         assert!(message.contains("did not provide problem details"));
+    }
+
+    #[test]
+    fn cancellation_timeout_and_uncertain_mutations_share_recovery_guidance() {
+        for error in [
+            aster_acme::issuance::IssueError::Cancelled,
+            aster_acme::issuance::IssueError::TimedOut,
+            aster_acme::issuance::IssueError::MutationUncertain("finalize"),
+        ] {
+            let (message, hint) = diagnostic(&error);
+            assert_ne!(message, "");
+            let hint = hint.unwrap();
+            assert!(hint.contains("cert issue --resume"));
+            assert!(hint.contains("--operation"));
+            assert!(hint.contains("Saved validation files"));
+        }
     }
 }

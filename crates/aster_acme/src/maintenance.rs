@@ -251,7 +251,7 @@ pub async fn run_once(
                     entry.renew_at = saved.renewal.as_ref().map(|p| p.renew_at);
                     entry.next_check_at = saved.renewal.as_ref().and_then(|p| p.next_check_at);
                 }
-                Err(IssueError::Interrupted) if cancellation.is_cancelled() => {
+                Err(IssueError::Cancelled) if cancellation.is_cancelled() => {
                     entry.outcome = Outcome::Cancelled;
                     report.cancelled = true;
                 }
@@ -309,7 +309,7 @@ async fn refresh_one(
         }
     };
     let outcome = match error {
-        IssueError::Interrupted if execution.cancellation.is_cancelled() => Outcome::Cancelled,
+        IssueError::Cancelled if execution.cancellation.is_cancelled() => Outcome::Cancelled,
         error => Outcome::Failed(error),
     };
     Ok((outcome, saved))

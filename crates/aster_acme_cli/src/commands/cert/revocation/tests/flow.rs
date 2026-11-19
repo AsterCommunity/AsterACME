@@ -92,7 +92,7 @@ impl Fixture {
         let record = session.complete(&record, leaf.as_bytes()).await.unwrap();
         drop(session);
         Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/must-not-register",server.uri()),"revokeCert":format!("{}/revoke",server.uri())
+            "newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/must-not-register",server.uri()),"revokeCert":format!("{}/revoke",server.uri()),"keyChange":format!("{}/key-change",server.uri())
         }))).mount(&server).await;
         Mock::given(method("HEAD"))
             .and(path("/nonce"))

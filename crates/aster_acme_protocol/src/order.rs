@@ -26,6 +26,9 @@ pub struct WireIdentifier {
     pub kind: String,
     /// Exact identifier value.
     pub value: String,
+    /// Fields introduced by identifier extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Complete newOrder payload. Requested certificate dates are omitted by this client.
@@ -71,6 +74,9 @@ pub struct OrderObject {
     pub replaces: Option<String>,
     /// Optional CA explanation for an invalid order.
     pub error: Option<Problem>,
+    /// Fields introduced by CA extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// CA authorization resource; wildcard values omit the `*.` prefix.
@@ -88,6 +94,9 @@ pub struct AuthorizationObject {
     pub wildcard: bool,
     /// Offered challenges; unsupported methods are retained.
     pub challenges: Vec<ChallengeObject>,
+    /// Fields introduced by CA extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// CA challenge resource, including optional validation failure details.

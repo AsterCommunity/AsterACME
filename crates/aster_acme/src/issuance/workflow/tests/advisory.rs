@@ -39,7 +39,9 @@ impl BeforeOrder for Advice<'_> {
                 index: 0,
                 result: match self.result {
                     0 => Ok(false),
-                    1 => Err(Failure::LookupFailed),
+                    1 => Err(Failure::LookupFailed {
+                        reason: "injected lookup failure".into(),
+                    }),
                     _ => Err(Failure::TimedOut),
                 },
             }],
@@ -103,7 +105,7 @@ async fn cancellation_in_optional_check_stops_before_order_and_shutdown_is_await
             &Stage::new(&advice),
         )
         .await;
-    assert!(matches!(result, Err(IssueError::Interrupted)));
+    assert!(matches!(result, Err(IssueError::Cancelled)));
     assert_eq!(f.count("/create").await, 0);
     assert!(!f.session.record().await.unwrap().new_order_intent_saved);
     assert_eq!(solver.0.load(Ordering::SeqCst), 1);
@@ -190,7 +192,10 @@ async fn uncooperative_advice_is_bounded_by_cancellation_and_operation_deadline(
         })
         .await
         .unwrap();
-        assert!(matches!(result, Err(IssueError::Interrupted)));
+        assert!(matches!(
+            (cancel, result),
+            (true, Err(IssueError::Cancelled)) | (false, Err(IssueError::TimedOut))
+        ));
         assert_eq!(solver.0.load(Ordering::SeqCst), 1);
         assert_eq!(f.count("/create").await, 0);
         assert!(!f.session.record().await.unwrap().new_order_intent_saved);

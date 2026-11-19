@@ -95,10 +95,12 @@ impl DeploymentSession {
             .admits(&self.artifacts.generation, intent, matches, now)
     }
 
+    /// Binding snapshot this session was opened with, including its execution state.
     #[must_use]
     pub fn definition(&self) -> &DeploymentBinding {
         &self.definition
     }
+    /// Certificate artifacts staged for this session's generation.
     #[must_use]
     pub fn artifacts(&self) -> &DeploymentArtifacts {
         &self.artifacts

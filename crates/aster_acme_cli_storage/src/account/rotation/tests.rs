@@ -31,7 +31,7 @@ struct Fixture {
     before: AccountRecord,
 }
 
-async fn setup(endpoint: bool, timeout: Duration) -> Fixture {
+async fn setup(timeout: Duration) -> Fixture {
     let server = MockServer::start().await;
     let url = |path: &str| AcmeUrl::new(&format!("{}{path}", server.uri())).unwrap();
     Mock::given(method("GET"))
@@ -45,8 +45,9 @@ async fn setup(endpoint: bool, timeout: Duration) -> Fixture {
                     new_account: url("/unused"),
                     renewal_info: None,
                     revoke_cert: None,
-                    key_change: endpoint.then(|| url("/vendor/rollover")),
+                    key_change: Some(url("/vendor/rollover")),
                     meta: DirectoryMeta::default(),
+                    extensions: std::collections::BTreeMap::new(),
                 }),
         )
         .mount(&server)
@@ -109,7 +110,7 @@ fn post_count(requests: &[wiremock::Request], suffix: &str) -> usize {
 
 #[tokio::test]
 async fn empty_success_commits_both_keys_preserving_account_identity_and_status_time() {
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    let fixture = setup(Duration::from_secs(30)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))
         .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "response_nonce"))
@@ -176,7 +177,7 @@ async fn empty_success_commits_both_keys_preserving_account_identity_and_status_
 async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover() {
     // The detached submission retains the lease until the bounded transport
     // classifies the lost response, then reconciliation can acquire it.
-    let fixture = setup(true, Duration::from_millis(400)).await;
+    let fixture = setup(Duration::from_millis(400)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))
         .respond_with(
@@ -239,6 +240,7 @@ async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover()
         status: AccountStatus::Valid,
         contact: Some(vec![]),
         external_account_binding: None,
+        extensions: std::collections::BTreeMap::new(),
     };
     Mock::given(method("POST"))
         .and(path("/account/%41"))
@@ -276,7 +278,7 @@ async fn cancelled_request_reconciles_saved_new_key_without_replaying_rollover()
 #[tokio::test]
 async fn explicit_rejections_and_pending_unauthorized_never_replace_primary_key() {
     for status in [400, 409, 429, 503] {
-        let fixture = setup(true, Duration::from_secs(30)).await;
+        let fixture = setup(Duration::from_secs(30)).await;
         let primary = fixture.store.account_slot().join("account-key.pk8");
         let before = fs::read(&primary).unwrap();
         Mock::given(method("POST"))
@@ -318,8 +320,8 @@ async fn explicit_rejections_and_pending_unauthorized_never_replace_primary_key(
 }
 
 #[tokio::test]
-async fn confirmed_partial_local_swap_resumes_without_a_key_change_endpoint() {
-    let fixture = setup(false, Duration::from_secs(30)).await;
+async fn confirmed_partial_local_swap_resumes_without_directory_discovery() {
+    let fixture = setup(Duration::from_secs(30)).await;
     let session = fixture
         .store
         .rotation(&fixture.before.directory_url)
@@ -362,23 +364,8 @@ async fn confirmed_partial_local_swap_resumes_without_a_key_change_endpoint() {
 }
 
 #[tokio::test]
-async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
-    let fixture = setup(false, Duration::from_secs(30)).await;
-    assert!(matches!(
-        fixture
-            .service
-            .rotate_key(fixture.store.as_ref(), None, None)
-            .await,
-        Err(aster_acme::account::AccountError::KeyChangeUnavailable)
-    ));
-    assert!(
-        !fixture
-            .store
-            .account_slot()
-            .join("account-key.next.pk8")
-            .exists()
-    );
-    let fixture = setup(true, Duration::from_secs(30)).await;
+async fn missing_stage_and_same_key_fail_before_post() {
+    let fixture = setup(Duration::from_secs(30)).await;
     let mut record = fixture.before.clone();
     record.key_rotation = Some(KeyRotation {
         new_thumbprint: "x".repeat(43),
@@ -428,7 +415,7 @@ async fn missing_endpoint_missing_stage_and_same_key_fail_before_post() {
 
 #[tokio::test]
 async fn timeout_keeps_both_keys_and_never_automatically_reposts_key_change() {
-    let fixture = setup(true, Duration::from_millis(250)).await;
+    let fixture = setup(Duration::from_millis(250)).await;
     let primary = fixture.store.account_slot().join("account-key.pk8");
     let original = fs::read(&primary).unwrap();
     Mock::given(method("POST"))
@@ -486,7 +473,7 @@ async fn timeout_keeps_both_keys_and_never_automatically_reposts_key_change() {
 
 #[tokio::test]
 async fn bad_nonce_retries_only_the_outer_signature_with_the_same_durable_new_key() {
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    let fixture = setup(Duration::from_secs(30)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))
         .respond_with(
@@ -528,7 +515,7 @@ async fn bad_nonce_retries_only_the_outer_signature_with_the_same_durable_new_ke
 
 #[tokio::test]
 async fn definitive_conflict_problem_preserves_old_identity_and_allows_later_operations() {
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    let fixture = setup(Duration::from_secs(30)).await;
     Mock::given(method("POST")).and(path("/vendor/rollover"))
         .respond_with(ResponseTemplate::new(409).insert_header("Location",format!("{}/other-account",fixture.server.uri()))
             .set_body_json(serde_json::json!({"type":"urn:ietf:params:acme:error:malformed","detail":"key already in use"})))
@@ -570,7 +557,7 @@ async fn definitive_conflict_problem_preserves_old_identity_and_allows_later_ope
 
 #[tokio::test]
 async fn rotation_commit_rejects_changed_identity_and_unconfirmed_journal() {
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    let fixture = setup(Duration::from_secs(30)).await;
     let session = fixture
         .store
         .rotation(&fixture.before.directory_url)
@@ -601,7 +588,7 @@ async fn rotation_commit_rejects_changed_identity_and_unconfirmed_journal() {
 #[tokio::test]
 async fn cross_algorithm_rotations_commit_actual_type_and_default_to_the_previous_type() {
     use aster_acme::{crypto::key_algorithm::KeyAlgorithm, storage::account::KeyAccess};
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    let fixture = setup(Duration::from_secs(30)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))
         .respond_with(ResponseTemplate::new(200).insert_header("Replay-Nonce", "next_nonce"))
@@ -668,7 +655,7 @@ async fn cross_algorithm_rotations_commit_actual_type_and_default_to_the_previou
 #[tokio::test]
 async fn staged_algorithm_survives_restart_and_conflicting_choices_are_rejected() {
     use aster_acme::crypto::key_algorithm::KeyAlgorithm;
-    let fixture = setup(true, Duration::from_secs(30)).await;
+    let fixture = setup(Duration::from_secs(30)).await;
     let session = fixture
         .store
         .rotation(&fixture.before.directory_url)
@@ -708,7 +695,7 @@ async fn staged_algorithm_survives_restart_and_conflicting_choices_are_rejected(
 
 #[tokio::test]
 async fn concurrent_stage_calls_return_the_same_durable_key() {
-    let fixture = setup(true, Duration::from_secs(1)).await;
+    let fixture = setup(Duration::from_secs(1)).await;
     let session = fixture
         .store
         .rotation(&fixture.before.directory_url)
@@ -735,7 +722,7 @@ async fn concurrent_stage_calls_return_the_same_durable_key() {
 
 #[tokio::test]
 async fn stale_rotation_confirmation_never_stages_or_sends_a_request() {
-    let fixture = setup(true, Duration::from_secs(1)).await;
+    let fixture = setup(Duration::from_secs(1)).await;
     let mut expected = fixture.before.clone();
     expected.account_id = "different".into();
     assert!(matches!(
@@ -763,7 +750,7 @@ async fn stale_rotation_confirmation_never_stages_or_sends_a_request() {
 
 #[tokio::test]
 async fn nonce_failure_before_sending_rollover_keeps_prepared_intent_retryable() {
-    let fixture = setup(true, Duration::from_secs(1)).await;
+    let fixture = setup(Duration::from_secs(1)).await;
     let directory = fixture.before.directory_url.clone();
     Mock::given(method("GET"))
         .and(path("/directory"))
@@ -777,6 +764,7 @@ async fn nonce_failure_before_sending_rollover_keeps_prepared_intent_retryable()
             renewal_info: None,
             revoke_cert: None,
             meta: DirectoryMeta::default(),
+            extensions: std::collections::BTreeMap::new(),
         }))
         .with_priority(1)
         .mount(&fixture.server)
@@ -816,7 +804,7 @@ async fn nonce_failure_before_sending_rollover_keeps_prepared_intent_retryable()
 #[tokio::test]
 async fn cancellation_while_fetching_nonce_leaves_prepared_rotation_retryable_without_post() {
     use aster_acme::storage::account::AccountRotationStore as _;
-    let fixture = setup(true, Duration::from_secs(5)).await;
+    let fixture = setup(Duration::from_secs(5)).await;
     let delayed_nonce = AcmeUrl::new(&format!("{}/delayed-nonce", fixture.server.uri())).unwrap();
     Mock::given(method("GET"))
         .and(path("/directory"))
@@ -830,6 +818,7 @@ async fn cancellation_while_fetching_nonce_leaves_prepared_rotation_retryable_wi
             renewal_info: None,
             revoke_cert: None,
             meta: DirectoryMeta::default(),
+            extensions: std::collections::BTreeMap::new(),
         }))
         .with_priority(1)
         .mount(&fixture.server)

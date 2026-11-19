@@ -68,6 +68,7 @@ async fn read(f: &Fixture, record: &IssueRecord) -> IssueRecord {
 async fn directory(f: &Fixture, ari: bool) {
     Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
         "newNonce":format!("{}/nonce",f.server.uri()),"newAccount":format!("{}/unused",f.server.uri()),
+        "keyChange":format!("{}/key-change",f.server.uri()),
         "renewalInfo":ari.then(||format!("{}/ari",f.server.uri()))
     }))).with_priority(2).mount(&f.server).await;
 }
@@ -371,7 +372,7 @@ async fn per_certificate_deadline_retains_saved_retry_and_continues() {
     assert!(
         matches!(
             report.entries[0].outcome,
-            Outcome::Failed(IssueError::Interrupted)
+            Outcome::Failed(IssueError::TimedOut)
         ),
         "first certificate must time out: {report:?}"
     );

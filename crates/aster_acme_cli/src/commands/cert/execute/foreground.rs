@@ -82,7 +82,7 @@ impl Foreground<'_> {
         let result = workflow
             .run(identity, session, solver.as_ref(), &execution)
             .await;
-        if matches!(result, Err(IssueError::Interrupted))
+        if matches!(result, Err(IssueError::Cancelled | IssueError::TimedOut))
             && self.execution.cancellation.is_cancelled()
         {
             return Err(Box::new(terminal::Canceled));

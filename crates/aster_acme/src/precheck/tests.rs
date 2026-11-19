@@ -9,7 +9,9 @@ impl Check for Fake {
         match input {
             0 => Ok(true),
             1 => Ok(false),
-            2 => Err(Failure::LookupFailed),
+            2 => Err(Failure::LookupFailed {
+                reason: "injected lookup failure".into(),
+            }),
             4 => Err(Failure::Unavailable {
                 reason: "system DNS configuration could not be parsed".into(),
             }),
@@ -51,7 +53,14 @@ async fn failed_and_negative_observations_do_not_stop_remaining_inputs() {
         .collect::<Vec<_>>();
     assert_eq!(
         results,
-        [Ok(true), Ok(false), Err(Failure::LookupFailed), Ok(true)]
+        [
+            Ok(true),
+            Ok(false),
+            Err(Failure::LookupFailed {
+                reason: "injected lookup failure".into(),
+            }),
+            Ok(true),
+        ]
     );
     assert_eq!(Runner::default().timeout(), Duration::from_secs(5));
 }

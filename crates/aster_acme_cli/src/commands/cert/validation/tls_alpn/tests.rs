@@ -156,7 +156,7 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
                 &cancelled
             )
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     assert!(solver.listener.lock().await.is_none());
     assert!(solver.resolver.certificates.read().unwrap().is_empty());
@@ -168,7 +168,7 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
         solver
             .restore(&publications(&[requirement]), &expired)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::TimedOut)
     ));
     assert!(solver.listener.lock().await.is_none());
     assert!(solver.resolver.certificates.read().unwrap().is_empty());

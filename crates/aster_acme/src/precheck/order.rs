@@ -66,7 +66,9 @@ impl<'a, C: BeforeOrder + ?Sized> Stage<'a, C> {
             .check(directory, record, execution)
             .await
             .map_err(|error| match error {
-                Error::Interrupted => IssueError::Interrupted,
+                Error::Interrupted => execution
+                    .check()
+                    .map_or_else(IssueError::from, |()| IssueError::Cancelled),
                 Error::InvalidBudget => IssueError::InvalidInput("invalid precheck budget"),
             })?;
         if let Some(observer) = self.observer {

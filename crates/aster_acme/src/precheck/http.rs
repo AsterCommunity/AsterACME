@@ -36,7 +36,9 @@ impl Check for Http<'_> {
         self.pool
             .check_http_challenge(url, content.as_bytes(), remaining)
             .await
-            .map_err(|_| Failure::LookupFailed)
+            .map_err(|error| Failure::LookupFailed {
+                reason: error.to_string(),
+            })
     }
 }
 

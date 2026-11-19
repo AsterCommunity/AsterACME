@@ -75,9 +75,14 @@ fn request_shapes_omit_optional_fields_and_keep_lookup_separate() {
 #[test]
 fn account_response_distinguishes_absent_empty_and_unknown_fields() {
     let absent: AccountObject =
-        serde_json::from_str(r#"{"status":"future","extension":true}"#).unwrap();
+        serde_json::from_str(r#"{"status":"future","extension":{"nested":true}}"#).unwrap();
     assert_eq!(absent.status, AccountStatus::Unknown("future".into()));
     assert_eq!(absent.contact, None);
+    assert_eq!(absent.extensions["extension"]["nested"], true);
+    assert_eq!(
+        serde_json::to_value(&absent).unwrap()["extension"]["nested"],
+        true
+    );
     let empty: AccountObject = serde_json::from_str(r#"{"status":"valid","contact":[]}"#).unwrap();
     assert_eq!(empty.contact, Some(vec![]));
     for invalid in [
@@ -125,7 +130,7 @@ fn headers_have_exclusive_identity_and_eab_has_no_nonce() {
 
 #[test]
 fn directory_and_problem_parse_custom_endpoints_without_assumed_paths() {
-    let directory: Directory = serde_json::from_str(r#"{"newNonce":"https://ca.example/custom/n%2fonce","newAccount":"https://other.example/api?new=account","meta":{"externalAccountRequired":true},"extension":true}"#).unwrap();
+    let directory: Directory = serde_json::from_str(r#"{"newNonce":"https://ca.example/custom/n%2fonce","newAccount":"https://other.example/api?new=account","keyChange":"https://ca.example/custom/key-change","meta":{"externalAccountRequired":true,"futureMeta":{"future":2}},"extension":{"future":1}}"#).unwrap();
     assert_eq!(
         directory.new_nonce.as_str(),
         "https://ca.example/custom/n%2fonce"
@@ -135,9 +140,42 @@ fn directory_and_problem_parse_custom_endpoints_without_assumed_paths() {
         "https://other.example/api?new=account"
     );
     assert!(directory.meta.external_account_required);
+    assert_eq!(directory.extensions["extension"]["future"], 1);
+    assert_eq!(directory.meta.extensions["futureMeta"]["future"], 2);
+    assert_eq!(
+        serde_json::to_value(&directory).unwrap()["extension"]["future"],
+        1
+    );
     let problem: Problem = serde_json::from_str(r#"{"type":"urn:custom:problem","status":429,"subproblems":[{"type":"nested","detail":"why"}]}"#).unwrap();
     assert_eq!(problem.extensions["status"], 429);
     assert_eq!(problem.subproblems[0].detail.as_deref(), Some("why"));
+}
+
+#[test]
+fn account_order_authorization_and_ari_extensions_round_trip() {
+    use crate::{
+        order::{AuthorizationObject, OrderObject},
+        renewal::RenewalInfo,
+    };
+    let authorization: AuthorizationObject = serde_json::from_value(serde_json::json!({
+        "identifier":{"type":"dns","value":"example.com","futureIdentifier":{"v":3}},"status":"pending","challenges":[],"futureAuth":{"v":1}
+    })).unwrap();
+    assert_eq!(authorization.extensions["futureAuth"]["v"], 1);
+    let authorization = serde_json::to_value(authorization).unwrap();
+    assert_eq!(authorization["futureAuth"]["v"], 1);
+    assert_eq!(authorization["identifier"]["futureIdentifier"]["v"], 3);
+
+    let order: OrderObject = serde_json::from_value(serde_json::json!({
+        "status":"pending","identifiers":[],"authorizations":[],"finalize":"https://ca.example/finalize","profiles":["ecdsa"],"futureOrder":true
+    })).unwrap();
+    assert_eq!(order.extensions["profiles"], serde_json::json!(["ecdsa"]));
+    assert_eq!(serde_json::to_value(order).unwrap()["futureOrder"], true);
+
+    let ari: RenewalInfo = serde_json::from_value(serde_json::json!({
+        "suggestedWindow":{"start":"2026-11-12T00:00:00Z","end":"2026-11-13T00:00:00Z"},"futureAri":{"v":2}
+    })).unwrap();
+    assert_eq!(ari.extensions["futureAri"]["v"], 2);
+    assert_eq!(serde_json::to_value(ari).unwrap()["futureAri"]["v"], 2);
 }
 
 #[test]
@@ -255,8 +293,15 @@ fn directory_caa_identities_preserve_alternatives_and_optional_absence() {
         ["ca.example", "alternate.example"]
     );
     let no_meta: crate::directory::Directory = serde_json::from_value(serde_json::json!({
-        "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account"
+        "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account",
+        "keyChange":"https://ca.example/key-change"
     }))
     .unwrap();
     assert_eq!(no_meta.meta.caa_identities, Vec::<String>::new());
+    let missing_key_change =
+        serde_json::from_value::<crate::directory::Directory>(serde_json::json!({
+            "newNonce":"https://ca.example/nonce", "newAccount":"https://ca.example/account"
+        }))
+        .unwrap();
+    assert!(missing_key_change.key_change.is_none());
 }

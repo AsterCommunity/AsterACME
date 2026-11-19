@@ -262,7 +262,7 @@ impl RenewalService {
         session: &mut dyn IssueSession,
         execution: &ExecutionContext,
     ) -> Result<IssueRecord, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let record = session.record().await?;
         if record.directory != *self.client.directory_url() {
             return Err(IssueError::InvalidInput("renewal directory mismatch"));
@@ -285,7 +285,7 @@ impl RenewalService {
         mut record: IssueRecord,
         execution: &ExecutionContext,
     ) -> Result<IssueRecord, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let endpoint = self.client.directory().renewal_info.as_ref();
         let endpoint = endpoint.ok_or(IssueError::InvalidInput("missing ARI endpoint"))?;
         let plan = record
@@ -328,7 +328,7 @@ impl RenewalService {
                     }
                 }
             }
-            Err(IssueError::Interrupted) => return Err(IssueError::Interrupted),
+            Err(error @ (IssueError::Cancelled | IssueError::TimedOut)) => return Err(error),
             Err(_) => {}
         }
         Ok(record)
@@ -341,15 +341,15 @@ impl RenewalService {
     ) -> Result<crate::transport::AcmeResponse, IssueError> {
         for attempt in 0..3u32 {
             let response = tokio::select! {
-                () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
-                result = tokio::time::timeout_at(execution.deadline.into(), self.client.get(url)) => result.map_err(|_| IssueError::Interrupted)?,
+                () = execution.cancellation.cancelled() => return Err(IssueError::Cancelled),
+                result = tokio::time::timeout_at(execution.deadline.into(), self.client.get(url)) => result.map_err(|_| IssueError::TimedOut)?,
             };
             match response {
                 Ok(response) => return Ok(response),
                 Err(error) if attempt < 2 && temporary(&error) => {
                     tokio::select! {
-                        () = execution.cancellation.cancelled() => return Err(IssueError::Interrupted),
-                        () = tokio::time::sleep_until(execution.deadline.into()) => return Err(IssueError::Interrupted),
+                        () = execution.cancellation.cancelled() => return Err(IssueError::Cancelled),
+                        () = tokio::time::sleep_until(execution.deadline.into()) => return Err(IssueError::TimedOut),
                         () = tokio::time::sleep(Duration::from_secs(1 << attempt)) => {}
                     }
                 }

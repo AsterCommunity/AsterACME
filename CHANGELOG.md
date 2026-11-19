@@ -16,6 +16,8 @@
 
 ### Changed
 
+- **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. Journal JSON snapshots retain null-valued order and authorization extensions. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget, including provider and host-process timeouts.
+
 - **DNS provider diagnostics** — Include the API action, HTTP status, validated provider error code, and safe request ID in native backend failures when available. Raw response bodies and provider messages remain hidden; the same CLI path also displays safe provider codes from external backends.
 
 - **DNS read reconciliation** — Share bounded read retry budgets across native providers while retaining vendor-specific visibility and ownership checks. Never replay an uncertain creation or treat malformed responses and identity conflicts as visibility delays.
@@ -25,8 +27,11 @@
 - **Deployment verification** — Verify the full published file set against staged content, identity and applicable permissions before reload. Report completed replacement paths on failure while retaining the partial-set/retry contract; no whole-set atomicity or automatic rollback is promised. Refuse configuration and deployment when an existing destination cannot be normalized to prove ownership; restore access or remove the stale binding before retrying.
 - **Optional validation dependencies** — An empty `aster_acme_validation` feature set no longer brings Tokio into production dependencies. Check and test optional feature combinations independently.
 
+- **Issuance and publication verification** — Add loopback HTTP coverage for finalize, certificate download and storage completion, plus direct publication-receipt identity, duplicate, control-character and atomicity boundary tests.
+
 ### Fixed
 
+- **Saved request selection** — Accept valid operation IDs beginning with `-` in issue recovery, show, remove and revoke commands instead of interpreting them as options.
 - **ACME mutation recovery** — Retain revocation Pending and challenge/finalize Submitted evidence after 408/429 instead of treating these transient responses as definitive rejection. Preserve acknowledgement/finalize retry deadlines, prior uncertain revocations and the existing explicit-retry boundaries.
 - **Maintenance diagnostics** — Preserve both the refresh failure and subsequent durable-read failure for one certificate, report its latest schedule as unavailable, and continue processing the remaining certificates.
 

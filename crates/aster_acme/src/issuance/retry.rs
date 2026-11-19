@@ -21,7 +21,9 @@ pub struct RenewalPredecessor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PollWaitSource {
+    /// The CA's Retry-After deadline won over the configured interval.
     RetryAfter,
+    /// The configured polling interval applied; the CA gave no usable deadline.
     LocalInterval,
 }
 

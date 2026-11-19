@@ -21,7 +21,7 @@ impl ChallengeSolver for DnsVisibility {
         publications: &[ChallengePublication],
         execution: &ExecutionContext,
     ) -> Result<ReadyResult, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let resolver = crate::resolver::system()
             .map_err(|error| IssueError::Publication(error.to_string()))?;
         for publication in publications {
@@ -33,10 +33,12 @@ impl ChallengeSolver for DnsVisibility {
             };
             let lookup = tokio::select! {
                 biased;
-                ()=execution.cancellation.cancelled()=>return Err(IssueError::Interrupted),
-                result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::Interrupted)?,
+                ()=execution.cancellation.cancelled()=>return Err(IssueError::Cancelled),
+                result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::TimedOut)?,
             };
-            if !observe_lookup(lookup, value)? {
+            if !observe_lookup(lookup, value)
+                .map_err(|error| IssueError::Publication(error.to_string()))?
+            {
                 return Ok(ReadyResult::default());
             }
         }
@@ -50,11 +52,11 @@ impl ChallengeSolver for DnsVisibility {
 pub(crate) fn observe_lookup(
     lookup: Result<hickory_resolver::lookup::Lookup, hickory_resolver::net::NetError>,
     expected: &str,
-) -> Result<bool, IssueError> {
+) -> Result<bool, hickory_resolver::net::NetError> {
     match lookup {
         Ok(lookup) => Ok(txt_value_present(lookup.answers(), expected)),
         Err(error) if crate::dns::empty_answer(&error) => Ok(false),
-        Err(_) => Err(IssueError::InvalidInput("local DNS TXT lookup failed")),
+        Err(error) => Err(error),
     }
 }
 
@@ -77,6 +79,13 @@ pub(crate) fn txt_value_present(
 #[cfg(test)]
 mod tests {
     use crate::dns01::visibility::*;
+    use hickory_resolver::{
+        net::{NetError, NoRecords},
+        proto::{
+            op::{Query, ResponseCode},
+            rr::{Name, RecordType},
+        },
+    };
     use std::time::{Duration, Instant};
     use tokio_util::sync::CancellationToken;
 
@@ -99,6 +108,33 @@ mod tests {
         assert!(!txt_value_present(&[], "missing"));
     }
 
+    #[test]
+    fn negative_answers_are_absent_but_server_failures_keep_the_resolver_cause() {
+        let query = || {
+            Query::query(
+                Name::from_ascii("_acme-challenge.example.com.").unwrap(),
+                RecordType::TXT,
+            )
+        };
+        let nodata = NetError::from(NoRecords::new(query(), ResponseCode::NoError));
+        let nxdomain = NetError::from(NoRecords::new(query(), ResponseCode::NXDomain));
+        assert!(!observe_lookup(Err(nodata), "expected").unwrap());
+        assert!(!observe_lookup(Err(nxdomain), "expected").unwrap());
+
+        let servfail = NetError::from(NoRecords::new(query(), ResponseCode::ServFail));
+        let expected_reason = servfail.to_string();
+        assert_eq!(
+            observe_lookup(Err(servfail), "expected")
+                .unwrap_err()
+                .to_string(),
+            expected_reason
+        );
+        assert!(matches!(
+            observe_lookup(Err(NetError::Timeout), "expected"),
+            Err(NetError::Timeout)
+        ));
+    }
+
     #[tokio::test]
     async fn cancellation_and_deadline_prevent_resolver_work() {
         let cancelled = ExecutionContext {
@@ -108,7 +144,7 @@ mod tests {
         cancelled.cancellation.cancel();
         assert!(matches!(
             DnsVisibility.ready(&[], &cancelled).await,
-            Err(IssueError::Interrupted)
+            Err(IssueError::Cancelled)
         ));
         let expired = ExecutionContext {
             cancellation: CancellationToken::new(),
@@ -116,7 +152,7 @@ mod tests {
         };
         assert!(matches!(
             DnsVisibility.ready(&[], &expired).await,
-            Err(IssueError::Interrupted)
+            Err(IssueError::TimedOut)
         ));
     }
 }

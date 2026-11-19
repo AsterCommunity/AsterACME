@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 mod operation;
 
+/// Backend identifier under which the Cloudflare provider registers.
 pub const BACKEND_ID: &str = "com.astercosm.acme.dns.cloudflare";
 const API: &str = "https://api.cloudflare.com/client/v4";
 const FIELDS: &[ConfigField] = &[
@@ -43,15 +44,19 @@ static REGISTRATION: BackendRegistration = BackendRegistration {
     create: || Arc::new(CloudflareBackend),
 };
 
+/// Cloudflare DNS backend built from the Cloudflare API v4 record endpoints.
 pub struct CloudflareBackend;
 
 /// Cloudflare configuration. Explicit zone identity survives token rotation.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudflareConfig {
+    /// Pinned Cloudflare zone ID; discovery by name is used when empty.
     #[serde(default)]
     pub zone_id: String,
+    /// Cloudflare API token given inline; mutually exclusive with `token_file`.
     pub api_token: Option<String>,
+    /// Private file holding the API token; mutually exclusive with `api_token`.
     pub token_file: Option<PathBuf>,
 }
 

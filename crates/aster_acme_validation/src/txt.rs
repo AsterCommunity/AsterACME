@@ -46,7 +46,9 @@ impl Check for Txt {
             self.resolver.txt_lookup(format!("{name}.")).await,
             value,
         )
-        .map_err(|_| Failure::LookupFailed)
+        .map_err(|error| Failure::LookupFailed {
+            reason: error.to_string(),
+        })
     }
 }
 
@@ -69,7 +71,7 @@ mod tests {
         let address = socket.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let mut bytes = [0; 4096];
-            for _ in 0..3 {
+            loop {
                 let (length, peer) = socket.recv_from(&mut bytes).await.unwrap();
                 let request = Message::from_vec(&bytes[..length]).unwrap();
                 let query = request.queries[0].clone();
@@ -78,11 +80,16 @@ mod tests {
                 response.metadata.recursion_desired = true;
                 response.metadata.recursion_available = true;
                 response.add_query(query.clone());
-                response.add_answer(Record::from_rdata(
-                    query.name().clone(),
-                    0,
-                    RData::TXT(TXT::new(vec!["token".into(), ".thumb".into()])),
-                ));
+                if query.name().to_ascii() == "_acme-challenge.four.example." {
+                    response.metadata.response_code =
+                        hickory_resolver::proto::op::ResponseCode::ServFail;
+                } else {
+                    response.add_answer(Record::from_rdata(
+                        query.name().clone(),
+                        0,
+                        RData::TXT(TXT::new(vec!["token".into(), ".thumb".into()])),
+                    ));
+                }
                 socket
                     .send_to(&response.to_vec().unwrap(), peer)
                     .await
@@ -91,12 +98,12 @@ mod tests {
         });
         let mut nameserver = NameServerConfig::udp(address.ip());
         nameserver.connections[0].port = address.port();
-        let resolver = Resolver::builder_with_config(
+        let mut builder = Resolver::builder_with_config(
             ResolverConfig::from_parts(None, vec![], vec![nameserver]),
             TokioRuntimeProvider::default(),
-        )
-        .build()
-        .unwrap();
+        );
+        builder.options_mut().attempts = 1;
+        let resolver = builder.build().unwrap();
         let check = Txt::new(resolver);
         let inputs = [
             ValidationRequirement::Dns01 {
@@ -119,6 +126,10 @@ mod tests {
                 path: "/".into(),
                 content: "token.thumb".into(),
             },
+            ValidationRequirement::Dns01 {
+                name: "_acme-challenge.four.example".into(),
+                value: "token.thumb".into(),
+            },
         ];
         let execution = ExecutionContext {
             cancellation: tokio_util::sync::CancellationToken::new(),
@@ -135,6 +146,18 @@ mod tests {
             report.observations[3].result,
             Err(Failure::UnsupportedInput)
         );
-        server.await.unwrap();
+        let expected_reason =
+            hickory_resolver::net::NetError::from(hickory_resolver::net::DnsError::ResponseCode(
+                hickory_resolver::proto::op::ResponseCode::ServFail,
+            ))
+            .to_string();
+        assert_eq!(
+            report.observations[4].result,
+            Err(Failure::LookupFailed {
+                reason: expected_reason,
+            })
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 }

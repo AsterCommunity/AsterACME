@@ -23,9 +23,12 @@ pub enum Failure {
         /// Render as untrusted text; never include credentials or full configurations.
         reason: String,
     },
-    /// Lookup/request failed; absence of evidence is not a matching result.
-    #[error("precheck lookup failed")]
-    LookupFailed,
+    /// Lookup/request failed; the checker-owned cause is retained for diagnostics.
+    #[error("precheck lookup failed: {reason}")]
+    LookupFailed {
+        /// Sanitized lookup cause, never credentials or a full configuration.
+        reason: String,
+    },
     /// The checker cannot inspect this input.
     #[error("unsupported precheck input")]
     UnsupportedInput,

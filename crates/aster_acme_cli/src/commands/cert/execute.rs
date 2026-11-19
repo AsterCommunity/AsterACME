@@ -122,9 +122,10 @@ pub(crate) async fn execute(
             target,
             history,
             verify,
+            operation_timeout,
             http,
             local,
-        } => show(target, history, verify, http, local, cli).await,
+        } => show(target, history, verify, operation_timeout, http, local, cli).await,
         CertCommand::Revoke(args) => crate::commands::cert::revocation::execute(args, cli).await,
     }
 }

@@ -20,7 +20,9 @@ fn every_observation_is_rendered_without_changing_issuance_state() {
     let observer = Display::new(&saved, &progress);
     observer.starting();
     for result in [
-        Err(Failure::LookupFailed),
+        Err(Failure::LookupFailed {
+            reason: "injected lookup failure".into(),
+        }),
         Err(Failure::Unavailable {
             reason: "CA directory does not advertise caaIdentities".into(),
         }),
@@ -40,7 +42,9 @@ fn every_observation_is_rendered_without_changing_issuance_state() {
     }
     let text = diagnostics.text();
     assert!(text.contains("CAA example.com:"));
+    assert!(text.contains("injected lookup failure"));
     assert!(text.contains("does not advertise caaIdentities"));
+    assert!(text.contains("injected lookup failure"));
     assert!(text.contains("CAA precheck timed out"));
     assert!(text.contains("no CAA record matches"));
     assert_eq!(serde_json::to_value(saved).unwrap(), before);
@@ -78,7 +82,9 @@ fn only_matching_or_unrestricted_caa_results_use_info() {
         Failure::Unavailable {
             reason: "CA directory does not advertise caaIdentities".into(),
         },
-        Failure::LookupFailed,
+        Failure::LookupFailed {
+            reason: "injected lookup failure".into(),
+        },
         Failure::UnsupportedInput,
         Failure::TimedOut,
         Failure::NotChecked,

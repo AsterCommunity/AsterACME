@@ -39,44 +39,68 @@ pub struct KeyRotation {
 pub enum KeyRotationPhase {
     /// Staged locally; transport preparation has not reached the request boundary.
     Prepared,
+    /// The keyChange request was dispatched; whether the CA accepted it is unknown.
+    /// Reconcile the original account URL with the saved new key; never resubmit
+    /// `keyChange`, including when reconciliation fails.
     Pending,
+    /// A CA response explicitly confirmed the new key is authoritative.
     Confirmed,
 }
 
 /// Requested account operation, independent of transport and storage.
 #[derive(Debug, Clone, Copy)]
 pub enum AccountOperation {
+    /// Fetch the current authoritative account object without mutating anything.
     Inspect,
+    /// Create the account at the CA, or look up an existing registration.
     Register,
+    /// Deactivate the account at the CA.
     Deactivate,
+    /// Select the stored account for use without sending a mutation request.
     Select,
+    /// Update account contacts at the CA.
     Update,
+    /// Begin or resume RFC 8555 §7.3.5 key rollover.
     RotateKey,
 }
 
 /// Next permitted action, or an explicit refusal requiring reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountAction {
+    /// Look up an existing account URL with `onlyReturnExisting` before any mutation.
     LookupExisting,
+    /// Fetch the authoritative account object from the CA.
     Inspect,
+    /// POST the deactivation request to the CA.
     SendDeactivation,
+    /// No request is needed; deactivation is already durably confirmed.
     AlreadyDeactivated,
+    /// Use the stored account as-is; no request is required.
     Select,
+    /// POST the account contact update.
     Update,
+    /// The new key is staged; send the `keyChange` request.
     SendKeyChange,
+    /// The `keyChange` outcome is unknown; query the original account URL with the saved new key.
+    /// A failed query does not authorize another `keyChange` request.
     ReconcileKeyChange,
+    /// The CA confirmed the new key; finish the interrupted local key swap.
     FinalizeKeyChange,
 }
 
 /// Account lifecycle refusal; the caller maps it to its user-facing error contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AccountStateError {
+    /// The operation requires a durable registration, and none exists yet.
     #[error("account is not registered")]
     NotRegistered,
+    /// The last authoritative observation shows the account is deactivated, revoked, or unknown.
     #[error("account is not active")]
     NotActive,
+    /// A deactivation intent is pending with unknown remote outcome and must reconcile first.
     #[error("account deactivation requires reconciliation")]
     ReconciliationRequired,
+    /// A key rotation is in progress; other operations stay blocked until it finalizes.
     #[error("account key rotation requires reconciliation")]
     KeyRotationUncertain,
 }

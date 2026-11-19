@@ -1,4 +1,8 @@
-//! High-level ACME services, orchestration, and adapter contracts.
+//! Embeddable ACME services, protocol orchestration, and adapter contracts.
+//!
+//! This crate owns ACME request sequencing, durable workflow contracts, and bounded
+//! execution policies while leaving file layout, terminal interaction, and challenge
+//! publication effects to replaceable host adapters.
 
 #![cfg_attr(
     not(test),

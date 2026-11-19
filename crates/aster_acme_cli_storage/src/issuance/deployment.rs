@@ -19,15 +19,22 @@ mod update;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DeploymentTarget {
     /// Publish fullchain.pem, cert.pem, ca.pem and private-key.pem in this directory.
-    Directory { path: PathBuf },
+    Directory {
+        /// Directory receiving every published artifact.
+        path: PathBuf,
+    },
     /// Publish only the selected artifact paths; every artifact destination is optional.
     Files {
+        /// Destination for the leaf certificate in PEM form.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         certificate: Option<PathBuf>,
+        /// Destination for the full certificate chain in PEM form.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fullchain: Option<PathBuf>,
+        /// Destination for the CA chain (without the leaf) in PEM form.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ca_chain: Option<PathBuf>,
+        /// Destination for the PEM private key; stored with the key mode policy.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_key: Option<PathBuf>,
     },
@@ -149,9 +156,13 @@ fn configured() -> DeploymentPhase {
 pub struct DeploymentArtifacts {
     /// Selected operation generation.
     pub generation: String,
+    /// Full certificate chain in PEM form.
     pub fullchain: Vec<u8>,
+    /// Leaf certificate in PEM form.
     pub certificate: Vec<u8>,
+    /// CA chain (without the leaf) in PEM form.
     pub ca_chain: Vec<u8>,
+    /// PEM private key, zeroized when this artifact snapshot is dropped.
     pub private_key: Zeroizing<Vec<u8>>,
 }
 

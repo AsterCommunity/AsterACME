@@ -10,7 +10,8 @@ use aster_acme::{
     },
 };
 use aster_acme_dns::{
-    CleanupRequest, DnsProvider, ProviderContext, ProviderExecution, RecordOwnership,
+    CleanupRequest, DnsProvider, ProviderContext, ProviderError, ProviderErrorCode,
+    ProviderExecution, ProviderFailure, RecordOwnership,
     propagation::{PropagationError, PropagationEvent, PropagationPolicy},
     routing::{DnsLookup, absolute_name, resolve, validate_chain},
 };
@@ -33,6 +34,46 @@ fn scope(execution: &ExecutionContext) -> ProviderExecution {
         deadline: execution.deadline,
     }
 }
+
+fn interrupted(execution: &ExecutionContext) -> IssueError {
+    execution
+        .check()
+        .map_or_else(IssueError::from, |()| IssueError::Cancelled)
+}
+
+fn provider_failure(execution: &ExecutionContext, failure: ProviderFailure) -> IssueError {
+    if execution.cancellation.is_cancelled()
+        || matches!(
+            &failure,
+            ProviderFailure::Host {
+                code: aster_acme_dns::HostErrorCode::ProcessCancelled,
+                ..
+            }
+        )
+    {
+        return IssueError::Cancelled;
+    }
+    let provider_timed_out = matches!(
+        &failure,
+        ProviderFailure::Provider(ProviderError {
+            code: ProviderErrorCode::ProviderTimeout,
+            ..
+        }) | ProviderFailure::Host {
+            code: aster_acme_dns::HostErrorCode::ProcessTimeout,
+            ..
+        }
+    );
+    if provider_timed_out
+        && matches!(
+            execution.check(),
+            Err(aster_acme::solver::SolverError::DeadlineExceeded)
+        )
+    {
+        return IssueError::TimedOut;
+    }
+    IssueError::DnsProvider(failure)
+}
+
 impl ProviderDns {
     fn validate_plan(
         &self,
@@ -95,7 +136,7 @@ impl ProviderDns {
         publications: &[ChallengePublication],
         execution: &ExecutionContext,
     ) -> Result<ReadyResult, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let mut records = Vec::new();
         for publication in publications {
             let plan = publication.plan.as_ref().ok_or(IssueError::InvalidInput(
@@ -128,13 +169,7 @@ impl ProviderDns {
                 if let aster_acme_dns::ProviderFailure::Provider(provider) = &error {
                     outcome.retry_at = retry_at(provider);
                 }
-                outcome.failure = Some(match error {
-                    aster_acme_dns::ProviderFailure::Host {
-                        code: aster_acme_dns::HostErrorCode::ProcessCancelled,
-                        ..
-                    } => IssueError::Interrupted,
-                    error => IssueError::DnsProvider(error),
-                });
+                outcome.failure = Some(provider_failure(execution, error));
                 return Ok(outcome);
             }
         };
@@ -148,11 +183,7 @@ impl ProviderDns {
                     outcome.retry_at = outcome.retry_at.max(retry_at(&error));
                     outcome.ready = false;
                     if outcome.failure.is_none() {
-                        outcome.failure = Some(if execution.cancellation.is_cancelled() {
-                            IssueError::Interrupted
-                        } else {
-                            IssueError::DnsProvider(error.into())
-                        });
+                        outcome.failure = Some(provider_failure(execution, error.into()));
                     }
                 }
             }
@@ -215,7 +246,7 @@ impl ChallengeSolver for ProviderDns {
                     )
                     .await
                     .map_err(|error| match error {
-                        aster_acme_dns::routing::RouteError::Interrupted => IssueError::Interrupted,
+                        aster_acme_dns::routing::RouteError::Interrupted => interrupted(execution),
                         error => IssueError::DnsRouting(error),
                     })?;
                     let target = chain
@@ -271,7 +302,7 @@ impl ChallengeSolver for ProviderDns {
             })
             .await
             .map_err(|error| match error {
-                aster_acme_dns::propagation::PropagationError::Interrupted => IssueError::Interrupted,
+                aster_acme_dns::propagation::PropagationError::Interrupted => interrupted(execution),
                 error @ PropagationError::InvalidPolicy => IssueError::DnsPropagation(error),
             })?;
         self.progress.output.progress(
@@ -305,7 +336,7 @@ impl ChallengeSolver for ProviderDns {
             MessageKind::Info,
             &format!("Cleaning up {} DNS TXT publication(s)", publications.len()),
         );
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let mut outcome = CleanupResult::default();
         let mut records = Vec::new();
         for publication in publications {
@@ -358,7 +389,7 @@ impl ChallengeSolver for ProviderDns {
                     if let aster_acme_dns::ProviderFailure::Provider(provider) = &error {
                         outcome.retry_at = retry_at(provider);
                     }
-                    outcome.failure = Some(IssueError::DnsProvider(error));
+                    outcome.failure = Some(provider_failure(execution, error));
                 }
                 Ok(results) => {
                     for item in results {
@@ -378,11 +409,7 @@ impl ChallengeSolver for ProviderDns {
                                 outcome.retry_at = outcome.retry_at.max(retry_at(&error));
                                 if outcome.failure.is_none() {
                                     outcome.failure =
-                                        Some(if execution.cancellation.is_cancelled() {
-                                            IssueError::Interrupted
-                                        } else {
-                                            IssueError::DnsProvider(error.into())
-                                        });
+                                        Some(provider_failure(execution, error.into()));
                                 }
                             }
                         }
@@ -402,4 +429,88 @@ fn retry_at(error: &aster_acme_dns::ProviderError) -> Option<time::OffsetDateTim
         .and_then(|seconds| {
             time::OffsetDateTime::now_utc().checked_add(time::Duration::seconds(seconds))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::commands::cert::validation::dns_provider::{interrupted, provider_failure};
+    use aster_acme::issuance::IssueError;
+    use aster_acme::solver::ExecutionContext;
+    use aster_acme_dns::{ProviderError, ProviderErrorCode, ProviderFailure, SideEffect};
+    use std::time::{Duration, Instant};
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn route_and_propagation_interruptions_recover_caller_reason() {
+        let cancelled = ExecutionContext {
+            cancellation: CancellationToken::new(),
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+        cancelled.cancellation.cancel();
+        assert!(matches!(interrupted(&cancelled), IssueError::Cancelled));
+
+        let timed_out = ExecutionContext {
+            cancellation: CancellationToken::new(),
+            deadline: Instant::now(),
+        };
+        assert!(matches!(interrupted(&timed_out), IssueError::TimedOut));
+    }
+
+    fn provider_error(code: ProviderErrorCode) -> ProviderFailure {
+        ProviderError {
+            code,
+            message: "injected".into(),
+            side_effect: SideEffect::None,
+            retry_after_seconds: None,
+            provider_code: None,
+        }
+        .into()
+    }
+
+    #[test]
+    fn provider_timeout_requires_an_expired_deadline_and_cancellation_wins() {
+        let expired = ExecutionContext {
+            cancellation: CancellationToken::new(),
+            deadline: Instant::now(),
+        };
+        assert!(matches!(
+            provider_failure(&expired, provider_error(ProviderErrorCode::ProviderTimeout)),
+            IssueError::TimedOut
+        ));
+        assert!(matches!(
+            provider_failure(
+                &expired,
+                provider_error(ProviderErrorCode::ProviderUnavailable)
+            ),
+            IssueError::DnsProvider(_)
+        ));
+
+        let active = ExecutionContext {
+            cancellation: CancellationToken::new(),
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+        assert!(matches!(
+            provider_failure(&active, provider_error(ProviderErrorCode::ProviderTimeout)),
+            IssueError::DnsProvider(_)
+        ));
+
+        let host_timeout = || ProviderFailure::Host {
+            code: aster_acme_dns::HostErrorCode::ProcessTimeout,
+            side_effect: SideEffect::Unknown,
+        };
+        assert!(matches!(
+            provider_failure(&expired, host_timeout()),
+            IssueError::TimedOut
+        ));
+        assert!(matches!(
+            provider_failure(&active, host_timeout()),
+            IssueError::DnsProvider(_)
+        ));
+
+        expired.cancellation.cancel();
+        assert!(matches!(
+            provider_failure(&expired, provider_error(ProviderErrorCode::ProviderTimeout)),
+            IssueError::Cancelled
+        ));
+    }
 }

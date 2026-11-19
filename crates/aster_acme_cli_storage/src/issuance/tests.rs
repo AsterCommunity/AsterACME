@@ -62,7 +62,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let server = MockServer::start().await;
-    Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/unused",server.uri()),"newOrder":format!("{}/vendor/create",server.uri())}))).mount(&server).await;
+    Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/unused",server.uri()),"newOrder":format!("{}/vendor/create",server.uri()),"keyChange":format!("{}/key-change",server.uri())}))).mount(&server).await;
     Mock::given(method("HEAD"))
         .and(path("/nonce"))
         .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "fresh"))
@@ -110,6 +110,111 @@ async fn fixture() -> Fixture {
         store,
         account,
         service,
+    }
+}
+
+#[tokio::test]
+async fn order_and_authorization_extension_nulls_roundtrip_through_journal() {
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    record.order = Some(
+        serde_json::from_value(serde_json::json!({
+            "status":"pending",
+            "identifiers":[{"type":"dns","value":"example.com"}],
+            "authorizations":[],
+            "finalize":"https://ca.example/finalize",
+            "futureExtension":{"nullable":null,"values":[null,true,{"nested":null}]}
+        }))
+        .unwrap(),
+    );
+    record.authorizations = vec![
+        serde_json::from_value(serde_json::json!({
+            "url":"https://ca.example/auth/1",
+            "resource":{
+                "identifier":{"type":"dns","value":"example.com"},
+                "status":"pending",
+                "wildcard":false,
+                "challenges":[{
+                    "type":"dns-01",
+                    "url":"https://ca.example/challenge/1",
+                    "status":"pending",
+                    "token":"saved-token",
+                    "x-ca-challenge":[null]
+                }],
+                "x-ca-evidence":[null]
+            },
+            "cleanup_pending":false,
+            "acknowledgement":"not_submitted"
+        }))
+        .unwrap(),
+    ];
+    session.save(&record).await.unwrap();
+    drop(session);
+
+    let restored = fixture
+        .store
+        .open(&record.name, &record.operation_id)
+        .await
+        .unwrap()
+        .record()
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.order).unwrap(),
+        serde_json::to_value(&record.order).unwrap(),
+    );
+    assert_eq!(
+        serde_json::to_value(&restored.authorizations).unwrap(),
+        serde_json::to_value(&record.authorizations).unwrap(),
+    );
+
+    // Version-one journals written before JSON snapshots stored authorization
+    // objects inline. Keep reading that layout when the snapshot is absent.
+    let mut legacy = restored;
+    legacy.order = None;
+    legacy.authorizations[0].resource.challenges.clear();
+    legacy.authorizations[0]
+        .resource
+        .extensions
+        .insert("x-ca-evidence".into(), serde_json::json!(["legacy"]));
+    let legacy_text = toml::to_string_pretty(&Journal {
+        version: JOURNAL_VERSION,
+        operation: &legacy,
+        order_json: None,
+        authorizations_json: None,
+    })
+    .unwrap();
+    let legacy_path = fixture
+        .temp
+        .path()
+        .join("certs/example.com")
+        .join(legacy.generation_name())
+        .join("operation.toml");
+    std::fs::write(&legacy_path, legacy_text).unwrap();
+    assert_eq!(
+        read_journal(&legacy_path).unwrap().authorizations[0]
+            .resource
+            .extensions["x-ca-evidence"],
+        serde_json::json!(["legacy"])
+    );
+
+    let too_many = serde_json::to_string(&vec![legacy.authorizations[0].clone(); 101]).unwrap();
+    for encoded in ["invalid JSON".to_owned(), "{}".to_owned(), too_many] {
+        let text = toml::to_string_pretty(&Journal {
+            version: JOURNAL_VERSION,
+            operation: &legacy,
+            order_json: None,
+            authorizations_json: Some(encoded),
+        })
+        .unwrap();
+        std::fs::write(&legacy_path, &text).unwrap();
+        assert!(read_journal(&legacy_path).is_err());
+        assert_eq!(std::fs::read_to_string(&legacy_path).unwrap(), text);
     }
 }
 
@@ -668,7 +773,7 @@ async fn cancellation_and_pending_finalization_never_replay_a_mutation() {
             .service
             .run(session.as_mut(), &Dns(true), &execution)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::TimedOut)
     ));
     assert!(
         !fixture
@@ -685,7 +790,7 @@ async fn cancellation_and_pending_finalization_never_replay_a_mutation() {
             .service
             .run(session.as_mut(), &Dns(true), &execution)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
 }
 
@@ -791,7 +896,12 @@ async fn order_inspection_only_observes_and_preserves_pending_publication_state(
         .open(&record.name, &record.operation_id)
         .await
         .unwrap();
-    let observed = fixture.service.inspect(session.as_mut()).await.unwrap();
+    let execution = execution();
+    let observed = fixture
+        .service
+        .inspect(session.as_mut(), &execution.context)
+        .await
+        .unwrap();
     assert_eq!(observed.operation_id, record.operation_id);
     assert_eq!(observed.finalize_submitted, SubmissionState::NotSubmitted);
     for authorization in &observed.authorizations {
@@ -1453,6 +1563,7 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
+            "keyChange":format!("{}/key-change",fixture.server.uri()),
             "renewalInfo":format!("{}/vendor/renewal",fixture.server.uri())
         }))).with_priority(1).mount(&fixture.server).await;
     let now = time::OffsetDateTime::now_utc();
@@ -1462,6 +1573,7 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
             end: now + time::Duration::days(2),
         },
         explanation_url: None,
+        extensions: std::collections::BTreeMap::new(),
     };
     Mock::given(method("GET"))
         .and(path(format!("/vendor/renewal/{id}")))
@@ -2586,7 +2698,7 @@ async fn renewal_client(fixture: &Fixture, ari: bool) -> Arc<IssueService> {
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
-            "newOrder":format!("{}/vendor/create",fixture.server.uri()),"renewalInfo":ari.then(||format!("{}/renewal-info",fixture.server.uri()))
+            "newOrder":format!("{}/vendor/create",fixture.server.uri()),"keyChange":format!("{}/key-change",fixture.server.uri()),"renewalInfo":ari.then(||format!("{}/renewal-info",fixture.server.uri()))
         }))).with_priority(1).mount(&fixture.server).await;
     let client = aster_acme::transport::HttpPool::default()
         .discover(
@@ -2985,7 +3097,7 @@ async fn interrupted_manual_renewal_retains_old_in_use_and_resumes_the_same_orde
             .service
             .run(restored.as_mut(), &Dns(true), &cancelled)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     assert_eq!(
         selected_view(&slot),

@@ -74,7 +74,7 @@ impl IssueService {
             for url in &order.authorizations {
                 if let Err(error) = bounded(execution, self.authorization(record, url)).await {
                     tracing::debug!("Could not enrich invalid order authorization details");
-                    if matches!(error, IssueError::Interrupted) {
+                    if matches!(error, IssueError::Cancelled | IssueError::TimedOut) {
                         break;
                     }
                 }

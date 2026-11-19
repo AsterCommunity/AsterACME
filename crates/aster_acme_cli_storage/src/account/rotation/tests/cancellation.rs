@@ -81,7 +81,7 @@ impl AccountRotation for PausingRotation {
 
 #[tokio::test]
 async fn cancelling_after_pending_save_keeps_submission_owned_and_confirmed_recovery_offline() {
-    let fixture = setup(true, Duration::from_secs(3)).await;
+    let fixture = setup(Duration::from_secs(3)).await;
     Mock::given(method("POST"))
         .and(path("/vendor/rollover"))
         .respond_with(ResponseTemplate::new(200))

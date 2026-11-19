@@ -46,12 +46,12 @@ impl TlsAlpn {
         requirements: &[ValidationRequirement],
         execution: &ExecutionContext,
     ) -> Result<(), IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let mut listener = self.listener.lock().await;
         self.resolver.publish(requirements)?;
-        if execution.check().is_err() {
+        if let Err(error) = execution.check() {
             self.resolver.clear();
-            return Err(IssueError::Interrupted);
+            return Err(error.into());
         }
         if let Some(active) = listener.as_ref() {
             if active.is_finished() {

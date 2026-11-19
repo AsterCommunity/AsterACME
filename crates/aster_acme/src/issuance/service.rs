@@ -2,7 +2,7 @@
 
 use crate::issuance::progress::{IssueEvent, IssueObserver};
 use crate::issuance::service::{
-    execution::{bounded, check},
+    execution::{bounded, bounded_context, check},
     response::{parse_order, schedule},
 };
 use crate::issuance::{IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord};
@@ -70,14 +70,19 @@ impl IssueService {
     ///
     /// # Errors
     /// Reports binding, HTTP and malformed-resource failures.
-    pub async fn inspect(&self, session: &mut dyn IssueSession) -> Result<IssueRecord, IssueError> {
+    pub async fn inspect(
+        &self,
+        session: &mut dyn IssueSession,
+        execution: &crate::solver::ExecutionContext,
+    ) -> Result<IssueRecord, IssueError> {
+        execution.check().map_err(IssueError::from)?;
         let mut record = session.record().await?;
         self.check_identity(&record)?;
         let url = record
             .order_url
             .clone()
             .ok_or(IssueError::CreationUncertain)?;
-        let response = self.post(&url, b"").await?;
+        let response = bounded_context(execution, self.post(&url, b"")).await?;
         if response.status != reqwest::StatusCode::OK {
             return Err(IssueError::InvalidInput("order query must return HTTP 200"));
         }
@@ -89,14 +94,10 @@ impl IssueService {
             .authorizations
             .clone();
         for url in urls {
-            self.authorization(&mut record, &url).await?;
+            bounded_context(execution, self.authorization(&mut record, &url)).await?;
         }
         session.save(&record).await?;
-        let execution = crate::solver::ExecutionContext {
-            cancellation: tokio_util::sync::CancellationToken::new(),
-            deadline: std::time::Instant::now() + Duration::from_secs(30),
-        };
-        self.plan_renewal(session, &execution).await
+        self.plan_renewal(session, execution).await
     }
 
     /// Drive one saved issuance using explicit core actions and bounded cancellation-aware I/O.
