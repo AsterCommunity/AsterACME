@@ -1,4 +1,3 @@
-use super::{annotate_provider_error, request_diagnostic};
 use crate::{
     DnsRecord, ProviderContext, ProviderError, ProviderErrorCode, ProviderExecution,
     RecordOwnership, SideEffect,
@@ -11,6 +10,7 @@ use crate::{
         ProviderAction, ProviderEffect, ProviderEvent, ProviderHost, ProviderOperation,
         ProviderOutcome, PublicationSession, PublicationStore, RecoveryState,
     },
+    operation::{annotate_provider_error, request_diagnostic},
 };
 use async_trait::async_trait;
 use std::{
@@ -22,16 +22,17 @@ use std::{
 #[test]
 fn request_diagnostics_keep_safe_actions_and_status_but_never_url_queries() {
     let request = HttpRequest {
+        operation: Some("DescribeRecordList".into()),
         method: crate::operation::HttpMethod::Post,
         url: "https://api.example.test/v2/zones?token=secret-sentinel".into(),
-        headers: vec![("x-tc-action".into(), "DescribeRecordList".into())],
+        headers: vec![],
         body: b"secret-sentinel".to_vec(),
         mutation: false,
     };
     assert_eq!(request_diagnostic(&request), "DescribeRecordList");
 
     let request = HttpRequest {
-        headers: vec![("x-tc-action".into(), "unsafe action\nsecret".into())],
+        operation: Some("unsafe action\nsecret".into()),
         ..request
     };
     let action = request_diagnostic(&request);
@@ -156,6 +157,7 @@ impl ProviderOperation for SpecialOperation {
             }
             (SpecialMode::MutationWithoutCheckpoint, ProviderEvent::Start) => {
                 Ok(ProviderEffect::Http(HttpRequest {
+                    operation: None,
                     method: crate::operation::HttpMethod::Post,
                     url: "https://dns.example/mutation".into(),
                     headers: vec![],
@@ -336,6 +338,7 @@ impl ProviderOperation for Operation {
             }
             ProviderEvent::Start | ProviderEvent::CheckpointSaved => {
                 Ok(ProviderEffect::Http(HttpRequest {
+                    operation: None,
                     method: crate::operation::HttpMethod::Post,
                     url: format!("https://dns.example/{}", self.record.publication_id),
                     headers: vec![],

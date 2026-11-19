@@ -1,5 +1,5 @@
 //! Huawei TXT presentation and value-bound publication markers.
-use crate::provider::marker::{is_publication_marker, matches_publication};
+use crate::provider::common::marker::is_publication_marker;
 use aster_acme_dns::{ProviderError, backend::configuration_error};
 pub(super) fn has_marker(description: &str, marker: &str) -> bool {
     description
@@ -8,39 +8,28 @@ pub(super) fn has_marker(description: &str, marker: &str) -> bool {
 }
 
 pub(super) fn has_foreign_marker(description: &str, marker: &str) -> bool {
-    let expected_hash = marker.split_once('=').map(|(_, hash)| hash);
+    let Some((expected_id, expected_hash)) = parse_huawei_marker(marker) else {
+        return false;
+    };
     description
         .split(';')
-        .filter(|part| is_publication_marker(part))
-        .any(|part| {
-            if matches_publication_marker(part, marker) {
-                return false;
-            }
-            let Some(expected_hash) = expected_hash else {
-                return true;
-            };
-            part.split_once('=').is_none_or(|(_, hash)| {
-                hash.len() != 64
-                    || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    || hash.eq_ignore_ascii_case(expected_hash)
-            })
-        })
+        .filter_map(parse_huawei_marker)
+        .any(|(id, hash)| id != expected_id && hash.eq_ignore_ascii_case(expected_hash))
 }
 
 fn matches_publication_marker(actual: &str, expected: &str) -> bool {
-    if actual == expected {
-        return true;
-    }
-    let Some((expected_id, expected_hash)) = expected
-        .strip_prefix("asteracme-")
-        .and_then(|value| value.split_once('='))
-    else {
-        return false;
-    };
-    actual == format!("acme-{expected_id}={expected_hash}")
-        || actual == format!("asteracme-{expected_id}={expected_hash}")
-        || actual == format!("asteracme:{expected_id}={expected_hash}")
-        || matches_publication(actual, expected_id)
+    actual == expected && parse_huawei_marker(actual).is_some()
+}
+
+fn valid_huawei_marker(id: &str, hash: &str) -> bool {
+    is_publication_marker(&format!("asteracme-{id}"))
+        && hash.len() == 64
+        && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn parse_huawei_marker(marker: &str) -> Option<(&str, &str)> {
+    let (id, hash) = marker.strip_prefix("asteracme-")?.split_once('=')?;
+    valid_huawei_marker(id, hash).then_some((id, hash))
 }
 
 pub(super) fn add_marker(description: &str, marker: &str) -> Result<String, ProviderError> {
@@ -62,7 +51,7 @@ pub(super) fn add_marker(description: &str, marker: &str) -> Result<String, Prov
 pub(super) fn remove_marker(description: &str, marker: &str) -> String {
     description
         .split(';')
-        .filter(|part| *part != marker)
+        .filter(|part| !matches_publication_marker(part, marker))
         .collect::<Vec<_>>()
         .join(";")
 }

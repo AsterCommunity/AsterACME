@@ -36,6 +36,8 @@ impl HttpMethod {
 
 /// Fully prepared request. Headers/body may contain credentials; deliberately no Debug.
 pub struct HttpRequest {
+    /// Optional provider-owned API operation name; the host validates it before display.
+    pub operation: Option<String>,
     pub method: HttpMethod,
     pub url: String,
     pub headers: Vec<(String, String)>,
@@ -339,7 +341,9 @@ fn advance_with_context(
     };
     match operation.advance(event) {
         Ok(effect) => {
-            *request_context = None;
+            if !matches!(effect, ProviderEffect::Checkpoint(_)) {
+                *request_context = None;
+            }
             Ok(effect)
         }
         Err(error) => Err(annotate_provider_error(
@@ -351,12 +355,11 @@ fn advance_with_context(
 }
 
 fn request_diagnostic(request: &HttpRequest) -> String {
-    if let Some((_, action)) = request.headers.iter().find(|(name, value)| {
-        matches!(
-            name.to_ascii_lowercase().as_str(),
-            "x-acs-action" | "x-tc-action"
-        ) && safe_action(value)
-    }) {
+    if let Some(action) = request
+        .operation
+        .as_ref()
+        .filter(|action| safe_action(action))
+    {
         return action.clone();
     }
     let path = request

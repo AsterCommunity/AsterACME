@@ -1,4 +1,4 @@
-use crate::provider::cloudflare::{BACKEND_ID, Cloudflare, CloudflareConfig};
+use crate::provider::vendors::cloudflare::{BACKEND_ID, Cloudflare, CloudflareConfig};
 use aster_acme_dns::{
     CleanupRequest, CleanupStatus, DnsRecord, ProviderErrorCode, RecordOwnership, SideEffect,
     operation::{
@@ -100,7 +100,7 @@ fn creates_only_after_intent_and_cleans_exact_owned_record() {
     let saved = intent(machine.as_mut());
     let ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) = machine
         .advance(response(remote(
-            Some("asteracme:publication-1"),
+            Some("asteracme-publication-1"),
             "txt-value",
         )))
         .unwrap()
@@ -123,7 +123,7 @@ fn creates_only_after_intent_and_cleans_exact_owned_record() {
     assert!(matches!(
         cleanup
             .advance(response(remote(
-                Some("asteracme:publication-1"),
+                Some("asteracme-publication-1"),
                 "txt-value"
             )))
             .unwrap(),
@@ -154,7 +154,7 @@ fn lost_create_response_reconciles_tag_without_repeating_post() {
     assert_eq!(error.side_effect, SideEffect::Unknown);
     let mut restored = begin(Some(saved));
     assert!(
-        matches!(restored.advance(response(json!([remote(Some("asteracme:publication-1"),"txt-value")]))).unwrap(),
+        matches!(restored.advance(response(json!([remote(Some("asteracme-publication-1"),"txt-value")]))).unwrap(),
         ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) if receipt.ownership == RecordOwnership::Created)
     );
 }
@@ -203,11 +203,12 @@ fn preexisting_values_are_retained_and_other_publications_cannot_be_borrowed() {
     for comment in [
         None,
         Some("user comment"),
-        Some("asteracme:another-publication"),
+        Some("acme-publication-1"),
+        Some("asteracme-another-publication"),
     ] {
         let mut machine = begin(None);
         let outcome = machine.advance(response(json!([remote(comment, "txt-value")])));
-        if comment == Some("asteracme:another-publication") {
+        if comment == Some("asteracme-another-publication") {
             assert!(
                 matches!(outcome,Err(error) if error.code == ProviderErrorCode::RecordConflict)
             );
@@ -247,7 +248,7 @@ fn pagination_is_complete_before_creating_and_ambiguous_records_fail_closed() {
     }));
     let request = http(machine.advance(page).unwrap(), "GET");
     assert!(request.url.ends_with("page=2"));
-    let page=ProviderEvent::Http(Ok(HttpResponse {status:200,headers:vec![],body:serde_json::to_vec(&json!({"success":true,"result":[remote(Some("asteracme:publication-1"),"txt-value")],"result_info":{"page":2,"total_pages":2}})).unwrap()}));
+    let page=ProviderEvent::Http(Ok(HttpResponse {status:200,headers:vec![],body:serde_json::to_vec(&json!({"success":true,"result":[remote(Some("asteracme-publication-1"),"txt-value")],"result_info":{"page":2,"total_pages":2}})).unwrap()}));
     assert!(matches!(
         machine.advance(page).unwrap(),
         ProviderEffect::Complete(_)
@@ -262,13 +263,13 @@ fn pagination_is_complete_before_creating_and_ambiguous_records_fail_closed() {
 fn changed_record_or_publication_tag_never_authorizes_delete_or_create() {
     let mut machine = begin(None);
     assert!(
-        matches!(machine.advance(response(json!([remote(Some("asteracme:publication-1"),"changed")]))),Err(error) if error.code==ProviderErrorCode::RecordConflict)
+        matches!(machine.advance(response(json!([remote(Some("asteracme-publication-1"),"changed")]))),Err(error) if error.code==ProviderErrorCode::RecordConflict)
     );
     let mut machine = begin(None);
     let saved = intent(machine.as_mut());
     let ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) = machine
         .advance(response(remote(
-            Some("asteracme:publication-1"),
+            Some("asteracme-publication-1"),
             "txt-value",
         )))
         .unwrap()
@@ -277,13 +278,13 @@ fn changed_record_or_publication_tag_never_authorizes_delete_or_create() {
     };
     for record in [
         remote(None, "txt-value"),
-        remote(Some("asteracme:publication-1"), "changed"),
+        remote(Some("asteracme-publication-1"), "changed"),
     ] {
         let mut cleanup = factory()
             .start(
                 ProviderAction::Cleanup(CleanupRequest {
                     publication_id: record_for_id(),
-                    record: crate::provider::cloudflare::tests::record(),
+                    record: crate::provider::vendors::cloudflare::tests::record(),
                     receipt: receipt.clone(),
                 }),
                 Some(saved.clone()),
@@ -410,7 +411,7 @@ fn cleanup_absence_requires_a_structured_missing_record_error() {
     let saved = intent(machine.as_mut());
     let ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) = machine
         .advance(response(remote(
-            Some("asteracme:publication-1"),
+            Some("asteracme-publication-1"),
             "txt-value",
         )))
         .unwrap()
@@ -509,7 +510,7 @@ fn delayed_owned_marker_reconciles_by_reading_without_recreating() {
     http(machine.advance(ProviderEvent::Timer).unwrap(), "GET");
     let effect = machine
         .advance(response(json!([remote(
-            Some("asteracme:publication-1"),
+            Some("asteracme-publication-1"),
             "txt-value"
         )])))
         .unwrap();
@@ -549,7 +550,7 @@ fn unknown_backend_config_version_is_not_interpreted_as_current() {
         ..BackendConfig::default()
     };
     assert!(
-        crate::provider::cloudflare::CloudflareBackend
+        crate::provider::vendors::cloudflare::CloudflareBackend
             .validate(&config)
             .is_err()
     );

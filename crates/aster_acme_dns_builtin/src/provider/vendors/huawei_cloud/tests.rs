@@ -1,4 +1,4 @@
-use crate::provider::huawei_cloud::{
+use crate::provider::vendors::huawei_cloud::{
     BACKEND_ID, Config, HuaweiCloudBackend,
     api::{SignedRequest, canonical_query, canonical_uri},
     operation::Factory,
@@ -133,6 +133,7 @@ fn official_hws_get_and_post_signatures_use_exact_wire_bytes() {
         "SDK-HMAC-SHA256 Access=AccessKey, SignedHeaders=x-sdk-date, Signature=cecc2af119b18ab70b4d094c0750f3b42c02f254903179a0fc2cc72fc9db4f59"
     );
     assert_eq!(canonical_uri("/v2/path x"), "/v2/path%20x/");
+    assert_eq!(canonical_uri("/v2/zones/"), "/v2/zones/");
     assert_eq!(
         canonical_query(&[
             ("test", "一 (&=?!#%.*)"),
@@ -141,6 +142,116 @@ fn official_hws_get_and_post_signatures_use_exact_wire_bytes() {
         ]),
         "enable=true&path=%2Ftmp%2F123&test=%E4%B8%80%20%28%26%3D%3F%21%23%25.%2A%29"
     );
+    let with_project = SignedRequest {
+        endpoint: "https://example.huaweicloud.com",
+        method: aster_acme_dns::operation::HttpMethod::Get,
+        path: "/path",
+        query: &[],
+        body: &[],
+        mutation: false,
+        project_id: Some("project-id"),
+    }
+    .sign("AccessKey", "SecretKey", "20060102T150405Z")
+    .unwrap();
+    assert!(
+        with_project
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-project-id" && value == "project-id")
+    );
+    assert!(
+        SignedRequest {
+            endpoint: "https://example.huaweicloud.com",
+            method: aster_acme_dns::operation::HttpMethod::Get,
+            path: "/path",
+            query: &[],
+            body: &[],
+            mutation: false,
+            project_id: None,
+        }
+        .sign("AccessKey", "SecretKey", "bad")
+        .is_err()
+    );
+}
+
+#[test]
+fn hws_pagination_and_payload_errors_fail_closed() {
+    assert_eq!(
+        crate::provider::vendors::huawei_cloud::api::marker_from_next(
+            "https://example.huaweicloud.com/v2/zones?marker=next",
+            "https://example.huaweicloud.com",
+        )
+        .unwrap(),
+        "next"
+    );
+    for next in [
+        "not a url",
+        "https://other.example/v2/zones?marker=next",
+        "https://example.huaweicloud.com/v2/zones",
+        "https://example.huaweicloud.com/v2/zones?marker=",
+    ] {
+        assert!(
+            crate::provider::vendors::huawei_cloud::api::marker_from_next(
+                next,
+                "https://example.huaweicloud.com",
+            )
+            .is_err()
+        );
+    }
+    for (status, code) in [
+        (400, ProviderErrorCode::InvalidRequest),
+        (401, ProviderErrorCode::AuthenticationFailed),
+        (403, ProviderErrorCode::AuthorizationDenied),
+        (409, ProviderErrorCode::RecordConflict),
+        (429, ProviderErrorCode::RateLimited),
+    ] {
+        let response = HttpResponse {
+            status,
+            headers: vec![],
+            body: json!({"code":"DNS.Invalid"}).to_string().into_bytes(),
+        };
+        let error =
+            crate::provider::vendors::huawei_cloud::api::payload(&response, true).unwrap_err();
+        assert_eq!(error.code, code);
+        assert_eq!(error.side_effect, SideEffect::None);
+    }
+    for response in [
+        HttpResponse {
+            status: 200,
+            headers: vec![],
+            body: b"not-json".to_vec(),
+        },
+        HttpResponse {
+            status: 200,
+            headers: vec![],
+            body: json!({"code":"DNS.Error"}).to_string().into_bytes(),
+        },
+        HttpResponse {
+            status: 500,
+            headers: vec![],
+            body: json!({"code":"DNS.Error"}).to_string().into_bytes(),
+        },
+    ] {
+        assert!(crate::provider::vendors::huawei_cloud::api::payload(&response, true).is_err());
+    }
+    let response = HttpResponse {
+        status: 200,
+        headers: vec![],
+        body: json!({"code":"DNS.Error"}).to_string().into_bytes(),
+    };
+    assert!(crate::provider::vendors::huawei_cloud::api::payload(&response, false).is_err());
+    let response = HttpResponse {
+        status: 500,
+        headers: vec![],
+        body: json!({"code":"DNS.0001","message":"private raw Huawei detail"})
+            .to_string()
+            .into_bytes(),
+    };
+    let failure =
+        crate::provider::vendors::huawei_cloud::api::payload(&response, true).unwrap_err();
+    assert_eq!(failure.provider_code.as_deref(), Some("DNS.0001"));
+    assert!(failure.message.contains("DNS.0001"));
+    assert!(!failure.message.contains("private raw Huawei detail"));
 }
 #[test]
 fn descriptor_is_explicitly_best_effort_and_keys_are_sensitive() {
@@ -180,6 +291,60 @@ fn descriptor_is_explicitly_best_effort_and_keys_are_sensitive() {
     assert_eq!(
         backend.binding(&automatic).unwrap(),
         "cn-north-4:auto:best-effort"
+    );
+}
+
+#[test]
+fn huawei_configuration_boundaries_reject_invalid_regions_and_projects() {
+    let backend = HuaweiCloudBackend;
+    for custom in [
+        json!({"access_key_id":"AccessKey","access_key_secret":"SecretKey","region":""}),
+        json!({"access_key_id":"AccessKey","access_key_secret":"SecretKey","region":"CN-NORTH-4"}),
+        json!({"access_key_id":"AccessKey","access_key_secret":"SecretKey","region":"cn north"}),
+        json!({"access_key_id":"AccessKey","access_key_secret":"SecretKey","project_id":"bad"}),
+    ] {
+        let config = BackendConfig {
+            custom: serde_json::from_value(custom).unwrap(),
+            ..BackendConfig::default()
+        };
+        assert!(backend.validate(&config).is_err());
+    }
+}
+
+#[test]
+fn uppercase_project_ids_have_one_binding_representation() {
+    let backend = HuaweiCloudBackend;
+    let config = BackendConfig {
+        custom: serde_json::from_value(json!({
+            "access_key_id":"AccessKey",
+            "access_key_secret":"SecretKey",
+            "project_id":"0123456789ABCDEF0123456789ABCDEF"
+        }))
+        .unwrap(),
+        ..BackendConfig::default()
+    };
+    assert_eq!(
+        backend.binding(&config).unwrap(),
+        "cn-north-4:0123456789abcdef0123456789abcdef:best-effort"
+    );
+}
+
+#[test]
+fn uppercase_saved_and_configured_project_ids_resume_as_the_same_project() {
+    let mut config = config();
+    config.project_id = Some("0123456789abcdef0123456789abcdef".into());
+    let factory = Factory { config };
+    let saved = RecoveryState {
+        version: 1,
+        data: json!({
+            "phase":"project_resolved",
+            "project_id":"0123456789ABCDEF0123456789ABCDEF"
+        }),
+    };
+    assert!(
+        factory
+            .start(ProviderAction::Present(record()), Some(saved))
+            .is_ok()
     );
 }
 
@@ -421,21 +586,52 @@ fn preexisting_same_value_is_retained_and_foreign_marker_is_rejected() {
 }
 #[test]
 fn descriptions_preserve_user_text_and_bound_markers() {
+    let p = marker("p", "value-p");
+    let q = marker("q", "value-q");
+    assert_eq!(add_marker("user", &p).unwrap(), format!("user;{p}"));
     assert_eq!(
-        add_marker("user", "asteracme:p").unwrap(),
-        "user;asteracme:p"
+        remove_marker(&format!("user;{p};{q}"), &p),
+        format!("user;{q}")
+    );
+    assert!(add_marker(&"x".repeat(255), &p).is_err());
+    assert!(
+        !crate::provider::vendors::huawei_cloud::txt::has_foreign_marker(
+            "asteracme-other",
+            "plain"
+        )
     );
     assert_eq!(
-        remove_marker("user;asteracme:p;asteracme:q", "asteracme:p"),
-        "user;asteracme:q"
+        add_marker(&format!("user;{p}"), &p).unwrap(),
+        format!("user;{p}")
     );
-    assert!(add_marker(&"x".repeat(255), "asteracme:p").is_err());
+}
+
+#[test]
+fn oversized_description_fails_before_persisting_a_write_intent() {
+    let mut operation = factory()
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    initial(operation.as_mut());
+    http(
+        operation.advance(ProviderEvent::CheckpointSaved).unwrap(),
+        "GET",
+    );
+    let result = reply(
+        operation.as_mut(),
+        200,
+        listing(vec![row(&["user-value"], &"x".repeat(250))]),
+    );
+    let failure = result
+        .err()
+        .expect("oversized description must fail locally");
+    assert_eq!(failure.side_effect, SideEffect::None);
+    assert!(failure.message.contains("255 bytes"));
 }
 
 fn marker(id: &str, value: &str) -> String {
     format!(
         "asteracme-{id}={}",
-        crate::provider::rpc::sha256(value.as_bytes())
+        crate::provider::common::rpc::sha256(value.as_bytes())
     )
 }
 
@@ -449,6 +645,8 @@ fn txt_wire_representation_roundtrips_quotes_backslashes_utf8_and_chunk_boundari
     for input in ["raw", "\"unterminated", r#""\999""#, r#""\1""#, ""] {
         assert!(txt_decode(input).is_none());
     }
+    assert!(txt_decode("   ").is_none());
+    assert!(txt_decode(r#""\12x""#).is_none());
     assert!(txt_decode(&format!("\"{}\"", "a".repeat(256))).is_none());
 }
 
@@ -885,20 +1083,20 @@ fn successful_write_is_not_a_receipt_until_active_remote_readback_matches() {
 }
 
 #[test]
-fn unknown_or_truncated_publication_markers_never_authorize_borrowing() {
-    for description in ["asteracme:another", "asteracme:another=truncated"] {
+fn malformed_marker_notes_remain_operator_metadata_and_never_prove_ownership() {
+    for description in ["asteracme-another", "asteracme-another=truncated"] {
         let mut op = factory()
             .start(ProviderAction::Present(record()), None)
             .unwrap();
         initial(op.as_mut());
         http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "GET");
-        let failure = reply(
+        let result = reply(
             op.as_mut(),
             200,
             listing(vec![row(&["our-value"], description)]),
         )
-        .err()
         .unwrap();
-        assert_eq!(failure.code, ProviderErrorCode::RecordConflict);
+        checkpoint(result, "presented");
+        assert_eq!(receipt(op.as_mut()).ownership, RecordOwnership::Preexisting);
     }
 }

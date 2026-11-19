@@ -7,7 +7,7 @@ use aster_acme_dns::{
 };
 use serde_json::Value;
 
-pub(super) fn record() -> DnsRecord {
+pub(in crate::provider) fn record() -> DnsRecord {
     DnsRecord {
         publication_id: "publication-1".into(),
         challenge_name: "_acme-challenge.example.com.".into(),
@@ -21,7 +21,7 @@ pub(super) fn record() -> DnsRecord {
     }
 }
 
-pub(super) fn cleanup(receipt: PublicationReceipt) -> CleanupRequest {
+pub(in crate::provider) fn cleanup(receipt: PublicationReceipt) -> CleanupRequest {
     CleanupRequest {
         publication_id: record().publication_id,
         record: record(),
@@ -29,7 +29,7 @@ pub(super) fn cleanup(receipt: PublicationReceipt) -> CleanupRequest {
     }
 }
 
-pub(super) fn response(status: u16, body: &Value) -> HttpResponse {
+pub(in crate::provider) fn response(status: u16, body: &Value) -> HttpResponse {
     HttpResponse {
         status,
         body: serde_json::to_vec(body).unwrap(),
@@ -37,14 +37,14 @@ pub(super) fn response(status: u16, body: &Value) -> HttpResponse {
     }
 }
 
-pub(super) fn reply(
+pub(in crate::provider) fn reply(
     machine: &mut dyn ProviderOperation,
     body: &Value,
 ) -> Result<ProviderEffect, ProviderError> {
     machine.advance(ProviderEvent::Http(Ok(response(200, body))))
 }
 
-pub(super) fn http(
+pub(in crate::provider) fn http(
     effect: ProviderEffect,
     action_header: &str,
     action: &str,
@@ -63,7 +63,7 @@ pub(super) fn http(
     request
 }
 
-pub(super) fn saved(effect: ProviderEffect, phase: &str) -> RecoveryState {
+pub(in crate::provider) fn saved(effect: ProviderEffect, phase: &str) -> RecoveryState {
     let ProviderEffect::Checkpoint(state) = effect else {
         panic!("expected checkpoint for {phase}");
     };
@@ -75,13 +75,13 @@ pub(super) fn saved(effect: ProviderEffect, phase: &str) -> RecoveryState {
     loaded
 }
 
-pub(super) fn receipt(effect: ProviderEffect) -> PublicationReceipt {
+pub(in crate::provider) fn receipt(effect: ProviderEffect) -> PublicationReceipt {
     let ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) = effect else {
         panic!("expected publication receipt");
     };
     receipt
 }
 
-pub(super) fn fail(result: Result<ProviderEffect, ProviderError>) -> ProviderError {
+pub(in crate::provider) fn fail(result: Result<ProviderEffect, ProviderError>) -> ProviderError {
     result.err().expect("expected typed provider failure")
 }

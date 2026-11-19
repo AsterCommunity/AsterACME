@@ -1,5 +1,5 @@
 //! HWS request signing and bounded API response interpretation.
-use crate::provider::rpc::{api_error, hex, hmac256, invalid};
+use crate::provider::common::rpc::{ApiErrorDetails, api_error, hex, hmac256, invalid};
 use aster_acme_dns::{
     ProviderError, ProviderErrorCode,
     backend::configuration_error,
@@ -29,7 +29,7 @@ impl SignedRequest<'_> {
             return Err(configuration_error("invalid HWS signature date"));
         }
         let canonical_query = canonical_query(self.query);
-        let content_hash = crate::provider::rpc::sha256(self.body);
+        let content_hash = crate::provider::common::rpc::sha256(self.body);
         let (signed_headers, canonical_headers) = self.project_id.map_or_else(
             || ("x-sdk-date", format!("x-sdk-date:{date}\n")),
             |id| {
@@ -46,7 +46,7 @@ impl SignedRequest<'_> {
         );
         let string_to_sign = format!(
             "SDK-HMAC-SHA256\n{date}\n{}",
-            crate::provider::rpc::sha256(canonical.as_bytes())
+            crate::provider::common::rpc::sha256(canonical.as_bytes())
         );
         let signature = hex(hmac256(secret.as_bytes(), string_to_sign.as_bytes()).as_ref());
         let mut url = format!("{}{}", self.endpoint, self.path);
@@ -68,6 +68,7 @@ impl SignedRequest<'_> {
             headers.push(("x-project-id".into(), id.into()));
         }
         Ok(HttpRequest {
+            operation: None,
             method: self.method,
             url,
             headers,
@@ -127,41 +128,86 @@ pub(super) fn marker_from_next(next: &str, endpoint: &str) -> Result<String, Pro
 
 pub(super) fn payload(response: &HttpResponse, mutation: bool) -> Result<Value, ProviderError> {
     let body = serde_json::from_slice::<Value>(&response.body);
-    let structured = body
+    let error_body = serde_json::from_slice::<ErrorBody>(&response.body).ok();
+    let raw_code = error_body
         .as_ref()
-        .ok()
-        .and_then(|body| body.get("code").or_else(|| body.get("error_code")))
-        .and_then(Value::as_str)
-        .is_some_and(|code| {
-            code.starts_with("DNS.") || code.starts_with("APIG.") || code.starts_with("APIC.")
-        });
+        .and_then(|error| error.code.as_deref().or(error.error_code.as_deref()));
+    let provider_code = raw_code.and_then(safe_huawei_error_code);
+    let request_id = error_body
+        .as_ref()
+        .and_then(|error| error.request_id.as_deref())
+        .and_then(safe_request_id);
+    let structured = raw_code.is_some_and(|code| {
+        code.starts_with("DNS.") || code.starts_with("APIG.") || code.starts_with("APIC.")
+    });
     let recognized = if structured {
-        Some(match response.status {
-            400 => (ProviderErrorCode::InvalidRequest, "HuaweiInvalidRequest"),
-            401 => (
+        match response.status {
+            400 => Some((ProviderErrorCode::InvalidRequest, "HuaweiInvalidRequest")),
+            401 => Some((
                 ProviderErrorCode::AuthenticationFailed,
                 "HuaweiAuthenticationFailed",
-            ),
-            403 => (
+            )),
+            403 => Some((
                 ProviderErrorCode::AuthorizationDenied,
                 "HuaweiAuthorizationDenied",
-            ),
-            409 => (ProviderErrorCode::RecordConflict, "HuaweiRecordConflict"),
-            429 => (ProviderErrorCode::RateLimited, "HuaweiRateLimited"),
-            _ => return Err(api_error(response, mutation, None)),
-        })
+            )),
+            409 => Some((ProviderErrorCode::RecordConflict, "HuaweiRecordConflict")),
+            429 => Some((ProviderErrorCode::RateLimited, "HuaweiRateLimited")),
+            _ => None,
+        }
     } else {
         None
     };
-    if response.status / 100 == 2 && body.as_ref().is_ok_and(Value::is_object) {
+    if response.status / 100 != 2 || structured {
+        return Err(api_error(
+            response,
+            mutation,
+            ApiErrorDetails {
+                classification: recognized,
+                provider_code,
+                request_id,
+            },
+        ));
+    }
+    if body.as_ref().is_ok_and(Value::is_object) {
         let body = body.map_err(|_| invalid(mutation))?;
         if body.get("code").is_some() || body.get("error_code").is_some() {
             return Err(invalid(mutation));
         }
         Ok(body)
     } else {
-        Err(api_error(response, mutation, recognized))
+        Err(invalid(mutation))
     }
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    code: Option<String>,
+    error_code: Option<String>,
+    #[serde(alias = "requestId")]
+    request_id: Option<String>,
+}
+
+fn safe_huawei_error_code(code: &str) -> Option<String> {
+    let recognized_namespace = ["DNS.", "APIG.", "APIC."].iter().any(|prefix| {
+        code.strip_prefix(prefix).is_some_and(|suffix| {
+            suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    });
+    (recognized_namespace
+        || ((16..=128).contains(&code.len())
+            && code
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))))
+    .then(|| code.to_owned())
+}
+
+fn safe_request_id(id: &str) -> Option<String> {
+    ((16..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then(|| id.to_owned())
 }
 
 pub(super) fn decode_body<T: for<'de> Deserialize<'de>>(

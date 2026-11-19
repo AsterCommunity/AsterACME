@@ -5,8 +5,8 @@
 //! intent, but cannot guarantee that a concurrent remote writer is not
 //! overwritten.
 use crate::provider::{
-    huawei_cloud::operation::Factory,
-    rpc::{key_field, settings, validate_keys},
+    common::rpc::{key_field, settings, validate_keys},
+    vendors::huawei_cloud::operation::Factory,
 };
 use aster_acme_dns::{
     ProviderError,
@@ -47,7 +47,7 @@ fn default_region() -> String {
 }
 
 fn decode_config(config: &BackendConfig) -> Result<Config, ProviderError> {
-    let config: Config = settings(config)?;
+    let mut config: Config = settings(config)?;
     validate_keys(&config.access_key_id, &config.access_key_secret)?;
     if config.region.len() > 32
         || config.region.is_empty()
@@ -66,6 +66,9 @@ fn decode_config(config: &BackendConfig) -> Result<Config, ProviderError> {
         return Err(configuration_error(
             "Huawei Cloud project_id must contain 32 hexadecimal characters",
         ));
+    }
+    if let Some(project_id) = &mut config.project_id {
+        *project_id = project_id.to_ascii_lowercase();
     }
     Ok(config)
 }

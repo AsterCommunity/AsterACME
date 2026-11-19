@@ -20,7 +20,7 @@
 
 - **DNS read reconciliation** — Share bounded read retry budgets across native providers while retaining vendor-specific visibility and ownership checks. Never replay an uncertain creation or treat malformed responses and identity conflicts as visibility delays.
 
-- **DNS HTTP effects** — `HttpRequest.method` now uses the shared `HttpMethod` enum. Vendor Cargo features automatically select shared implementation capabilities; HTTP method variants no longer depend on vendor flags.
+- **DNS HTTP effects** — `HttpRequest.method` now uses the shared `HttpMethod` enum, with an optional provider-owned operation name for diagnostics. Built-in adapter paths move to `provider::vendors`; shared support remains internal under `provider::common`. Vendor Cargo features automatically select shared implementation capabilities; HTTP method variants no longer depend on vendor flags.
 
 - **Deployment verification** — Verify the full published file set against staged content, identity and applicable permissions before reload. Report completed replacement paths on failure while retaining the partial-set/retry contract; no whole-set atomicity or automatic rollback is promised. Refuse configuration and deployment when an existing destination cannot be normalized to prove ownership; restore access or remove the stale binding before retrying.
 - **Optional validation dependencies** — An empty `aster_acme_validation` feature set no longer brings Tokio into production dependencies. Check and test optional feature combinations independently.

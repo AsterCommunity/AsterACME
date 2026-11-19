@@ -1,7 +1,13 @@
 //! Tencent Cloud `DNSPod` API 2021-03-23 using TC3-HMAC-SHA256.
-use crate::provider::{
-    individual::{IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, RecordMarking, Zone},
-    rpc::{api_error, decode, hex, hmac256, invalid, key_field, settings, sha256, validate_keys},
+use crate::provider::common::{
+    individual::{
+        api::{IndividualApi, PAGE_SIZE, Page, Record, RecordMarking, Zone},
+        lifecycle::IndividualFactory,
+    },
+    rpc::{
+        ApiErrorDetails, api_error, decode, hex, hmac256, invalid, key_field, settings, sha256,
+        validate_keys,
+    },
 };
 use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
@@ -160,6 +166,7 @@ impl Keys {
         let timestamp = OffsetDateTime::now_utc().unix_timestamp();
         let authorization = self.authorization(HOST, SERVICE, action.wire(), timestamp, &body)?;
         Ok(HttpRequest {
+            operation: Some(action.wire().into()),
             method: HttpMethod::Post,
             url: format!("https://{HOST}/"),
             body,
@@ -485,11 +492,71 @@ fn payload(response: &HttpResponse, mutation: bool) -> Result<Value, ProviderErr
     {
         return Ok(body);
     }
+    let envelope = serde_json::from_slice::<ErrorEnvelope>(&response.body).ok();
+    let details = envelope
+        .as_ref()
+        .and_then(|envelope| envelope.response.as_ref());
+    let error_code = details
+        .and_then(|details| details.error.as_ref())
+        .and_then(|error| error.code.as_deref());
+    let request_id = details
+        .and_then(|details| details.request_id.as_deref())
+        .and_then(safe_request_id);
     Err(api_error(
         response,
         mutation,
-        classify(body["Error"]["Code"].as_str()),
+        ApiErrorDetails {
+            classification: classify(error_code),
+            provider_code: error_code.and_then(safe_provider_code),
+            request_id,
+        },
     ))
+}
+
+#[derive(Deserialize)]
+struct ErrorEnvelope {
+    #[serde(rename = "Response")]
+    response: Option<ErrorResponse>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ErrorResponse {
+    error: Option<ErrorBody>,
+    request_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    #[serde(rename = "Code")]
+    code: Option<String>,
+}
+
+fn safe_provider_code(code: &str) -> Option<String> {
+    let known_short = matches!(
+        code,
+        "RequestLimitExceeded"
+            | "UnauthorizedOperation"
+            | "InternalError"
+            | "AuthFailure"
+            | "InvalidParameter"
+            | "MissingParameter"
+    );
+    ((16..=128).contains(&code.len()) || known_short)
+        .then_some(code)
+        .filter(|code| {
+            code.bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+        .map(str::to_owned)
+}
+
+fn safe_request_id(id: &str) -> Option<String> {
+    ((16..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then(|| id.to_owned())
 }
 
 fn classify(code: Option<&str>) -> Option<(ProviderErrorCode, &'static str)> {
@@ -502,7 +569,8 @@ fn classify(code: Option<&str>) -> Option<(ProviderErrorCode, &'static str)> {
         "RequestLimitExceeded"
         | "RequestLimitExceeded.GlobalRegionUinLimitExceeded"
         | "RequestLimitExceeded.IPLimitExceeded"
-        | "RequestLimitExceeded.UinLimitExceeded" => (RateLimited, "RequestLimitExceeded"),
+        | "RequestLimitExceeded.UinLimitExceeded"
+        | "RequestLimitExceeded.RequestLimitExceeded" => (RateLimited, "RequestLimitExceeded"),
         "AuthFailure.SignatureFailure"
         | "AuthFailure.SecretIdNotFound"
         | "AuthFailure.SignatureExpire" => (AuthenticationFailed, "AuthFailure"),
@@ -510,9 +578,9 @@ fn classify(code: Option<&str>) -> Option<(ProviderErrorCode, &'static str)> {
             (AuthorizationDenied, "UnauthorizedOperation")
         }
         "ResourceNotFound.NoDataOfDomain" => (ZoneNotFound, "ResourceNotFound.NoDataOfDomain"),
-        "InvalidParameter.RecordExist" | "InvalidParameterValue.RecordExist" => {
-            (RecordConflict, "RecordExist")
-        }
+        "InvalidParameter.RecordExist"
+        | "InvalidParameterValue.RecordExist"
+        | "InvalidParameter.DomainRecordExist" => (RecordConflict, "RecordExist"),
         "InvalidParameter" | "InvalidParameterValue" | "InvalidParameterValue.TTLTooSmall" => {
             (InvalidRequest, "InvalidParameter")
         }

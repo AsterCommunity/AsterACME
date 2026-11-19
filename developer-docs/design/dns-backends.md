@@ -24,13 +24,19 @@
 
 预发布本地布局直接演进：旧 Profile 缺 `backend_id`/`backend_config_version`、旧 `dns_external` 定义或缺 binding 字段时失败，不提供兼容别名、自动迁移或数据删除。ADPP wire v1 请求只发送最终记录名，CNAME 路由留在宿主；旧 provider 需适配此预发布协议变更。
 
+## 实现边界
+
+`aster_acme_dns_builtin::provider::vendors` 拥有各家签名、请求/响应结构、错误码映射、所有权备注与配置约束。`provider::common` 只提供共享状态机和签名原语；错误构造接收厂商适配器产出的 `ApiErrorDetails`，不读取或猜测响应 JSON。HTTP effect 的可选 `operation` 由厂商提供，宿主仅校验字符并展示，不解析厂商请求头；拒绝结果经过检查点保存再报告时保留操作上下文。请求体通过 `Serialize` struct 编码。`_publication-markers` 等内部能力由厂商 feature 自动启用。
+
+共享 `individual` 分为 API 契约、工厂校验、区域发现、发布/清理和事件调度。独立 fake-provider 测试验证状态机；厂商测试验证 wire 契约；CLI loopback 测试验证持久化和宿主写入许可。
+
 ## 单记录与无原子标记的所有权
 
 DNSPod 与阿里云共用单记录发布生命周期。厂商模块各自解释错误并签名。逐页读取的结果必须完整且 ID 唯一。找到最终 TXT owner 的最长 zone 后先保存 zone 身份。后续调用沿用已保存的 zone。匹配同值集合为空时，`create_intent` 同时表示空的发布前同值快照。有记录时先保存 `preexisting` 和所有匹配 ID。
 
-- 阿里云 `AddDomainRecord` 不接受备注，独立的备注更新无法给创建请求提供原子标记。发布前发现的同值记录一律保留并拒绝借用。仅创建响应的 `RecordId` 可转成 `created`。丢响应后同值出现或消失都不足以接管记录或重放创建。
-- DNSPod 的 `CreateRecord.Remark` 随记录写入。只有已有 `create_intent` 且发现唯一、精确匹配的本次标记时，才可在丢响应后保存 `created`。其他 publication 的值拒绝借用。单条已启用的默认线路用户同值记录可借用并保留。
-- 发出创建回执前重读 ID、zone、owner、类型、值、线路、启用状态和有效 TTL。DNSPod 还核对备注。清理要求 journal ID 等于回执 ID，并核对当前记录元组后保存删除意图。只有厂商明确的对象不存在错误可确认缺失。
+- 阿里云 `AddDomainRecord` 不接受备注，独立的备注更新无法给创建请求提供原子标记。发布前发现的同值记录一律保留并拒绝借用。创建响应的 `RecordId` 保存为 `remark_intent`；首次补写和重启均先按 ID 核验记录，只在备注为空时保存新的写入意图再补写。备注已匹配时直接保存 `marked`，其他备注拒绝覆盖。丢响应后同值出现或消失都不足以接管记录或重放创建。
+- DNSPod 的 `CreateTXTRecord.Remark` 随记录写入。只有已有 `create_intent` 且发现唯一、精确匹配的本次标记时，才可在丢响应后保存 `created`。其他 publication 的值拒绝借用。单条已启用的默认线路用户同值记录可借用并保留。
+- 发出创建回执前重读 ID、zone、owner、类型、值、线路、启用状态和有效 TTL。两家都核对各自备注，包括 `delete_intent` 恢复后的删除重试。清理要求 journal ID 等于回执 ID，并核对当前记录元组后保存删除意图。只有厂商明确的对象不存在错误可确认缺失。
 - 明确拒绝需要先持久化才能再次创建。传输结果未知、结构错误或无法解释的错误代码均保留创建意图。退避下限由 solver 随签发 journal 落盘。凭据和厂商原始报错不会落盘。
 
 ## RRset 覆盖
@@ -47,7 +53,7 @@ Cloudflare 使用单记录对象及 publication comment，不使用 RRset 全量
 
 - 公网 zone 使用 marker 分页，按最终 TXT owner 的最长标签后缀选取。zone ID/名称随 publication 保存；重启继续使用该 zone。`project_id` 和 region 组成非秘密 binding，凭据可轮换。
 - 默认线路 RRset 的 `records` 按 TXT quoted-string 编码；读取能识别多 chunk 和十进制转义，同逻辑值有多个表示时拒绝歧义。合并保留当前其他 wire 值；PUT 只发送 `records` 和 description，使 TTL 和其他未修改字段留在服务端。
-- description 中默认使用 `asteracme-<publication_id>=<sha256(value)>` 按分号分隔，保留用户原文和其他 publication 标记。provider 可覆盖备注格式；阿里云单记录使用 `acme-<publication_id>` 以满足 50 字符上限，读取兼容早期冒号格式。marker 与值绑定，根域/通配符不同值可共享同一 RRset。超过 255 字节或所有权不一致时拒绝写入；不为扩容截断用户描述。
+- description 中默认使用 `asteracme-<publication_id>=<sha256(value)>` 按分号分隔，保留用户原文和其他 publication 标记。provider 可覆盖备注格式；阿里云单记录使用 `acme-<publication_id>` 以满足 50 字符上限，marker 与值绑定，根域/通配符不同值可共享同一 RRset。超过 255 字节或所有权不一致时拒绝写入；不为扩容截断用户描述。
 - 无标记同值保留为 preexisting；其他 publication 同值拒绝借用。创建/合并前保存意图，已知响应先保存真实 RRset ID，再重读 ACTIVE 状态、ID、zone、owner、TXT 值与 marker 后产生回执。响应丢失仅在本次意图和完整 marker 可对账时接管，不凭值存在重放写入。
 - 清理重新读当前集合，仅减去本 publication 有证据的值和 marker。有其他值时 PUT；没有剩余值才 DELETE。核验 ID 与 marker 后也存在外部竞态。写后再读取确认，后续重复清理使用终态 checkpoint，不再次删除后来重建的记录。华为云对空 description 的更新可能保留原值，因此不承诺清空最后一个 description 标记；过期标记仍不能绕过新 publication 的所有权校验。
 - 仅对结构化明确 409 拒绝保存证据后重读合并，单次调用最多四次写入；429/认证/授权等错误结构化脱敏，限频下限随签发 journal 持久化。不确定响应保留意图；pending 状态有界轮询，不能把 HTTP 200/202 当作完成。

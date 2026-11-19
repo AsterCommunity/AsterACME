@@ -1,8 +1,10 @@
 //! Cloudflare publication reconciliation and exact-object cleanup transitions.
 use crate::provider::{
-    cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone},
-    marker::{is_publication_marker, matches_publication, publication},
-    retry::ReadRetry,
+    common::{
+        marker::{is_publication_marker, matches_publication, publication},
+        retry::ReadRetry,
+    },
+    vendors::cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone},
 };
 use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
@@ -14,7 +16,7 @@ use aster_acme_dns::{
         ProviderOperation, ProviderOutcome, RecoveryState,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 impl OperationFactory for Cloudflare {
@@ -124,6 +126,16 @@ enum CloudflareAction {
     GetTxtRecord,
     CreateTxtRecord,
     DeleteTxtRecord,
+}
+
+#[derive(Serialize)]
+struct CreateTxtBody<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: &'a str,
+    content: &'a str,
+    ttl: u32,
+    comment: String,
 }
 
 impl CloudflareAction {
@@ -436,7 +448,7 @@ impl Operation {
         &self,
         action: CloudflareAction,
         path: &str,
-        body: Option<Value>,
+        body: Option<Vec<u8>>,
         mutation: bool,
     ) -> Result<ProviderEffect, ProviderError> {
         self.raw_request(
@@ -450,7 +462,7 @@ impl Operation {
         &self,
         action: CloudflareAction,
         url: &str,
-        body: Option<Value>,
+        body: Option<Vec<u8>>,
         mutation: bool,
     ) -> Result<ProviderEffect, ProviderError> {
         let token = self.token.as_ref().ok_or_else(|| {
@@ -460,12 +472,9 @@ impl Operation {
                 SideEffect::None,
             )
         })?;
-        let body = body
-            .map(|body| serde_json::to_vec(&body))
-            .transpose()
-            .map_err(|_| configuration_error("cannot encode Cloudflare request"))?
-            .unwrap_or_default();
+        let body = body.unwrap_or_default();
         Ok(ProviderEffect::Http(HttpRequest {
+            operation: None,
             method: action.method(),
             url: url.into(),
             headers: vec![
@@ -490,6 +499,23 @@ impl Operation {
             ),
             None,
             false,
+        )
+    }
+    fn create_record(&mut self) -> Result<ProviderEffect, ProviderError> {
+        self.stage = Stage::Create;
+        let body = serde_json::to_vec(&CreateTxtBody {
+            kind: "TXT",
+            name: self.record().name.trim_end_matches('.'),
+            content: &self.record().value,
+            ttl: self.record().ttl_seconds.unwrap_or(120).clamp(60, 86400),
+            comment: self.tag(),
+        })
+        .map_err(|_| configuration_error("cannot encode Cloudflare request"))?;
+        self.request(
+            CloudflareAction::CreateTxtRecord,
+            "/dns_records",
+            Some(body),
+            true,
         )
     }
     fn receipt(
@@ -568,11 +594,7 @@ impl ProviderOperation for Operation {
             (Stage::Zone, ProviderEvent::Http(response)) => self.zone_response(response),
             (Stage::List, ProviderEvent::Http(response)) => self.list_response(response),
             (Stage::Reconcile, ProviderEvent::Timer) => self.list(),
-            (Stage::Intent, ProviderEvent::CheckpointSaved) => {
-                self.stage = Stage::Create;
-                self.request(CloudflareAction::CreateTxtRecord, "/dns_records", Some(json!({"type":"TXT", "name": self.record().name.trim_end_matches('.'),
-                    "content": self.record().value, "ttl": self.record().ttl_seconds.unwrap_or(120).clamp(60,86400), "comment": self.tag()})), true)
-            }
+            (Stage::Intent, ProviderEvent::CheckpointSaved) => self.create_record(),
             (Stage::Create, ProviderEvent::Http(response)) => {
                 let response: Envelope<Record> = match decode_response(response, true) {
                     Ok(response) => response,

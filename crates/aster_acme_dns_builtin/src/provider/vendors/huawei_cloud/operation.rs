@@ -1,13 +1,14 @@
 //! Best-effort Huawei `RRset` lifecycle; it never invents an atomic revision.
 use crate::provider::{
-    huawei_cloud::{
+    common::{
+        retry::ReadRetry,
+        rpc::{error, invalid, sha256},
+    },
+    vendors::huawei_cloud::{
         Config,
         api::{SignedRequest, decode_body, marker_from_next, payload},
         txt::{add_marker, has_foreign_marker, has_marker, remove_marker, txt_decode, txt_encode},
     },
-    marker::publication_value,
-    retry::ReadRetry,
-    rpc::{error, invalid},
 };
 use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
@@ -148,6 +149,7 @@ struct Operation {
     read_retry: ReadRetry,
     writes: u8,
     confirm_cleanup: bool,
+    prepared_write: Option<HttpRequest>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -177,6 +179,22 @@ struct Recordset {
     zone_id: String,
     #[serde(default)]
     line: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RecordsetCreateBody {
+    name: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    ttl: u32,
+    records: Vec<String>,
+    description: String,
+}
+
+#[derive(Serialize)]
+struct RecordsetUpdateBody {
+    records: Vec<String>,
+    description: String,
 }
 
 #[derive(Clone, Copy)]
@@ -226,15 +244,22 @@ impl OperationFactory for Factory {
                     .as_object_mut()
                     .and_then(|object| object.remove("resolved_project_id"))
                 {
-                    Some(value) => {
-                        Some(value.as_str().map(str::to_owned).ok_or_else(|| {
-                            configuration_error("invalid saved Huawei project ID")
-                        })?)
-                    }
+                    Some(value) => Some(
+                        value
+                            .as_str()
+                            .filter(|id| super::valid_project_id(id))
+                            .map(str::to_ascii_lowercase)
+                            .ok_or_else(|| {
+                                configuration_error("invalid saved Huawei project ID")
+                            })?,
+                    ),
                     None => None,
                 };
-                let checkpoint = serde_json::from_value::<Checkpoint>(data)
+                let mut checkpoint = serde_json::from_value::<Checkpoint>(data)
                     .map_err(|_| configuration_error("invalid Huawei DNS checkpoint"))?;
+                if let Checkpoint::ProjectResolved { project_id } = &mut checkpoint {
+                    *project_id = project_id.to_ascii_lowercase();
+                }
                 Ok((checkpoint, project_id))
             })
             .transpose()?;
@@ -397,6 +422,7 @@ impl Operation {
             read_retry: ReadRetry::new(8, std::time::Duration::from_secs(1)),
             writes: 0,
             confirm_cleanup: false,
+            prepared_write: None,
         }
     }
 
@@ -408,7 +434,11 @@ impl Operation {
     }
 
     fn marker(&self) -> String {
-        publication_value(&self.record().publication_id, &self.record().value)
+        format!(
+            "asteracme-{}={}",
+            self.record().publication_id,
+            sha256(self.record().value.as_bytes())
+        )
     }
 
     fn endpoint(&self) -> String {
@@ -810,6 +840,7 @@ impl Operation {
             .recordset
             .as_ref()
             .map_or_else(String::new, |value| value.description.clone());
+        self.prepared_write = Some(self.prepare_write()?);
         let zone = self.zone()?;
         let checkpoint = match self.action {
             ProviderAction::Present(_) => Checkpoint::PresentIntent {
@@ -828,34 +859,33 @@ impl Operation {
         self.checkpoint(checkpoint, Stage::SaveIntent)
     }
 
-    fn write(&mut self) -> Result<ProviderEffect, ProviderError> {
+    fn prepare_write(&self) -> Result<HttpRequest, ProviderError> {
         let zone = self.zone()?;
         let owner = absolute_name(&self.record().name).map_err(|_| invalid(false))?;
         let marker = self.marker();
-        let body = match self.write_kind {
-            WriteKind::Create => json!({
-                "name": owner,
-                "type": "TXT",
-                "ttl": self.record().ttl_seconds.unwrap_or(300).clamp(300, 2_147_483_647),
-                "records": self.desired.iter().collect::<Vec<_>>(),
-                "description": add_marker(&self.original_description, &marker)?,
+        let body_bytes = match self.write_kind {
+            WriteKind::Create => serde_json::to_vec(&RecordsetCreateBody {
+                name: owner,
+                kind: "TXT",
+                ttl: self
+                    .record()
+                    .ttl_seconds
+                    .unwrap_or(300)
+                    .clamp(300, 2_147_483_647),
+                records: self.desired.iter().cloned().collect(),
+                description: add_marker(&self.original_description, &marker)?,
             }),
-            WriteKind::Update => json!({
-                "records": self.desired.iter().collect::<Vec<_>>(),
-                "description": if matches!(self.action, ProviderAction::Cleanup(_)) {
+            WriteKind::Update => serde_json::to_vec(&RecordsetUpdateBody {
+                records: self.desired.iter().cloned().collect(),
+                description: if matches!(self.action, ProviderAction::Cleanup(_)) {
                     remove_marker(&self.original_description, &marker)
                 } else {
                     add_marker(&self.original_description, &marker)?
                 },
             }),
-            WriteKind::Delete => Value::Null,
-        };
-        let body_bytes = if matches!(self.write_kind, WriteKind::Delete) {
-            Vec::new()
-        } else {
-            serde_json::to_vec(&body).map_err(|_| invalid(true))?
-        };
-        self.stage = Stage::Write;
+            WriteKind::Delete => Ok(Vec::new()),
+        }
+        .map_err(|_| configuration_error("cannot encode Huawei DNS request"))?;
         match self.write_kind {
             WriteKind::Create => self.request(
                 HuaweiAction::CreateRecordset,
@@ -879,7 +909,6 @@ impl Operation {
                 true,
             ),
         }
-        .map(ProviderEffect::Http)
     }
 
     fn zone(&self) -> Result<Zone, ProviderError> {
@@ -1046,8 +1075,13 @@ impl ProviderOperation for Operation {
                 self.parse_recordsets(&response.map_err(transport)?, page)
             }
             (Stage::SaveIntent, ProviderEvent::CheckpointSaved) => {
+                let request = self
+                    .prepared_write
+                    .take()
+                    .ok_or_else(|| configuration_error("missing prepared Huawei DNS request"))?;
                 self.writes += 1;
-                self.write()
+                self.stage = Stage::Write;
+                Ok(ProviderEffect::Http(request))
             }
             (Stage::Write, ProviderEvent::Http(response)) => self.finish_write(response),
             (Stage::SaveOutcome, ProviderEvent::CheckpointSaved) => {

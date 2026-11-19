@@ -49,11 +49,11 @@ impl Vendor {
     const fn id(self) -> &'static str {
         match self {
             #[cfg(feature = "dns-aliyun")]
-            Self::Aliyun => aster_acme_dns_builtin::provider::aliyun::BACKEND_ID,
+            Self::Aliyun => aster_acme_dns_builtin::provider::vendors::aliyun::BACKEND_ID,
             #[cfg(feature = "dns-tencent-cloud")]
-            Self::DnsPod => aster_acme_dns_builtin::provider::tencent_cloud::BACKEND_ID,
+            Self::DnsPod => aster_acme_dns_builtin::provider::vendors::tencent_cloud::BACKEND_ID,
             #[cfg(feature = "dns-huawei-cloud")]
-            Self::Huawei => aster_acme_dns_builtin::provider::huawei_cloud::BACKEND_ID,
+            Self::Huawei => aster_acme_dns_builtin::provider::vendors::huawei_cloud::BACKEND_ID,
         }
     }
 
@@ -87,6 +87,10 @@ struct Cloud {
     #[cfg(feature = "dns-huawei-cloud")]
     iam_queries: AtomicUsize,
     lose_response: AtomicBool,
+    #[cfg(feature = "dns-aliyun")]
+    remark_fault: AtomicUsize,
+    #[cfg(feature = "dns-aliyun")]
+    remarks: AtomicUsize,
     throttle: AtomicBool,
     check_lease: AtomicBool,
     cancel_after_write: AtomicBool,
@@ -104,9 +108,41 @@ impl Cloud {
             #[cfg(feature = "dns-huawei-cloud")]
             iam_queries: AtomicUsize::new(0),
             lose_response: AtomicBool::new(false),
+            #[cfg(feature = "dns-aliyun")]
+            remark_fault: AtomicUsize::new(0),
+            #[cfg(feature = "dns-aliyun")]
+            remarks: AtomicUsize::new(0),
             throttle: AtomicBool::new(false),
             check_lease: AtomicBool::new(true),
             cancel_after_write: AtomicBool::new(false),
+        }
+    }
+
+    fn assert_write_intent(&self, creating: bool, remarking: bool) {
+        let cp = self.checkpoint();
+        assert_eq!(cp["record"]["name"], OWNER);
+        assert_eq!(cp["record"]["ttl_seconds"], 120);
+        let phase = &cp["state"]["data"]["phase"];
+        if phase.is_string() {
+            assert_eq!(
+                phase,
+                if creating {
+                    "present_intent"
+                } else {
+                    "cleanup_intent"
+                }
+            );
+        } else {
+            assert_eq!(
+                phase["state"],
+                if creating {
+                    "create_intent"
+                } else if remarking {
+                    "remark_intent"
+                } else {
+                    "delete_intent"
+                }
+            );
         }
     }
 
@@ -209,6 +245,7 @@ impl Cloud {
                 json!({"RecordId":"23"})
             }
             "UpdateDomainRecordRemark" => {
+                self.remarks.fetch_add(1, Ordering::SeqCst);
                 assert_eq!(params["RecordId"], "23");
                 let remark = params["Remark"].replace("%2D", "-");
                 assert!(remark.starts_with("acme-"));
@@ -390,31 +427,7 @@ impl HttpExecutor for Cloud {
             || request.method == aster_acme_dns::operation::HttpMethod::Post && action.is_empty();
         let remarking = action == "UpdateDomainRecordRemark";
         if request.mutation {
-            let cp = self.checkpoint();
-            assert_eq!(cp["record"]["name"], OWNER);
-            assert_eq!(cp["record"]["ttl_seconds"], 120);
-            let phase = &cp["state"]["data"]["phase"];
-            if phase.is_string() {
-                assert_eq!(
-                    phase,
-                    if creating {
-                        "present_intent"
-                    } else {
-                        "cleanup_intent"
-                    }
-                );
-            } else {
-                assert_eq!(
-                    phase["state"],
-                    if creating {
-                        "create_intent"
-                    } else if remarking {
-                        "remark_intent"
-                    } else {
-                        "delete_intent"
-                    }
-                );
-            }
+            self.assert_write_intent(creating, remarking);
             if self.check_lease.swap(false, Ordering::SeqCst) {
                 let root = self.root.clone();
                 let backend = self.vendor.id();
@@ -450,7 +463,27 @@ impl HttpExecutor for Cloud {
                 body: serde_json::to_vec(&self.throttle_body()).unwrap(),
             });
         }
+        #[cfg(feature = "dns-aliyun")]
+        let remark_fault = if remarking {
+            self.remark_fault.swap(0, Ordering::SeqCst)
+        } else {
+            0
+        };
+        #[cfg(feature = "dns-aliyun")]
+        if remark_fault == 1 {
+            return Err(HttpFailure {
+                code: ProviderErrorCode::ProviderTimeout,
+                side_effect: SideEffect::Unknown,
+            });
+        }
         let body = self.request(&request, action);
+        #[cfg(feature = "dns-aliyun")]
+        if remark_fault == 2 {
+            return Err(HttpFailure {
+                code: ProviderErrorCode::ProviderTimeout,
+                side_effect: SideEffect::Unknown,
+            });
+        }
         if creating && self.cancel_after_write.load(Ordering::SeqCst) {
             execution.cancellation.cancel();
         }
@@ -546,6 +579,37 @@ async fn aliyun_persists_record_id_and_effective_ttl_through_issuance_and_cleanu
 
 #[cfg(feature = "dns-aliyun")]
 #[tokio::test]
+async fn aliyun_remark_restart_rechecks_identity_and_reacquires_write_permission() {
+    for fault in [1, 2] {
+        let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
+        let cloud = Arc::new(Cloud::new(Vendor::Aliyun, fixture.temp.path()));
+        cloud.remark_fault.store(fault, Ordering::SeqCst);
+        assert!(
+            run(&mut fixture, &cloud.solver(), &controls())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            cloud.checkpoint()["state"]["data"]["phase"]["state"],
+            "remark_intent"
+        );
+        assert_eq!(fixture.count("/dns-challenge").await, 0);
+        fixture.reopen().await;
+        assert!(matches!(
+            run(&mut fixture, &cloud.solver(), &controls())
+                .await
+                .unwrap(),
+            IssueOutcome::Completed { .. }
+        ));
+        assert_eq!(cloud.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(cloud.remarks.load(Ordering::SeqCst), 1);
+        assert_eq!(cloud.deletes.load(Ordering::SeqCst), 1);
+        assert!(cloud.remote.lock().unwrap().is_none());
+    }
+}
+
+#[cfg(feature = "dns-aliyun")]
+#[tokio::test]
 async fn aliyun_unknown_create_never_replays_or_acknowledges_an_unowned_txt() {
     let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;
     let cloud = Arc::new(Cloud::new(Vendor::Aliyun, fixture.temp.path()));
@@ -618,6 +682,14 @@ async fn vendor_throttle_persists_retry_floor_and_blocks_an_early_restart() {
             panic!("throttled publication unexpectedly completed")
         };
         assert!(!error.to_string().contains("fixture-secret"));
+        match vendor {
+            #[cfg(feature = "dns-aliyun")]
+            Vendor::Aliyun => assert!(error.to_string().contains("API request: AddDomainRecord")),
+            #[cfg(feature = "dns-tencent-cloud")]
+            Vendor::DnsPod => assert!(error.to_string().contains("API request: CreateTXTRecord")),
+            #[cfg(feature = "dns-huawei-cloud")]
+            Vendor::Huawei => assert!(error.to_string().contains("API request: POST")),
+        }
         let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
         assert!(
             saved.authorizations[0].publication_retry_at.unwrap()

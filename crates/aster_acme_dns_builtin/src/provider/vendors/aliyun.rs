@@ -1,10 +1,12 @@
 //! Alibaba Cloud DNS RPC, API version 2015-01-09, signed with ACS3.
-use crate::provider::{
+use crate::provider::common::{
     individual::{
-        IndividualApi, IndividualFactory, PAGE_SIZE, Page, Record, RecordMarking, Zone, valid_id,
+        api::{IndividualApi, PAGE_SIZE, Page, Record, RecordMarking, Zone, valid_id},
+        lifecycle::IndividualFactory,
     },
     rpc::{
-        api_error, decode, hex, hmac256, invalid, key_field, query, settings, sha256, validate_keys,
+        ApiErrorDetails, api_error, decode, hex, hmac256, invalid, key_field, settings, sha256,
+        validate_keys,
     },
 };
 use aster_acme_dns::operation::HttpMethod;
@@ -145,6 +147,7 @@ impl Keys {
         let signature =
             hex(hmac256(self.access_key_secret.as_bytes(), to_sign.as_bytes()).as_ref());
         HttpRequest {
+            operation: Some(action.wire().into()),
             method: HttpMethod::Get,
             url: format!("https://{HOST}/?{query}"),
             headers: vec![
@@ -286,7 +289,31 @@ impl IndividualApi for Keys {
         format!("acme-{publication_id}")
     }
 
+    fn owns_marker(&self, marker: &str, publication_id: &str) -> bool {
+        marker == self.marker(publication_id)
+    }
+
+    fn is_publication_marker(&self, marker: &str) -> bool {
+        marker.strip_prefix("acme-").is_some_and(|id| {
+            !id.is_empty()
+                && id.len() <= 90
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+    }
+
+    fn validate_marker(&self, marker: &str) -> Result<(), ProviderError> {
+        if marker.len() > 50 {
+            return Err(configuration_error(
+                "Alibaba Cloud DNS record remark exceeds 50 characters",
+            ));
+        }
+        Ok(())
+    }
+
     fn set_remark(&self, id: &str, marker: &str) -> Result<HttpRequest, ProviderError> {
+        self.validate_marker(marker)?;
         self.request(
             AliyunAction::UpdateDomainRecordRemark,
             &[("RecordId", id), ("Remark", marker)],
@@ -497,11 +524,80 @@ fn missing(response: &HttpResponse) -> bool {
 
 fn payload(response: &HttpResponse, mutation: bool) -> Result<Value, ProviderError> {
     let body = serde_json::from_slice::<Value>(&response.body);
-    let code = body.as_ref().ok().and_then(|body| body["Code"].as_str());
+    let api_error_body = serde_json::from_slice::<AliyunErrorBody>(&response.body).ok();
+    let code = api_error_body
+        .as_ref()
+        .and_then(|error| error.code.as_deref());
     if response.status == 200 && code.is_none() {
         return body.map_err(|_| invalid(mutation));
     }
-    Err(api_error(response, mutation, classify(code)))
+    let request_id = api_error_body
+        .as_ref()
+        .and_then(|error| error.request_id.as_deref())
+        .and_then(safe_request_id);
+    Err(api_error(
+        response,
+        mutation,
+        ApiErrorDetails {
+            classification: classify(code),
+            provider_code: code.and_then(safe_provider_code),
+            request_id,
+        },
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct AliyunErrorBody {
+    code: Option<String>,
+    request_id: Option<String>,
+}
+
+fn safe_provider_code(code: &str) -> Option<String> {
+    let known_short = matches!(
+        code,
+        "MissingParameter" | "InvalidParameter" | "RequestLimitExceeded"
+    );
+    ((16..=128).contains(&code.len()) || known_short)
+        .then_some(code)
+        .filter(|code| {
+            code.bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+        .map(str::to_owned)
+}
+
+fn query(parameters: &[(&str, &str)]) -> String {
+    fn encode(input: &str) -> String {
+        let mut result = String::new();
+        for byte in input.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                result.push(char::from(byte));
+            } else {
+                use std::fmt::Write as _;
+                let _ = write!(result, "%{byte:02X}");
+            }
+        }
+        result
+    }
+    let mut encoded: Vec<_> = parameters
+        .iter()
+        .map(|(name, value)| (encode(name), encode(value)))
+        .collect();
+    encoded.sort_unstable();
+    encoded
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn safe_request_id(id: &str) -> Option<String> {
+    ((16..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then(|| id.to_owned())
 }
 
 fn classify(code: Option<&str>) -> Option<(ProviderErrorCode, &'static str)> {
@@ -520,6 +616,7 @@ fn classify(code: Option<&str>) -> Option<(ProviderErrorCode, &'static str)> {
             (AuthorizationDenied, "AccessDenied")
         }
         "InvalidDomainName.NoExist" => (ZoneNotFound, "InvalidDomainName.NoExist"),
+        "InvalidParameterValue" | "InvalidParameter" => (InvalidRequest, "InvalidParameter"),
         "DomainRecordDuplicate" | "DomainRecordConflict" => {
             (RecordConflict, "DomainRecordConflict")
         }

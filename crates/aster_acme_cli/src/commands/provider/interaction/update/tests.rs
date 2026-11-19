@@ -165,7 +165,7 @@ fn native_editor_updates_custom_fields_and_allowed_zones() {
     .unwrap()
     .clone();
     let original = ProviderProfile::builtin(
-        aster_acme_dns_builtin::provider::cloudflare::BACKEND_ID.into(),
+        aster_acme_dns_builtin::provider::vendors::cloudflare::BACKEND_ID.into(),
         custom,
         vec!["old.example".into()],
     )

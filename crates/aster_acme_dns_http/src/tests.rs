@@ -16,6 +16,7 @@ fn scope() -> ProviderExecution {
 }
 fn request(url: String) -> HttpRequest {
     HttpRequest {
+        operation: None,
         method: aster_acme_dns::operation::HttpMethod::Post,
         url,
         headers: vec![("X-Signed".into(), "exact-value".into())],

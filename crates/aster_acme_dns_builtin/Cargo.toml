@@ -12,14 +12,15 @@ keywords = ["acme", "dns", "dns-01", "cloudflare", "provider"]
 
 [features]
 default = []
-cloudflare = ["_http"]
+cloudflare = ["_http", "_publication-markers"]
 aliyun = ["_individual-records"]
 tencent_cloud = ["_individual-records"]
-huawei_cloud = ["_signed-api", "dep:url"]
+huawei_cloud = ["_signed-api", "_publication-markers", "dep:url"]
 # Implementation capabilities: selected automatically by vendor features.
+_publication-markers = []
 _http = ["dep:linkme"]
 _signed-api = ["_http", "dep:aws-lc-rs", "dep:httpdate", "dep:time", "dep:zeroize"]
-_individual-records = ["_signed-api"]
+_individual-records = ["_signed-api", "_publication-markers"]
 
 [dependencies]
 aster_acme_dns.workspace = true

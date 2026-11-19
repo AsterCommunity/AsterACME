@@ -294,6 +294,18 @@ mod tests {
         assert!(message.contains("InvalidParameterValue.DomainId"));
         assert!(hint.unwrap().contains("API request"));
         assert!(!message.contains("secret"));
+        let unsafe_provider = aster_acme::issuance::IssueError::DnsProvider(
+            aster_acme_dns::ProviderFailure::Provider(aster_acme_dns::ProviderError {
+                code: aster_acme_dns::ProviderErrorCode::InvalidRequest,
+                message: "DNS API rejected".into(),
+                side_effect: aster_acme_dns::SideEffect::None,
+                retry_after_seconds: None,
+                provider_code: Some("bad code\nsecret".into()),
+            }),
+        );
+        let (message, _) = diagnostic(&unsafe_provider);
+        assert!(!message.contains("bad code"));
+        assert!(!message.contains("secret"));
     }
 
     #[test]

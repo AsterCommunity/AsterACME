@@ -1,8 +1,8 @@
-use crate::provider::{
-    individual::IndividualFactory,
-    tencent_cloud::{Keys, payload},
+use crate::provider::common::{
+    individual::lifecycle::IndividualFactory,
     tests::{cleanup, fail, http, receipt, record, reply, response, saved},
 };
+use crate::provider::vendors::tencent_cloud::{Keys, payload};
 use aster_acme_dns::{
     CleanupStatus, ProviderErrorCode, RecordOwnership, SideEffect,
     operation::{
@@ -42,7 +42,7 @@ fn list(records: Vec<Value>) -> Value {
 fn inspected() -> Value {
     ok(
         json!({"RecordInfo":{"DomainId":42,"Id":123,"SubDomain":"target","RecordType":"TXT",
-        "Value":"challenge-value","Remark":"asteracme:publication-1","TTL":600,"Enabled":1,"RecordLineId":"0"}}),
+        "Value":"challenge-value","Remark":"asteracme-publication-1","TTL":600,"Enabled":1,"RecordLineId":"0"}}),
     )
 }
 
@@ -227,8 +227,8 @@ fn matching_remark_recovers_lost_create_with_the_exact_id() {
     for rows in [
         vec![],
         vec![row(123, None)],
-        vec![row(123, Some("asteracme:other"))],
-        vec![row(123, Some("asteracme:publication-1")), row(124, None)],
+        vec![row(123, Some("asteracme-other"))],
+        vec![row(123, Some("asteracme-publication-1")), row(124, None)],
     ] {
         let mut op = factory
             .start(ProviderAction::Present(record()), Some(cp.clone()))
@@ -246,7 +246,7 @@ fn matching_remark_recovers_lost_create_with_the_exact_id() {
     let created = saved(
         reply(
             op.as_mut(),
-            &list(vec![row(123, Some("asteracme:publication-1"))]),
+            &list(vec![row(123, Some("asteracme-publication-1"))]),
         )
         .unwrap(),
         "created",
@@ -367,9 +367,9 @@ fn unmarked_values_are_retained_and_other_publications_cannot_be_borrowed() {
     ));
 
     for rows in [
-        vec![row(123, Some("asteracme:another"))],
+        vec![row(123, Some("asteracme-another"))],
         vec![row(123, None), row(124, None)],
-        vec![row(123, Some("asteracme:publication-1"))],
+        vec![row(123, Some("asteracme-publication-1"))],
     ] {
         let mut op = factory
             .start(ProviderAction::Present(record()), Some(resolved()))
@@ -425,4 +425,39 @@ fn http_200_structured_throttling_is_durable_and_unrecognized_failures_are_uncer
         assert_eq!(failure.side_effect, SideEffect::Unknown);
         assert!(!format!("{failure:?}").contains("dummysecret"));
     }
+}
+
+#[test]
+fn documented_create_conflict_and_throttle_codes_have_definitive_classification() {
+    assert_eq!(
+        super::classify(Some("RequestLimitExceeded.RequestLimitExceeded"))
+            .unwrap()
+            .0,
+        ProviderErrorCode::RateLimited
+    );
+    assert_eq!(
+        super::classify(Some("InvalidParameter.DomainRecordExist"))
+            .unwrap()
+            .0,
+        ProviderErrorCode::RecordConflict
+    );
+}
+
+#[test]
+fn vendor_error_fields_are_parsed_and_redacted_at_the_tencent_boundary() {
+    let body = json!({
+        "Response": {
+            "Error": {"Code":"RequestLimitExceeded.RequestLimitExceeded", "Message":"secret text"},
+            "RequestId":"req-1234567890123456"
+        }
+    });
+    let failure = payload(&response(200, &body), true).unwrap_err();
+    assert_eq!(failure.code, ProviderErrorCode::RateLimited);
+    assert_eq!(
+        failure.provider_code.as_deref(),
+        Some("RequestLimitExceeded.RequestLimitExceeded")
+    );
+    assert!(failure.message.contains("req-1234567890123456"));
+    assert!(!failure.message.contains("secret text"));
+    assert_eq!(super::safe_provider_code("dummysecret"), None);
 }

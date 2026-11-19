@@ -1,7 +1,12 @@
 use crate::provider::{
-    aliyun::{Keys, payload},
-    individual::{IndividualApi, IndividualFactory},
-    tests::{cleanup, fail, http, receipt, record, reply, response, saved},
+    common::{
+        individual::{
+            api::{IndividualApi, Zone},
+            lifecycle::IndividualFactory,
+        },
+        tests::{cleanup, fail, http, receipt, record, reply, response, saved},
+    },
+    vendors::aliyun::{Keys, payload},
 };
 use aster_acme_dns::{
     CleanupStatus, ProviderErrorCode, RecordOwnership, SideEffect,
@@ -29,6 +34,41 @@ fn aliyun_marker_override_stays_within_the_fifty_character_limit() {
     let marker = keys().marker(&"a".repeat(43));
     assert_eq!(marker, format!("acme-{}", "a".repeat(43)));
     assert_eq!(marker.len(), 48);
+    let factory = factory();
+    let mut max_id = record();
+    max_id.publication_id = "a".repeat(45);
+    assert!(factory.start(ProviderAction::Present(max_id), None).is_ok());
+    let mut too_long_id = record();
+    too_long_id.publication_id = "a".repeat(46);
+    assert!(
+        factory
+            .start(ProviderAction::Present(too_long_id), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn individual_checkpoint_and_response_boundaries_fail_closed() {
+    let factory = factory();
+    let mut bad = record();
+    bad.publication_id = "bad id".into();
+    assert!(factory.start(ProviderAction::Present(bad), None).is_err());
+    let invalid = RecoveryState {
+        version: 2,
+        data: json!({}),
+    };
+    assert!(
+        factory
+            .start(ProviderAction::Present(record()), Some(invalid))
+            .is_err()
+    );
+    let api = keys();
+    let zone = Zone::new("child-id".into(), "child.validation.net").unwrap();
+    assert!(api.zones(response(200, &json!({})), 1).is_err());
+    assert!(api.records(response(200, &json!({})), &zone, 1).is_err());
+    assert!(api.inspected(response(200, &json!({})), &zone).is_err());
+    assert!(api.created(response(200, &json!({}))).is_err());
+    assert!(api.deleted(response(200, &json!({})), "64").is_err());
 }
 
 fn zone(id: &str, name: &str) -> Value {
@@ -56,7 +96,7 @@ fn row(id: &str, value: &str) -> Value {
 
 fn owned_row(id: &str, value: &str) -> Value {
     let mut row = row(id, value);
-    row["Remark"] = json!("asteracme:publication-1");
+    row["Remark"] = json!("acme-publication-1");
     row
 }
 
@@ -147,6 +187,15 @@ fn mark_created(machine: &mut dyn ProviderOperation) -> RecoveryState {
         "remark_intent",
     );
     assert_eq!(remark_intent.data["phase"]["id"], "64");
+    read_zone(
+        machine,
+        ProviderEvent::CheckpointSaved,
+        "DescribeDomainRecordInfo",
+    );
+    let pending_remark = saved(
+        reply(machine, &row("64", "challenge-value")).unwrap(),
+        "remark_intent",
+    );
     let request = http(
         machine.advance(ProviderEvent::CheckpointSaved).unwrap(),
         "x-acs-action",
@@ -158,17 +207,19 @@ fn mark_created(machine: &mut dyn ProviderOperation) -> RecoveryState {
             .url
             .ends_with("?RecordId=64&Remark=acme-publication-1")
     );
-    saved(
+    let marked = saved(
         reply(machine, &json!({"RequestId":"remark-request"})).unwrap(),
         "marked",
-    )
+    );
+    assert_eq!(pending_remark.data["phase"]["id"], "64");
+    marked
 }
 
 #[test]
 fn acs3_signs_exact_rfc3986_query_and_empty_wire_body() {
     // Independent Python hashlib/hmac + urllib reference based on the ACS3 canonical request.
     let request = keys().signed(
-        crate::provider::aliyun::AliyunAction::AddDomainRecord,
+        crate::provider::vendors::aliyun::AliyunAction::AddDomainRecord,
         &[
             ("Value", "\"é +/=%~\""),
             ("RR", "_acme-challenge"),
@@ -218,6 +269,7 @@ fn returned_id_survives_restart_and_requires_exact_remote_identity_before_delete
         ("Type", json!("CAA")),
         ("RecordId", json!("65")),
         ("Line", json!("other")),
+        ("Remark", json!("operator-edited")),
     ] {
         let mut op = factory
             .start(
@@ -288,8 +340,17 @@ fn remark_failure_retries_the_update_without_repeating_record_creation() {
         .start(ProviderAction::Present(record()), None)
         .unwrap();
     intent(present.as_mut());
-    let remark_intent = saved(
+    saved(
         reply(present.as_mut(), &json!({"RecordId":"64"})).unwrap(),
+        "remark_intent",
+    );
+    read_zone(
+        present.as_mut(),
+        ProviderEvent::CheckpointSaved,
+        "DescribeDomainRecordInfo",
+    );
+    let remark_ready = saved(
+        reply(present.as_mut(), &row("64", "challenge-value")).unwrap(),
         "remark_intent",
     );
     let request = http(
@@ -306,10 +367,19 @@ fn remark_failure_retries_the_update_without_repeating_record_creation() {
     assert_eq!(error.side_effect, SideEffect::Unknown);
 
     let mut resumed = factory
-        .start(ProviderAction::Present(record()), Some(remark_intent))
+        .start(ProviderAction::Present(record()), Some(remark_ready))
         .unwrap();
+    read_zone(
+        resumed.as_mut(),
+        ProviderEvent::Start,
+        "DescribeDomainRecordInfo",
+    );
+    saved(
+        reply(resumed.as_mut(), &row("64", "challenge-value")).unwrap(),
+        "remark_intent",
+    );
     let request = http(
-        resumed.advance(ProviderEvent::Start).unwrap(),
+        resumed.advance(ProviderEvent::CheckpointSaved).unwrap(),
         "x-acs-action",
         "UpdateDomainRecordRemark",
         true,
@@ -319,14 +389,111 @@ fn remark_failure_retries_the_update_without_repeating_record_creation() {
         reply(resumed.as_mut(), &json!({"RequestId":"remark-request"})).unwrap(),
         "marked",
     );
+    let mut resumed = factory
+        .start(ProviderAction::Present(record()), Some(marked.clone()))
+        .unwrap();
     read_zone(
         resumed.as_mut(),
-        ProviderEvent::CheckpointSaved,
+        ProviderEvent::Start,
         "DescribeDomainRecordInfo",
     );
     let receipt = receipt(reply(resumed.as_mut(), &owned_row("64", "challenge-value")).unwrap());
     assert_eq!(receipt.record_id, "64");
     assert_eq!(marked.data["phase"]["id"], "64");
+}
+
+#[test]
+fn explicit_create_rejection_saves_state_before_reporting_failure() {
+    let factory = factory();
+    let mut operation = factory
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    intent(operation.as_mut());
+    let rejected = saved(
+        reply(
+            operation.as_mut(),
+            &json!({"Code":"InvalidParameterValue","Message":"safe-to-hide"}),
+        )
+        .unwrap(),
+        "rejected",
+    );
+    let error = fail(operation.advance(ProviderEvent::CheckpointSaved));
+    assert!(!error.message.contains("safe-to-hide"));
+    assert_eq!(rejected.data["phase"]["state"], "rejected");
+}
+
+#[test]
+fn saved_delete_intent_requires_current_aliyun_remark_before_retry() {
+    let factory = factory();
+    let mut present = factory
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    intent(present.as_mut());
+    let mut deleting = mark_created(present.as_mut());
+    read_zone(
+        present.as_mut(),
+        ProviderEvent::CheckpointSaved,
+        "DescribeDomainRecordInfo",
+    );
+    let receipt = receipt(reply(present.as_mut(), &owned_row("64", "challenge-value")).unwrap());
+    deleting.data["phase"] = json!({"state":"delete_intent","id":"64"});
+    for marker in [
+        json!(null),
+        json!(""),
+        json!("operator note"),
+        json!("acme-another"),
+    ] {
+        let mut cleanup_op = factory
+            .start(
+                ProviderAction::Cleanup(cleanup(receipt.clone())),
+                Some(deleting.clone()),
+            )
+            .unwrap();
+        read_zone(
+            cleanup_op.as_mut(),
+            ProviderEvent::Start,
+            "DescribeDomainRecordInfo",
+        );
+        let mut observed = owned_row("64", "challenge-value");
+        observed["Remark"] = marker;
+        assert_eq!(
+            fail(reply(cleanup_op.as_mut(), &observed)).code,
+            ProviderErrorCode::RecordNotOwned
+        );
+    }
+}
+
+#[test]
+fn aliyun_remark_recovery_never_overwrites_an_existing_operator_remark() {
+    let factory = factory();
+    let mut present = factory
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    intent(present.as_mut());
+    let saved = saved(
+        reply(present.as_mut(), &json!({"RecordId":"64"})).unwrap(),
+        "remark_intent",
+    );
+    read_zone(
+        present.as_mut(),
+        ProviderEvent::CheckpointSaved,
+        "DescribeDomainRecordInfo",
+    );
+    let mut operator_record = row("64", "challenge-value");
+    operator_record["Remark"] = json!("operator-owned note");
+    let error = fail(reply(present.as_mut(), &operator_record));
+    assert_eq!(error.code, ProviderErrorCode::RecordNotOwned);
+
+    let mut resumed = factory
+        .start(ProviderAction::Present(record()), Some(saved))
+        .unwrap();
+    read_zone(
+        resumed.as_mut(),
+        ProviderEvent::Start,
+        "DescribeDomainRecordInfo",
+    );
+    let error = fail(reply(resumed.as_mut(), &operator_record));
+    assert_eq!(error.code, ProviderErrorCode::RecordNotOwned);
 }
 
 #[test]
@@ -455,7 +622,7 @@ fn rejects_wrong_zone_before_using_a_saved_ali_dns_name() {
 
 #[test]
 fn detailed_domain_info_requires_a_valid_ttl_before_any_write() {
-    use crate::provider::individual::{IndividualApi, Zone};
+    use crate::provider::common::individual::api::{IndividualApi, Zone};
     let api = keys();
     let expected = Zone::new("child-id".into(), "child.validation.net").unwrap();
     for ttl in [1, 300, 86400] {
@@ -485,7 +652,7 @@ fn detailed_domain_info_requires_a_valid_ttl_before_any_write() {
 
 #[test]
 fn documented_record_statuses_and_unknown_values_control_readback_readiness() {
-    use crate::provider::individual::{IndividualApi, Zone};
+    use crate::provider::common::individual::api::{IndividualApi, Zone};
     let api = keys();
     let expected = Zone::new("child-id".into(), "child.validation.net").unwrap();
     for (status, enabled) in [
@@ -507,7 +674,7 @@ fn documented_record_statuses_and_unknown_values_control_readback_readiness() {
 
 #[test]
 fn live_record_info_without_domain_id_keeps_domain_and_record_identity_checks() {
-    use crate::provider::individual::{IndividualApi, Zone};
+    use crate::provider::common::individual::api::{IndividualApi, Zone};
     let api = keys();
     let expected = Zone::new("child-id".into(), "child.validation.net").unwrap();
     let mut body = row("64", "challenge-value");
@@ -539,7 +706,7 @@ fn saved_record_id_retries_only_readback_and_recovers_after_visibility_delay() {
             .unwrap()
             .as_mut(),
     );
-    created.data["phase"] = json!({"state":"created","id":"64"});
+    created.data["phase"] = json!({"state":"marked","id":"64"});
     let mut op = factory
         .start(ProviderAction::Present(record()), Some(created))
         .unwrap();
@@ -560,7 +727,7 @@ fn saved_record_id_retries_only_readback_and_recovers_after_visibility_delay() {
         false,
     );
     assert!(request.url.ends_with("?RecordId=64"));
-    let receipt = receipt(reply(op.as_mut(), &row("64", "challenge-value")).unwrap());
+    let receipt = receipt(reply(op.as_mut(), &owned_row("64", "challenge-value")).unwrap());
     assert_eq!(receipt.record_id, "64");
 }
 
@@ -573,7 +740,7 @@ fn missing_saved_record_exhausts_read_budget_without_creating_again() {
             .unwrap()
             .as_mut(),
     );
-    created.data["phase"] = json!({"state":"created","id":"64"});
+    created.data["phase"] = json!({"state":"marked","id":"64"});
     let mut op = factory
         .start(ProviderAction::Present(record()), Some(created))
         .unwrap();
