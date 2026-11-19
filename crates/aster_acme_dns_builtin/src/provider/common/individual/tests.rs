@@ -16,6 +16,8 @@ const ZONE: &str = "child.example.test.";
 struct FakeApi {
     remote: Mutex<Option<Value>>,
     pending_create: Mutex<Option<Value>>,
+    zones: Mutex<Vec<Zone>>,
+    delete_ids: Mutex<Vec<String>>,
 }
 
 impl FakeApi {
@@ -23,6 +25,8 @@ impl FakeApi {
         Self {
             remote: Mutex::new(None),
             pending_create: Mutex::new(None),
+            zones: Mutex::new(vec![Zone::new("zone-1".into(), ZONE).unwrap()]),
+            delete_ids: Mutex::new(Vec::new()),
         }
     }
 
@@ -67,10 +71,9 @@ impl IndividualApi for FakeApi {
     }
 
     fn zones(&self, _: HttpResponse, _: u32) -> Result<Page<Zone>, ProviderError> {
-        Ok(Page {
-            entries: vec![Zone::new("zone-1".into(), ZONE)?],
-            total: 1,
-        })
+        let entries = self.zones.lock().unwrap().clone();
+        let total = u32::try_from(entries.len()).unwrap();
+        Ok(Page { entries, total })
     }
 
     fn list(&self, _: &Zone, _: &str, _: u32) -> Result<HttpRequest, ProviderError> {
@@ -120,15 +123,27 @@ impl IndividualApi for FakeApi {
         Ok("123".into())
     }
 
-    fn delete(&self, _: &Zone, _: &str) -> Result<HttpRequest, ProviderError> {
+    fn delete(&self, _: &Zone, id: &str) -> Result<HttpRequest, ProviderError> {
+        self.delete_ids.lock().unwrap().push(id.to_owned());
         Ok(Self::request("delete", true))
     }
 
     fn deleted(
         &self,
         _: HttpResponse,
-        _: &str,
+        id: &str,
     ) -> Result<aster_acme_dns::CleanupStatus, ProviderError> {
+        if self
+            .remote
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|record| record["id"].as_str() != Some(id))
+        {
+            return Err(aster_acme_dns::backend::configuration_error(
+                "fake delete ID did not match remote record",
+            ));
+        }
         *self.remote.lock().unwrap() = None;
         Ok(aster_acme_dns::CleanupStatus::Removed)
     }
@@ -177,9 +192,36 @@ fn respond(operation: &mut dyn ProviderOperation, body: impl Into<Value>) -> Pro
         .unwrap()
 }
 
+fn assert_saved_create_readback_is_uncertain(
+    factory: &IndividualFactory<FakeApi>,
+    api: &Arc<FakeApi>,
+    publication: &DnsRecord,
+    created: &RecoveryState,
+) {
+    api.remote.lock().unwrap().as_mut().unwrap()["enabled"] = json!(false);
+    let mut disabled = factory
+        .start(
+            ProviderAction::Present(publication.clone()),
+            Some(created.clone()),
+        )
+        .unwrap();
+    advance_http(disabled.as_mut(), ProviderEvent::Start, "inspect", false);
+    let failure = disabled
+        .advance(ProviderEvent::Http(Ok(FakeApi::response(&json!({})))))
+        .err()
+        .expect("disabled readback must fail");
+    assert_eq!(
+        failure.code,
+        aster_acme_dns::ProviderErrorCode::RecordNotOwned
+    );
+    assert_eq!(failure.side_effect, SideEffect::Unknown);
+    api.remote.lock().unwrap().as_mut().unwrap()["enabled"] = json!(true);
+}
+
 #[test]
 fn shared_lifecycle_checkpoints_create_inspects_and_cleans_exact_record() {
-    let factory = IndividualFactory(Arc::new(FakeApi::new()));
+    let api = Arc::new(FakeApi::new());
+    let factory = IndividualFactory(api.clone());
     let publication = record();
     let mut present = factory
         .start(ProviderAction::Present(publication.clone()), None)
@@ -217,16 +259,12 @@ fn shared_lifecycle_checkpoints_create_inspects_and_cleans_exact_record() {
     assert_eq!(receipt.record_id, "123");
     assert_eq!(receipt.ownership, RecordOwnership::Created);
 
+    assert_saved_create_readback_is_uncertain(&factory, &api, &publication, &created);
+
     let cleanup = CleanupRequest {
         publication_id: publication.publication_id.clone(),
-        record: publication,
-        receipt: PublicationReceipt {
-            record_id: "123".into(),
-            ownership: RecordOwnership::Created,
-            record_name: "_acme-challenge.child.example.test.".into(),
-            cname_chain: vec!["_acme-challenge.example.test.".into(), ZONE.into()],
-            effective_ttl_seconds: Some(300),
-        },
+        record: publication.clone(),
+        receipt: receipt.clone(),
     };
     let mut cleanup_op = factory
         .start(ProviderAction::Cleanup(cleanup), Some(created))
@@ -245,18 +283,16 @@ fn shared_lifecycle_checkpoints_create_inspects_and_cleans_exact_record() {
             aster_acme_dns::CleanupStatus::Removed
         ))
     ));
+    assert_eq!(
+        api.delete_ids.lock().unwrap().as_slice(),
+        std::slice::from_ref(&receipt.record_id)
+    );
     let mut restored_cleanup = factory
         .start(
             ProviderAction::Cleanup(CleanupRequest {
-                publication_id: "publication-test".into(),
-                record: record(),
-                receipt: PublicationReceipt {
-                    record_id: "123".into(),
-                    ownership: RecordOwnership::Created,
-                    record_name: "_acme-challenge.child.example.test.".into(),
-                    cname_chain: vec!["_acme-challenge.example.test.".into(), ZONE.into()],
-                    effective_ttl_seconds: Some(300),
-                },
+                publication_id: publication.publication_id.clone(),
+                record: publication,
+                receipt,
             }),
             Some(delete_intent),
         )
@@ -378,6 +414,52 @@ fn invalid_recovery_and_receipts_are_rejected_before_effects() {
 }
 
 #[test]
+fn api_defaults_reject_unsupported_remarking_and_zone_verification() {
+    let api = FakeApi::new();
+    let zone = Zone::new("zone-1".into(), ZONE).unwrap();
+    assert!(api.validate_marker("marker").is_ok());
+    assert!(api.verify_zone(&zone).unwrap().is_none());
+    assert!(api.set_remark("123", "marker").is_err());
+    assert!(api.remarked(FakeApi::response(&json!({}))).is_err());
+    assert!(
+        api.checked_zone(FakeApi::response(&json!({})), &zone)
+            .is_err()
+    );
+}
+
+#[test]
+fn discovery_rejects_duplicate_zone_ids_and_prefers_the_most_specific_zone() {
+    let duplicate_api = Arc::new(FakeApi::new());
+    *duplicate_api.zones.lock().unwrap() = vec![
+        Zone::new("zone-1".into(), ZONE).unwrap(),
+        Zone::new("zone-1".into(), "example.test.").unwrap(),
+    ];
+    let duplicate_factory = IndividualFactory(duplicate_api);
+    let mut duplicate = duplicate_factory
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    assert!(duplicate.advance(ProviderEvent::Start).is_ok());
+    assert!(
+        duplicate
+            .advance(ProviderEvent::Http(Ok(FakeApi::response(&json!({})))))
+            .is_err()
+    );
+
+    let nested_api = Arc::new(FakeApi::new());
+    *nested_api.zones.lock().unwrap() = vec![
+        Zone::new("child-zone".into(), ZONE).unwrap(),
+        Zone::new("parent-zone".into(), "example.test.").unwrap(),
+    ];
+    let nested_factory = IndividualFactory(nested_api);
+    let mut nested = nested_factory
+        .start(ProviderAction::Present(record()), None)
+        .unwrap();
+    assert!(nested.advance(ProviderEvent::Start).is_ok());
+    let saved = checkpoint(respond(nested.as_mut(), json!({})), "resolved");
+    assert_eq!(saved.data["zone"]["id"], "child-zone");
+}
+
+#[test]
 fn cleanup_retry_rereads_marker_and_never_deletes_changed_ownership() {
     let api = Arc::new(FakeApi::new());
     let factory = IndividualFactory(api.clone());
@@ -416,6 +498,7 @@ fn cleanup_retry_rereads_marker_and_never_deletes_changed_ownership() {
             failure.code,
             aster_acme_dns::ProviderErrorCode::RecordNotOwned
         );
+        assert_eq!(failure.side_effect, SideEffect::None);
         assert!(api.remote.lock().unwrap().is_some());
     }
     let mut mismatched = request;

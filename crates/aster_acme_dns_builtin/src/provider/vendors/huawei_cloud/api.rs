@@ -138,10 +138,16 @@ pub(super) fn payload(response: &HttpResponse, mutation: bool) -> Result<Value, 
         .and_then(|error| error.request_id.as_deref())
         .and_then(safe_request_id);
     let structured = raw_code.is_some_and(|code| {
-        code.starts_with("DNS.") || code.starts_with("APIG.") || code.starts_with("APIC.")
+        code.starts_with("DNS.")
+            || code.starts_with("APIG.")
+            || code.starts_with("APIGW.")
+            || code.starts_with("APIC.")
     });
     let recognized = if structured {
         match response.status {
+            400 if matches!(raw_code, Some("DNS.0312" | "DNS.0016")) => {
+                Some((ProviderErrorCode::RecordConflict, "HuaweiRecordConflict"))
+            }
             400 => Some((ProviderErrorCode::InvalidRequest, "HuaweiInvalidRequest")),
             401 => Some((
                 ProviderErrorCode::AuthenticationFailed,
@@ -188,8 +194,8 @@ struct ErrorBody {
     request_id: Option<String>,
 }
 
-fn safe_huawei_error_code(code: &str) -> Option<String> {
-    let recognized_namespace = ["DNS.", "APIG.", "APIC."].iter().any(|prefix| {
+pub(super) fn safe_huawei_error_code(code: &str) -> Option<String> {
+    let recognized_namespace = ["DNS.", "APIG.", "APIGW.", "APIC."].iter().any(|prefix| {
         code.strip_prefix(prefix).is_some_and(|suffix| {
             suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit())
         })
@@ -202,7 +208,7 @@ fn safe_huawei_error_code(code: &str) -> Option<String> {
     .then(|| code.to_owned())
 }
 
-fn safe_request_id(id: &str) -> Option<String> {
+pub(super) fn safe_request_id(id: &str) -> Option<String> {
     ((16..=128).contains(&id.len())
         && id
             .bytes()

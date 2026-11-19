@@ -36,7 +36,7 @@ CLI 默认已包含这两个后端；源码可用 `cargo run --locked -p aster_a
 | 阿里云云解析 DNS | `com.astercosm.acme.dns.aliyun` | `access_key_id`、`access_key_secret` |
 | 腾讯云 DNSPod | `com.astercosm.acme.dns.tencent-cloud` | `secret_id`、`secret_key` |
 
-交互终端运行 `provider add NAME --backend BACKEND_ID`，两个凭据字段均隐藏输入。自动化把两项写入私有 TOML 文件，再传入 `--settings-file /absolute/path/settings.toml --json`。阿里云 RAM 权限覆盖 `DescribeDomains`、`DescribeDomainInfo`、`DescribeDomainRecords`、`DescribeDomainRecordInfo`、`AddDomainRecord`、`UpdateDomainRecordRemark` 和 `DeleteDomainRecord`。DNSPod CAM 权限覆盖 `DescribeDomainList`、`DescribeRecordList`、`DescribeRecord`、`CreateRecord` 和 `DeleteRecord`。请限制写权限到实际发布 zone。
+交互终端运行 `provider add NAME --backend BACKEND_ID`，两个凭据字段均隐藏输入。自动化把两项写入私有 TOML 文件，再传入 `--settings-file /absolute/path/settings.toml --json`。阿里云 RAM 权限覆盖 `DescribeDomains`、`DescribeDomainInfo`、`DescribeDomainRecords`、`DescribeDomainRecordInfo`、`AddDomainRecord`、`UpdateDomainRecordRemark` 和 `DeleteDomainRecord`。DNSPod CAM 权限覆盖 `DescribeDomainList`、`DescribeRecordList`、`DescribeRecord`、`CreateTXTRecord` 和 `DeleteRecord`。请限制写权限到实际发布 zone。
 
 两者按最终 TXT owner 逐页查找最长匹配 zone，并在写入前保存该 zone 身份。阿里云调用 `DescribeDomainInfo` 时显式传 `NeedDetailAttributes=true`，从返回的 `MinTtl` 取下限，最高为 86400 秒；缺失或非法下限在写入前拒绝。DNSPod 使用覆盖免费套餐的 600 秒下限和 604800 秒上限。Profile 展示请求值，签发 journal 的 `effective_ttl_seconds` 保存厂商读回值。
 

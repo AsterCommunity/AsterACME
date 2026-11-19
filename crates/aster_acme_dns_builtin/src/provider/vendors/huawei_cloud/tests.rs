@@ -1,6 +1,6 @@
 use crate::provider::vendors::huawei_cloud::{
     BACKEND_ID, Config, HuaweiCloudBackend,
-    api::{SignedRequest, canonical_query, canonical_uri},
+    api::{SignedRequest, canonical_query, canonical_uri, safe_huawei_error_code, safe_request_id},
     operation::Factory,
     txt::{add_marker, remove_marker, txt_decode, txt_encode},
 };
@@ -252,6 +252,71 @@ fn hws_pagination_and_payload_errors_fail_closed() {
     assert_eq!(failure.provider_code.as_deref(), Some("DNS.0001"));
     assert!(failure.message.contains("DNS.0001"));
     assert!(!failure.message.contains("private raw Huawei detail"));
+}
+
+#[test]
+fn huawei_error_codes_and_request_ids_are_filtered_at_the_vendor_boundary() {
+    for code in ["DNS.0001", "APIG.0001", "APIGW.0308", "APIC.9999"] {
+        assert_eq!(safe_huawei_error_code(code).as_deref(), Some(code));
+    }
+    let safe_generic = "Provider.Error_Code-123";
+    assert_eq!(
+        safe_huawei_error_code(safe_generic).as_deref(),
+        Some(safe_generic)
+    );
+    for code in [
+        "DNS.001",
+        "DNS.00001",
+        "DNS.A001",
+        "DNS.0001/secret",
+        "APIG.000x",
+        "APIC.0001 ",
+        "unsafe",
+        "Provider.Error/secret",
+    ] {
+        assert!(safe_huawei_error_code(code).is_none(), "{code}");
+    }
+
+    let safe_id = "a".repeat(16);
+    assert_eq!(safe_request_id(&safe_id).as_deref(), Some(safe_id.as_str()));
+    for id in ["short", &"a".repeat(129), "request id", "bad/id"] {
+        assert!(safe_request_id(id).is_none(), "{id}");
+    }
+
+    for (status, code, expected) in [
+        (400, "DNS.0312", ProviderErrorCode::RecordConflict),
+        (400, "DNS.0016", ProviderErrorCode::RecordConflict),
+        (400, "DNS.0002", ProviderErrorCode::InvalidRequest),
+        (429, "APIGW.0308", ProviderErrorCode::RateLimited),
+    ] {
+        let failure = crate::provider::vendors::huawei_cloud::api::payload(
+            &HttpResponse {
+                status,
+                headers: vec![],
+                body: json!({"code":code}).to_string().into_bytes(),
+            },
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, expected, "{status} {code}");
+        assert_eq!(failure.side_effect, SideEffect::None, "{status} {code}");
+    }
+    for (status, expected) in [
+        (408, ProviderErrorCode::ProviderTimeout),
+        (500, ProviderErrorCode::ProviderUnavailable),
+    ] {
+        let failure = crate::provider::vendors::huawei_cloud::api::payload(
+            &HttpResponse {
+                status,
+                headers: vec![],
+                body: json!({"code":"APIGW.0308"}).to_string().into_bytes(),
+            },
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, expected);
+        assert_eq!(failure.side_effect, SideEffect::Unknown);
+    }
 }
 #[test]
 fn descriptor_is_explicitly_best_effort_and_keys_are_sensitive() {
@@ -930,11 +995,16 @@ fn structured_conflicts_are_checkpointed_and_reread_with_a_four_write_limit() {
     for attempt in 0..4 {
         intent(op.as_mut(), vec![]);
         http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "POST");
+        let code = if attempt % 2 == 0 {
+            "DNS.0312"
+        } else {
+            "DNS.0016"
+        };
         checkpoint(
             reply(
                 op.as_mut(),
-                409,
-                json!({"code":"DNS.0312", "message":"SecretKey"}),
+                400,
+                json!({"code":code, "message":"SecretKey"}),
             )
             .unwrap(),
             "rejected",
@@ -959,7 +1029,7 @@ fn rate_limit_floor_is_retained_and_malformed_write_response_never_fabricates_an
     let response = HttpResponse {
         status: 429,
         headers: vec![("retry-after".into(), b"83".to_vec())],
-        body: serde_json::to_vec(&json!({"error_code":"APIG.0308", "error_msg":"SecretKey"}))
+        body: serde_json::to_vec(&json!({"error_code":"APIGW.0308", "error_msg":"SecretKey"}))
             .unwrap(),
     };
     checkpoint(

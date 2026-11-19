@@ -165,7 +165,7 @@ impl<A: IndividualApi> Operation<A> {
                     self.api.owns_marker(marker, &self.record().publication_id)
                 }))
         {
-            return Err(not_owned(false));
+            return Err(not_owned(!cleanup));
         }
         if matches!(saved.phase, Phase::RemarkIntent { .. }) {
             let remark_id = match &saved.phase {
@@ -184,7 +184,7 @@ impl<A: IndividualApi> Operation<A> {
                 .as_deref()
                 .is_some_and(|marker| !marker.is_empty())
             {
-                return Err(not_owned(false));
+                return Err(not_owned(true));
             }
             let request = self.api.set_remark(&remark_id, &self.marker)?;
             return self.checkpoint(
@@ -197,7 +197,7 @@ impl<A: IndividualApi> Operation<A> {
             return self.checkpoint(Phase::DeleteIntent { id: record.id }, Stage::Send(request));
         }
         if !record.enabled || record.ttl == 0 {
-            return Err(not_owned(false));
+            return Err(not_owned(true));
         }
         Ok(ProviderEffect::Complete(
             self.receipt(record, RecordOwnership::Created),

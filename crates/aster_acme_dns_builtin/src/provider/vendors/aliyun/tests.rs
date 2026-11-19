@@ -6,7 +6,7 @@ use crate::provider::{
         },
         tests::{cleanup, fail, http, receipt, record, reply, response, saved},
     },
-    vendors::aliyun::{Keys, payload},
+    vendors::aliyun::{Keys, classify, payload, safe_request_id},
 };
 use aster_acme_dns::{
     CleanupStatus, ProviderErrorCode, RecordOwnership, SideEffect,
@@ -591,6 +591,58 @@ fn structured_throttle_saves_rejection_before_retry_and_never_echoes_raw_data() 
         let error = payload(&response(status, &body), true).unwrap_err();
         assert_eq!(error.side_effect, SideEffect::Unknown);
         assert!(!format!("{error:?}").contains("dummysecret"));
+    }
+}
+
+#[test]
+fn aliyun_error_classification_and_request_ids_accept_only_safe_values() {
+    use ProviderErrorCode::{
+        AuthenticationFailed, AuthorizationDenied, InvalidRequest, RateLimited, RecordConflict,
+        ZoneNotFound,
+    };
+
+    for (code, expected) in [
+        ("Throttling", RateLimited),
+        ("Throttling.User", RateLimited),
+        ("Throttling.Api", RateLimited),
+        ("Throttling.System", RateLimited),
+        ("InvalidAccessKeyId.NotFound", AuthenticationFailed),
+        ("SignatureDoesNotMatch", AuthenticationFailed),
+        ("InvalidSecurityToken.Expired", AuthenticationFailed),
+        ("Forbidden.RAM", AuthorizationDenied),
+        ("Forbidden.AccessDenied", AuthorizationDenied),
+        ("Forbidden.NoPermission", AuthorizationDenied),
+        ("InvalidDomainName.NoExist", ZoneNotFound),
+        ("InvalidParameterValue", InvalidRequest),
+        ("InvalidParameter", InvalidRequest),
+        ("DomainRecordDuplicate", RecordConflict),
+        ("DomainRecordConflict", RecordConflict),
+        ("InvalidRR", InvalidRequest),
+        ("InvalidValue", InvalidRequest),
+        ("InvalidType", InvalidRequest),
+        ("InvalidTTL", InvalidRequest),
+        ("InvalidLine", InvalidRequest),
+    ] {
+        assert_eq!(
+            classify(Some(code)).map(|(kind, _)| kind),
+            Some(expected),
+            "{code}"
+        );
+    }
+    assert!(classify(None).is_none());
+    assert!(classify(Some("Unrecognized.Provider.Error")).is_none());
+
+    let accepted = "a".repeat(16);
+    assert_eq!(safe_request_id(&accepted), Some(accepted));
+    let accepted_max = "b".repeat(128);
+    assert_eq!(safe_request_id(&accepted_max), Some(accepted_max));
+    for rejected in [
+        "short",
+        &"c".repeat(129),
+        "request id with spaces",
+        "bad/id",
+    ] {
+        assert!(safe_request_id(rejected).is_none(), "{rejected}");
     }
 }
 
