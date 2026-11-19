@@ -7,6 +7,7 @@ use aster_acme::{
     transport::{RetryAfter, TransportError},
 };
 use aster_acme_cli_storage::account::StorageError;
+use std::fmt::Write as _;
 
 pub(crate) mod problem;
 
@@ -120,7 +121,8 @@ fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option
         IssueError::MaintenanceReadback { .. } => (issue.to_string(), Some("Inspect certificate storage and permissions. The latest saved renewal state is unavailable; other certificates are processed independently.".into())),
         IssueError::LeaseUnavailable(..) => (issue.to_string(), Some("Let the running operation finish, then check the saved certificate state and lock permissions. Lock contention does not advance renewal backoff.".into())),
         IssueError::AuthorizationFailed { status, problem } => self::problem::authorization_failed(status, problem.as_deref()),
-        IssueError::DnsProvider(_) | IssueError::DnsRouting(_) | IssueError::DnsPropagation(_) | IssueError::DnsRetryAt(_) => (issue.to_string(), Some("Inspect provider show <PROFILE> and its private TOML configuration, allowed DNS zones, resolver diagnostic and provider error code. Retain the saved request and publication receipts; resume the same request after correcting the cause or waiting for the saved retry time. For a terminal request use provider cleanup <PROFILE>.".into())),
+        IssueError::DnsProvider(failure) => dns_provider_diagnostic(issue, failure),
+        IssueError::DnsRouting(_) | IssueError::DnsPropagation(_) | IssueError::DnsRetryAt(_) => (issue.to_string(), Some("Inspect provider show <PROFILE> and its private TOML configuration, allowed DNS zones, resolver diagnostic and provider error code. Retain the saved request and publication receipts; resume the same request after correcting the cause or waiting for the saved retry time. For a terminal request use provider cleanup <PROFILE>.".into())),
         IssueError::Publication(_) if issue.to_string().contains("webroot") || issue.to_string().contains("HTTP") || issue.to_string().contains("isolated") => (issue.to_string(), Some("Inspect the webroot file state and the exact path reported in the error. Retain any isolated cleanup entry until ownership can be verified, then correct the webroot state and retry/resume.".into())),
         IssueError::Publication(_) => (issue.to_string(), Some("Check the selected validation implementation and its saved configuration. For DNS use provider show <PROFILE> and inspect private profile permissions; for HTTP/TLS listeners check the address, port forwarding and bind permissions. Retain saved publication material before retrying.".into())),
         IssueError::NameAlreadyExists(name)=>(issue.to_string(),Some(format!("Choose another --name, or inspect cert show '{}'. To continue its unfinished request use cert issue --resume '{}'.",name.as_str(),name.as_str()))),
@@ -136,6 +138,33 @@ fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option
         IssueError::Interrupted | IssueError::MutationUncertain(_)=>(issue.to_string(),Some("Use cert issue --resume <CERTIFICATE>; for several requests add --operation <ID>. Saved validation files and records remain under your control.".into())),
         IssueError::RenewalAdmission(_) | IssueError::InvalidInput(_) | IssueError::Identifier(_) | IssueError::State(_) | IssueError::Challenge(_) | IssueError::Crypto(_)=>(issue.to_string(),Some("Inspect cert show <CERTIFICATE> for saved status and saved validation requirements. Retain the certificate key and CSR.".into())),
     }
+}
+
+fn dns_provider_diagnostic(
+    issue: &aster_acme::issuance::IssueError,
+    failure: &aster_acme_dns::ProviderFailure,
+) -> (String, Option<String>) {
+    let mut message = issue.to_string();
+    if let aster_acme_dns::ProviderFailure::Provider(provider) = failure
+        && let Some(code) = provider
+            .provider_code
+            .as_deref()
+            .filter(|code| safe_provider_code(code))
+        && !message.contains(code)
+    {
+        let _ = write!(message, " (provider code: {code})");
+    }
+    (
+        message,
+        Some("Inspect provider show <PROFILE> and its private TOML configuration and allowed DNS zones. The error includes the API request, HTTP status and safe provider code when available. Retain the saved request and publication receipts; resume the same request after correcting the cause or waiting for the saved retry time. For a terminal request use provider cleanup <PROFILE>.".into()),
+    )
+}
+
+fn safe_provider_code(code: &str) -> bool {
+    (1..=128).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn storage_message(message: &str) -> (String, Option<String>) {
@@ -249,6 +278,36 @@ mod tests {
         );
         assert!(!retry_hint(None).contains("None"));
     }
+
+    #[test]
+    fn dns_provider_diagnostics_keep_safe_provider_codes_and_hide_raw_messages() {
+        let error = aster_acme::issuance::IssueError::DnsProvider(
+            aster_acme_dns::ProviderFailure::Provider(aster_acme_dns::ProviderError {
+                code: aster_acme_dns::ProviderErrorCode::InvalidRequest,
+                message: "DNS API rejected (API request: DescribeRecordList)".into(),
+                side_effect: aster_acme_dns::SideEffect::None,
+                retry_after_seconds: None,
+                provider_code: Some("InvalidParameterValue.DomainId".into()),
+            }),
+        );
+        let (message, hint) = diagnostic(&error);
+        assert!(message.contains("InvalidParameterValue.DomainId"));
+        assert!(hint.unwrap().contains("API request"));
+        assert!(!message.contains("secret"));
+        let unsafe_provider = aster_acme::issuance::IssueError::DnsProvider(
+            aster_acme_dns::ProviderFailure::Provider(aster_acme_dns::ProviderError {
+                code: aster_acme_dns::ProviderErrorCode::InvalidRequest,
+                message: "DNS API rejected".into(),
+                side_effect: aster_acme_dns::SideEffect::None,
+                retry_after_seconds: None,
+                provider_code: Some("bad code\nsecret".into()),
+            }),
+        );
+        let (message, _) = diagnostic(&unsafe_provider);
+        assert!(!message.contains("bad code"));
+        assert!(!message.contains("secret"));
+    }
+
     #[test]
     fn missing_local_account_points_to_name_and_data_directory_in_a_separate_hint() {
         let error = MissingLocalAccount {

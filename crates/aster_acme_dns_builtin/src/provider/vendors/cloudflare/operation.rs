@@ -1,5 +1,12 @@
 //! Cloudflare publication reconciliation and exact-object cleanup transitions.
-use crate::provider::cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone};
+use crate::provider::{
+    common::{
+        marker::{is_publication_marker, matches_publication, publication},
+        retry::ReadRetry,
+    },
+    vendors::cloudflare::{API, Cloudflare, CloudflareConfig, valid_token, valid_zone},
+};
+use aster_acme_dns::operation::HttpMethod;
 use aster_acme_dns::{
     CleanupStatus, ProviderError, ProviderErrorCode, PublicationReceipt, RecordOwnership,
     SideEffect,
@@ -9,7 +16,7 @@ use aster_acme_dns::{
         ProviderOperation, ProviderOutcome, RecoveryState,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 impl OperationFactory for Cloudflare {
@@ -88,6 +95,7 @@ impl OperationFactory for Cloudflare {
             automatic: self.config.zone_id.is_empty(),
             candidate: 0,
             rejection: None,
+            read_retry: ReadRetry::new(6, std::time::Duration::from_secs(5)),
         }))
     }
 }
@@ -107,7 +115,41 @@ enum Stage {
     SaveRejection,
     Delete,
     Done,
+    Reconcile,
 }
+
+#[derive(Clone, Copy)]
+enum CloudflareAction {
+    GetZone,
+    DiscoverZones,
+    ListTxtRecords,
+    GetTxtRecord,
+    CreateTxtRecord,
+    DeleteTxtRecord,
+}
+
+#[derive(Serialize)]
+struct CreateTxtBody<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    name: &'a str,
+    content: &'a str,
+    ttl: u32,
+    comment: String,
+}
+
+impl CloudflareAction {
+    const fn method(self) -> HttpMethod {
+        match self {
+            Self::GetZone | Self::DiscoverZones | Self::ListTxtRecords | Self::GetTxtRecord => {
+                HttpMethod::Get
+            }
+            Self::CreateTxtRecord => HttpMethod::Post,
+            Self::DeleteTxtRecord => HttpMethod::Delete,
+        }
+    }
+}
+
 struct Operation {
     config: CloudflareConfig,
     action: ProviderAction,
@@ -119,6 +161,7 @@ struct Operation {
     rejection: Option<ProviderError>,
     automatic: bool,
     candidate: usize,
+    read_retry: ReadRetry,
 }
 
 #[derive(Deserialize)]
@@ -158,7 +201,10 @@ impl Operation {
         };
         if record.id != request.receipt.record_id
             || !self.same_record(&record)
-            || record.comment.as_deref() != Some(&self.tag())
+            || !record
+                .comment
+                .as_deref()
+                .is_some_and(|comment| matches_publication(comment, &self.record().publication_id))
         {
             return Err(error(
                 ProviderErrorCode::RecordNotOwned,
@@ -192,10 +238,14 @@ impl Operation {
                 return self.list();
             }
         }
-        let tag = self.tag();
         let mut candidates = Vec::new();
         for record in std::mem::take(&mut self.found) {
-            if record.comment.as_deref() == Some(&tag) && !self.same_record(&record) {
+            if record
+                .comment
+                .as_deref()
+                .is_some_and(|comment| matches_publication(comment, &self.record().publication_id))
+                && !self.same_record(&record)
+            {
                 return Err(error(
                     ProviderErrorCode::RecordConflict,
                     "Cloudflare publication tag refers to a different record",
@@ -214,26 +264,34 @@ impl Operation {
             ));
         }
         if let Some(record) = candidates.pop() {
-            let ownership = if record.comment.as_deref() == Some(&tag) {
-                RecordOwnership::Created
-            } else if self.creation_uncertain {
-                return Err(uncertain_creation());
-            } else if record
-                .comment
-                .as_ref()
-                .is_some_and(|comment| comment.starts_with("asteracme:"))
-            {
-                return Err(error(
-                    ProviderErrorCode::RecordConflict,
-                    "TXT value belongs to another active publication",
-                    SideEffect::None,
-                ));
-            } else {
-                RecordOwnership::Preexisting
-            };
+            let ownership =
+                if record.comment.as_deref().is_some_and(|comment| {
+                    matches_publication(comment, &self.record().publication_id)
+                }) {
+                    RecordOwnership::Created
+                } else if self.creation_uncertain {
+                    return Err(uncertain_creation());
+                } else if record
+                    .comment
+                    .as_ref()
+                    .is_some_and(|comment| is_publication_marker(comment))
+                {
+                    return Err(error(
+                        ProviderErrorCode::RecordConflict,
+                        "TXT value belongs to another active publication",
+                        SideEffect::None,
+                    ));
+                } else {
+                    RecordOwnership::Preexisting
+                };
             return self.receipt(record, ownership);
         }
         if self.creation_uncertain {
+            if let Some(until) = self.read_retry.next() {
+                self.page = 1;
+                self.stage = Stage::Reconcile;
+                return Ok(ProviderEffect::WaitUntil(until));
+            }
             return Err(uncertain_creation());
         }
         self.stage = Stage::Intent;
@@ -278,7 +336,12 @@ impl Operation {
                 }
                 let id = request.receipt.record_id.clone();
                 self.stage = Stage::Inspect;
-                self.request("GET", &format!("/dns_records/{id}"), None, false)
+                self.request(
+                    CloudflareAction::GetTxtRecord,
+                    &format!("/dns_records/{id}"),
+                    None,
+                    false,
+                )
             }
         }
     }
@@ -294,7 +357,7 @@ impl Operation {
     fn begin_zone(&mut self) -> Result<ProviderEffect, ProviderError> {
         if !self.config.zone_id.is_empty() {
             self.stage = Stage::Zone;
-            return self.request("GET", "", None, false);
+            return self.request(CloudflareAction::GetZone, "", None, false);
         }
         self.discover()
     }
@@ -317,7 +380,7 @@ impl Operation {
         let candidate = labels[self.candidate..].join(".");
         self.stage = Stage::Discover;
         self.raw_request(
-            "GET",
+            CloudflareAction::DiscoverZones,
             &format!("{API}/zones?name={candidate}&status=active&per_page=50&page=1"),
             None,
             false,
@@ -379,17 +442,17 @@ impl Operation {
         }
     }
     fn tag(&self) -> String {
-        format!("asteracme:{}", self.record().publication_id)
+        publication(&self.record().publication_id)
     }
     fn request(
         &self,
-        method: &str,
+        action: CloudflareAction,
         path: &str,
-        body: Option<Value>,
+        body: Option<Vec<u8>>,
         mutation: bool,
     ) -> Result<ProviderEffect, ProviderError> {
         self.raw_request(
-            method,
+            action,
             &format!("{API}/zones/{}{path}", self.config.zone_id),
             body,
             mutation,
@@ -397,9 +460,9 @@ impl Operation {
     }
     fn raw_request(
         &self,
-        method: &str,
+        action: CloudflareAction,
         url: &str,
-        body: Option<Value>,
+        body: Option<Vec<u8>>,
         mutation: bool,
     ) -> Result<ProviderEffect, ProviderError> {
         let token = self.token.as_ref().ok_or_else(|| {
@@ -409,13 +472,10 @@ impl Operation {
                 SideEffect::None,
             )
         })?;
-        let body = body
-            .map(|body| serde_json::to_vec(&body))
-            .transpose()
-            .map_err(|_| configuration_error("cannot encode Cloudflare request"))?
-            .unwrap_or_default();
+        let body = body.unwrap_or_default();
         Ok(ProviderEffect::Http(HttpRequest {
-            method: method.into(),
+            operation: None,
+            method: action.method(),
             url: url.into(),
             headers: vec![
                 ("Authorization".into(), format!("Bearer {token}")),
@@ -432,13 +492,30 @@ impl Operation {
         aster_acme_dns::routing::absolute_name(name)
             .map_err(|_| configuration_error("invalid Cloudflare DNS name"))?;
         self.request(
-            "GET",
+            CloudflareAction::ListTxtRecords,
             &format!(
                 "/dns_records?type=TXT&name={name}&per_page=100&page={}",
                 self.page
             ),
             None,
             false,
+        )
+    }
+    fn create_record(&mut self) -> Result<ProviderEffect, ProviderError> {
+        self.stage = Stage::Create;
+        let body = serde_json::to_vec(&CreateTxtBody {
+            kind: "TXT",
+            name: self.record().name.trim_end_matches('.'),
+            content: &self.record().value,
+            ttl: self.record().ttl_seconds.unwrap_or(120).clamp(60, 86400),
+            comment: self.tag(),
+        })
+        .map_err(|_| configuration_error("cannot encode Cloudflare request"))?;
+        self.request(
+            CloudflareAction::CreateTxtRecord,
+            "/dns_records",
+            Some(body),
+            true,
         )
     }
     fn receipt(
@@ -455,6 +532,7 @@ impl Operation {
         }
         let plan = self.record();
         let receipt = PublicationReceipt {
+            effective_ttl_seconds: None,
             record_id: record.id,
             ownership,
             record_name: plan.name.clone(),
@@ -515,11 +593,8 @@ impl ProviderOperation for Operation {
             (Stage::SaveZone, ProviderEvent::CheckpointSaved) => self.begin_zone(),
             (Stage::Zone, ProviderEvent::Http(response)) => self.zone_response(response),
             (Stage::List, ProviderEvent::Http(response)) => self.list_response(response),
-            (Stage::Intent, ProviderEvent::CheckpointSaved) => {
-                self.stage = Stage::Create;
-                self.request("POST", "/dns_records", Some(json!({"type":"TXT", "name": self.record().name.trim_end_matches('.'),
-                    "content": self.record().value, "ttl": self.record().ttl_seconds.unwrap_or(120).clamp(60,86400), "comment": self.tag()})), true)
-            }
+            (Stage::Reconcile, ProviderEvent::Timer) => self.list(),
+            (Stage::Intent, ProviderEvent::CheckpointSaved) => self.create_record(),
             (Stage::Create, ProviderEvent::Http(response)) => {
                 let response: Envelope<Record> = match decode_response(response, true) {
                     Ok(response) => response,
@@ -534,7 +609,9 @@ impl ProviderOperation for Operation {
                     Err(error) => return Err(error),
                 };
                 let record = response.result.ok_or_else(invalid_response)?;
-                if record.comment.as_deref() != Some(&self.tag()) {
+                if !record.comment.as_deref().is_some_and(|comment| {
+                    matches_publication(comment, &self.record().publication_id)
+                }) {
                     return Err(invalid_response());
                 }
                 self.receipt(record, RecordOwnership::Created)
@@ -549,7 +626,12 @@ impl ProviderOperation for Operation {
                 };
                 let id = request.receipt.record_id.clone();
                 self.stage = Stage::Delete;
-                self.request("DELETE", &format!("/dns_records/{id}"), None, true)
+                self.request(
+                    CloudflareAction::DeleteTxtRecord,
+                    &format!("/dns_records/{id}"),
+                    None,
+                    true,
+                )
             }
             (Stage::Delete, ProviderEvent::Http(response)) => {
                 let response: Envelope<Value> = decode_response(response, true)?;
@@ -600,6 +682,14 @@ fn decode_response<T: serde::de::DeserializeOwned>(
     };
     if let Some(code) = code {
         let mut failure = error(code, "Cloudflare API rejected the operation", side_effect);
+        let provider_code = cloudflare_provider_code(&response.body);
+        let request_id = cloudflare_request_id(&response.headers);
+        failure.message = cloudflare_message(
+            response.status,
+            provider_code.as_deref(),
+            request_id.as_deref(),
+        );
+        failure.provider_code = provider_code;
         // Only an authenticated, parsed rejection can narrow unknown mutation effects.
         if response.status < 500
             && serde_json::from_slice::<Value>(&response.body)
@@ -626,13 +716,80 @@ fn decode_response<T: serde::de::DeserializeOwned>(
         )
     })?;
     if !decoded.success {
-        return Err(error(
+        let mut failure = error(
             ProviderErrorCode::RecordConflict,
             "Cloudflare API did not confirm success",
             side_effect,
-        ));
+        );
+        let provider_code = cloudflare_provider_code(&response.body);
+        let request_id = cloudflare_request_id(&response.headers);
+        failure.message = cloudflare_message(
+            response.status,
+            provider_code.as_deref(),
+            request_id.as_deref(),
+        );
+        failure.provider_code = provider_code;
+        return Err(failure);
     }
     Ok(decoded)
+}
+
+fn cloudflare_message(
+    status: u16,
+    provider_code: Option<&str>,
+    request_id: Option<&str>,
+) -> String {
+    let mut message = match provider_code {
+        Some(provider_code) => format!(
+            "Cloudflare API rejected or did not confirm the operation (HTTP {status}, provider code {provider_code})"
+        ),
+        None => format!(
+            "Cloudflare API rejected or did not confirm the operation (HTTP {status}; provider code unavailable)"
+        ),
+    };
+    if let Some(request_id) = request_id {
+        use std::fmt::Write as _;
+        let _ = write!(message, ", request ID {request_id}");
+    }
+    message
+}
+
+fn cloudflare_request_id(headers: &[(String, Vec<u8>)]) -> Option<String> {
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("cf-ray"))
+        .and_then(|(_, value)| std::str::from_utf8(value).ok())?;
+    if (1..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Some(value.to_owned())
+    } else {
+        None
+    }
+}
+
+fn cloudflare_provider_code(body: &[u8]) -> Option<String> {
+    let body = serde_json::from_slice::<Value>(body).ok()?;
+    let code = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|errors| errors.first())
+        .and_then(|error| error.get("code"))?;
+    let code = code
+        .as_u64()
+        .map(|code| code.to_string())
+        .or_else(|| code.as_str().map(str::to_owned))?;
+    if (1..=128).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        Some(code)
+    } else {
+        None
+    }
 }
 
 fn valid_record_id(value: &str) -> bool {

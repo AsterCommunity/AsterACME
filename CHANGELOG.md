@@ -6,11 +6,21 @@
 
 ### Added
 
+- **Huawei Cloud DNS** — Include the backend in the default CLI build; embedded hosts opt in with `huawei_cloud`. `project_id` is optional and is discovered through IAM for the selected region; `region` is optional and defaults to `cn-north-4`. Public-zone discovery, HWS signatures and durable RRset recovery use best-effort ownership: concurrent external changes between read and PUT/DELETE may be overwritten or deleted; atomic isolation is not guaranteed (#41).
+
+- **Alibaba Cloud DNS and Tencent Cloud DNSPod** — Included in default CLI builds, with individual features `dns-aliyun` and `dns-tencent-cloud` for smaller builds. Both save the final target’s zone, the observed TXT TTL and verify the exact record before cleanup. Built-in providers use a shared marker contract with provider overrides; Alibaba Cloud uses the 50-character-safe `acme-<publication_id>` form while the default remains `asteracme-<publication_id>`. Alibaba Cloud writes its marker with `UpdateDomainRecordRemark` after creation and retries that checkpoint without repeating TXT creation. DNSPod reconciles lost creates using publication remarks. Alibaba Cloud DNS requests detailed domain attributes to discover its minimum TTL, recognizes documented record statuses, requires the saved create-response record ID and refuses to borrow existing values. (#40, #39)
+
 - **Embedded issuance example** — `cargo run -p aster_acme --example embedded_issuance` walks the full embedding path: CA discovery, account registration or reuse through `AccountService`, an embedder-owned HTTP-01 webroot `ChallengeSolver`, saved-request resume via the `IssueStore` contract, and promoted artifacts. The example defaults to Let's Encrypt staging with a temporary data directory, compiles under workspace CI, and the bilingual README quick starts link it as the library-first entry point (#33).
 - **DNS publication TTL** — Configure requested TXT TTL with `provider add/update --ttl-seconds` (default 120, RFC 2181 range 0–2147483647); retain each publication's saved TTL across recovery and profile edits. Backends own vendor-specific limits; local propagation observations keep their existing advisory behavior.
 - **Automatic CA terms updates** — `account register --auto-accept-new-terms` accepts the current directory terms and durably delegates future terms URL changes for unattended account ensure and renewal. The exact accepted URL remains visible in `account show`; `--yes`, JSON mode and implicit ensure never enable the delegation.
 
 ### Changed
+
+- **DNS provider diagnostics** — Include the API action, HTTP status, validated provider error code, and safe request ID in native backend failures when available. Raw response bodies and provider messages remain hidden; the same CLI path also displays safe provider codes from external backends.
+
+- **DNS read reconciliation** — Share bounded read retry budgets across native providers while retaining vendor-specific visibility and ownership checks. Never replay an uncertain creation or treat malformed responses and identity conflicts as visibility delays.
+
+- **DNS HTTP effects** — `HttpRequest.method` now uses the shared `HttpMethod` enum, with an optional provider-owned operation name for diagnostics. Built-in adapter paths move to `provider::vendors`; shared support remains internal under `provider::common`. Vendor Cargo features automatically select shared implementation capabilities; HTTP method variants no longer depend on vendor flags.
 
 - **Deployment verification** — Verify the full published file set against staged content, identity and applicable permissions before reload. Report completed replacement paths on failure while retaining the partial-set/retry contract; no whole-set atomicity or automatic rollback is promised. Refuse configuration and deployment when an existing destination cannot be normalized to prove ownership; restore access or remove the stale binding before retrying.
 - **Optional validation dependencies** — An empty `aster_acme_validation` feature set no longer brings Tokio into production dependencies. Check and test optional feature combinations independently.

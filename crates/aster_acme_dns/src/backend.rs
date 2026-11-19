@@ -39,6 +39,7 @@ pub struct ConfigField {
 pub enum MutationModel {
     IndividualRecords,
     ConditionalRrsets,
+    BestEffortRrsets,
     ExternalProtocol,
 }
 

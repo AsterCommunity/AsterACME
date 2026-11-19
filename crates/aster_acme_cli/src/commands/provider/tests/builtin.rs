@@ -29,6 +29,22 @@ async fn backend_inventory_reports_only_compiled_implementations_without_provide
         ids.contains(&"com.astercosm.acme.dns.cloudflare"),
         cfg!(feature = "dns-cloudflare")
     );
+    for (id, enabled) in [
+        (
+            "com.astercosm.acme.dns.aliyun",
+            cfg!(feature = "dns-aliyun"),
+        ),
+        (
+            "com.astercosm.acme.dns.tencent-cloud",
+            cfg!(feature = "dns-tencent-cloud"),
+        ),
+        (
+            "com.astercosm.acme.dns.huawei-cloud",
+            cfg!(feature = "dns-huawei-cloud"),
+        ),
+    ] {
+        assert_eq!(ids.contains(&id), enabled);
+    }
     assert!(!root.path().join("providers").exists());
 }
 #[cfg(feature = "dns-cloudflare")]
@@ -166,5 +182,160 @@ async fn native_backend_rejects_executable_and_argv_before_profile_creation() {
                 .is_err()
         );
         assert!(!root.path().join("providers/bad.toml").exists());
+    }
+}
+
+#[cfg(any(
+    feature = "dns-aliyun",
+    feature = "dns-tencent-cloud",
+    feature = "dns-huawei-cloud"
+))]
+#[tokio::test]
+async fn signed_backends_accept_private_settings_and_redact_both_credential_fields() {
+    let cases = [
+        #[cfg(feature = "dns-aliyun")]
+        (
+            "com.astercosm.acme.dns.aliyun",
+            "access_key_id",
+            "access_key_secret",
+        ),
+        #[cfg(feature = "dns-tencent-cloud")]
+        (
+            "com.astercosm.acme.dns.tencent-cloud",
+            "secret_id",
+            "secret_key",
+        ),
+        #[cfg(feature = "dns-huawei-cloud")]
+        (
+            "com.astercosm.acme.dns.huawei-cloud",
+            "access_key_id",
+            "access_key_secret",
+        ),
+    ];
+    for (backend, id, secret) in cases {
+        check_signed_profile(backend, id, secret).await;
+    }
+}
+
+#[cfg(any(
+    feature = "dns-aliyun",
+    feature = "dns-tencent-cloud",
+    feature = "dns-huawei-cloud"
+))]
+async fn check_signed_profile(backend: &str, id: &str, secret: &str) {
+    use crate::{commands::provider::render::render, common::session::Format};
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().to_str().unwrap();
+    let path = root.path().join("settings.toml");
+    let settings = aster_acme_cli_storage::state_file::StateDirectory::open(root.path()).unwrap();
+    let project = "";
+    settings
+        .atomic_write(
+            "settings.toml",
+            format!("{id} = 'fixture-key-id'\n{secret} = 'secret-sentinel'\n{project}").as_bytes(),
+        )
+        .unwrap();
+    let cli = CommandContext::new(true);
+    let registry = crate::commands::provider::runtime::registry().unwrap();
+    let descriptors = registry.descriptors();
+    let descriptor = descriptors.iter().find(|item| item.id == backend).unwrap();
+    assert_signed_backend_fields(backend, descriptor);
+    execute(
+        command(&[
+            "add",
+            "native",
+            "--backend",
+            backend,
+            "--settings-file",
+            path.to_str().unwrap(),
+            "--ttl-seconds",
+            "120",
+            "--data-dir",
+            directory,
+            "--json",
+        ]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    let shown = execute(
+        command(&["show", "native", "--data-dir", directory, "--json"]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    for json in [true, false] {
+        let output = render(&shown, Format { json, color: false }).unwrap();
+        assert!(output.contains(backend));
+        assert!(output.contains("120"));
+        assert!(!output.contains("fixture-key-id"));
+        assert!(!output.contains("secret-sentinel"));
+    }
+    settings
+        .atomic_write(
+            "settings.toml",
+            format!("{id} = 'invalid id'\n{secret} = 'secret-sentinel'\n{project}").as_bytes(),
+        )
+        .unwrap();
+    let Err(error) = execute(
+        command(&[
+            "update",
+            "native",
+            "--settings-file",
+            path.to_str().unwrap(),
+            "--data-dir",
+            directory,
+            "--json",
+        ]),
+        &cli,
+    )
+    .await
+    else {
+        panic!("invalid API key ID accepted")
+    };
+    assert!(!error.to_string().contains("secret-sentinel"));
+}
+
+#[cfg(any(
+    feature = "dns-aliyun",
+    feature = "dns-tencent-cloud",
+    feature = "dns-huawei-cloud"
+))]
+fn assert_signed_backend_fields(
+    backend: &str,
+    descriptor: &aster_acme_dns::backend::BackendDescriptor,
+) {
+    assert_eq!(
+        descriptor.fields.len(),
+        if backend.ends_with("huawei-cloud") {
+            4
+        } else {
+            2
+        }
+    );
+    assert!(
+        descriptor
+            .fields
+            .iter()
+            .filter(|field| field.sensitive)
+            .all(|field| field.required)
+    );
+    if backend.ends_with("huawei-cloud") {
+        assert!(
+            !descriptor
+                .fields
+                .iter()
+                .find(|field| field.name == "project_id")
+                .unwrap()
+                .required
+        );
+        assert!(
+            !descriptor
+                .fields
+                .iter()
+                .find(|field| field.name == "region")
+                .unwrap()
+                .required
+        );
     }
 }

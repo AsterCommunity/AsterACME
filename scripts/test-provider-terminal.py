@@ -13,6 +13,21 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+SIGNED_BACKENDS = {
+    "add-aliyun": ("com.astercosm.acme.dns.aliyun", (
+        ("access_key_id", b"Alibaba Cloud AccessKey ID:"),
+        ("access_key_secret", b"Alibaba Cloud AccessKey secret:"),
+    )),
+    "add-dnspod": ("com.astercosm.acme.dns.tencent-cloud", (
+        ("secret_id", b"Tencent Cloud SecretID:"),
+        ("secret_key", b"Tencent Cloud SecretKey:"),
+    )),
+}
+SIGNED_BACKENDS["add-huawei"] = ("com.astercosm.acme.dns.huawei-cloud", (
+    ("access_key_id", b"Huawei Cloud Access Key ID:"),
+    ("access_key_secret", b"Huawei Cloud Secret Access Key:"),
+))
+SIGNED_CREDENTIALS = ("pty-key-id-sentinel", "pty-key-secret-sentinel")
 
 
 def prepare(binary, root):
@@ -33,6 +48,9 @@ def command(binary, mode, root):
     if mode == "add-explicit":
         return [binary, "provider", "add", "cf-new", "--backend",
                 "com.astercosm.acme.dns.cloudflare", *common]
+    if mode in SIGNED_BACKENDS:
+        return [binary, "provider", "add", "cf-new", "--backend",
+                SIGNED_BACKENDS[mode][0], *common]
     if mode == "issue":
         return [binary, "cert", "issue", "-c", "dns_provider", "-d", "example.com", *common]
     raise AssertionError(mode)
@@ -79,9 +97,10 @@ def run_case(binary, mode, prompts, color, cancelled=False):
             assert process.poll() is not None, (mode, sent, bytes(output).decode(errors="replace"))
             assert process.wait(timeout=1) == expected_status, bytes(output).decode(errors="replace")
             assert sent == len(prompts), repr(bytes(output))
-            assert b"pty-token-sentinel" not in bytes(output), "credential input must not echo"
+            secrets = (b"pty-token-sentinel", *(value.encode() for value in SIGNED_CREDENTIALS))
+            assert not any(secret in output for secret in secrets), "credential input must not echo"
             visible = ANSI.sub(b"", bytes(output)).replace(b"\r", b"")
-            if any(b"pty-token-sentinel" in value for _, value in prompts):
+            if any(secret in value for _, value in prompts for secret in secrets):
                 assert b"*" in visible, "credential input must display a mask"
             if cancelled:
                 assert b"Canceled; inspect saved state" in visible, repr(visible)
@@ -91,7 +110,7 @@ def run_case(binary, mode, prompts, color, cancelled=False):
                 assert b"No terminal DNS publication cleanup is pending" in visible, repr(visible)
             elif mode == "remove":
                 assert b"Removed provider profile cf-test" in visible, repr(visible)
-            elif mode in {"add", "add-explicit"}:
+            elif mode in {"add", "add-explicit", *SIGNED_BACKENDS}:
                 report = bytes(output)
                 assert b"cf-new" in visible and b"providers/cf-new.toml" in visible, repr(visible)
                 assert (b"\x1b[36mProfile file:" in report) == color, repr(report)
@@ -99,6 +118,15 @@ def run_case(binary, mode, prompts, color, cancelled=False):
                     with open(Path(directory) / "providers/cf-new.toml", "rb") as saved:
                         profile = tomllib.load(saved)
                     assert profile["provider_custom"] == {"api_token": "pty-token-sentinel"}
+                if mode in SIGNED_BACKENDS:
+                    backend, fields = SIGNED_BACKENDS[mode]
+                    with open(Path(directory) / "providers/cf-new.toml", "rb") as saved:
+                        profile = tomllib.load(saved)
+                    assert profile["backend_id"] == backend
+                    expected = dict(zip((name for name, _ in fields), SIGNED_CREDENTIALS, strict=True))
+                    if mode == "add-huawei":
+                        expected = dict(zip((name for name, _ in fields), SIGNED_CREDENTIALS, strict=True))
+                    assert profile["provider_custom"] == expected
             elif mode == "show":
                 report = bytes(output)
                 details = ANSI.sub(b"", report).replace(b"\r", b"").rsplit(b"\nDNS provider profile:\n", 1)[-1]
@@ -121,7 +149,8 @@ def run_case(binary, mode, prompts, color, cancelled=False):
 
 
 def main():
-    subprocess.run(["cargo", "build", "-p", "aster_acme_cli", "--locked"], cwd=ROOT, check=True)
+    subprocess.run(["cargo", "build", "-p", "aster_acme_cli", "--locked",
+                    "--features", "dns-aliyun,dns-tencent-cloud,dns-huawei-cloud"], cwd=ROOT, check=True)
     binary = str(ROOT / "target/debug/aster-acme")
     selector = (b"DNS provider profile:", b"cf-test\r")
     cases = 0
@@ -161,6 +190,14 @@ def main():
                              (b"Absolute private token file (or use api_token):", b"\r"),
                              (b"Cloudflare zone ID (optional):", b"\r")], False)
     cases += 1
+    for mode, (_, fields) in SIGNED_BACKENDS.items():
+        prompts = [(prompt, value.encode() + b"\r") for (_, prompt), value in
+                   zip(fields, SIGNED_CREDENTIALS, strict=True)]
+        if mode == "add-huawei":
+            prompts += [(b"Huawei Cloud project ID (optional; discover automatically):", b"\r"),
+                        (b"Huawei Cloud region (optional; default cn-north-4):", b"\r")]
+        run_case(binary, mode, prompts, False)
+        cases += 1
     update = [selector, (b"Edit provider profile:", b"Arguments\r"),
               (b"Edit arguments:", b"Add value\r"),
               (b"Argument value (passed exactly, without shell parsing):", b"--label=hello world\r"),

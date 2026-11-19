@@ -91,6 +91,7 @@ impl DnsProvider for Dns {
                     (
                         record.clone(),
                         PublicationReceipt {
+                            effective_ttl_seconds: None,
                             record_id: format!("record-{}", record.publication_id),
                             ownership: if self.preexisting.load(Ordering::SeqCst) {
                                 RecordOwnership::Preexisting
@@ -274,6 +275,7 @@ async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request()
     };
     assert_eq!(cleanup.len(), 1);
     assert!(record.authorizations[0].cleanup_pending);
+    assert!(diagnostics.text().contains("Adding 1 DNS TXT record(s)"));
     assert!(
         diagnostics
             .text()
@@ -356,6 +358,7 @@ impl ChallengeSolver for ReceiptRecovery {
                 PublicationReceiptUpdate {
                     publication_id: publication.publication_id.clone(),
                     receipt: PublicationReceipt {
+                        effective_ttl_seconds: None,
                         record_id: format!("recovered-{}", publication.publication_id),
                         ownership: RecordOwnership::Created,
                         record_name: plan.name.clone(),
@@ -453,6 +456,7 @@ async fn cleanup_keeps_processing_later_records_after_invalid_saved_routes() {
     let make_publication = |id: &str, plan: Option<DnsRecord>| {
         let (name, value) = ("_acme-challenge.example.com", "expected");
         let receipt = PublicationReceipt {
+            effective_ttl_seconds: None,
             record_id: format!("record-{id}"),
             ownership: RecordOwnership::Created,
             record_name: plan
@@ -658,6 +662,12 @@ async fn rate_limit_backoff_is_saved_and_resume_cannot_reinvoke_before_it() {
 
 #[cfg(feature = "dns-cloudflare")]
 mod cloudflare;
+#[cfg(any(
+    feature = "dns-aliyun",
+    feature = "dns-tencent-cloud",
+    feature = "dns-huawei-cloud"
+))]
+mod signed_rpc;
 
 #[tokio::test]
 async fn explicit_target_skips_cname_lookup_survives_restart_and_cleans_saved_target() {

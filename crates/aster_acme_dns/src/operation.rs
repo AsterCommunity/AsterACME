@@ -12,9 +12,33 @@ use std::{sync::Arc, time::Instant};
 /// Host-side publication batch bound, independent of external wire versions.
 pub const MAX_PUBLICATIONS: usize = 100;
 
+/// HTTP verbs supported by DNS provider effects, independent of vendor features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+impl HttpMethod {
+    /// Exact HTTP token used by transports and request signers.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Delete => "DELETE",
+        }
+    }
+}
+
 /// Fully prepared request. Headers/body may contain credentials; deliberately no Debug.
 pub struct HttpRequest {
-    pub method: String,
+    /// Optional provider-owned API operation name; the host validates it before display.
+    pub operation: Option<String>,
+    pub method: HttpMethod,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -204,6 +228,7 @@ impl RegisteredProvider {
         let mut mutated = session.state().is_some();
         let mut write_permitted = false;
         let mut draining = 0;
+        let mut request_context = None;
         for _ in 0..1024 {
             // Preserve an already observed response and its durable result on
             // cancellation, but never start more I/O. Bound even a buggy drain.
@@ -213,7 +238,8 @@ impl RegisteredProvider {
                     return Err(interrupted(mutated));
                 }
             }
-            match operation.advance(event)? {
+            let effect = advance_with_context(operation.as_mut(), event, &mut request_context)?;
+            match effect {
                 ProviderEffect::Http(request) => {
                     if request.mutation && !write_permitted {
                         return Err(configuration_error(
@@ -221,6 +247,7 @@ impl RegisteredProvider {
                         ));
                     }
                     let mutation = request.mutation;
+                    request_context = Some(request_diagnostic(&request));
                     if mutation {
                         write_permitted = false;
                     }
@@ -301,6 +328,76 @@ impl RegisteredProvider {
         }
         Ok(())
     }
+}
+
+fn advance_with_context(
+    operation: &mut dyn ProviderOperation,
+    event: ProviderEvent,
+    request_context: &mut Option<String>,
+) -> Result<ProviderEffect, ProviderError> {
+    let response_status = match &event {
+        ProviderEvent::Http(Ok(response)) => Some(response.status),
+        _ => None,
+    };
+    match operation.advance(event) {
+        Ok(effect) => {
+            if !matches!(effect, ProviderEffect::Checkpoint(_)) {
+                *request_context = None;
+            }
+            Ok(effect)
+        }
+        Err(error) => Err(annotate_provider_error(
+            error,
+            request_context.take(),
+            response_status,
+        )),
+    }
+}
+
+fn request_diagnostic(request: &HttpRequest) -> String {
+    if let Some(action) = request
+        .operation
+        .as_ref()
+        .filter(|action| safe_action(action))
+    {
+        return action.clone();
+    }
+    let path = request
+        .url
+        .split_once("://")
+        .and_then(|(_, remainder)| remainder.find('/').map(|index| &remainder[index..]))
+        .and_then(|path| path.split(['?', '#']).next())
+        .filter(|path| {
+            path.len() <= 128
+                && path
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"/-_.{}".contains(&byte))
+        })
+        .map_or_else(|| "<path unavailable>".into(), str::to_owned);
+    format!("{} {path}", request.method.as_str())
+}
+
+fn safe_action(action: &str) -> bool {
+    (1..=64).contains(&action.len())
+        && action
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn annotate_provider_error(
+    mut error: ProviderError,
+    request_context: Option<String>,
+    response_status: Option<u16>,
+) -> ProviderError {
+    if let Some(context) = request_context {
+        let status = if error.message.contains("HTTP ") {
+            String::new()
+        } else {
+            response_status.map_or_else(String::new, |status| format!("; HTTP {status}"))
+        };
+        error.message = format!("{} (API request: {context}{status})", error.message);
+    }
+    error
 }
 
 #[async_trait]

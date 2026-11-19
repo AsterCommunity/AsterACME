@@ -1,6 +1,6 @@
 ---
 title: DNS Provider Automation
-description: Built-in Cloudflare, ADPP external executables, credentials, CNAME delegation, and cleanup.
+description: Built-in Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, ADPP external executables, credentials, CNAME delegation, and cleanup.
 ---
 
 The `dns_provider` validation implementation is driven by a DNS Provider Profile: a configuration stored at `<data-dir>/providers/<name>.toml` describing which backend publishes TXT records in which zone. Built-in and external backends share the same publication, receipt, propagation, and cleanup flow.
@@ -38,9 +38,32 @@ aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare \
 
 - The token must cover the target zone with Zone Read and DNS Edit
 - With no zone ID, the zone is discovered from the longest suffix of the final publication target; the discovered zone is saved per publication and reused by recovery and cleanup
-- Created records carry an `asteracme:<publication_id>` comment for reconciliation; deletion verifies every record attribute first
+- Built-in providers use `asteracme-<publication_id>` by default; Alibaba Cloud overrides this with `acme-<publication_id>` because its remark field is limited to 50 characters; Huawei Cloud appends `=<sha256(txt_value)>` for value binding inside an RRset; deletion verifies every record attribute first
 - Existing same-value records owned by another AsterACME publication are never borrowed; the user's own unmarked records are preserved
 - Credential rotation is allowed; a saved certificate's backend and zone-selection mode are not
+
+The CLI includes Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Huawei Cloud DNS by default. Run `provider backends` to inspect the active build. A smaller source build can pass `--no-default-features` and select only required `dns-*` features; the embedded crate defaults to no vendor.
+
+## Built-in Alibaba Cloud DNS and Tencent Cloud DNSPod
+
+Both backends are available in the default CLI build. A smaller source build can enable `dns-aliyun` or `dns-tencent-cloud` individually.
+
+| Backend ID | Private settings fields |
+| --- | --- |
+| `com.astercosm.acme.dns.aliyun` | `access_key_id`, `access_key_secret` |
+| `com.astercosm.acme.dns.tencent-cloud` | `secret_id`, `secret_key` |
+
+Run `provider add NAME --backend BACKEND_ID` to enter both credentials at hidden prompts. Automation can pass a private TOML file with `--settings-file`. Both backends discover the zone from the final TXT target and record the observed TTL in the receipt. DNSPod writes the common remark in its create request; Alibaba Cloud DNS writes it with `UpdateDomainRecordRemark` after `AddDomainRecord` succeeds. A failed Alibaba remark update is checkpointed and retries only the remark request, never the TXT creation. Alibaba Cloud DNS requires a saved create-response `RecordId`; when that ID is unavailable, recovery stops and leaves the remote record in place.
+
+See the [permissions, TTL and recovery guide](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md).
+
+## Huawei Cloud DNS: no atomic isolation guarantee
+
+The default CLI build includes backend `com.astercosm.acme.dns.huawei-cloud`; a smaller source build can enable `dns-huawei-cloud`. Private settings require `access_key_id` and `access_key_secret`; `project_id` is optional and is discovered through IAM for the selected region when omitted. `region` is optional and defaults to `cn-north-4`.
+
+**This backend cannot guarantee safety against concurrent remote writers.** Huawei DNS updates replace a whole RRset without a documented revision precondition. A console or external client change between our read and PUT/DELETE may be overwritten or deleted. Coordinate every writer and prefer a dedicated ACME CNAME target. The backend preserves observed unrelated TXT values, checks ownership markers, checkpoints writes and reconciles lost responses, but these safeguards do not make the operation atomic.
+
+See [Huawei configuration and limitations](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md).
 
 ## ADPP external executables
 

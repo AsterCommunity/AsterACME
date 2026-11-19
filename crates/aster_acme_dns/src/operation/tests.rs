@@ -10,6 +10,7 @@ use crate::{
         ProviderAction, ProviderEffect, ProviderEvent, ProviderHost, ProviderOperation,
         ProviderOutcome, PublicationSession, PublicationStore, RecoveryState,
     },
+    operation::{annotate_provider_error, request_diagnostic},
 };
 use async_trait::async_trait;
 use std::{
@@ -17,6 +18,41 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+#[test]
+fn request_diagnostics_keep_safe_actions_and_status_but_never_url_queries() {
+    let request = HttpRequest {
+        operation: Some("DescribeRecordList".into()),
+        method: crate::operation::HttpMethod::Post,
+        url: "https://api.example.test/v2/zones?token=secret-sentinel".into(),
+        headers: vec![],
+        body: b"secret-sentinel".to_vec(),
+        mutation: false,
+    };
+    assert_eq!(request_diagnostic(&request), "DescribeRecordList");
+
+    let request = HttpRequest {
+        operation: Some("unsafe action\nsecret".into()),
+        ..request
+    };
+    let action = request_diagnostic(&request);
+    assert!(action.contains("/v2/zones"));
+    assert!(!action.contains("secret"));
+    let error = annotate_provider_error(
+        ProviderError {
+            code: ProviderErrorCode::InternalError,
+            message: "provider failure".into(),
+            side_effect: SideEffect::None,
+            retry_after_seconds: None,
+            provider_code: None,
+        },
+        Some(action),
+        Some(403),
+    );
+    assert!(error.message.contains("HTTP 403"));
+    assert!(!error.message.contains("secret-sentinel"));
+}
+
 #[derive(Default, PartialEq)]
 enum CancellationPoint {
     #[default]
@@ -90,6 +126,7 @@ impl ProviderOperation for SpecialOperation {
                 if value == "token" {
                     Ok(ProviderEffect::Complete(ProviderOutcome::Presented(
                         crate::PublicationReceipt {
+                            effective_ttl_seconds: None,
                             record_id: "secret-record".into(),
                             ownership: RecordOwnership::Created,
                             record_name: self.record.name.clone(),
@@ -105,6 +142,7 @@ impl ProviderOperation for SpecialOperation {
             )),
             (SpecialMode::Wait, ProviderEvent::Timer) => Ok(ProviderEffect::Complete(
                 ProviderOutcome::Presented(crate::PublicationReceipt {
+                    effective_ttl_seconds: None,
                     record_id: "wait-record".into(),
                     ownership: RecordOwnership::Created,
                     record_name: self.record.name.clone(),
@@ -119,7 +157,8 @@ impl ProviderOperation for SpecialOperation {
             }
             (SpecialMode::MutationWithoutCheckpoint, ProviderEvent::Start) => {
                 Ok(ProviderEffect::Http(HttpRequest {
-                    method: "POST".into(),
+                    operation: None,
+                    method: crate::operation::HttpMethod::Post,
                     url: "https://dns.example/mutation".into(),
                     headers: vec![],
                     body: vec![],
@@ -299,7 +338,8 @@ impl ProviderOperation for Operation {
             }
             ProviderEvent::Start | ProviderEvent::CheckpointSaved => {
                 Ok(ProviderEffect::Http(HttpRequest {
-                    method: "POST".into(),
+                    operation: None,
+                    method: crate::operation::HttpMethod::Post,
                     url: format!("https://dns.example/{}", self.record.publication_id),
                     headers: vec![],
                     body: vec![],
@@ -308,6 +348,7 @@ impl ProviderOperation for Operation {
             }
             ProviderEvent::Http(Ok(response)) if response.status == 200 => Ok(
                 ProviderEffect::Complete(ProviderOutcome::Presented(crate::PublicationReceipt {
+                    effective_ttl_seconds: None,
                     record_id: "record".into(),
                     ownership: RecordOwnership::Created,
                     record_name: self.record.name.clone(),

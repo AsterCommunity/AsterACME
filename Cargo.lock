@@ -274,9 +274,14 @@ name = "aster_acme_dns_builtin"
 version = "0.1.0-alpha.2"
 dependencies = [
  "aster_acme_dns",
+ "aws-lc-rs",
+ "httpdate",
  "linkme",
  "serde",
  "serde_json",
+ "time",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
