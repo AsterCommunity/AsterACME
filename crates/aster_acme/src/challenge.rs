@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::identifier::{DnsIdentifier, IdentifierError};
+use crate::identifier::IdentifierError;
 
 pub mod dns01;
 pub mod dns_persist;
@@ -52,6 +52,26 @@ impl ChallengeKind {
         match self {
             Self::Dns01 | Self::DnsPersist01 => true,
             Self::Http01 | Self::TlsAlpn01 => false,
+        }
+    }
+
+    /// Whether this method can validate IP identifiers at all. RFC 8738
+    /// section 7 forbids DNS-based methods for IP identifiers.
+    #[must_use]
+    pub const fn supports_ip_identifiers(self) -> bool {
+        match self {
+            Self::Dns01 | Self::DnsPersist01 => false,
+            Self::Http01 | Self::TlsAlpn01 => true,
+        }
+    }
+
+    /// Whether this method can validate exactly this identifier. The central
+    /// capability dispatch; material owners only see compatible identifiers.
+    #[must_use]
+    pub fn validates_identifier(self, identifier: &crate::identifier::Identifier) -> bool {
+        match identifier {
+            crate::identifier::Identifier::Dns(_) => true,
+            crate::identifier::Identifier::Ip(_) => self.supports_ip_identifiers(),
         }
     }
 }
@@ -199,7 +219,7 @@ impl ChallengePolicy {
     /// Returns an error when no candidate meets the policy and identifier constraints.
     pub fn select(
         &self,
-        identifier: &DnsIdentifier,
+        identifier: &crate::identifier::Identifier,
         offered: &[WireChallengeKind],
         supported: &[ChallengeKind],
     ) -> Result<ChallengeKind, ChallengeError> {
@@ -211,7 +231,8 @@ impl ChallengePolicy {
             .iter()
             .copied()
             .find(|kind| {
-                (!identifier.is_wildcard() || kind.supports_wildcards())
+                kind.validates_identifier(identifier)
+                    && (!identifier.is_wildcard() || kind.supports_wildcards())
                     && supported.contains(kind)
                     && offered.iter().any(|wire| known_method(wire) == Some(*kind))
             })

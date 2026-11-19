@@ -35,9 +35,9 @@ async fn failed_cli_requires_confirmation_then_deletes_only_evidenced_failure_of
         .create(
             &IssueRequest {
                 name: CertificateName::new("failed.example.com").unwrap(),
-                identifiers: vec![
+                identifiers: vec![aster_acme::identifier::Identifier::Dns(
                     aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
-                ],
+                )],
                 account_name: "default".into(),
                 key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 challenge: aster_acme::challenge::ChallengeKind::Dns01,

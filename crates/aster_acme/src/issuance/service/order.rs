@@ -35,11 +35,7 @@ impl IssueService {
         let identifiers = record
             .identifiers
             .iter()
-            .map(|dns| WireIdentifier {
-                kind: "dns".into(),
-                value: dns.value(),
-                extensions: std::collections::BTreeMap::new(),
-            })
+            .map(WireIdentifier::from)
             .collect::<Vec<_>>();
         record.submitted_replaces = match self.client.directory().renewal_info.as_ref() {
             Some(_) => record

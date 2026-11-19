@@ -5,16 +5,21 @@ use crate::commands::cert::validation::tls_alpn::*;
 use std::time::{Duration, Instant};
 
 #[tokio::test]
-async fn generates_one_critical_challenge_certificate_per_dns_name() {
+async fn generates_one_critical_challenge_certificate_per_identifier() {
     let requirements = vec![ValidationRequirement::TlsAlpn01 {
-        domain: "Example.COM".into(),
+        identifier: "Example.COM".into(),
         digest: [7; 32],
     }];
     let provider = rustls::crypto::aws_lc_rs::default_provider();
     let desired = validated_requirements(&requirements).unwrap();
     let map = desired
         .iter()
-        .map(|(name, digest)| (name.clone(), certificate(name, digest, &provider).unwrap()))
+        .map(|(name, (digest, identifier))| {
+            (
+                name.clone(),
+                certificate(identifier, digest, &provider).unwrap(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     assert_eq!(map.len(), 1);
     let key = map.get("example.com").unwrap();
@@ -33,14 +38,14 @@ async fn generates_one_critical_challenge_certificate_per_dns_name() {
 }
 
 #[tokio::test]
-async fn rejects_mixed_methods_duplicate_names_and_non_dns_identifiers() {
+async fn rejects_mixed_methods_duplicates_and_wildcards() {
     let mut duplicate = vec![
         ValidationRequirement::TlsAlpn01 {
-            domain: "example.com".into(),
+            identifier: "example.com".into(),
             digest: [1; 32],
         },
         ValidationRequirement::TlsAlpn01 {
-            domain: "example.com".into(),
+            identifier: "example.com".into(),
             digest: [2; 32],
         },
     ];
@@ -53,14 +58,7 @@ async fn rejects_mixed_methods_duplicate_names_and_non_dns_identifiers() {
     assert!(validated_requirements(&duplicate).is_err());
     assert!(
         validated_requirements(&[ValidationRequirement::TlsAlpn01 {
-            domain: "*.example.com".into(),
-            digest: [1; 32]
-        }])
-        .is_err()
-    );
-    assert!(
-        validated_requirements(&[ValidationRequirement::TlsAlpn01 {
-            domain: "127.0.0.1".into(),
+            identifier: "*.example.com".into(),
             digest: [1; 32]
         }])
         .is_err()
@@ -78,11 +76,11 @@ async fn rejects_mixed_methods_duplicate_names_and_non_dns_identifiers() {
 fn resolver_incrementally_adds_material_and_rejects_digest_replacement() {
     let resolver = SniResolver::default();
     let first = ValidationRequirement::TlsAlpn01 {
-        domain: "one.example".into(),
+        identifier: "one.example".into(),
         digest: [1; 32],
     };
     let second = ValidationRequirement::TlsAlpn01 {
-        domain: "two.example".into(),
+        identifier: "two.example".into(),
         digest: [2; 32],
     };
     resolver.publish(std::slice::from_ref(&first)).unwrap();
@@ -103,7 +101,7 @@ fn resolver_incrementally_adds_material_and_rejects_digest_replacement() {
     ));
     drop(entries);
     let changed = ValidationRequirement::TlsAlpn01 {
-        domain: "one.example".into(),
+        identifier: "one.example".into(),
         digest: [9; 32],
     };
     assert!(resolver.publish(&[first, changed]).is_err());
@@ -113,7 +111,7 @@ fn resolver_incrementally_adds_material_and_rejects_digest_replacement() {
     assert!(resolver.publish(&[]).is_err());
     let too_many = (0..101)
         .map(|index| ValidationRequirement::TlsAlpn01 {
-            domain: format!("{index}.example"),
+            identifier: format!("{index}.example"),
             digest: [u8::try_from(index).unwrap(); 32],
         })
         .collect::<Vec<_>>();
@@ -125,7 +123,7 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = occupied.local_addr().unwrap();
     let requirement = ValidationRequirement::TlsAlpn01 {
-        domain: "example.com".into(),
+        identifier: "example.com".into(),
         digest: [3; 32],
     };
     let solver = TlsAlpn::new(address, progress());
@@ -178,7 +176,7 @@ async fn occupied_socket_cancelled_or_expired_runs_leave_no_listener_or_challeng
 #[tokio::test]
 async fn cancelling_an_active_tls_handshake_closes_listener_and_idle_connection() {
     let requirement = ValidationRequirement::TlsAlpn01 {
-        domain: "example.com".into(),
+        identifier: "example.com".into(),
         digest: [5; 32],
     };
     let cancellation = tokio_util::sync::CancellationToken::new();
@@ -225,14 +223,133 @@ async fn cancelling_an_active_tls_handshake_closes_listener_and_idle_connection(
 }
 
 #[tokio::test]
+async fn ip_identifiers_route_by_reverse_arpa_sni_and_serve_ipaddress_sans() {
+    let requirements = vec![
+        ValidationRequirement::TlsAlpn01 {
+            identifier: "192.0.2.1".into(),
+            digest: [4; 32],
+        },
+        ValidationRequirement::TlsAlpn01 {
+            identifier: "2001:db8::1".into(),
+            digest: [6; 32],
+        },
+    ];
+    let solver = TlsAlpn::new(([127, 0, 0, 1], 0).into(), progress());
+    solver
+        .ready(&publications(&requirements), &execution())
+        .await
+        .unwrap();
+    let address = solver.listener.lock().await.as_ref().unwrap().address;
+
+    // RFC 8738 section 6 SNI forms route to certificates with one iPAddress SAN.
+    assert_valid_ip_tls_alpn_certificate(address, "192.0.2.1", [4; 32]).await;
+    assert_valid_ip_tls_alpn_certificate(address, "2001:db8::1", [6; 32]).await;
+
+    // The textual address is never a routing key: RFC 6066 forbids IP
+    // literals in SNI, so only the reverse name selects the certificate.
+    assert_tls_client_rejected(address, "192.0.2.1", Some(ALPN)).await;
+    assert_tls_client_rejected(address, "2001:db8::1", Some(ALPN)).await;
+
+    // A digest change on a routed IP entry keeps the active challenge stable
+    // and fails the publication exactly like DNS entries.
+    let changed = ValidationRequirement::TlsAlpn01 {
+        identifier: "192.0.2.1".into(),
+        digest: [7; 32],
+    };
+    assert!(
+        solver
+            .ready(&publications(std::slice::from_ref(&changed)), &execution())
+            .await
+            .is_err()
+    );
+    assert_valid_ip_tls_alpn_certificate(address, "192.0.2.1", [4; 32]).await;
+
+    solver.shutdown().await;
+    assert!(tokio::net::TcpListener::bind(address).await.is_ok());
+
+    // Restart rebuilds IP challenge certificates from the same saved digests.
+    let resumed = TlsAlpn::new(address, progress());
+    resumed
+        .restore(&publications(&requirements), &execution())
+        .await
+        .unwrap();
+    assert_valid_ip_tls_alpn_certificate(address, "2001:db8::1", [6; 32]).await;
+    resumed
+        .cleanup(&publications(&requirements), &execution())
+        .await
+        .unwrap();
+    assert!(tokio::net::TcpListener::bind(address).await.is_ok());
+}
+
+/// Decode an RFC 5280 iPAddress SAN into a typed address for comparisons.
+fn ip_from_san(bytes: &[u8]) -> Option<std::net::IpAddr> {
+    match bytes {
+        [a, b, c, d] => Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+            *a, *b, *c, *d,
+        ))),
+        octets if octets.len() == 16 => {
+            let mut segments = [0u16; 8];
+            for (index, [high, low]) in octets.as_chunks::<2>().0.iter().enumerate() {
+                segments[index] = u16::from_be_bytes([*high, *low]);
+            }
+            Some(std::net::IpAddr::V6(std::net::Ipv6Addr::new(
+                segments[0],
+                segments[1],
+                segments[2],
+                segments[3],
+                segments[4],
+                segments[5],
+                segments[6],
+                segments[7],
+            )))
+        }
+        _ => None,
+    }
+}
+
+async fn assert_valid_ip_tls_alpn_certificate(
+    address: SocketAddr,
+    ip_value: &str,
+    digest: [u8; 32],
+) {
+    let sni = aster_acme::identifier::IpIdentifier::new(ip_value)
+        .unwrap()
+        .reverse_name();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stream = tls_connect(address, &sni, client_config(Some(ALPN), seen.clone()))
+        .await
+        .unwrap();
+    assert_eq!(stream.get_ref().1.alpn_protocol(), Some(ALPN));
+    drop(stream);
+    let der = seen.lock().unwrap().last().unwrap().clone();
+    let (_, cert) = x509_parser::parse_x509_certificate(&der).unwrap();
+    assert!(cert.verify_signature(None).is_ok());
+    let san = cert.subject_alternative_name().unwrap().unwrap();
+    assert_eq!(san.value.general_names.len(), 1);
+    let expected: std::net::IpAddr = ip_value.parse().unwrap();
+    assert!(san
+        .value
+        .general_names
+        .iter()
+        .any(|name| matches!(name, x509_parser::extensions::GeneralName::IPAddress(bytes) if ip_from_san(bytes) == Some(expected))));
+    let extension = cert
+        .extensions()
+        .iter()
+        .find(|extension| extension.oid.to_id_string() == "1.3.6.1.5.5.7.1.31")
+        .unwrap();
+    assert!(extension.critical);
+    assert_eq!(extension.value, [&[0x04, 0x20][..], &digest[..]].concat());
+}
+
+#[tokio::test]
 async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain_certificates() {
     let requirements = vec![
         ValidationRequirement::TlsAlpn01 {
-            domain: "first.example".into(),
+            identifier: "first.example".into(),
             digest: [1; 32],
         },
         ValidationRequirement::TlsAlpn01 {
-            domain: "second.example".into(),
+            identifier: "second.example".into(),
             digest: [2; 32],
         },
     ];
@@ -249,7 +366,7 @@ async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain
 
     let first = requirements[0].clone();
     let third = ValidationRequirement::TlsAlpn01 {
-        domain: "third.example".into(),
+        identifier: "third.example".into(),
         digest: [3; 32],
     };
     solver
@@ -258,7 +375,7 @@ async fn tls_handshake_requires_matching_sni_and_acme_alpn_and_serves_per_domain
         .unwrap();
     assert_valid_tls_alpn_certificate(address, "third.example", [3; 32]).await;
     let changed = ValidationRequirement::TlsAlpn01 {
-        domain: "first.example".into(),
+        identifier: "first.example".into(),
         digest: [8; 32],
     };
     assert!(
@@ -330,6 +447,60 @@ async fn tls_connect(
         .connect(name, stream)
         .await
         .map_err(std::io::Error::other)
+}
+
+/// Loopback CA helper for RFC 8738 scenarios: connect with the reverse-name
+/// SNI the RFC mandates and require exactly one iPAddress SAN.
+pub(crate) async fn verify_ip_challenge_certificate(
+    address: SocketAddr,
+    ip_value: &str,
+    digest: [u8; 32],
+) -> Result<(), String> {
+    let ip =
+        aster_acme::identifier::IpIdentifier::new(ip_value).map_err(|error| error.to_string())?;
+    let expected = ip.address();
+    let sni = ip.reverse_name();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stream = tls_connect(address, &sni, client_config(Some(ALPN), seen.clone()))
+        .await
+        .map_err(|error| error.to_string())?;
+    if stream.get_ref().1.alpn_protocol() != Some(ALPN) {
+        return Err("TLS listener selected the wrong ALPN".into());
+    }
+    drop(stream);
+    let certificates = seen
+        .lock()
+        .map_err(|_| "captured certificate lock poisoned")?;
+    let (_, cert) = x509_parser::parse_x509_certificate(
+        certificates.last().ok_or("TLS peer sent no certificate")?,
+    )
+    .map_err(|error| error.to_string())?;
+    cert.verify_signature(None)
+        .map_err(|error| error.to_string())?;
+    let names = cert
+        .subject_alternative_name()
+        .map_err(|error| error.to_string())?
+        .ok_or("missing SAN")?;
+    if names.value.general_names.len() != 1
+        || !names.value.general_names.iter().any(|name| {
+            matches!(
+                name,
+                x509_parser::extensions::GeneralName::IPAddress(bytes)
+                    if ip_from_san(bytes) == Some(expected)
+            )
+        })
+    {
+        return Err("challenge certificate SAN does not match the IP identifier".into());
+    }
+    let extension = cert
+        .extensions()
+        .iter()
+        .find(|extension| extension.oid.to_id_string() == "1.3.6.1.5.5.7.1.31")
+        .ok_or("missing acmeIdentifier")?;
+    if !extension.critical || extension.value != [&[0x04, 0x20][..], &digest[..]].concat() {
+        return Err("acmeIdentifier criticality or digest does not match".into());
+    }
+    Ok(())
 }
 
 pub(crate) async fn verify_challenge_certificate(

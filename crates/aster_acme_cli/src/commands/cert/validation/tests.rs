@@ -683,7 +683,9 @@ pub(crate) fn publications(
         .enumerate()
         .map(
             |(index, requirement)| aster_acme::solver::ChallengePublication {
-                identifier: aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+                identifier: aster_acme::identifier::Identifier::Dns(
+                    aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+                ),
                 publication_id: format!("test-publication-{index}"),
                 requirement: requirement.clone(),
                 receipt: None,

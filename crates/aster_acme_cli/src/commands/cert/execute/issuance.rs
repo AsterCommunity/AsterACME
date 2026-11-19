@@ -8,7 +8,7 @@ use crate::common::{context::CliSettings, error::CliResult, terminal};
 use aster_acme::storage::issuance::{IssueSession, IssueStore};
 use aster_acme::storage::query::{IssueQuery, SimilarIssue};
 use aster_acme::{
-    identifier::DnsIdentifier,
+    identifier::Identifier,
     issuance::{CertificateName, IssueError, IssueRecord, IssueRequest},
 };
 use aster_acme_cli_storage::issuance::CliIssueStore;
@@ -181,10 +181,17 @@ pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest
                 args.listen_address,
             )?
         };
-    let identifiers = args.domain.clone();
+    // Command-line order is preserved per flag; DNS entries precede IP
+    // entries in the certificate SAN list, and the first entry is primary.
+    let mut identifiers = args
+        .domain
+        .iter()
+        .map(|dns| Identifier::Dns(dns.clone()))
+        .collect::<Vec<_>>();
+    identifiers.extend(args.ip.iter().map(|ip| Identifier::Ip(ip.clone())));
     let primary = identifiers
         .first()
-        .ok_or("At least one domain is required.")?;
+        .ok_or("At least one domain or IP address is required.")?;
     let request = IssueRequest {
         challenge: method.kind(),
         solver_id: method.id().into(),
@@ -231,11 +238,11 @@ pub(super) async fn prepare_session(
             progress.output.progress(
                 MessageKind::Info,
                 &format!(
-                    "Domains: {}",
+                    "Identifiers: {}",
                     request
                         .identifiers
                         .iter()
-                        .map(DnsIdentifier::value)
+                        .map(Identifier::value)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -271,7 +278,7 @@ pub(super) async fn allocate_certificate(
                     request
                         .identifiers
                         .first()
-                        .ok_or(IssueError::InvalidInput("missing primary domain"))?,
+                        .ok_or(IssueError::InvalidInput("missing primary identifier"))?,
                 )?;
             }
             result => return result,

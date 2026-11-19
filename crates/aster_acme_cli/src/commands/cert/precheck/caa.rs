@@ -31,10 +31,18 @@ impl aster_acme::precheck::order::Observer<aster_acme_validation::caa::Report> f
         for item in &report.observations {
             let name = self.record.identifiers.get(item.index).map_or_else(
                 || "unknown".into(),
-                aster_acme::identifier::DnsIdentifier::value,
+                aster_acme::identifier::Identifier::value,
             );
             match &item.result {
                 Ok(report) => render(report, self.progress),
+                Err(Failure::UnsupportedInput) => {
+                    self.progress.output.progress(
+                        MessageKind::Info,
+                        &format!(
+                            "CAA {name}: not applicable to IP identifiers (RFC 8659 covers DNS names); CA policy governs IP issuance"
+                        ),
+                    );
+                }
                 Err(Failure::TimedOut | Failure::NotChecked) => self.progress.output.progress(
                     MessageKind::Warning,
                     &format!(
@@ -55,12 +63,6 @@ impl aster_acme::precheck::order::Observer<aster_acme_validation::caa::Report> f
                             "CAA {name}: DNS lookup failed: {}; result unknown, continuing to CA",
                             crate::common::output::safe(reason)
                         ),
-                    );
-                }
-                Err(Failure::UnsupportedInput) => {
-                    self.progress.output.progress(
-                        MessageKind::Warning,
-                        &format!("CAA {name}: DNS lookup failed; result unknown, continuing to CA"),
                     );
                 }
             }

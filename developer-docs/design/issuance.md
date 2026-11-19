@@ -6,9 +6,9 @@
 
 IssueService接收dyn IssueSession、dyn ChallengeSolver和IssueExecution。core决定下一步动作，protocol提供wire模型，服务推导材料、保存检查点、通知CA和轮询。CLI实现manual_dns、dns_persist、dns_provider、manual_http、webroot、standalone、tls_alpn，不再维护第二套协议流程。
 
-四种`ChallengeMaterial`均为具名子模块类型：`dns01::Dns01Record`、`dns_persist::DnsPersistRecord`、`http01::Http01Response`和`tls_alpn01::TlsAlpn01Response`；各模块拥有材料定义、派生和方法约束，公共`KeyAuthorization`只拥有token与账户绑定及共享摘要。DNS Persist的`issuer`与`account_uri`子模块分别拥有issuer集合规则和哈希URI规则，记录本身拥有TXT格式及复用范围。
+四种`ChallengeMaterial`均为具名子模块类型：`dns01::Dns01Record`、`dns_persist::DnsPersistRecord`、`http01::Http01Response`和`tls_alpn01::TlsAlpn01Response`；各模块拥有材料定义、派生和方法约束（含IP标识符的HTTP Host括号形式与TLS反向名SNI），公共`KeyAuthorization`只拥有token与账户绑定及共享摘要。DNS Persist的`issuer`与`account_uri`子模块分别拥有issuer集合规则和哈希URI规则，记录本身拥有TXT格式及复用范围。
 
-`ChallengeKind`集中以穷尽match声明directory准入、`PublicationLifetime`、发布前账户证明要求及ack身份字段。`check_execution`在新订单准入时统一校验方法所需元数据；`create`只处理通用newOrder，授权编排根据能力要求执行账户控制权证明。纯`issuance::authorization`负责选择challenge、调用材料所有者、检查固定材料并设置检查点，服务负责保存、网络和solver调用。恢复、清理、完成提示及续期快照共用发布生命周期；持久化与通用编排不解析TXT策略。
+`ChallengeKind`集中以穷尽match声明directory准入、`PublicationLifetime`、发布前账户证明要求、标识符类型能力及ack身份字段。IP标识符（RFC 8738）只能进入HTTP-01/TLS-ALPN-01；DNS方法与IP的组合在请求校验与执行准入中拒绝，CA未提供兼容方法时不产生ack。`check_execution`在新订单准入时统一校验方法所需元数据；`create`只处理通用newOrder，授权编排根据能力要求执行账户控制权证明。纯`issuance::authorization`负责选择challenge、调用材料所有者、检查固定材料并设置检查点，服务负责保存、网络和solver调用。恢复、清理、完成提示及续期快照共用发布生命周期；持久化与通用编排不解析TXT策略。
 
 IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配置。每个世代独立key/CSR，material.sha256绑定固定字节。恢复沿用保存的材料及配置；相似未完成查询按完整定义匹配，不按主域名猜测。
 
@@ -40,7 +40,7 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 
 库默认不启用预检，IssueService::run不自动调用预检；CLI默认启用自己的precheck feature，关闭后仍可正常签发。CLI在统一`precheck::with_validation`装饰器中对solver已就绪的DNS-01/DNS-PERSIST-01材料执行TXT建议检查、对HTTP-01执行HTTP检查，发布solver本身不隐式做网络预检。嵌入者可自行选择检查器并通过Runner::new覆盖默认预算。
 
-issue与renew共用Foreground：directory发现后、首次newOrder前检查全部DNS标识符。恢复已有订单或已提交的创建不重复查CAA；directory未广告caaIdentities时输出无法判断，不根据CA URL猜测身份。CAA阶段所有SAN共享5秒，保留已完成观察，超时后的未检查项为未知。
+issue与renew共用Foreground：directory发现后、首次newOrder前检查全部DNS标识符；RFC 8659 CAA只覆盖DNS名，IP标识符输出“不适用”观察（RFC 8738 §9.1由CA策略决定），不做DNS查询。恢复已有订单或已提交的创建不重复查CAA；directory未广告caaIdentities时输出无法判断，不根据CA URL猜测身份。CAA阶段所有SAN共享5秒，保留已完成观察，超时后的未检查项为未知。
 
 `protocol::DirectoryMeta.caa_identities`对应RFC8555 §7.1.1，多个issuer是任选匹配，不要求全部发布。`core::caa`按RFC8659处理issue/issuewild、加法授权和未知critical；`validation::caa`使用系统递归解析器（包含别名跟随），只对原标识符爬父域，遇到首个非空CAA集合停止，不合并父子集合、不查询根。NODATA/NXDOMAIN与SERVFAIL等失败分开。通配符去掉*.查询，有issuewild则覆盖issue；仅iodef不限制。RFC8657账户URI/验证方式逐条匹配，CA参数支持和未知critical支持仍由CA决定，客户端结果只为建议。DEBUG可查看本地记录；INFO/WARN显示标识符、查询来源及匹配／无法判断原因。
 
@@ -60,9 +60,9 @@ DNS/HTTP本地预检共用专用时限，固定最多5秒，均为建议性，�
 
 ## 临时HTTP/TLS服务
 
-listener统一TCP绑定、最多64条连接、每连接5秒期限、任务回收和取消。HTTP standalone复用Tokio/Hyper HTTP1，不引入Web框架或手写解析；默认0.0.0.0:80，只响应当前材料的规范Host/path GET。拒绝请求体、绝对代理URI、query、未知域名/路径和其他方法，最多8KiB/32个头，每连接一个请求。
+listener统一TCP绑定、最多64条连接、每连接5秒期限、任务回收和取消。HTTP standalone复用Tokio/Hyper HTTP1，不引入Web框架或手写解析；默认0.0.0.0:80，只响应当前材料的规范Host/path GET。RFC 8738 IP标识符的Host为IP字面量（IPv6带括号），表键统一为去括号小写形式，跳过DNS解析。拒绝请求体、绝对代理URI、query、未知域名/路径和其他方法，最多8KiB/32个头，每连接一个请求。
 
-TLS-ALPN默认0.0.0.0:443，复用rustls/AWS-LC与同一listener。每DNS标识符独立P-256挑战证书，单一SAN、critical acmeIdentifier（DER OCTET STRING中的32字节摘要）；仅SNI匹配且客户端提供acme-tls/1时选择，不复用证书私钥，不支持通配符/IP。
+TLS-ALPN默认0.0.0.0:443，复用rustls/AWS-LC与同一listener。每标识符独立P-256挑战证书，单一SAN（DNS名为dNSName，RFC 8738 IP标识符为iPAddress）与critical acmeIdentifier（DER OCTET STRING中的32字节摘要）；仅SNI匹配且客户端提供acme-tls/1时选择，不复用证书私钥，不支持通配符。IP标识符按RFC 8738 §6以IN-ADDR.ARPA/IP6.ARPA反向名作SNI路由键。
 
 restore只重建临时响应服务，不重发ack；run每个返回路径await有界shutdown。宿主直接丢弃future时仍须关闭或丢弃solver，Drop负责兜底。公网端口、A/AAAA、Host/SNI转发由用户负责，不自动提权或停其他服务。
 

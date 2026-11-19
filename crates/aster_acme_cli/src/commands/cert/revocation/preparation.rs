@@ -102,13 +102,13 @@ pub(super) async fn prepare(
     let signing_method = authority.authorize(&target)?.observation.method();
     terminal::confirm_action(
         &format!(
-            "Permanently revoke certificate\n  Name: {}\n  Request: {}\n  Domains: {}\n  CA: {}\n  Reason: {}\n  Sign with: {}\n  Certificate SHA-256: {}\n\nThis cannot be undone. Local certificate files will be retained.\nA deployed copy must be replaced separately.",
+            "Permanently revoke certificate\n  Name: {}\n  Request: {}\n  Identifiers: {}\n  CA: {}\n  Reason: {}\n  Sign with: {}\n  Certificate SHA-256: {}\n\nThis cannot be undone. Local certificate files will be retained.\nA deployed copy must be replaced separately.",
             record.name.as_str(),
             record.operation_id,
             record
                 .identifiers
                 .iter()
-                .map(aster_acme::identifier::DnsIdentifier::value)
+                .map(aster_acme::identifier::Identifier::value)
                 .collect::<Vec<_>>()
                 .join(", "),
             target.directory.as_str(),

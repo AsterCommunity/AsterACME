@@ -1,14 +1,16 @@
-//! RFC 8555 section 8.3 HTTP-01 response material and identifier constraints.
+//! RFC 8555 section 8.3 and RFC 8738 section 5 HTTP-01 response material and
+//! identifier constraints.
 use crate::{
     challenge::{ChallengeError, ChallengeToken, KeyAuthorization},
-    identifier::DnsIdentifier,
+    identifier::Identifier,
 };
+use std::net::IpAddr;
 
-/// Exact token response to publish for one non-wildcard hostname.
+/// Exact token response to publish for one non-wildcard hostname or address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Http01Response {
     /// Non-wildcard certificate identifier.
-    pub identifier: DnsIdentifier,
+    pub identifier: Identifier,
     /// Validated request-path segment.
     pub token: ChallengeToken,
     /// Response body, without account private key material.
@@ -21,7 +23,7 @@ impl Http01Response {
     /// # Errors
     /// Rejects wildcard identifiers and invalid account thumbprints.
     pub fn derive(
-        identifier: &DnsIdentifier,
+        identifier: &Identifier,
         token: &ChallengeToken,
         thumbprint: &str,
     ) -> Result<Self, ChallengeError> {
@@ -34,28 +36,43 @@ impl Http01Response {
             key_authorization: KeyAuthorization::new(token, thumbprint)?,
         })
     }
+
+    /// Host authority for the HTTP-01 URL and request Host header. IPv6 uses
+    /// the bracketed form required by RFC 3986 and RFC 8738 section 5.
+    #[must_use]
+    pub fn host(&self) -> String {
+        match &self.identifier {
+            Identifier::Dns(dns) => dns.value(),
+            Identifier::Ip(ip) => match ip.address() {
+                IpAddr::V4(_) => self.identifier.value(),
+                IpAddr::V6(_) => format!("[{}]", self.identifier.value()),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::challenge::{ChallengeError, ChallengeToken, http01::Http01Response};
-    use crate::identifier::DnsIdentifier;
+    use crate::identifier::{DnsIdentifier, Identifier};
     const THUMBPRINT: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     #[test]
     fn response_preserves_validated_token_and_full_normalized_hostname() {
         let token = ChallengeToken::new("long-enough-opaque-challenge-token").unwrap();
-        let domain = DnsIdentifier::new("BÜCHER.Example.").unwrap();
+        let domain = Identifier::Dns(DnsIdentifier::new("BÜCHER.Example.").unwrap());
         let response = Http01Response::derive(&domain, &token, THUMBPRINT).unwrap();
         assert_eq!(response.identifier.value(), "xn--bcher-kva.example");
+        assert_eq!(response.host(), "xn--bcher-kva.example");
         assert_eq!(response.token, token);
         assert_eq!(
             response.key_authorization.as_str(),
             format!("{}.{}", token.as_str(), THUMBPRINT)
         );
         let label = "a".repeat(63);
-        let maximum =
-            DnsIdentifier::new(&format!("{label}.{label}.{label}.{}", "b".repeat(61))).unwrap();
+        let maximum = Identifier::Dns(
+            DnsIdentifier::new(&format!("{label}.{label}.{label}.{}", "b".repeat(61))).unwrap(),
+        );
         assert_eq!(
             Http01Response::derive(&maximum, &token, THUMBPRINT)
                 .unwrap()
@@ -65,14 +82,26 @@ mod tests {
     }
 
     #[test]
+    fn ip_identifiers_derive_material_and_bare_or_bracketed_hosts() {
+        let token = ChallengeToken::new("long-enough-opaque-challenge-token").unwrap();
+        let ipv4 = Identifier::new("192.0.2.1").unwrap();
+        let response = Http01Response::derive(&ipv4, &token, THUMBPRINT).unwrap();
+        assert_eq!(response.host(), "192.0.2.1");
+        let ipv6 = Identifier::new("2001:DB8::1").unwrap();
+        let response = Http01Response::derive(&ipv6, &token, THUMBPRINT).unwrap();
+        assert_eq!(response.identifier.value(), "2001:db8::1");
+        assert_eq!(response.host(), "[2001:db8::1]");
+    }
+
+    #[test]
     fn wildcards_and_malformed_thumbprints_never_produce_http_material() {
         let token = ChallengeToken::new("long-enough-opaque-challenge-token").unwrap();
-        let wildcard = DnsIdentifier::new("*.example.com").unwrap();
+        let wildcard = Identifier::Dns(DnsIdentifier::new("*.example.com").unwrap());
         assert_eq!(
             Http01Response::derive(&wildcard, &token, THUMBPRINT),
             Err(ChallengeError::WildcardMethod)
         );
-        let domain = DnsIdentifier::new("example.com").unwrap();
+        let domain = Identifier::Dns(DnsIdentifier::new("example.com").unwrap());
         for invalid in [
             "",
             "invalid",

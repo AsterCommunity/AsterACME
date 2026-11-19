@@ -63,11 +63,10 @@ pub(super) async fn prepare(
 }
 
 pub(super) fn publication(auth: &AuthorizationRecord) -> Result<ChallengePublication, IssueError> {
-    let crate::identifier::Identifier::Dns(identifier) =
-        crate::identifier::authorization_identifier(
-            auth.resource.identifier.clone(),
-            auth.resource.wildcard,
-        )?;
+    let identifier = crate::identifier::authorization_identifier(
+        auth.resource.identifier.clone(),
+        auth.resource.wildcard,
+    )?;
     Ok(ChallengePublication {
         identifier,
         publication_id: auth

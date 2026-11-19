@@ -159,6 +159,14 @@ impl ChallengeSolver for Standalone {
     }
 }
 
+/// Bare lowercase host key: strip IPv6 brackets so a CA's bracketed Host
+/// header and the material URL always map to the same table entry.
+fn normalize_host(host: &str) -> String {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase()
+}
+
 fn validate(requirements: &[ValidationRequirement]) -> Result<Requirements, IssueError> {
     if requirements.is_empty() {
         return Err(IssueError::InvalidInput(
@@ -180,9 +188,13 @@ fn validate(requirements: &[ValidationRequirement]) -> Result<Requirements, Issu
         ChallengeToken::new(token)?;
         let parsed = url::Url::parse(url)
             .map_err(|_| IssueError::InvalidInput("invalid standalone public URL"))?;
-        let domain = parsed.domain().ok_or(IssueError::InvalidInput(
-            "standalone requires a DNS hostname",
-        ))?;
+        // RFC 8738: the host may be an IP literal; IPv6 arrives bracketed in
+        // the URL and in the CA's Host header. Normalize both to one bare,
+        // lowercase form so routing never depends on bracket spelling.
+        let host = parsed
+            .host_str()
+            .ok_or(IssueError::InvalidInput("standalone requires a URL host"))?;
+        let host = normalize_host(host);
         if parsed.scheme() != "http"
             || parsed.port_or_known_default() != Some(80)
             || !parsed.username().is_empty()
@@ -200,7 +212,7 @@ fn validate(requirements: &[ValidationRequirement]) -> Result<Requirements, Issu
                 "invalid standalone HTTP challenge material",
             ));
         }
-        let key = (domain.to_owned(), path.clone());
+        let key = (host, path.clone());
         if table
             .insert(key, content.clone())
             .is_some_and(|previous| previous != *content)
@@ -237,7 +249,7 @@ async fn respond(
         && (authority.port().is_none() || authority.port_u16().is_some())
     {
         let key = (
-            authority.host().trim_end_matches('.').to_ascii_lowercase(),
+            normalize_host(authority.host().trim_end_matches('.')),
             request.uri().path().to_owned(),
         );
         if let Some(value) = table.read().await.get(&key) {

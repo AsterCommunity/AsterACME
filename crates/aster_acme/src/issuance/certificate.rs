@@ -1,9 +1,39 @@
 //! Fixed PKCS#10 CSR generation and issued leaf identity/key checks.
-use crate::identifier::DnsIdentifier;
+use crate::identifier::{DnsIdentifier, Identifier};
 use crate::issuance::IssueError;
-use rcgen::{CertificateParams, DistinguishedName, KeyPair, PublicKeyData as _};
+use rcgen::{CertificateParams, DistinguishedName, KeyPair, PublicKeyData as _, SanType};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use x509_parser::{pem::parse_x509_pem, prelude::FromDer as _, x509::X509Version};
 use zeroize::Zeroizing;
+
+/// Decode an RFC 5280 `iPAddress` SAN: four bytes for IPv4, sixteen for IPv6.
+///
+/// # Errors
+/// Rejects any other length as a malformed address.
+fn parse_san_address(bytes: &[u8]) -> Result<IpAddr, IssueError> {
+    match bytes {
+        [a, b, c, d] => Ok(IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d))),
+        octets if octets.len() == 16 => {
+            let mut segments = [0u16; 8];
+            for (index, pair) in octets.as_chunks::<2>().0.iter().enumerate() {
+                segments[index] = u16::from_be_bytes([pair[0], pair[1]]);
+            }
+            Ok(IpAddr::V6(Ipv6Addr::new(
+                segments[0],
+                segments[1],
+                segments[2],
+                segments[3],
+                segments[4],
+                segments[5],
+                segments[6],
+                segments[7],
+            )))
+        }
+        _ => Err(IssueError::InvalidInput(
+            "issued certificate has a malformed iPAddress SAN",
+        )),
+    }
+}
 
 /// Certificate private material, never Debug or Serialize.
 pub struct CertificateMaterial {
@@ -13,22 +43,44 @@ pub struct CertificateMaterial {
     pub csr: Vec<u8>,
 }
 
+/// One requested SAN, typed so DNS names never masquerade as addresses.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum San {
+    /// DNS name in canonical form.
+    Dns(String),
+    /// Parsed IP address.
+    Ip(IpAddr),
+}
+
+impl San {
+    fn of(identifier: &Identifier) -> Self {
+        match identifier {
+            Identifier::Dns(dns) => Self::Dns(dns.value()),
+            Identifier::Ip(ip) => Self::Ip(ip.address()),
+        }
+    }
+}
+
 /// Generate a separate selected certificate key and SAN-only CSR.
 ///
 /// # Errors
 /// Rejects generation failures and malformed SAN identifiers.
 pub fn generate(
-    identifiers: &[DnsIdentifier],
+    identifiers: &[Identifier],
     algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
 ) -> Result<CertificateMaterial, IssueError> {
     let key = algorithm.generate()?;
-    let mut params = CertificateParams::new(
-        identifiers
-            .iter()
-            .map(DnsIdentifier::value)
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| IssueError::InvalidInput("invalid CSR identifiers"))?;
+    let mut params = CertificateParams::new(Vec::new())
+        .map_err(|_| IssueError::InvalidInput("invalid CSR identifiers"))?;
+    params.subject_alt_names = identifiers
+        .iter()
+        .map(|identifier| match identifier {
+            Identifier::Dns(dns) => Ok(SanType::DnsName(dns.value().as_str().try_into().map_err(
+                |_: rcgen::Error| IssueError::InvalidInput("invalid CSR DNS identifier"),
+            )?)),
+            Identifier::Ip(ip) => Ok(SanType::IpAddress(ip.address())),
+        })
+        .collect::<Result<Vec<_>, IssueError>>()?;
     params.distinguished_name = DistinguishedName::new();
     let csr = params
         .serialize_request(&key)
@@ -43,11 +95,12 @@ pub fn generate(
 /// This checks the issued artifact, not public trust; staging roots are never installed.
 ///
 /// # Errors
-/// Rejects malformed chains, wrong key/SANs, CA leaves and invalid validity intervals.
+/// Rejects malformed chains, wrong key/SANs (including a DNS name standing in
+/// for a requested IP address), CA leaves and invalid validity intervals.
 pub fn validate(
     chain: &[u8],
     key_der: &[u8],
-    identifiers: &[DnsIdentifier],
+    identifiers: &[Identifier],
 ) -> Result<time::OffsetDateTime, IssueError> {
     let invalid = || {
         IssueError::InvalidInput(
@@ -98,15 +151,15 @@ pub fn validate(
     for name in &names.value.general_names {
         match name {
             x509_parser::extensions::GeneralName::DNSName(name) => {
-                actual.push(DnsIdentifier::new(name)?.value());
+                actual.push(San::Dns(DnsIdentifier::new(name)?.value()));
+            }
+            x509_parser::extensions::GeneralName::IPAddress(bytes) => {
+                actual.push(San::Ip(parse_san_address(bytes)?));
             }
             _ => return Err(invalid()),
         }
     }
-    let mut expected = identifiers
-        .iter()
-        .map(DnsIdentifier::value)
-        .collect::<Vec<_>>();
+    let mut expected = identifiers.iter().map(San::of).collect::<Vec<_>>();
     actual.sort();
     expected.sort();
     if actual != expected {
@@ -196,3 +249,6 @@ pub fn leaf_der(chain: &[u8]) -> Result<Vec<u8>, IssueError> {
     }
     Ok(pem.contents)
 }
+
+#[cfg(test)]
+mod tests;

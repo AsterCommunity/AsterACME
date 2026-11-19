@@ -94,7 +94,9 @@ impl Fixture {
 
     async fn complete(&self, renewal: bool) -> aster_acme::issuance::IssueRecord {
         use aster_acme::{
-            crypto::key_algorithm::KeyAlgorithm, identifier::DnsIdentifier, issuance::IssueRequest,
+            crypto::key_algorithm::KeyAlgorithm,
+            identifier::{DnsIdentifier, Identifier},
+            issuance::IssueRequest,
         };
         let session = if renewal {
             self.store.renew(&self.name, &self.account).await.unwrap()
@@ -103,7 +105,9 @@ impl Fixture {
                 .create(
                     &IssueRequest {
                         name: self.name.clone(),
-                        identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+                        identifiers: vec![Identifier::Dns(
+                            DnsIdentifier::new("example.com").unwrap(),
+                        )],
                         account_name: "default".into(),
                         challenge: aster_acme::challenge::ChallengeKind::Dns01,
                         solver_id: "manual_dns".into(),
@@ -137,13 +141,17 @@ impl Fixture {
     async fn pending(&self, name: &str) {
         use aster_acme::storage::issuance::IssueStore;
         use aster_acme::{
-            crypto::key_algorithm::KeyAlgorithm, identifier::DnsIdentifier, issuance::IssueRequest,
+            crypto::key_algorithm::KeyAlgorithm,
+            identifier::{DnsIdentifier, Identifier},
+            issuance::IssueRequest,
         };
         self.store
             .create(
                 &IssueRequest {
                     name: CertificateName::new(name).unwrap(),
-                    identifiers: vec![DnsIdentifier::new("pending.example.com").unwrap()],
+                    identifiers: vec![Identifier::Dns(
+                        DnsIdentifier::new("pending.example.com").unwrap(),
+                    )],
                     account_name: "default".into(),
                     challenge: aster_acme::challenge::ChallengeKind::Dns01,
                     solver_id: "manual_dns".into(),

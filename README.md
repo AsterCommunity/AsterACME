@@ -35,7 +35,7 @@ CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, a
 ## Capabilities
 
 - Named CA accounts: registration, recovery, contacts, key rotation, and deactivation.
-- Single-domain, multi-SAN, and wildcard certificates; independent account and certificate key choices.
+- Single-domain, multi-SAN, wildcard, and IP-address (RFC 8738) certificates; independent account and certificate key choices.
 - Saved issuance recovery, ARI refresh, foreground single/batch renewal, and unattended maintenance for supported validation methods.
 - Multiple deployment targets per certificate, automatic deployment after renewal, and bounded reload commands with stdout/stderr output.
 - Interactive input, structured JSON, offline inspection, and optional debug diagnostics.
@@ -44,8 +44,8 @@ CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, a
 | --- | --- |
 | DNS-01 | `dns_provider --provider NAME`: native DNS or ADPP automation; `manual_dns`: publish TXT records yourself; supports wildcards |
 | DNS-PERSIST-01 (draft -02) | `dns_persist`: provision persistent TXT records manually, then reuse them for renewal; supports wildcards |
-| HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80 |
-| TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443 |
+| HTTP-01 | `manual_http`, `webroot`, or temporary `standalone` listener on port 80; validates DNS and IP identifiers |
+| TLS-ALPN-01 | Temporary `tls_alpn` listener on port 443; validates DNS and IP identifiers |
 
 `dns_persist` requires a CA implementing the [same draft revision](developer-docs/rfc-reference.md#dns-persist-草案实现2026-11-14). Keep its TXT records for renewal. DNS provider writes and public-CA acceptance are separate capabilities.
 

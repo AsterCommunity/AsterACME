@@ -5,7 +5,7 @@ use crate::{
         dns_persist::DnsPersistRecord, dns01::Dns01Record, http01::Http01Response,
         tls_alpn01::TlsAlpn01Response,
     },
-    identifier::{Identifier, authorization_identifier},
+    identifier::authorization_identifier,
     issuance::{IssueError, IssueRecord, ValidationRequirement},
 };
 use aster_acme_core::{
@@ -54,10 +54,17 @@ pub(super) fn prepare(
                 if crate::challenge::known_method(&challenge.kind) != Some(record.challenge) {
                     return Err(IssueError::InvalidInput("saved challenge method changed"));
                 }
-                let Identifier::Dns(identifier) = authorization_identifier(
+                let identifier = authorization_identifier(
                     auth.resource.identifier.clone(),
                     auth.resource.wildcard,
                 )?;
+                if !record.challenge.validates_identifier(&identifier) {
+                    // No acknowledgement for a method that cannot validate this
+                    // identifier kind (RFC 8738 section 7).
+                    return Err(IssueError::InvalidInput(
+                        "the selected method cannot validate this authorization identifier",
+                    ));
+                }
                 let requirement = materials.derive(
                     &identifier,
                     challenge,
@@ -120,10 +127,16 @@ struct AuthorizationMaterials<'a> {
 impl AuthorizationMaterials<'_> {
     fn derive(
         &self,
-        identifier: &crate::identifier::DnsIdentifier,
+        identifier: &crate::identifier::Identifier,
         challenge: &ChallengeObject,
         saved: Option<&ValidationRequirement>,
     ) -> Result<ValidationRequirement, IssueError> {
+        let dns = || match identifier {
+            crate::identifier::Identifier::Dns(dns) => Ok(dns),
+            crate::identifier::Identifier::Ip(_) => Err(IssueError::InvalidInput(
+                "DNS validation methods cannot validate an IP identifier",
+            )),
+        };
         let material = match self.method {
             ChallengeKind::DnsPersist01 => {
                 let parameters = challenge.dns_persist_parameters().map_err(|_| {
@@ -132,7 +145,7 @@ impl AuthorizationMaterials<'_> {
                     )
                 })?;
                 ChallengeMaterial::DnsPersist01(DnsPersistRecord::derive(
-                    identifier,
+                    dns()?,
                     self.account_url,
                     self.account_thumbprint,
                     self.directory,
@@ -150,7 +163,7 @@ impl AuthorizationMaterials<'_> {
                 )?)
             }
             ChallengeKind::Dns01 => ChallengeMaterial::Dns01(Dns01Record::derive(
-                identifier,
+                dns()?,
                 &token(challenge)?,
                 self.account_thumbprint,
             )?),

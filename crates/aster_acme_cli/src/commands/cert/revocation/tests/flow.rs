@@ -16,7 +16,7 @@ use crate::{
 };
 use aster_acme::{
     crypto::key_algorithm::KeyAlgorithm,
-    identifier::DnsIdentifier,
+    identifier::{DnsIdentifier, Identifier},
     issuance::{CertificateName, IssueRecord, IssueRequest},
     solver::ExecutionContext,
     storage::{
@@ -79,7 +79,7 @@ impl Fixture {
             solver_id: "manual_http".into(),
             solver_config: serde_json::json!({}),
             name: CertificateName::new("web").unwrap(),
-            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
             key_algorithm: KeyAlgorithm::EcdsaP256,
             account_name: "issuer".into(),
         };

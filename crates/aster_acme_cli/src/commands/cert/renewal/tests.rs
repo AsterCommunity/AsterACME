@@ -249,7 +249,9 @@ impl LocalFixture {
             solver_id: "manual_dns".into(),
             solver_config: serde_json::Value::Object(serde_json::Map::default()),
             name: CertificateName::new(name).unwrap(),
-            identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
+            identifiers: vec![aster_acme::identifier::Identifier::Dns(
+                aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+            )],
             key_algorithm: KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
         };
@@ -838,7 +840,9 @@ impl LocalFixture {
             solver_id: method.id().into(),
             solver_config: config,
             name: CertificateName::new(name).unwrap(),
-            identifiers: vec![aster_acme::identifier::DnsIdentifier::new("example.com").unwrap()],
+            identifiers: vec![aster_acme::identifier::Identifier::Dns(
+                aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+            )],
             key_algorithm: KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
         };

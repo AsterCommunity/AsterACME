@@ -36,7 +36,7 @@
 ## 名称与选择
 
 - account 的单账户命令支持位置 `[NAME]` 和 `-n/--name`，互斥；名称统一为 1–64 位 ASCII 字母、数字、下划线或连字符。
-- `cert issue -n/--name` 设置长期证书名称，缺省为首个规范化域名加随机后缀；自动名称碰撞换串重试，仅用户指定的已存在名称拒绝；`-a/--account` 使用与账户命令一致的名称校验。
+- `cert issue -n/--name` 设置长期证书名称，缺省为首个规范化标识符加随机后缀：域名原样、通配符加 `wildcard-` 前缀、IP 地址加 `ip-` 前缀且冒号替换为连字符（如 `ip-192.0.2.1`、`ip-2001-db8--1`）；自动名称碰撞换串重试，仅用户指定的已存在名称拒绝；`-a/--account` 使用与账户命令一致的名称校验。
 - `cert list -n/--name` 筛选证书；`cert show [NAME]` 和 `cert show -n/--name NAME` 等价且互斥。
 - `cert issue --resume [NAME]` 从证书名称恢复（终端可省略 NAME 交互选择，脚本必须提供），不与创建用的 -d/-n/-a 混用。`--operation` 接受完整申请 ID，恢复时必须与 --resume 一起使用。
 - `cert show --operation ID` 可以直接定位申请；无参数时终端先选证书，多申请再选具体请求，脚本必须明确目标。
@@ -51,7 +51,8 @@
 | `-V` | `--version` | 根命令版本 |
 | `-n` | `--name` | 账户目标、证书名称/目标/筛选 |
 | `-a` | `--account` | cert issue 的账户选择 |
-| `-d` | `--domain` | cert issue 的域名，可重复 |
+| `-d` | `--domain` | cert issue 的 DNS 域名，可重复 |
+| `--ip` |  | cert issue 的 IP 标识符（RFC 8738），可重复；仅 HTTP-01/TLS-ALPN-01 支持，主标识符为首个 `-d`，否则首个 `--ip` |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
@@ -76,7 +77,7 @@
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、重复 --ip、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、--sign-with account/certificate-key、可选 --reason、-y、HTTP、--operation-timeout；不删除本地文件 |

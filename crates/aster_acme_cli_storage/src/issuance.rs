@@ -124,7 +124,7 @@ struct CertificateConfig {
 #[derive(Serialize, Deserialize)]
 struct CertificateSelection {
     name: CertificateName,
-    identifiers: Vec<aster_acme::identifier::DnsIdentifier>,
+    identifiers: Vec<aster_acme::identifier::Identifier>,
     key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm,
     account_name: String,
     account_id: String,

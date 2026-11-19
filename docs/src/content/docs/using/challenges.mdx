@@ -3,19 +3,19 @@ title: 验证方式
 description: 七种验证实现的对比、选型与限制。
 ---
 
-`cert issue -c` 选择验证实现。协议层是标准的 ACME 挑战;实现层决定**验证材料由谁发布**。选型主要看两点:是否需要通配符(DNS 协议),以及是否需要无人值守续期(自动化实现)。
+`cert issue -c` 选择验证实现。协议层是标准的 ACME 挑战;实现层决定**验证材料由谁发布**。选型主要看三点:是否需要通配符(DNS 协议)、标识符是 DNS 名还是 IP 地址(`-d` 收域名、`--ip` 收 RFC 8738 IP 字面量),以及是否需要无人值守续期(自动化实现)。
 
 ## 对比表
 
-| 实现 | 协议 | 材料发布 | 通配符 | 无人值守续期 | 适用场景 |
-| --- | --- | --- | --- | --- | --- |
-| `dns_provider` | DNS-01 | DNS API 自动发布 | ✓ | ✓ | 有受支持 DNS 服务商,想要全自动 |
-| `manual_dns` | DNS-01 | 你手动发布 TXT | ✓ | 材料不变时可复用 | 一次性签发;DNS 不支持自动化 |
-| `dns_persist` | DNS-PERSIST-01(草案) | 你手动配置长期 TXT | ✓ | ✓(复用同一 TXT) | 想要通配符但不想给客户端 DNS API 凭据 |
-| `webroot` | HTTP-01 | 自动写入 web 目录 | ✗ | ✓ | 已有 HTTP 服务与稳定 webroot |
-| `standalone` | HTTP-01 | 临时监听 80 端口 | ✗ | ✓ | 没有现成 HTTP 服务 |
-| `tls_alpn` | TLS-ALPN-01 | 临时监听 443 端口 | ✗ | ✓ | 80 端口被占用、443 可托管 |
-| `manual_http` | HTTP-01 | 你手动放置响应文件 | ✗ | 首次确认后可复用 | 无法自动写文件的环境 |
+| 实现 | 协议 | 材料发布 | 通配符 | IP 标识符 | 无人值守续期 | 适用场景 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dns_provider` | DNS-01 | DNS API 自动发布 | ✓ | — | ✓ | 有受支持 DNS 服务商,想要全自动 |
+| `manual_dns` | DNS-01 | 你手动发布 TXT | ✓ | — | 材料不变时可复用 | 一次性签发;DNS 不支持自动化 |
+| `dns_persist` | DNS-PERSIST-01(草案) | 你手动配置长期 TXT | ✓ | — | ✓(复用同一 TXT) | 想要通配符但不想给客户端 DNS API 凭据 |
+| `webroot` | HTTP-01 | 自动写入 web 目录 | ✗ | ✓ | ✓ | 已有 HTTP 服务与稳定 webroot |
+| `standalone` | HTTP-01 | 临时监听 80 端口 | ✗ | ✓ | ✓ | 没有现成 HTTP 服务 |
+| `tls_alpn` | TLS-ALPN-01 | 临时监听 443 端口 | ✗ | ✓ | ✓ | 80 端口被占用、443 可托管 |
+| `manual_http` | HTTP-01 | 你手动放置响应文件 | ✗ | ✓ | 首次确认后可复用 | 无法自动写文件的环境 |
 
 ## DNS 实现
 
@@ -69,3 +69,16 @@ AsterACME 输出 URL、path 和内容,你放置后 `--resume` 确认。适合 As
 ## 建议性预检
 
 CLI 默认构建包含建议性预检:CAA 记录核对(newOrder 前)、DNS TXT 本地可见性、HTTP URL 可达性(挑战发布后)。预检只产生 WARN/INFO 观察,**不能替代 CA 验证**;DNS 解析失败、CAA 不匹配等只提示并继续,CA 仍是唯一裁决者。`--no-default-features` 构建的 CLI 与库默认构建不含预检。
+
+## IP 标识符(RFC 8738)
+
+DNS 方法(dns_provider、manual_dns、dns_persist)不验证 IP 地址;HTTP-01 与 TLS-ALPN-01 同时支持 IPv4/IPv6 标识符:
+
+```sh
+aster-acme cert issue --ip 203.0.113.10 --ip 2001:db8:0:f00::1 -c standalone
+aster-acme cert issue -d example.com --ip 203.0.113.10 -c webroot -w /var/www/html
+```
+
+- IP 标识符跳过 DNS 解析:HTTP-01 的 Host 为 IP 字面量(IPv6 带括号),TLS-ALPN-01 按反向解析名(IN-ADDR.ARPA/IP6.ARPA)响应并提供 iPAddress SAN 证书。
+- CA 必须支持 RFC 8738 才能签发 IP 证书;CA 的拒绝(如不支持 IP、地址不可公网路由)会原样保留为可诊断错误。CAA 预检对 IP 标识符显示不适用。
+- 默认证书名对 IP 主标识符使用 `ip-` 前缀(如 `ip-203.0.113.10`)。

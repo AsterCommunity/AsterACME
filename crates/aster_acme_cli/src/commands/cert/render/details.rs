@@ -30,11 +30,11 @@ pub(in crate::commands::cert::render) fn request_lines(
         ),
         field("Requested:", &timestamp(Some(record.created_at)), color),
         field(
-            "Domains:",
+            "Identifiers:",
             &record
                 .identifiers
                 .iter()
-                .map(aster_acme::identifier::DnsIdentifier::value)
+                .map(aster_acme::identifier::Identifier::value)
                 .collect::<Vec<_>>()
                 .join(", "),
             color,

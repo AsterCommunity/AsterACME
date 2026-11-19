@@ -14,12 +14,12 @@ pub(super) fn parse_order(
     let expected = record
         .identifiers
         .iter()
-        .map(crate::identifier::DnsIdentifier::value)
+        .cloned()
         .collect::<std::collections::BTreeSet<_>>();
     let mut actual = std::collections::BTreeSet::new();
     for wire in &order.identifiers {
-        let Identifier::Dns(identifier) = Identifier::try_from(wire.clone())?;
-        if !actual.insert(identifier.value()) {
+        let identifier = Identifier::try_from(wire.clone())?;
+        if !actual.insert(identifier) {
             return Err(IssueError::InvalidInput("duplicate order identifiers"));
         }
     }

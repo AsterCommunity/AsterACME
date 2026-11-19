@@ -51,7 +51,7 @@ CLI 的 `cert::execute` 负责命令分发，`execute/{issuance,transaction,fore
 
 ## 当前能力
 
-已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone，签发恢复、ARI及随机回退计划、前台单次/批量续期、账户／证书私钥签名吊销和多目标文件部署/reload。
+已实现账户注册/找回/联系人更新/停用/换钥，DNS-01人工验证、草案DNS-PERSIST-01首次人工配置及持续复用、HTTP-01人工/webroot/standalone、TLS-ALPN-01 standalone（均支持RFC 8738 IPv4/IPv6标识符），签发恢复、ARI及随机回退计划、前台单次/批量续期、账户／证书私钥签名吊销和多目标文件部署/reload。
 
 `daemon run-once`与常驻`daemon run`都调用库的`maintenance::run_cycle`，由库按ARI刷新、到期续期、已配置部署重试的顺序查询候选并控制取消边界；CLI提供续期事务和reload执行回调。常驻循环不并发重叠，每轮完成后等待配置的间隔。CLI storage对每个data-dir提供跨进程daemon租约，证书级租约和expected_in_use重验保护daemon与人工renew/deploy竞争。验证实现准入及reload进程属于宿主能力，续期退避和部署重试准入属于库策略。内置与外部DNS provider共用`dns_provider`接入，Profile与操作见[DNS Provider](dns-providers.md)；内置Cloudflare已接入并通过真实DNS与Let's Encrypt production/staging验收（除DNS-PERSIST-01草案外全部challenge方法已走真实CA签发）；其他厂商adapter另行接入；IANA或RFC列出某种扩展不代表执行实现已接入。当前发行状态和能力以双语README、CHANGELOG及代码为准，历史测试记录只证明当时的验收范围。
 

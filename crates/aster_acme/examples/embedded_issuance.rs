@@ -38,7 +38,7 @@ use aster_acme::{
     account::{AccountRecord, AccountService, RegistrationOptions},
     challenge::ChallengeKind,
     crypto::{JwsSigner, key_algorithm::KeyAlgorithm},
-    identifier::DnsIdentifier,
+    identifier::Identifier,
     issuance::{
         CertificateName, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
         IssueRequest, ValidationRequirement,
@@ -72,7 +72,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Arguments accepted by the example binary.
 #[derive(Debug, Parser)]
 struct Args {
-    /// DNS name to issue; wildcards are rejected because HTTP-01 cannot validate them.
+    /// DNS name or bare IP literal (RFC 8738) to issue; wildcards are rejected
+    /// because HTTP-01 cannot validate them.
     #[arg(short, long)]
     domain: String,
     /// Webroot of an already running HTTP server; challenge files are written below it.
@@ -336,7 +337,7 @@ async fn open_or_create(
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let directory = AcmeUrl::new(&args.directory)?;
-    let identifier = DnsIdentifier::new(&args.domain)?;
+    let identifier = Identifier::new(&args.domain)?;
     if identifier.is_wildcard() {
         return Err("HTTP-01 cannot validate wildcard identifiers".into());
     }

@@ -1,4 +1,4 @@
-use crate::identifier::DnsIdentifier;
+use crate::identifier::{DnsIdentifier, Identifier, IpIdentifier};
 use crate::issuance::*;
 
 mod failed;
@@ -13,7 +13,7 @@ fn generated_management_names_keep_a_bounded_prefix_and_lowercase_random_suffix(
         "d".repeat(61)
     );
     for value in ["example.com", "*.example.com", long.as_str()] {
-        let domain = DnsIdentifier::new(value).unwrap();
+        let domain = Identifier::Dns(DnsIdentifier::new(value).unwrap());
         let name = CertificateName::generated(&domain).unwrap();
         let (prefix, suffix) = name.as_str().rsplit_once('-').unwrap();
         assert_eq!(suffix.len(), 8);
@@ -34,10 +34,37 @@ fn generated_management_names_keep_a_bounded_prefix_and_lowercase_random_suffix(
 }
 
 #[test]
+fn generated_names_turn_ip_primaries_into_portable_ip_prefixed_components() {
+    for (input, expected_prefix) in [
+        ("192.0.2.1", "ip-192.0.2.1"),
+        ("2001:db8::1", "ip-2001-db8--1"),
+        ("::1", "ip---1"),
+    ] {
+        let primary = Identifier::Ip(IpIdentifier::new(input).unwrap());
+        let name = CertificateName::generated(&primary).unwrap();
+        let (prefix, suffix) = name.as_str().rsplit_once('-').unwrap();
+        assert_eq!(suffix.len(), 8);
+        assert!(
+            suffix
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        );
+        assert_eq!(prefix, expected_prefix, "slug for {input}");
+        assert!(aster_acme_core::local_name::valid_component(prefix));
+    }
+    // Colons never reach the filesystem through the fallback prefix either.
+    let primary = Identifier::Ip(IpIdentifier::new("::1").unwrap());
+    let name = CertificateName::generated(&primary).unwrap();
+    assert!(!name.as_str().contains(':'));
+}
+
+#[test]
 fn protocol_method_validation_prevents_http_wildcards_before_material_or_network() {
     let mut request = IssueRequest {
         name: CertificateName::new("web").unwrap(),
-        identifiers: vec![DnsIdentifier::new("*.example.com").unwrap()],
+        identifiers: vec![Identifier::Dns(
+            DnsIdentifier::new("*.example.com").unwrap(),
+        )],
         key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         account_name: "default".into(),
         challenge: crate::challenge::ChallengeKind::Http01,
@@ -55,6 +82,43 @@ fn protocol_method_validation_prevents_http_wildcards_before_material_or_network
     request.identifiers.push(request.identifiers[0].clone());
     assert!(request.validate().is_err());
     request.identifiers.clear();
+    assert!(request.validate().is_err());
+}
+
+#[test]
+fn dns_methods_reject_ip_identifiers_and_http_methods_accept_mixed_sans_before_any_network() {
+    let mut request = IssueRequest {
+        name: CertificateName::new("ip").unwrap(),
+        identifiers: vec![
+            Identifier::Ip(IpIdentifier::new("192.0.2.1").unwrap()),
+            Identifier::Ip(IpIdentifier::new("2001:db8::1").unwrap()),
+        ],
+        key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+        account_name: "default".into(),
+        challenge: crate::challenge::ChallengeKind::Dns01,
+        solver_id: "manual_dns".into(),
+        solver_config: serde_json::Value::Object(serde_json::Map::default()),
+    };
+    assert!(request.validate().is_err());
+    request.challenge = crate::challenge::ChallengeKind::DnsPersist01;
+    assert!(request.validate().is_err());
+    request.challenge = crate::challenge::ChallengeKind::Http01;
+    request.validate().unwrap();
+    request.challenge = crate::challenge::ChallengeKind::TlsAlpn01;
+    request.validate().unwrap();
+    // Mixed DNS/IP SANs are valid for HTTP-capable methods, including TLS-ALPN.
+    request.identifiers.insert(
+        0,
+        Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+    );
+    request.challenge = crate::challenge::ChallengeKind::Http01;
+    request.validate().unwrap();
+    request.challenge = crate::challenge::ChallengeKind::TlsAlpn01;
+    request.validate().unwrap();
+    // Duplicate canonical addresses are rejected before any side effect.
+    request.identifiers.push(Identifier::Ip(
+        IpIdentifier::new("2001:db8:0:0:0:0:0:1").unwrap(),
+    ));
     assert!(request.validate().is_err());
 }
 #[test]

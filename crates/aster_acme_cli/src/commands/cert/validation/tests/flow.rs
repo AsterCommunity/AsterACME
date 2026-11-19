@@ -7,7 +7,7 @@ use aster_acme::storage::query::IssueQuery;
 use aster_acme::{
     account::AccountRecord,
     challenge::{ChallengeToken, tls_alpn01::TlsAlpn01Response},
-    identifier::DnsIdentifier,
+    identifier::{DnsIdentifier, Identifier},
     issuance::service::IssueService,
     issuance::{IssueExecution, IssueOutcome, IssueRequest},
     transport::{HttpPool, TransportOptions},
@@ -15,6 +15,7 @@ use aster_acme::{
 use aster_acme_cli_storage::account::CliAccountStore;
 use aster_acme_cli_storage::issuance::CliIssueStore;
 use aster_acme_core::{account::AccountRecordState, protocol::AccountStatus};
+use aster_acme_protocol::order::WireIdentifier;
 use aster_acme_protocol::{jws::FlattenedJws, url::AcmeUrl};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::{
@@ -30,8 +31,37 @@ mod dns_persist;
 mod dns_provider;
 
 const TOKEN: &str = "opaque-HTTP-token-with-enough-entropy";
+fn fixture_solver_config(
+    implementation: ValidationMethod,
+    root: &std::path::Path,
+) -> serde_json::Value {
+    if implementation == ValidationMethod::DnsProvider {
+        return provider_configuration(Some("test-provider")).unwrap();
+    }
+    configuration(
+        implementation,
+        if implementation == ValidationMethod::Webroot {
+            Some(root)
+        } else {
+            None
+        },
+        if matches!(
+            implementation,
+            ValidationMethod::Standalone | ValidationMethod::TlsAlpn
+        ) {
+            let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            Some(reservation.local_addr().unwrap())
+        } else {
+            None
+        },
+    )
+    .unwrap()
+}
+
 struct Fixture {
     implementation: ValidationMethod,
+    identifier: Identifier,
+    identifier_json: serde_json::Value,
     temp: tempfile::TempDir,
     server: MockServer,
     store: CliIssueStore,
@@ -45,6 +75,15 @@ struct Fixture {
 
 impl Fixture {
     async fn new(implementation: ValidationMethod) -> Self {
+        Self::for_identifier(
+            implementation,
+            Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+        )
+        .await
+    }
+
+    async fn for_identifier(implementation: ValidationMethod, identifier: Identifier) -> Self {
+        let identifier_json = serde_json::to_value(WireIdentifier::from(&identifier)).unwrap();
         let server = MockServer::start().await;
         Mock::given(method("GET")).and(path("/arbitrary-directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce": format!("{}/nonce",server.uri()), "newAccount": format!("{}/account",server.uri()), "newOrder": format!("{}/orders/create",server.uri()), "keyChange": format!("{}/key-change",server.uri()),
@@ -92,35 +131,15 @@ impl Fixture {
         let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
         let root = temp.path().join("www");
         std::fs::create_dir(&root).unwrap();
+        let solver_config = fixture_solver_config(implementation, &root);
         let request = IssueRequest {
             name: aster_acme::issuance::CertificateName::new("web").unwrap(),
-            identifiers: vec![DnsIdentifier::new("example.com").unwrap()],
+            identifiers: vec![identifier],
             key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
             challenge: implementation.kind(),
             solver_id: implementation.id().into(),
-            solver_config: if implementation == ValidationMethod::DnsProvider {
-                provider_configuration(Some("test-provider")).unwrap()
-            } else {
-                configuration(
-                    implementation,
-                    if implementation == ValidationMethod::Webroot {
-                        Some(root.as_path())
-                    } else {
-                        None
-                    },
-                    if matches!(
-                        implementation,
-                        ValidationMethod::Standalone | ValidationMethod::TlsAlpn
-                    ) {
-                        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                        Some(reservation.local_addr().unwrap())
-                    } else {
-                        None
-                    },
-                )
-                .unwrap()
-            },
+            solver_config,
         };
         let session = store.create(&request, &account).await.unwrap();
         let record = session.record().await.unwrap();
@@ -129,6 +148,8 @@ impl Fixture {
         ));
         let fixture = Self {
             implementation,
+            identifier: request.identifiers.first().cloned().unwrap(),
+            identifier_json,
             temp,
             server,
             store,
@@ -146,10 +167,11 @@ impl Fixture {
     async fn mount(&self) {
         let stage = self.stage.clone();
         let base = self.server.uri();
-        let order = |status: &str| serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
+        let identifier_json = self.identifier_json.clone();
+        let order = move |status: &str| serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
         let initial = order("pending");
         let reset = stage.clone();
-        let location = format!("{base}/order/1");
+        let location = format!("{}/order/1", self.server.uri());
         Mock::given(method("POST"))
             .and(path("/orders/create"))
             .respond_with(move |_: &wiremock::Request| {
@@ -181,17 +203,18 @@ impl Fixture {
             })
             .mount(&self.server)
             .await;
-        self.mount_authorization_challenge(stage.clone(), base, implementation)
+        self.mount_authorization_challenge(stage.clone(), self.server.uri(), implementation)
             .await;
         let current = stage;
         let base = self.server.uri();
         let generation = self.generation.clone();
+        let identifier_json = self.identifier_json.clone();
         Mock::given(method("POST")).and(path("/finalize")).respond_with(move |request: &wiremock::Request| {
             let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
             assert_eq!(URL_SAFE_NO_PAD.decode(payload["csr"].as_str().unwrap()).unwrap(), std::fs::read(generation.lock().unwrap().join("request.der")).unwrap());
             current.store(3,Ordering::SeqCst);
-            ResponseTemplate::new(200).insert_header("Replay-Nonce","finalized").insert_header("Retry-After","0").set_body_json(serde_json::json!({"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
+            ResponseTemplate::new(200).insert_header("Replay-Nonce","finalized").insert_header("Retry-After","0").set_body_json(serde_json::json!({"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
         }).mount(&self.server).await;
         self.mount_certificate().await;
     }
@@ -199,6 +222,7 @@ impl Fixture {
     async fn mount_certificate(&self) {
         let generation = self.generation.clone();
         let fault = self.publication_fault.clone();
+        let identifier = self.identifier.clone();
         let public_file = self
             .temp
             .path()
@@ -215,8 +239,13 @@ impl Fixture {
                         .as_slice(),
                 )
                 .unwrap();
-                let mut params =
-                    rcgen::CertificateParams::new(vec!["example.com".to_owned()]).unwrap();
+                let mut params = rcgen::CertificateParams::new(Vec::new()).unwrap();
+                params.subject_alt_names = vec![match &identifier {
+                    Identifier::Dns(dns) => {
+                        rcgen::SanType::DnsName(dns.value().as_str().try_into().unwrap())
+                    }
+                    Identifier::Ip(ip) => rcgen::SanType::IpAddress(ip.address()),
+                }];
                 params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
                 params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(89);
                 let leaf = params.self_signed(&key).unwrap();
@@ -247,6 +276,7 @@ impl Fixture {
         let challenge_url = format!("{base}{challenge_path}");
         let auth_stage = stage.clone();
         let auth_url = challenge_url.clone();
+        let identifier_json = self.identifier_json.clone();
         Mock::given(method("POST")).and(path("/authorize"))
             .respond_with(move |_: &wiremock::Request| {
                 let validated = implementation == ValidationMethod::TlsAlpn && auth_stage.load(Ordering::SeqCst) >= 2;
@@ -256,7 +286,7 @@ impl Fixture {
                     challenge["issuerDomainNames"] = serde_json::json!(["authority.example"]);
                 } else { challenge["token"] = serde_json::json!(TOKEN); }
                 ResponseTemplate::new(200).insert_header("Replay-Nonce", "authz").set_body_json(serde_json::json!({
-                    "identifier":{"type":"dns","value":"example.com"},"status":if validated { "valid" } else { "pending" },"expires":"2099-01-01T00:00:00Z",
+                    "identifier":identifier_json,"status":if validated { "valid" } else { "pending" },"expires":"2099-01-01T00:00:00Z",
                     "challenges":[challenge]
                 }))
             }).mount(&self.server).await;
@@ -277,6 +307,7 @@ impl Fixture {
         let acknowledged = Arc::new(AtomicUsize::new(0));
         let ack = acknowledged.clone();
         let base = self.server.uri();
+        let identifier_json = self.identifier_json.clone();
         Mock::given(method("POST")).and(path("/http-challenge"))
             .respond_with(move |_: &wiremock::Request| {
                 ack.fetch_add(1, Ordering::SeqCst);
@@ -287,7 +318,7 @@ impl Fixture {
         Mock::given(method("POST")).and(path("/order/1"))
             .respond_with(move |_: &wiremock::Request| {
                 let status = match remote.load(Ordering::SeqCst) { 0 => "pending", 1 => "ready", _ => "valid" };
-                ResponseTemplate::new(200).insert_header("Replay-Nonce", "poll").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "poll").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
             }).with_priority(2).mount(&self.server).await;
 
         (state, acknowledged)
@@ -296,10 +327,11 @@ impl Fixture {
     async fn invalidate_standalone_after_ack(&self, acknowledged: Arc<AtomicUsize>) {
         let ack = acknowledged;
         let base = self.server.uri();
+        let identifier_json = self.identifier_json.clone();
         Mock::given(method("POST")).and(path("/order/1"))
                 .respond_with(move |_: &wiremock::Request| {
                     let status = if ack.load(Ordering::SeqCst) == 0 { "pending" } else { "invalid" };
-                    ResponseTemplate::new(200).insert_header("Replay-Nonce", "terminal").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"error":{"type":"urn:ietf:params:acme:error:unauthorized","detail":"HTTP validation failed"}}))
+                    ResponseTemplate::new(200).insert_header("Replay-Nonce", "terminal").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"error":{"type":"urn:ietf:params:acme:error:unauthorized","detail":"HTTP validation failed"}}))
                 }).with_priority(1).mount(&self.server).await;
     }
 
@@ -413,6 +445,7 @@ async fn manual_http_yields_public_file_material_then_resumes_without_another_or
 async fn validate_standalone_over_http(
     server: &MockServer,
     address: std::net::SocketAddr,
+    host: &str,
     expected: &str,
     state: &AtomicUsize,
     acknowledged: &AtomicUsize,
@@ -432,10 +465,8 @@ async fn validate_standalone_over_http(
         };
         stream
             .write_all(
-                format!(
-                    "GET /.well-known/acme-challenge/{TOKEN} HTTP/1.1\r\nHost: example.com\r\n\r\n"
-                )
-                .as_bytes(),
+                format!("GET /.well-known/acme-challenge/{TOKEN} HTTP/1.1\r\nHost: {host}\r\n\r\n")
+                    .as_bytes(),
             )
             .await
             .unwrap();
@@ -506,8 +537,14 @@ async fn standalone_serves_real_http_and_resumes_acknowledged_challenges_without
         };
         let expected = format!("{TOKEN}.{}", fixture.account.key_thumbprint);
         let server = &fixture.server;
-        let validate =
-            validate_standalone_over_http(server, address, &expected, &state, &acknowledged);
+        let validate = validate_standalone_over_http(
+            server,
+            address,
+            "example.com",
+            &expected,
+            &state,
+            &acknowledged,
+        );
         let (outcome, ()) = tokio::join!(
             fixture.service.run(
                 fixture.session.as_mut().unwrap().as_mut(),
@@ -543,23 +580,20 @@ async fn standalone_serves_real_http_and_resumes_acknowledged_challenges_without
     }
 }
 
-async fn await_tls_alpn_validation(
+async fn await_tls_alpn_validation<Fut>(
     address: std::net::SocketAddr,
     digest: [u8; 32],
     stage: Arc<AtomicUsize>,
-) {
+    verify: impl Fn(std::net::SocketAddr, [u8; 32]) -> Fut,
+) where
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
     tokio::time::timeout(Duration::from_secs(8), async {
         while stage.load(Ordering::SeqCst) < 1 {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         loop {
-            match crate::commands::cert::validation::tls_alpn::tests::verify_challenge_certificate(
-                address,
-                "example.com",
-                digest,
-            )
-            .await
-            {
+            match verify(address, digest).await {
                 Ok(()) => {
                     stage.store(2, Ordering::SeqCst);
                     break;
@@ -581,12 +615,9 @@ async fn tls_alpn_completes_acme_order_and_resumes_without_reacknowledging() {
             serde_json::from_value(original.solver_config.clone()).unwrap();
         let address = config.listen_address;
         let token = ChallengeToken::new(TOKEN).unwrap();
-        let material = TlsAlpn01Response::derive(
-            &DnsIdentifier::new("example.com").unwrap(),
-            &token,
-            &fixture.account.key_thumbprint,
-        )
-        .unwrap();
+        let material =
+            TlsAlpn01Response::derive(&fixture.identifier, &token, &fixture.account.key_thumbprint)
+                .unwrap();
         let authorization_digest = material.authorization_digest;
 
         if resume {
@@ -632,7 +663,14 @@ async fn tls_alpn_completes_acme_order_and_resumes_without_reacknowledging() {
             solver.as_ref(),
             &controls,
         );
-        let validate = await_tls_alpn_validation(address, authorization_digest, stage);
+        let validate =
+            await_tls_alpn_validation(address, authorization_digest, stage, |address, digest| {
+                crate::commands::cert::validation::tls_alpn::tests::verify_challenge_certificate(
+                    address,
+                    "example.com",
+                    digest,
+                )
+            });
         let (outcome, ()) = tokio::join!(service, validate);
         let outcome = match outcome {
             Ok(outcome) => outcome,
@@ -650,6 +688,225 @@ async fn tls_alpn_completes_acme_order_and_resumes_without_reacknowledging() {
         assert_eq!(fixture.count("/orders/create").await, 1);
         assert_eq!(fixture.count("/tls-challenge").await, 1);
         assert_eq!(fixture.count("/finalize").await, 1);
+        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        drop(rebound);
+        drop(fixture.session.take());
+        let renewal = fixture
+            .store
+            .renew(&record.name, &fixture.account)
+            .await
+            .unwrap()
+            .record()
+            .await
+            .unwrap();
+        assert_eq!(renewal.solver_id, "tls_alpn");
+        assert_eq!(renewal.solver_config, record.solver_config);
+    }
+}
+
+/// Pin the RFC 8738 wire contract: newOrder must transmit the ip identifier
+/// kind through the single Identifier-to-WireIdentifier conversion owner,
+/// never a DNS spelling of the address.
+async fn assert_ip_order_wire_kind(fixture: &Fixture, expected: &str) {
+    let created = fixture
+        .server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|request| request.url.path() == "/orders/create")
+        .expect("newOrder request captured");
+    let jws: FlattenedJws = serde_json::from_slice(&created.body).unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
+    assert_eq!(
+        payload["identifiers"],
+        serde_json::json!([{ "type": "ip", "value": expected }])
+    );
+}
+
+#[tokio::test]
+async fn standalone_ip_identifier_completes_loopback_issuance_and_resumes_without_replay() {
+    for resume in [false, true] {
+        let mut fixture = Fixture::for_identifier(
+            ValidationMethod::Standalone,
+            Identifier::Ip(aster_acme::identifier::IpIdentifier::new("127.0.0.1").unwrap()),
+        )
+        .await;
+        let record = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let config: StandaloneConfig =
+            serde_json::from_value(record.solver_config.clone()).unwrap();
+        let address = config.listen_address;
+        let (state, acknowledged) = fixture.mount_standalone_ca(0).await;
+
+        let controls = IssueExecution {
+            max_polls: if resume { 1 } else { 30 },
+            context: ExecutionContext {
+                deadline: Instant::now() + Duration::from_secs(60),
+                ..execution()
+            },
+            poll_interval: Duration::from_millis(1),
+        };
+        if resume {
+            let solver = adapter(&record, false, false, progress()).unwrap();
+            assert!(matches!(
+                fixture
+                    .service
+                    .run(
+                        fixture.session.as_mut().unwrap().as_mut(),
+                        solver.as_ref(),
+                        &controls
+                    )
+                    .await,
+                Err(IssueError::PollLimit { .. })
+            ));
+            assert_eq!(acknowledged.load(Ordering::SeqCst), 1);
+            let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+            drop(rebound);
+            fixture.reopen().await;
+        }
+        let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let solver = adapter(&saved, false, false, progress()).unwrap();
+        let controls = IssueExecution {
+            max_polls: 30,
+            ..controls
+        };
+        let expected = format!("{TOKEN}.{}", fixture.account.key_thumbprint);
+        let server = &fixture.server;
+        let validate = validate_standalone_over_http(
+            server,
+            address,
+            "127.0.0.1",
+            &expected,
+            &state,
+            &acknowledged,
+        );
+        let (outcome, ()) = tokio::join!(
+            fixture.service.run(
+                fixture.session.as_mut().unwrap().as_mut(),
+                solver.as_ref(),
+                &controls
+            ),
+            validate
+        );
+        let IssueOutcome::Completed {
+            record: completed,
+            cleanup,
+        } = outcome.unwrap()
+        else {
+            panic!("expected certificate");
+        };
+        assert_eq!(cleanup, Vec::<ValidationRequirement>::new());
+        assert_eq!(fixture.count("/orders/create").await, 1);
+        assert_eq!(fixture.count("/http-challenge").await, 1);
+        assert_eq!(fixture.count("/finalize").await, 1);
+        assert_ip_order_wire_kind(&fixture, "127.0.0.1").await;
+        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        drop(rebound);
+        drop(fixture.session.take());
+        let renewed = fixture
+            .store
+            .renew(&completed.name, &fixture.account)
+            .await
+            .unwrap();
+        let renewal = renewed.record().await.unwrap();
+        assert_eq!(renewal.solver_id, "standalone");
+        assert_eq!(
+            renewal
+                .identifiers
+                .first()
+                .and_then(Identifier::as_ip)
+                .map(aster_acme::identifier::IpIdentifier::value),
+            Some("127.0.0.1".into())
+        );
+    }
+}
+
+#[tokio::test]
+async fn tls_alpn_ip_identifier_completes_loopback_issuance_with_reverse_name_sni() {
+    for resume in [false, true] {
+        let mut fixture = Fixture::for_identifier(
+            ValidationMethod::TlsAlpn,
+            Identifier::Ip(aster_acme::identifier::IpIdentifier::new("127.0.0.1").unwrap()),
+        )
+        .await;
+        let original = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let config: StandaloneConfig =
+            serde_json::from_value(original.solver_config.clone()).unwrap();
+        let address = config.listen_address;
+        let token = ChallengeToken::new(TOKEN).unwrap();
+        let material =
+            TlsAlpn01Response::derive(&fixture.identifier, &token, &fixture.account.key_thumbprint)
+                .unwrap();
+        let authorization_digest = material.authorization_digest;
+
+        if resume {
+            let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+            let solver = adapter(&saved, false, false, progress()).unwrap();
+            assert!(matches!(
+                fixture
+                    .service
+                    .run(
+                        fixture.session.as_mut().unwrap().as_mut(),
+                        solver.as_ref(),
+                        &IssueExecution {
+                            max_polls: 1,
+                            context: ExecutionContext {
+                                deadline: Instant::now() + Duration::from_secs(10),
+                                ..execution()
+                            },
+                            poll_interval: Duration::from_millis(1)
+                        }
+                    )
+                    .await,
+                Err(IssueError::PollLimit { .. })
+            ));
+            assert_eq!(fixture.count("/tls-challenge").await, 1);
+            let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+            drop(rebound);
+            fixture.reopen().await;
+        }
+
+        let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+        let solver = adapter(&saved, false, false, progress()).unwrap();
+        let stage = fixture.stage.clone();
+        let controls = IssueExecution {
+            max_polls: 30,
+            context: ExecutionContext {
+                deadline: Instant::now() + Duration::from_secs(10),
+                ..execution()
+            },
+            poll_interval: Duration::from_millis(1),
+        };
+        let service = fixture.service.run(
+            fixture.session.as_mut().unwrap().as_mut(),
+            solver.as_ref(),
+            &controls,
+        );
+        let validate =
+            await_tls_alpn_validation(address, authorization_digest, stage, |address, digest| {
+                crate::commands::cert::validation::tls_alpn::tests::verify_ip_challenge_certificate(
+                    address,
+                    "127.0.0.1",
+                    digest,
+                )
+            });
+        let (outcome, ()) = tokio::join!(service, validate);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => panic!(
+                "IP TLS issuance failed at remote stage {}: {error}",
+                fixture.stage.load(Ordering::SeqCst)
+            ),
+        };
+        let IssueOutcome::Completed { record, cleanup } = outcome else {
+            panic!("expected completed IP TLS-ALPN order");
+        };
+        assert_eq!(cleanup, Vec::<ValidationRequirement>::new());
+        assert_eq!(fixture.count("/orders/create").await, 1);
+        assert_eq!(fixture.count("/tls-challenge").await, 1);
+        assert_eq!(fixture.count("/finalize").await, 1);
+        assert_ip_order_wire_kind(&fixture, "127.0.0.1").await;
         let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
         drop(rebound);
         drop(fixture.session.take());
@@ -1055,9 +1312,9 @@ async fn saved_method_and_implementation_configuration_cannot_be_changed_on_open
 async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_order() {
     let fixture = Fixture::new(ValidationMethod::Webroot).await;
     let mut record = fixture.session.as_ref().unwrap().record().await.unwrap();
-    record
-        .identifiers
-        .push(DnsIdentifier::new("www.example.com").unwrap());
+    record.identifiers.push(Identifier::Dns(
+        DnsIdentifier::new("www.example.com").unwrap(),
+    ));
     let mut request = IssueRequest {
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),

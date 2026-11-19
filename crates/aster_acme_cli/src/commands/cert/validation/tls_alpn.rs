@@ -1,8 +1,10 @@
-//! TLS-ALPN-01 responder for RFC 8737.
+//! TLS-ALPN-01 responder for RFC 8737 and RFC 8738.
 //!
 //! The responder creates short-lived, self-signed challenge certificates with
-//! one DNS SAN and the critical `id-pe-acmeIdentifier` extension. It selects a
-//! certificate only when SNI and `acme-tls/1` are both present.
+//! one SAN (dNSName, or iPAddress for RFC 8738 IP identifiers) and the critical
+//! `id-pe-acmeIdentifier` extension. It selects a certificate only when SNI and
+//! `acme-tls/1` are both present; IP identifiers are keyed by their
+//! IN-ADDR.ARPA/IP6.ARPA reverse name, the SNI form RFC 8738 section 6 mandates.
 use crate::commands::cert::validation::{
     Arc, ChallengeKind, ChallengeSolver, IssueError, Progress, listener::Listener,
 };
@@ -14,7 +16,7 @@ use aster_acme::{
 use async_trait::async_trait;
 use rcgen::{
     CertificateParams, CustomExtension, DistinguishedName, ExtendedKeyUsagePurpose, KeyPair,
-    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
+    KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, SanType,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, crypto::CryptoProvider, sign::CertifiedKey};
@@ -191,8 +193,8 @@ impl SniResolver {
             .map_err(|_| IssueError::Publication("TLS challenge table is unavailable".into()))?;
         let provider = rustls::crypto::aws_lc_rs::default_provider();
         let mut additions = BTreeMap::new();
-        for (domain, digest) in desired {
-            if let Some(entry) = entries.get(&domain) {
+        for (sni, (digest, identifier)) in desired {
+            if let Some(entry) = entries.get(&sni) {
                 if entry.digest != digest {
                     return Err(IssueError::InvalidInput(
                         "TLS-ALPN challenge digest changed",
@@ -200,16 +202,16 @@ impl SniResolver {
                 }
             } else {
                 additions.insert(
-                    domain.clone(),
+                    sni.clone(),
                     Entry {
                         digest,
-                        certificate: certificate(&domain, &digest, &provider)?,
+                        certificate: certificate(&identifier, &digest, &provider)?,
                     },
                 );
             }
         }
         if entries.len() + additions.len() > 100 {
-            return Err(IssueError::InvalidInput("too many TLS-ALPN domains"));
+            return Err(IssueError::InvalidInput("too many TLS-ALPN identifiers"));
         }
         entries.extend(additions);
         Ok(())
@@ -244,7 +246,7 @@ impl rustls::server::ResolvesServerCert for SniResolver {
 
 fn validated_requirements(
     requirements: &[ValidationRequirement],
-) -> Result<BTreeMap<String, [u8; 32]>, IssueError> {
+) -> Result<BTreeMap<String, ([u8; 32], aster_acme::identifier::Identifier)>, IssueError> {
     if requirements.is_empty() || requirements.len() > 100 {
         return Err(IssueError::InvalidInput(
             "TLS-ALPN requires 1 to 100 challenge requirements",
@@ -252,31 +254,50 @@ fn validated_requirements(
     }
     let mut result = BTreeMap::new();
     for requirement in requirements {
-        let ValidationRequirement::TlsAlpn01 { domain, digest } = requirement else {
+        let ValidationRequirement::TlsAlpn01 {
+            identifier: value,
+            digest,
+        } = requirement
+        else {
             return Err(IssueError::InvalidInput(
                 "TLS-ALPN received another validation method",
             ));
         };
-        let identifier = aster_acme::identifier::DnsIdentifier::new(domain)?;
+        let identifier = aster_acme::identifier::Identifier::new(value)?;
         if identifier.is_wildcard() {
             return Err(IssueError::InvalidInput(
                 "TLS-ALPN does not support wildcard identifiers",
             ));
         }
-        if result.insert(identifier.value(), *digest).is_some() {
-            return Err(IssueError::InvalidInput("duplicate TLS-ALPN domain"));
+        // RFC 8738 section 6: IP identifiers are keyed by their reverse name,
+        // the only SNI form RFC 6066 allows a CA to send for an address.
+        let sni = match &identifier {
+            aster_acme::identifier::Identifier::Dns(dns) => dns.value(),
+            aster_acme::identifier::Identifier::Ip(ip) => ip.reverse_name(),
+        };
+        if result.insert(sni, (*digest, identifier)).is_some() {
+            return Err(IssueError::InvalidInput("duplicate TLS-ALPN identifier"));
         }
     }
     Ok(result)
 }
 
 fn certificate(
-    domain: &str,
+    identifier: &aster_acme::identifier::Identifier,
     digest: &[u8; 32],
     provider: &CryptoProvider,
 ) -> Result<Arc<CertifiedKey>, IssueError> {
-    let mut params = CertificateParams::new(vec![domain.to_owned()])
-        .map_err(|_| IssueError::InvalidInput("invalid TLS-ALPN DNS identifier"))?;
+    let mut params = CertificateParams::new(Vec::new())
+        .map_err(|_| IssueError::InvalidInput("invalid TLS-ALPN identifier"))?;
+    params.subject_alt_names = vec![match identifier {
+        aster_acme::identifier::Identifier::Dns(dns) => {
+            let name = dns.value().as_str().try_into().map_err(|_: rcgen::Error| {
+                IssueError::InvalidInput("invalid TLS-ALPN DNS identifier")
+            })?;
+            SanType::DnsName(name)
+        }
+        aster_acme::identifier::Identifier::Ip(ip) => SanType::IpAddress(ip.address()),
+    }];
     params.distinguished_name = DistinguishedName::new();
     let now = time::OffsetDateTime::now_utc();
     params.not_before = now - time::Duration::minutes(5);

@@ -330,7 +330,9 @@ fn timed_publication(id: &str, ownership: RecordOwnership) -> ChallengePublicati
         cname_chain: plan.cname_chain.clone(),
     };
     ChallengePublication {
-        identifier: aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+        identifier: aster_acme::identifier::Identifier::Dns(
+            aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+        ),
         publication_id: id.into(),
         requirement: ValidationRequirement::Dns01 {
             name: "_acme-challenge.example.com".into(),
@@ -647,7 +649,9 @@ async fn cleanup_keeps_processing_later_records_after_invalid_saved_routes() {
             ),
         };
         ChallengePublication {
-            identifier: aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+            identifier: aster_acme::identifier::Identifier::Dns(
+                aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+            ),
             publication_id: id.into(),
             requirement: ValidationRequirement::Dns01 {
                 name: name.into(),
@@ -887,12 +891,14 @@ async fn multiple_owners_use_explicit_mapping_or_independent_dns_resolution() {
         .dns_targets
         .insert("*.example.com".into(), "shared.validation.net.".into());
     let make = |id: &str, name: &str| ChallengePublication {
-        identifier: aster_acme::identifier::DnsIdentifier::new(match id {
-            "wildcard" => "*.example.com",
-            "two" => "other.net",
-            _ => "example.com",
-        })
-        .unwrap(),
+        identifier: aster_acme::identifier::Identifier::Dns(
+            aster_acme::identifier::DnsIdentifier::new(match id {
+                "wildcard" => "*.example.com",
+                "two" => "other.net",
+                _ => "example.com",
+            })
+            .unwrap(),
+        ),
         publication_id: id.into(),
         requirement: ValidationRequirement::Dns01 {
             name: name.into(),

@@ -244,9 +244,18 @@ impl IssueService {
             && record
                 .identifiers
                 .iter()
-                .any(crate::identifier::DnsIdentifier::is_wildcard)
+                .any(crate::identifier::Identifier::is_wildcard)
         {
             return Err(crate::challenge::ChallengeError::WildcardMethod.into());
+        }
+        if !record
+            .identifiers
+            .iter()
+            .all(|identifier| record.challenge.validates_identifier(identifier))
+        {
+            return Err(IssueError::InvalidInput(
+                "the saved method cannot validate a saved identifier kind",
+            ));
         }
         if solver.kind() != record.challenge {
             return Err(IssueError::InvalidInput(

@@ -3,7 +3,7 @@ use crate::issuance::{
     AuthorizationRecord, CertificateName, IssueError, IssueRequest, PollWaitSource,
     RenewalPredecessor, RenewalRetryState, RequestFailure, ValidationRequirement,
 };
-use crate::{account::AccountRecord, identifier::DnsIdentifier};
+use crate::{account::AccountRecord, identifier::Identifier};
 use aster_acme_core::workflow::{IssuancePhase, SubmissionState};
 use aster_acme_protocol::{order::OrderObject, url::AcmeUrl};
 use serde::{Deserialize, Serialize};
@@ -47,8 +47,8 @@ pub struct IssueRecord {
     pub account_thumbprint: String,
     /// Immutable certificate key choice used by this generation.
     pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
-    /// Ordered canonical DNS identifiers.
-    pub identifiers: Vec<DnsIdentifier>,
+    /// Ordered canonical DNS and IP identifiers.
+    pub identifiers: Vec<Identifier>,
     /// Local execution stage, independent of order status.
     pub phase: IssuancePhase,
     /// `NewOrder` intent was durably saved before sending; without a Location the

@@ -13,8 +13,7 @@ use crate::issuance::{
 use crate::solver::ChallengeSolver;
 use crate::storage::issuance::IssueSession;
 use crate::{
-    challenge::PublicationAccountProof,
-    identifier::{Identifier, authorization_identifier},
+    challenge::PublicationAccountProof, identifier::authorization_identifier,
     transport::json_payload,
 };
 use aster_acme_core::{
@@ -46,8 +45,7 @@ impl IssueService {
         if crate::transport::retry_after(&response.headers).is_some() {
             schedule(record, &response, Duration::ZERO);
         }
-        let Identifier::Dns(identifier) =
-            authorization_identifier(resource.identifier.clone(), resource.wildcard)?;
+        let identifier = authorization_identifier(resource.identifier.clone(), resource.wildcard)?;
         if !record.identifiers.contains(&identifier)
             || resource.challenges.len() > 32
             || matches!(resource.status, AuthorizationStatus::Valid) && resource.expires.is_none()
@@ -66,7 +64,7 @@ impl IssueService {
             .find(|auth| auth.url == *url)
         {
             Some(saved) => {
-                let Identifier::Dns(previous) = authorization_identifier(
+                let previous = authorization_identifier(
                     saved.resource.identifier.clone(),
                     saved.resource.wildcard,
                 )?;
@@ -306,7 +304,7 @@ impl IssueService {
                         .find(|challenge| challenge.url == url)
                         .ok_or(IssueError::InvalidInput("missing selected challenge"))?;
                     *selected = observed;
-                    let Identifier::Dns(identifier) = authorization_identifier(
+                    let identifier = authorization_identifier(
                         record.authorizations[index].resource.identifier.clone(),
                         record.authorizations[index].resource.wildcard,
                     )?;

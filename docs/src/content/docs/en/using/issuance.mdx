@@ -11,13 +11,14 @@ aster-acme cert issue -n example-cert -a default \
   -c dns_provider --provider cf-prod
 ```
 
-- `-n/--name`: the long-lived managed certificate name. Defaults to the first normalized domain plus a random suffix; an explicitly requested existing name is rejected
+- `-n/--name`: the long-lived managed certificate name. Defaults to the first normalized identifier plus a random suffix (IP primaries get an `ip-` prefix); an explicitly requested existing name is rejected
 - `-a/--account`: the issuing account
-- `-d/--domain`: repeatable; wildcards are written `*.example.com` and require DNS validation
+- `-d/--domain`: DNS names, repeatable; wildcards are written `*.example.com` and require DNS validation
+- `--ip`: IP addresses (RFC 8738), repeatable; requires HTTP-01/TLS-ALPN-01, the primary identifier is the first `-d`, else the first `--ip`
 - `-c/--challenge`: the validation implementation — see [Validation Methods](/en/using/challenges/)
 - `-k/--key-type`: certificate public key algorithm, ecdsa-p256 by default; also ecdsa-p384/p521, ed25519, rsa-2048/3072/4096/8192. If the CA rejects the choice, the actual error is preserved — AsterACME never retries with a different algorithm
 
-Each generation gets fixed keys and a fixed CSR: recovery never generates replacement material, and renewal reuses the same domains, account, and algorithm. Keys and CSRs are generated before any CA request, so cancelling the interactive flow leaves no half-initialized identity.
+Each generation gets fixed keys and a fixed CSR: recovery never generates replacement material, and renewal reuses the same identifiers, account, and algorithm. Keys and CSRs are generated before any CA request, so cancelling the interactive flow leaves no half-initialized identity.
 
 **Similar-order protection**: when a new request has no explicit name and an unfinished candidate with a fully matching definition exists, the terminal offers to resume or create fresh; scripts fail with the exact resume command instead of silently duplicating the order.
 
@@ -48,7 +49,7 @@ aster-acme cert show example-cert --verify
 aster-acme cert show --operation OPERATION-ID
 ```
 
-`list` shows one row per managed certificate by default; `--history` expands all generations. `show` displays the current in-use generation: domains, validity, validation method, deployment bindings, revocation state, and the renewal plan. Everything is offline by default; `--verify` queries the CA for the order and authorizations — it does not imply revocation status was checked, nor OCSP/CRL.
+`list` shows one row per managed certificate by default; `--history` expands all generations. `show` displays the current in-use generation: identifiers, validity, validation method, deployment bindings, revocation state, and the renewal plan. Everything is offline by default; `--verify` queries the CA for the order and authorizations — it does not imply revocation status was checked, nor OCSP/CRL.
 
 Time fields distinguish **order status** from **certificate expiry**; the NEXT RENEWAL column comes from the renewal plan (see [Renewal and ARI](/en/using/renewal/)).
 

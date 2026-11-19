@@ -85,7 +85,6 @@ fn only_matching_or_unrestricted_caa_results_use_info() {
         Failure::LookupFailed {
             reason: "injected lookup failure".into(),
         },
-        Failure::UnsupportedInput,
         Failure::TimedOut,
         Failure::NotChecked,
     ] {
@@ -104,6 +103,19 @@ fn only_matching_or_unrestricted_caa_results_use_info() {
         );
         assert!(!diagnostics.text().contains("[INFO]"));
     }
+    // IP identifiers do not participate in DNS CAA; the observation is honest
+    // informational scope, not a lookup failure.
+    let (output, _, diagnostics) = crate::common::session::tests::session(false);
+    let progress = Progress::new(output);
+    Display::new(&saved, &progress).observed(&Report::<aster_acme_validation::caa::Report> {
+        observations: vec![Entry {
+            index: 0,
+            result: Err(Failure::UnsupportedInput),
+        }],
+    });
+    let text = diagnostics.text();
+    assert!(text.contains("[INFO]"), "{text}");
+    assert!(text.contains("not applicable to IP identifiers"), "{text}");
 }
 
 #[test]

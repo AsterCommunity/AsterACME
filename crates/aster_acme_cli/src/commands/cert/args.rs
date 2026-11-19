@@ -156,7 +156,7 @@ pub(crate) struct IssueArgs {
     /// Local certificate name; default is the primary domain plus a random suffix.
     #[arg(short = 'n', long, conflicts_with = "resume",value_parser=parse_certificate_name)]
     pub name: Option<String>,
-    /// DNS identifier; repeat for SANs. First is the primary domain.
+    /// DNS identifier; repeat for SANs. The first -d or --ip is the primary identifier.
     #[arg(
         short = 'd',
         long,
@@ -164,6 +164,14 @@ pub(crate) struct IssueArgs {
         value_parser = parse_domain
     )]
     pub domain: Vec<aster_acme::identifier::DnsIdentifier>,
+    /// IP identifier (RFC 8738); repeat for SANs. Requires HTTP-01 or TLS-ALPN-01 validation.
+    #[arg(
+        long = "ip",
+        value_name = "ADDRESS",
+        conflicts_with = "resume",
+        value_parser = parse_ip
+    )]
+    pub ip: Vec<aster_acme::identifier::IpIdentifier>,
     /// Local account; default is the configured default account.
     #[arg(short = 'a', long, conflicts_with = "resume",value_parser=parse_account_name)]
     pub account: Option<String>,
@@ -268,6 +276,10 @@ impl CertCommand {
 
 fn parse_domain(value: &str) -> Result<aster_acme::identifier::DnsIdentifier, String> {
     aster_acme::identifier::DnsIdentifier::new(value).map_err(|error| error.to_string())
+}
+
+fn parse_ip(value: &str) -> Result<aster_acme::identifier::IpIdentifier, String> {
+    aster_acme::identifier::IpIdentifier::new(value).map_err(|error| error.to_string())
 }
 
 fn parse_certificate_name(value: &str) -> Result<String, String> {

@@ -185,66 +185,76 @@ fn selection_exhaustively_intersects_policy_offer_capability_and_wildcard() {
         WireChallengeKind::TlsAlpn01,
         WireChallengeKind::DnsPersist01,
     ];
-    for wildcard in [false, true] {
-        let dns = DnsIdentifier::new(if wildcard {
-            "*.example.com"
-        } else {
-            "example.com"
-        })
-        .unwrap();
-        for offer_mask in 0_u8..16 {
-            let mut offered: Vec<_> = wires
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| offer_mask & (1 << i) != 0)
-                .map(|(_, wire)| wire.clone())
-                .collect();
-            offered.push(WireChallengeKind::Unknown("future".into()));
-            for support_mask in 0_u8..16 {
-                let supported: Vec<_> = methods
+    let dns_wildcard_cases = [false, true];
+    let ip_cases = [false, true];
+    for wildcard in dns_wildcard_cases {
+        for with_ip in ip_cases {
+            let dns = Identifier::Dns(
+                DnsIdentifier::new(if wildcard {
+                    "*.example.com"
+                } else {
+                    "example.com"
+                })
+                .unwrap(),
+            );
+            let ip = Identifier::Ip(IpIdentifier::new("2001:db8::1").unwrap());
+            let identifier = if with_ip { &ip } else { &dns };
+            for offer_mask in 0_u8..16 {
+                let mut offered: Vec<_> = wires
                     .iter()
                     .enumerate()
-                    .filter(|(i, _)| support_mask & (1 << i) != 0)
-                    .map(|(_, method)| *method)
+                    .filter(|(i, _)| offer_mask & (1 << i) != 0)
+                    .map(|(_, wire)| wire.clone())
                     .collect();
-                for (i, method) in methods.iter().enumerate() {
-                    let eligible = offer_mask & (1 << i) != 0
-                        && support_mask & (1 << i) != 0
-                        && (!wildcard || method.supports_wildcards());
-                    let selected =
-                        ChallengePolicy::Require(*method).select(&dns, &offered, &supported);
+                offered.push(WireChallengeKind::Unknown("future".into()));
+                for support_mask in 0_u8..16 {
+                    let supported: Vec<_> = methods
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| support_mask & (1 << i) != 0)
+                        .map(|(_, method)| *method)
+                        .collect();
+                    for (i, method) in methods.iter().enumerate() {
+                        let eligible = offer_mask & (1 << i) != 0
+                            && support_mask & (1 << i) != 0
+                            && method.validates_identifier(identifier)
+                            && (!identifier.is_wildcard() || method.supports_wildcards());
+                        let selected = ChallengePolicy::Require(*method)
+                            .select(identifier, &offered, &supported);
+                        assert_eq!(
+                            selected,
+                            if eligible {
+                                Ok(*method)
+                            } else {
+                                Err(ChallengeError::NoCompatibleChallenge)
+                            }
+                        );
+                    }
+                    // Caller priority takes precedence over the order of the CA's offers.
+                    let preference = [
+                        ChallengeKind::TlsAlpn01,
+                        ChallengeKind::Dns01,
+                        ChallengeKind::Http01,
+                        ChallengeKind::DnsPersist01,
+                    ];
+                    let expected = preference
+                        .into_iter()
+                        .find(|method| {
+                            let i = methods.iter().position(|m| m == method).unwrap();
+                            offer_mask & (1 << i) != 0
+                                && support_mask & (1 << i) != 0
+                                && method.validates_identifier(identifier)
+                                && (!identifier.is_wildcard() || method.supports_wildcards())
+                        })
+                        .ok_or(ChallengeError::NoCompatibleChallenge);
                     assert_eq!(
-                        selected,
-                        if eligible {
-                            Ok(*method)
-                        } else {
-                            Err(ChallengeError::NoCompatibleChallenge)
-                        }
+                        ChallengePolicy::Prefer(
+                            ChallengePreferences::new(preference.to_vec()).unwrap()
+                        )
+                        .select(identifier, &offered, &supported),
+                        expected
                     );
                 }
-                // Caller priority takes precedence over the order of the CA's offers.
-                let preference = [
-                    ChallengeKind::TlsAlpn01,
-                    ChallengeKind::Dns01,
-                    ChallengeKind::Http01,
-                    ChallengeKind::DnsPersist01,
-                ];
-                let expected = preference
-                    .into_iter()
-                    .find(|method| {
-                        let i = methods.iter().position(|m| m == method).unwrap();
-                        offer_mask & (1 << i) != 0
-                            && support_mask & (1 << i) != 0
-                            && (!wildcard || method.supports_wildcards())
-                    })
-                    .ok_or(ChallengeError::NoCompatibleChallenge);
-                assert_eq!(
-                    ChallengePolicy::Prefer(
-                        ChallengePreferences::new(preference.to_vec()).unwrap()
-                    )
-                    .select(&dns, &offered, &supported),
-                    expected
-                );
             }
         }
     }
@@ -324,9 +334,10 @@ fn materials_bind_the_account_and_token_to_the_correct_response() {
         dns01::Dns01Record, http01::Http01Response, tls_alpn01::TlsAlpn01Response,
     };
     let token = ChallengeToken::new(TOKEN).unwrap();
-    let dns = DnsIdentifier::new("example.com").unwrap();
-    let wildcard = DnsIdentifier::new("*.example.com").unwrap();
-    let record = Dns01Record::derive(&dns, &token, THUMBPRINT).unwrap();
+    let dns = Identifier::Dns(DnsIdentifier::new("example.com").unwrap());
+    let wildcard = Identifier::Dns(DnsIdentifier::new("*.example.com").unwrap());
+    let dns_for_record = DnsIdentifier::new("example.com").unwrap();
+    let record = Dns01Record::derive(&dns_for_record, &token, THUMBPRINT).unwrap();
     assert_eq!(
         ChallengeMaterial::Dns01(record.clone()).kind(),
         ChallengeKind::Dns01
@@ -337,9 +348,10 @@ fn materials_bind_the_account_and_token_to_the_correct_response() {
         record.txt_value,
         "zkPLeQfwjDL3HGjmMfjWh4_NsuFxkEKquc65DVPQTuQ"
     );
+    let wildcard_for_record = DnsIdentifier::new("*.example.com").unwrap();
     assert_eq!(
         record,
-        Dns01Record::derive(&wildcard, &token, THUMBPRINT).unwrap()
+        Dns01Record::derive(&wildcard_for_record, &token, THUMBPRINT).unwrap()
     );
     let response = Http01Response::derive(&dns, &token, THUMBPRINT).unwrap();
     assert_eq!(
@@ -370,7 +382,21 @@ fn materials_bind_the_account_and_token_to_the_correct_response() {
         TlsAlpn01Response::derive(&wildcard, &token, THUMBPRINT),
         Err(ChallengeError::WildcardMethod)
     );
-    assert!(Dns01Record::derive(&dns, &token, "invalid").is_err());
+    assert!(Dns01Record::derive(&dns_for_record, &token, "invalid").is_err());
+    // RFC 8738: IP identifiers derive HTTP-01/TLS-ALPN-01 material but never DNS records.
+    let ipv4 = Identifier::Ip(IpIdentifier::new("192.0.2.1").unwrap());
+    let response = Http01Response::derive(&ipv4, &token, THUMBPRINT).unwrap();
+    assert_eq!(response.host(), "192.0.2.1");
+    let ipv6 = Identifier::Ip(IpIdentifier::new("2001:DB8::1").unwrap());
+    let response = Http01Response::derive(&ipv6, &token, THUMBPRINT).unwrap();
+    assert_eq!(response.identifier.value(), "2001:db8::1");
+    assert_eq!(response.host(), "[2001:db8::1]");
+    let response = TlsAlpn01Response::derive(&ipv4, &token, THUMBPRINT).unwrap();
+    assert_eq!(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(response.authorization_digest),
+        record.txt_value
+    );
+    assert_eq!(response.sni_name(), "1.2.0.192.in-addr.arpa");
 }
 
 #[test]
@@ -406,7 +432,7 @@ fn validation_requirements_roundtrip_without_a_parallel_unused_receipt_schema() 
             content: "key.authorization".into(),
         },
         ValidationRequirement::TlsAlpn01 {
-            domain: "example.com".into(),
+            identifier: "example.com".into(),
             digest: [1; 32],
         },
     ];
@@ -446,5 +472,186 @@ fn url_host_ipv4_aliases_are_never_dns_certificate_identifiers() {
     }
     for host in ["127.example.com", "example.com", "*.example.com"] {
         assert!(crate::identifier::DnsIdentifier::new(host).is_ok());
+    }
+}
+
+#[test]
+fn ip_identifiers_canonicalize_and_compare_by_address_not_text() {
+    for (input, canonical) in [
+        ("192.0.2.1", "192.0.2.1"),
+        ("2001:DB8::1", "2001:db8::1"),
+        ("2001:0db8:0000:0000:0000:0000:0000:0001", "2001:db8::1"),
+        ("2001:db8:0:0:0:0:0:1", "2001:db8::1"),
+        ("::ffff:192.0.2.1", "::ffff:192.0.2.1"),
+        ("::FFFF:192.0.2.128", "::ffff:192.0.2.128"),
+        ("::1", "::1"),
+        ("::", "::"),
+    ] {
+        let identifier = IpIdentifier::new(input).unwrap();
+        assert_eq!(identifier.value(), canonical, "normalized {input}");
+        // Different textual forms of one address are the same identifier.
+        assert_eq!(identifier, IpIdentifier::new(canonical).unwrap());
+        let serialized = serde_json::to_string(&identifier).unwrap();
+        assert_eq!(
+            serde_json::from_str::<IpIdentifier>(&serialized).unwrap(),
+            identifier
+        );
+    }
+    for invalid in [
+        "",
+        "example.com",
+        "192.0.2.1:80",
+        "[2001:db8::1]:443",
+        "[2001:db8::1]",
+        "fe80::1%eth0",
+        "fe80::1%25eth0",
+        "01.2.3.4",
+        "1.2.3.4.5",
+        "1.2.3",
+        "256.0.2.1",
+        "2001:db8::1::2",
+        "2001:db8::g",
+        " 192.0.2.1",
+        "192.0.2.1 ",
+        "192.0.2.1/24",
+        "*.192.0.2.1",
+        "2001:db8::1 ",
+    ] {
+        assert!(IpIdentifier::new(invalid).is_err(), "accepted {invalid:?}");
+        assert!(serde_json::from_value::<IpIdentifier>(json!(invalid)).is_err());
+    }
+    // Canonical values are stable identifiers: reversed or aliased spellings
+    // never create a second authorization for the same address.
+    let set = [
+        IpIdentifier::new("2001:db8:0:0:0:0:0:1").unwrap(),
+        IpIdentifier::new("2001:db8::1").unwrap(),
+    ];
+    assert_eq!(set[0], set[1]);
+    assert_eq!(
+        set.iter().collect::<std::collections::HashSet<_>>().len(),
+        1
+    );
+}
+
+#[test]
+fn reverse_names_follow_in_addr_and_ip6_arpa_nibble_order() {
+    assert_eq!(
+        IpIdentifier::new("192.0.2.1").unwrap().reverse_name(),
+        "1.2.0.192.in-addr.arpa"
+    );
+    assert_eq!(
+        IpIdentifier::new("127.0.0.1").unwrap().reverse_name(),
+        "1.0.0.127.in-addr.arpa"
+    );
+    // RFC 8738 section 6 worked example for 2001:db8::1.
+    assert_eq!(
+        IpIdentifier::new("2001:db8::1").unwrap().reverse_name(),
+        "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa"
+    );
+    assert_eq!(
+        IpIdentifier::new("::1").unwrap().reverse_name(),
+        format!("1{}.ip6.arpa", ".0".repeat(31))
+    );
+    // The all-zero address still expands to 32 nibbles.
+    let zero = IpIdentifier::new("::").unwrap().reverse_name();
+    assert_eq!(zero.len(), 32 * 2 - 1 + ".ip6.arpa".len());
+    assert!(zero.ends_with(".ip6.arpa"));
+    assert_eq!(zero.split('.').count(), 34);
+}
+
+#[test]
+fn parsed_identifiers_route_ip_literals_first_and_keep_dns_semantics() {
+    // Exact IP literals become IP identifiers.
+    for value in ["192.0.2.1", "::1", "2001:db8::1"] {
+        assert!(
+            matches!(Identifier::new(value), Ok(Identifier::Ip(_))),
+            "expected IP for {value}"
+        );
+    }
+    // Numeric-looking dotted quads that are not canonical IPv4 are rejected by
+    // both channels: DnsIdentifier treats WHATWG-parseable hosts as addresses,
+    // and the strict IP parser rejects the spelling. The CLI keeps the intent
+    // split (-d versus --ip) so neither channel silently reinterprets it.
+    assert!(Identifier::new("01.2.3.4").is_err());
+    assert!(DnsIdentifier::new("01.2.3.4").is_err());
+    // A five-label numeric name has no IPv4 form at all and stays a DNS name.
+    let five_labels = Identifier::new("1.2.3.4.5").unwrap();
+    assert!(matches!(five_labels, Identifier::Dns(_)));
+    // DNS round trips keep their kind: identifiers that came from a DNS
+    // identifier value never re-parse as IP.
+    let dns = DnsIdentifier::new("example.com").unwrap();
+    assert_eq!(
+        Identifier::try_from(Identifier::Dns(dns).value()).unwrap(),
+        Identifier::Dns(DnsIdentifier::new("example.com").unwrap())
+    );
+    // Values that are neither kind report the DNS error.
+    assert!(Identifier::new("not a name").is_err());
+    // Wire identifiers keep exact kind strings.
+    let wire = WireIdentifier::from(&Identifier::Ip(IpIdentifier::new("2001:db8::1").unwrap()));
+    assert_eq!(wire.kind, "ip");
+    assert_eq!(wire.value, "2001:db8::1");
+    let parsed = Identifier::try_from(wire).unwrap();
+    assert_eq!(parsed.value(), "2001:db8::1");
+    let wire = WireIdentifier::from(&Identifier::Dns(
+        DnsIdentifier::new("Example.COM.").unwrap(),
+    ));
+    assert_eq!(wire.kind, "dns");
+    assert_eq!(wire.value, "example.com");
+}
+
+#[test]
+fn ip_authorizations_reject_wildcard_flags_and_dns_keep_base_semantics() {
+    assert_eq!(
+        authorization_identifier(
+            WireIdentifier {
+                kind: "ip".into(),
+                value: "192.0.2.1".into(),
+                extensions: std::collections::BTreeMap::new(),
+            },
+            true,
+        ),
+        Err(IdentifierError::WildcardIpAuthorization)
+    );
+    assert_eq!(
+        authorization_identifier(
+            WireIdentifier {
+                kind: "ip".into(),
+                value: "2001:db8::1".into(),
+                extensions: std::collections::BTreeMap::new(),
+            },
+            false,
+        )
+        .unwrap()
+        .value(),
+        "2001:db8::1"
+    );
+    // Non-canonical wire values are accepted by parsed address, not text.
+    assert_eq!(
+        authorization_identifier(
+            WireIdentifier {
+                kind: "ip".into(),
+                value: "2001:0db8:0000::1".into(),
+                extensions: std::collections::BTreeMap::new(),
+            },
+            false,
+        )
+        .unwrap()
+        .value(),
+        "2001:db8::1"
+    );
+    // Zone IDs and ports never reach an authorization identifier.
+    for value in ["fe80::1%eth0", "192.0.2.1:80", "[2001:db8::1]"] {
+        assert!(
+            authorization_identifier(
+                WireIdentifier {
+                    kind: "ip".into(),
+                    value: value.into(),
+                    extensions: std::collections::BTreeMap::new(),
+                },
+                false,
+            )
+            .is_err(),
+            "accepted {value:?}"
+        );
     }
 }

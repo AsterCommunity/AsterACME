@@ -6,6 +6,8 @@
 
 ### 新增
 
+- **RFC 8738 IP 标识符证书** — 以 HTTP-01 和 TLS-ALPN-01 为 IPv4/IPv6 地址签发证书：类型化 `Identifier` 贯穿订单、授权、CSR（DNS/IP 混合 SAN）、返回证书校验、恢复、续期与吊销。`-d/--domain` 仅收 DNS 名，新增可重复的 `--ip ADDRESS` 收 IP 字面量（首个 `-d`，否则首个 `--ip` 为主标识符；交互提示同时接受两种）。DNS-01/DNS-PERSIST-01 在任何副作用之前拒绝 IP 标识符且零 ack。TLS-ALPN-01 按 RFC 8738 反向名 SNI 路由 iPAddress SAN 证书；HTTP-01 材料使用 IPv6 括号 Host 形式并跳过 DNS 解析；CAA 预检将 IP 标识符报告为不适用（RFC 8659 只覆盖 DNS 名）。IP 主标识符的默认证书名加 `ip-` 前缀（冒号替换为连字符，如 `ip-2001-db8--1`）。签发报告与 JSON 改用 "Identifiers"。真实 CA 的 IP 签发验收与 loopback 证据分开记录。
+
 - **华为云 DNS** — CLI 默认构建包含该后端，嵌入式宿主使用 `huawei_cloud` 显式启用。`project_id` 可省略并按所选 region 通过 IAM 自动发现；`region` 可省略，默认 `cn-north-4`。公网 zone 发现、HWS 签名和持久 RRset 恢复采用尽力所有权：读取与 PUT/DELETE 之间的外部并发修改可能被覆盖或误删，不保证原子隔离（#41）。
 
 - **阿里云云解析 DNS 与腾讯云 DNSPod** — CLI 默认包含这两个后端，精简构建可分别选择 `dns-aliyun` 和 `dns-tencent-cloud`。四家内置 provider 共用备注契约但允许 provider 覆盖格式；默认使用 `asteracme-<publication_id>`，阿里云因 50 字符上限使用 `acme-<publication_id>`。阿里云在创建成功后通过 `UpdateDomainRecordRemark` 写入，并在备注失败时只重试备注阶段，不重复创建 TXT。两者发现并保存最终发布目标的 zone，在回执中记录实际 TXT TTL，并在清理前核验记录。DNSPod 用发布备注对账丢失的创建响应。阿里云显式请求域名详细属性以发现最小 TTL，识别文档定义的记录状态，须保存创建响应中的 `RecordId`，并拒绝借用已有同值记录。（#40、#39）
