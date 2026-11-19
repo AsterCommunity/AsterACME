@@ -30,13 +30,13 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 账户列表复用本地元数据枚举，默认标记来自配置，列表不加载密钥、不发 HTTP。last_status 为最后权威 CA 响应而非离线当前状态。AccountRecord::is_usable 统一判断本地账户可用于切换的条件，停用/撤销/未知状态及待对账意图均不可用。
 
-停用依 RFC 8555 §7.3.6：CLI 先默认否确认不可逆操作，非交互要求 --yes，确认前不构造 HTTP 客户端。协议层取得账户 lease，写 pending 意图后向已有账户 URL 发送 kid 签名 status=deactivated；仅 HTTP 200 + deactivated 确认，保留密钥及账户文件。超时/取消/坏响应保留 pending，避免跨调用重放；明确 badNonce 按 transport 有界重签。已 confirmed 重复调用只回本地结果。停用后 CA 必须拒绝后续授权请求，401 无法确认最终状态；inspect 只按真实账户对象处理 pending。默认配置保持用户原选择，列表仍显示停用账户，switch 不允许将其设为可用默认。
+停用依 RFC 8555 §7.3.6：CLI 先默认否确认不可逆操作，非交互要求 --yes，确认前不构造 HTTP 客户端。协议层取得账户 lease，写 pending 意图后向已有账户 URL 发送 kid 签名 status=deactivated；仅 HTTP 200 + deactivated 确认，保留密钥及账户文件。超时/取消/坏响应保留 pending，避免跨调用重放；明确 badNonce 按 transport 有界重签。已 confirmed 重复调用只回本地结果。停用后 CA 必须拒绝后续授权请求，401 无法确认最终状态；inspect 只按真实账户对象处理 pending。默认配置保持用户原选择，列表仍显示停用账户，default 不允许将其设为可用默认。
 
 线上模型已独立为 aster_acme_protocol，其依赖 core 状态枚举，core 不反向依赖协议。客户端和存储/CLI 直接导入 protocol::{url,directory,account,jws,problem}，移除旧 transport/crypto 类型入口，不增加 re-export。账户查找和创建为不同请求结构，创建可选字段按规范省略；JWS 身份是 untagged 枚举保证 jwk/kid 互斥，EAB 使用不包含 nonce 的 header 类型。AccountObject 类型化比较 EAB 响应。所有产品请求与 CLI JSON 输出使用具名结构序列化，CLI 输出模型独立属于呈现层。mock 测试的固定 URL 是服务端 fixture，新增自定义路径/query 的端到端签名检查证明生产不依赖 /account 等惯例。
 
-公开提供商入口迁至 protocol::directory::Provider（letsencrypt/zerossl/google），CLI 通过 TypedValueParser 显示可选值并映射同一 Provider，配置也直接反序列化该类型；没有重复提供商枚举、URL 表或 protocol 对 Clap 的依赖。端点路径仍完全由 CA 响应决定。账户子命令按声明顺序 list/show/switch/register/recover/deactivate。
+公开提供商入口迁至 protocol::directory::Provider（letsencrypt/zerossl/google），CLI 通过 TypedValueParser 显示可选值并映射同一 Provider，配置也直接反序列化该类型；没有重复提供商枚举、URL 表或 protocol 对 Clap 的依赖。端点路径仍完全由 CA 响应决定。账户子命令按声明顺序 list/show/default/register/recover/update/rotate-key/remove。
 
-CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），register/recover/show/switch/deactivate/remove 同一套解析和校验，脚本无终端/JSON不交互。list --verify 独立显式启用账户逐项核验，保留每项失败、继续其他账户，报告输出后部分失败退出非零；离线列表保留默认语义和按可见宽度对齐/高亮。修改类成功文本为摘要，show/JSON提供完整结果。
+CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），register/recover/show/default/remove 同一套解析和校验，脚本无终端/JSON不交互。list --verify 独立显式启用账户逐项核验，保留每项失败、继续其他账户，报告输出后部分失败退出非零；离线列表保留默认语义和按可见宽度对齐/高亮。修改类成功文本为摘要，show/JSON提供完整结果。
 
 本地 remove 不属于 ACME 协议，不向 CA 请求。CLI确认后调用文件适配器删除（账户锁→验证文件→原子隔离目录→清理→sync），之后条件清除仍指向该名称的默认配置。文件删除和配置更新不是跨文件事务：若默认清理失败，明确报“本地已删除、配置清理失败”，不伪造完全成功；不会更改另一个并发选择。
 
@@ -48,7 +48,7 @@ CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），regis
 
 ## 账户联系人与密钥轮换
 
-RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `update-contact` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
+RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `account update` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；同命令亦可设置/清除默认证书 profile（`--profile`/`--clear-profile`，draft-ietf-acme-profiles）；脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
 
 RFC 8555 §7.3.5 的端点从 directory.keyChange 发现。`KeyChangePayload` 绑定原 Location 的精确账户 URL 和旧 JWK。内层由新钥签名，header 含 jwk、与外层一致的 url，省略 nonce/kid；外层由旧钥签名，使用原账户 kid 和新 nonce。成功 HTTP 200 可以没有 JSON body；不更改 account_id、account_url、contacts、订单或授权。只有 last_used_at 因成功轮换推进；没有账户对象不能伪造新的状态观察时间。
 

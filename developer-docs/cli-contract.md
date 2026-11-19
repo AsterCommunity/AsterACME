@@ -21,9 +21,9 @@
 | 命令 | --yes 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已经存在的本地身份；不代替 --accept-terms |
-| `account update-contact` | 替换或显式清空已有账户联系人 |
+| `account update` | 替换/清空联系人，和/或设置/清除默认证书 profile |
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
-| `account deactivate` | 不可逆地停用 CA 账户 |
+| `account remove --deactivate` | 删除本地账户并不可逆停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
 | `cert remove` | 确认所选申请或显式 --history/--revoked/--failed/--all 的本地清理范围；不会吊销 CA 证书 |
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
@@ -56,7 +56,7 @@
 | `--profile` |  | cert issue 显式证书 profile（draft-ietf-acme-profiles）；优先级高于账户默认，CA directory 未广告时在 newOrder 前拒绝 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
-| `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
+| `-m` | `--contact` | account register/update 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
 
 其他参数保留明确长名称，不为每个选项硬配短字母。删除的 order、--solver、-c dns-01、--config 不保留兼容别名。
@@ -69,12 +69,12 @@
 | --- | --- |
 | account list | --verify；--user-agent / --request-timeout 仅在 verify 时可用 |
 | account show | [NAME] / -n；--verify；已有账户 CA 选择；HTTP 参数要求 verify |
-| account switch | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
+| account default | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
 | account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、--auto-accept-new-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
-| account update-contact | [NAME] / -n、-m 或 --clear-contacts、已有账户 CA 选择、HTTP、-y |
+| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、已有账户 CA 选择、HTTP、-y |
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
-| account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
+| account remove --deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y；纯本地删除时无 CA/HTTP |
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
@@ -254,7 +254,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | --- | --- | --- |
 | account register | 新建/继续、账户名、CA、联系人、条款、未来条款更新授权和复用确认 | EAB、密钥算法等高级选项 |
 | account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
-| account update-contact/rotate-key/deactivate/remove | 账户选择、联系人输入或操作确认 | key-type 等可选参数使用默认/显式值 |
+| account update/rotate-key/remove --deactivate | 账户选择、联系人/profile 输入或操作确认 | key-type 等可选参数使用默认/显式值 |
 | cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
 | cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
 | cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |

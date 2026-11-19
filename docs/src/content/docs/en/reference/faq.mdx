@@ -53,7 +53,7 @@ They will not double-issue. Certificate-level file locks ensure only the lock ho
 
 ### How do I revoke on a machine whose account is gone?
 
-Use `cert revoke --sign-with certificate-key`: it uses the certificate private key stored on this machine and needs no ACME account. If the account itself is suspected compromised, `account rotate-key` / `account deactivate` from a machine that can still reach it; the two paths are independent.
+Use `cert revoke --sign-with certificate-key`: it uses the certificate private key stored on this machine and needs no ACME account. If the account itself is suspected compromised, `account rotate-key` / `account remove --deactivate` from a machine that can still reach it; the two paths are independent.
 
 ### Is a staging environment supported?
 

@@ -18,11 +18,10 @@ use std::sync::Arc;
 
 enum Operation {
     Register,
-    Deactivate,
     Recover,
-    Show { verify: bool },
-    Switch,
-    Remove,
+    Show { verify: bool, profiles: bool },
+    Default,
+    Remove { deactivate: bool },
 }
 
 impl Operation {
@@ -32,7 +31,7 @@ impl Operation {
     ) -> aster_acme::storage::account::KeyAccess {
         match self {
             Self::Register => aster_acme::storage::account::KeyAccess::Create(algorithm),
-            Self::Recover | Self::Deactivate | Self::Show { .. } | Self::Switch | Self::Remove => {
+            Self::Recover | Self::Show { .. } | Self::Default | Self::Remove { .. } => {
                 aster_acme::storage::account::KeyAccess::Existing
             }
         }
@@ -48,43 +47,41 @@ pub(crate) async fn execute(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let (mut options, operation) = match command {
-        AccountCommand::UpdateContact(args) => {
-            return crate::commands::account::mutation::update_contacts(args, cli).await;
-        }
-        AccountCommand::Profiles(args) => {
-            return crate::commands::account::mutation::profiles(args, cli).await;
-        }
-        AccountCommand::SetProfile(args) => {
-            return crate::commands::account::mutation::set_profile(args, cli).await;
+        AccountCommand::Update(args) => {
+            return crate::commands::account::mutation::update(args, cli).await;
         }
         AccountCommand::RotateKey(args) => {
             return crate::commands::account::mutation::rotate_key(args, cli).await;
         }
         AccountCommand::List(args) => return list(args, cli).await,
-        AccountCommand::Remove(options) => (AccountArgs::from(options), Operation::Remove),
-        AccountCommand::Deactivate(options) => (AccountArgs::from(options), Operation::Deactivate),
+        AccountCommand::Remove(args) => {
+            let deactivate = args.deactivate;
+            (AccountArgs::from(args), Operation::Remove { deactivate })
+        }
         AccountCommand::Register(options) => (AccountArgs::from(options), Operation::Register),
         AccountCommand::Recover(options) => (AccountArgs::from(options), Operation::Recover),
-        AccountCommand::Show { options, verify } => {
-            (AccountArgs::from(options), Operation::Show { verify })
-        }
-        AccountCommand::Switch(options) => (AccountArgs::from(options), Operation::Switch),
+        AccountCommand::Show {
+            options,
+            verify,
+            profiles,
+        } => (
+            AccountArgs::from(options),
+            Operation::Show { verify, profiles },
+        ),
+        AccountCommand::Default(options) => (AccountArgs::from(options), Operation::Default),
     };
     let settings = CliSettings::load(&options).await?;
     let mode = match operation {
         Operation::Register => crate::commands::account::selection::Mode::Register,
-        Operation::Recover | Operation::Remove | Operation::Show { .. } => {
+        Operation::Recover | Operation::Show { .. } | Operation::Remove { .. } => {
             crate::commands::account::selection::Mode::Existing
         }
-        Operation::Deactivate => crate::commands::account::selection::Mode::Operation(
-            aster_acme_core::account::AccountOperation::Deactivate,
-        ),
-        Operation::Switch => crate::commands::account::selection::Mode::Registered,
+        Operation::Default => crate::commands::account::selection::Mode::Registered,
     };
     crate::commands::account::selection::complete(&mut options, &settings, mode, cli).await?;
-    if matches!(operation, Operation::Switch) && options.name.is_none() {
+    if matches!(operation, Operation::Default) && options.name.is_none() {
         return Err(
-            "Specify account switch <NAME> or --name <NAME>, or use an interactive terminal to select an account."
+            "Specify account default <NAME> or --name <NAME>, or use an interactive terminal to select an account."
                 .into(),
         );
     }
@@ -92,14 +89,13 @@ pub(crate) async fn execute(
     match operation {
         Operation::Register => {}
         Operation::Recover
-        | Operation::Remove
         | Operation::Show { .. }
-        | Operation::Deactivate
-        | Operation::Switch => {
+        | Operation::Default
+        | Operation::Remove { .. } => {
             context.require_account().await?;
         }
     }
-    if matches!(operation, Operation::Remove) {
+    if matches!(operation, Operation::Remove { deactivate: false }) {
         return remove(context, &options, cli).await;
     }
     // Check before loading/creating keys, changing contacts, or constructing HTTP.
@@ -117,10 +113,14 @@ pub(crate) async fn execute(
             &cli.output,
         )?;
     }
-    if let Operation::Switch = operation {
+    if let Operation::Default = operation {
         return switch(context).await;
     }
-    if matches!(operation, Operation::Show { verify: false }) {
+    if let Operation::Show {
+        verify: false,
+        profiles: false,
+    } = operation
+    {
         return offline(&context).await;
     }
     let name = context.name.clone();
@@ -132,23 +132,33 @@ pub(crate) async fn execute(
             operation.key_access(options.key_algorithm),
         )
         .await?;
-    if matches!(operation, Operation::Deactivate) {
-        return deactivate(context, signer, options, cli).await;
+    if let Operation::Remove { deactivate: true } = operation {
+        // Deactivate first (irreversible CA state), then local removal; the
+        // deactivation report is the outcome — removal failure still errors.
+        let report = deactivate(&context, signer, &options, cli).await?;
+        remove(context, &options, cli).await?;
+        return Ok(report);
     }
     match operation {
-        Operation::Show { verify } => {
+        Operation::Show { verify, profiles } => {
+            let client = Arc::new(
+                cli.http
+                    .discover(
+                        context.directory.clone(),
+                        context.transport_options(&options)?,
+                    )
+                    .await?,
+            );
             if verify {
-                let client = Arc::new(
-                    cli.http
-                        .discover(
-                            context.directory.clone(),
-                            context.transport_options(&options)?,
-                        )
-                        .await?,
-                );
-                AccountService::new(client, context.store.clone())
+                AccountService::new(client.clone(), context.store.clone())
                     .inspect(signer.as_ref())
                     .await?;
+            }
+            if profiles {
+                return Ok(AccountReport::Profiles {
+                    directory: context.directory,
+                    profiles: client.directory().meta.profiles.clone(),
+                });
             }
             local(&context, signer.as_ref(), name, verify).await
         }
@@ -283,9 +293,9 @@ async fn remove(
 /// Confirm from local metadata before discovery, then let the protocol service persist
 /// its intent under the operation lock. No unknown account URL is recovered implicitly.
 async fn deactivate(
-    context: CliContext,
+    context: &CliContext,
     signer: Arc<dyn JwsSigner>,
-    options: AccountArgs,
+    options: &AccountArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let thumbprint = signer.jwk()?.thumbprint()?;
@@ -304,13 +314,13 @@ async fn deactivate(
     {
         aster_acme_core::account::AccountAction::AlreadyDeactivated => {
             return Ok(AccountReport::Deactivated {
-                name: context.name,
+                name: context.name.clone(),
                 verified: false,
                 account: aster_acme::account::AcmeAccount {
                     key_algorithm: record.key_algorithm,
                     times: record.times,
                     account_id: record.account_id,
-                    directory_url: context.directory,
+                    directory_url: context.directory.clone(),
                     account_url,
                     status: aster_acme_core::protocol::AccountStatus::Deactivated,
                     contacts: record.server_contacts.unwrap_or_default(),
@@ -340,13 +350,17 @@ async fn deactivate(
         options.yes,
         &cli.output,
     )?;
-    let transport = context.transport_options(&options)?;
-    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
-    let account = AccountService::new(client, context.store)
+    let transport = context.transport_options(options)?;
+    let client = Arc::new(
+        cli.http
+            .discover(context.directory.clone(), transport)
+            .await?,
+    );
+    let account = AccountService::new(client, context.store.clone())
         .deactivate(signer.as_ref())
         .await?;
     Ok(AccountReport::Deactivated {
-        name: context.name,
+        name: context.name.clone(),
         account,
         verified: true,
     })
@@ -463,10 +477,9 @@ async fn remote(
             context.config.contact.clone(),
         )?),
         Operation::Recover
-        | Operation::Deactivate
         | Operation::Show { .. }
-        | Operation::Switch
-        | Operation::Remove => None,
+        | Operation::Default
+        | Operation::Remove { .. } => None,
     };
     if let Some(registration) = &mut registration {
         // Existing local input is preferable to asking again when no global default exists.
@@ -585,7 +598,7 @@ async fn remote(
                 .await?
         }
         Operation::Recover => service.recover(signer.as_ref()).await?,
-        Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
+        Operation::Show { .. } | Operation::Default | Operation::Remove { .. } => {
             return Err("Local command was dispatched to the network executor.".into());
         }
     };
@@ -599,7 +612,7 @@ async fn remote(
             crate::commands::account::report::RemoteAction::Register
         }
         Operation::Recover => crate::commands::account::report::RemoteAction::Recover,
-        Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
+        Operation::Show { .. } | Operation::Default | Operation::Remove { .. } => {
             return Err("Unexpected remote action.".into());
         }
     };

@@ -168,13 +168,10 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
             AccountCommand::Show { options, .. } | AccountCommand::Recover(options) => {
                 &options.local.data_dir
             }
-            AccountCommand::Switch(args) => &args.local.data_dir,
-            AccountCommand::Profiles(args) => &args.local.data_dir,
-            AccountCommand::SetProfile(args) => &args.network.local.data_dir,
+            AccountCommand::Default(args) => &args.local.data_dir,
             AccountCommand::Register(args) => &args.local.data_dir,
-            AccountCommand::UpdateContact(args) => &args.network.local.data_dir,
+            AccountCommand::Update(args) => &args.network.local.data_dir,
             AccountCommand::RotateKey(args) => &args.network.local.data_dir,
-            AccountCommand::Deactivate(args) => &args.network.local.data_dir,
             AccountCommand::Remove(args) => &args.target.local.data_dir,
         },
         Command::Cert { command } => match command {
