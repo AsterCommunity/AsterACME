@@ -34,12 +34,33 @@ async fn context(
 /// Update account preferences: CA contacts and/or the default certificate
 /// profile. Contact changes mutate the CA account; profile preferences are
 /// local metadata validated against the advertised list when reachable.
+/// Draft-ietf-acme-profiles
+/// (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>):
+/// interactive updates pick their scope from a menu, mirroring the provider
+/// editor. `None` means cancel; scripts never reach this path.
+fn interactive_update_scope(cli: &crate::common::context::CommandContext) -> Option<(bool, bool)> {
+    let choices = ["Contact addresses", "Default certificate profile", "Cancel"].map(str::to_owned);
+    let selection = terminal::select_index_or_back(
+        "Update which account preference?",
+        &choices,
+        0,
+        &cli.output,
+    )
+    .ok()?;
+    match selection {
+        Some(0) => Some((true, false)),
+        Some(1) => Some((false, true)),
+        _ => None,
+    }
+}
+
 pub(super) async fn update(
     args: crate::commands::account::args::UpdateArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let wants_contacts = args.contact_set() || args.clear_contacts;
     let wants_profile = args.profile_set() || args.clear_profile;
+    let explicit_profile_set = args.profile.is_some();
     let profile_target = if args.clear_profile {
         None
     } else {
@@ -52,10 +73,21 @@ pub(super) async fn update(
         cli,
     )
     .await?;
+    let interactive = terminal::interactive(options.json);
+    let mut wants_contacts = wants_contacts;
+    let mut wants_profile = wants_profile;
+    let mut profile_target = profile_target;
     if !wants_contacts && !wants_profile {
-        return Err(
-            "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or both.".into(),
-        );
+        if !interactive {
+            return Err(
+                "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or both.".into(),
+            );
+        }
+        let Some((scope_contacts, scope_profile)) = interactive_update_scope(cli) else {
+            return Err(crate::common::terminal::Canceled.into());
+        };
+        wants_contacts = scope_contacts;
+        wants_profile = scope_profile;
     }
     let signer = context
         .store
@@ -102,6 +134,10 @@ pub(super) async fn update(
         }
     }
     if wants_profile {
+        // Interactive path: pick from the advertised list, or clear explicitly.
+        if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
+            profile_target = interactive_profile_selection(&context, &options, cli).await?;
+        }
         let previous = record.preferred_profile.clone();
         let target = profile_target;
         save_profile_preference(&context, &record, target.clone(), &options, cli).await?;
@@ -115,6 +151,39 @@ pub(super) async fn update(
     Err(
         "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or both.".into(),
     )
+}
+
+/// Draft-ietf-acme-profiles interactive default-profile selection: the
+/// advertised names plus an explicit clear, or cancellation without a change.
+async fn interactive_profile_selection(
+    context: &crate::common::context::CliContext,
+    options: &AccountArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<Option<String>> {
+    let transport = context.transport_options(options)?;
+    let advertised = cli
+        .http
+        .discover(context.directory.clone(), transport)
+        .await?
+        .directory()
+        .meta
+        .profiles
+        .clone();
+    let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
+        return Err(
+            "CA directory does not advertise certificate profiles; nothing to select. Remove the profile preference with --clear-profile.".into(),
+        );
+    };
+    let mut choices = advertised.keys().cloned().collect::<Vec<_>>();
+    choices.push("(no default; the CA default applies)".to_owned());
+    let selection =
+        terminal::select_index_or_back("Default certificate profile:", &choices, 0, &cli.output)?
+            .ok_or(crate::common::terminal::Canceled)?;
+    Ok(if selection < advertised.len() {
+        Some(choices[selection].clone())
+    } else {
+        None
+    })
 }
 
 /// Validate and persist a profile preference; an unreachable directory never
