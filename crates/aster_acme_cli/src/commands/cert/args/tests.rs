@@ -3,6 +3,53 @@ use crate::commands::cert::args::*;
 use clap::Parser;
 
 #[test]
+fn operation_ids_with_leading_hyphens_parse_as_values_and_keep_validation() {
+    for command in [
+        vec!["issue", "--resume", "web"],
+        vec!["show", "web"],
+        vec!["remove", "web"],
+        vec!["revoke", "web"],
+    ] {
+        for prefix in ["A", "-N", "--"] {
+            let id = format!("{prefix}{}", "a".repeat(43 - prefix.len()));
+            let parsed = Args::try_parse_from(
+                ["aster-acme", "cert"]
+                    .into_iter()
+                    .chain(command.iter().copied())
+                    .chain(["--operation", id.as_str(), "--json"]),
+            )
+            .unwrap();
+            assert!(parsed.json());
+            let Command::Cert { command } = parsed.command else {
+                panic!("cert expected");
+            };
+            let operation = match command {
+                CertCommand::Issue(args) => args.operation,
+                CertCommand::Show { target, .. } | CertCommand::Remove { target, .. } => {
+                    target.operation
+                }
+                CertCommand::Revoke(args) => args.target.operation,
+                CertCommand::Renew(_) | CertCommand::Deploy(_) | CertCommand::List { .. } => {
+                    panic!("unexpected command");
+                }
+            };
+            assert_eq!(operation.as_deref(), Some(id.as_str()));
+        }
+        for invalid in ["-", "--json", &"a".repeat(44)] {
+            assert!(
+                Args::try_parse_from(
+                    ["aster-acme", "cert"]
+                        .into_iter()
+                        .chain(command.iter().copied())
+                        .chain(["--operation", invalid]),
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn failed_cleanup_is_explicit_and_conflicts_with_other_scopes_and_operations() {
     let parsed = crate::app::Args::try_parse_from([
         "aster-acme",

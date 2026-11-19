@@ -16,7 +16,7 @@
 
 ### 变更
 
-- **ACME wire 与检查契约** — 账户、标识符、订单、授权、directory metadata 和 ARI 资源保留未知扩展成员，同时保留 `keyChange`、`newOrder`、`revokeCert` 等 directory 能力 URL 的可选语义。`IssueService::inspect` 改为接收调用方的取消/截止时间上下文，签发结果区分调用方取消与操作预算耗尽。
+- **ACME wire 与检查契约** — 账户、标识符、订单、授权、directory metadata 和 ARI 资源保留未知扩展成员，同时保留 `keyChange`、`newOrder`、`revokeCert` 等 directory 能力 URL 的可选语义。日志使用 JSON 快照保留订单与授权扩展中的 null 值。`IssueService::inspect` 改为接收调用方的取消/截止时间上下文，签发结果区分调用方取消与操作预算耗尽，包括 provider 超时。
 
 - **DNS Provider 错误诊断** — 内置后端失败时尽可能显示 API action、HTTP 状态、通过校验的厂商错误码及安全 request ID；原始响应正文和厂商 message 仍不输出，外部后端的安全 provider code 也由同一 CLI 路径展示。
 
@@ -31,6 +31,7 @@
 
 ### 修复
 
+- **已保存请求选择** — issue 恢复、show、remove 和 revoke 接受以 `-` 开头的合法 operation ID，不再误作命令行选项。
 - **ACME mutation 恢复** — 408/429 保留吊销 Pending、challenge/finalize Submitted 证据，不作为明确拒绝；保留 ack/finalize 等待下限、已有不确定吊销状态和显式重试边界。
 - **维护诊断** — 单证书 refresh 失败后持久状态读回也失败时，同时保留两个错误，将最新调度时间标为不可用，并继续处理其余证书。
 

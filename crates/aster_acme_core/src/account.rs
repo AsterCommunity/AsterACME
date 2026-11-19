@@ -40,6 +40,8 @@ pub enum KeyRotationPhase {
     /// Staged locally; transport preparation has not reached the request boundary.
     Prepared,
     /// The keyChange request was dispatched; whether the CA accepted it is unknown.
+    /// Reconcile the original account URL with the saved new key; never resubmit
+    /// `keyChange`, including when reconciliation fails.
     Pending,
     /// A CA response explicitly confirmed the new key is authoritative.
     Confirmed,
@@ -79,7 +81,8 @@ pub enum AccountAction {
     Update,
     /// The new key is staged; send the `keyChange` request.
     SendKeyChange,
-    /// The `keyChange` outcome is unknown; re-send to reconcile the server state.
+    /// The `keyChange` outcome is unknown; query the original account URL with the saved new key.
+    /// A failed query does not authorize another `keyChange` request.
     ReconcileKeyChange,
     /// The CA confirmed the new key; finish the interrupted local key swap.
     FinalizeKeyChange,

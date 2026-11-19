@@ -114,7 +114,7 @@ async fn fixture() -> Fixture {
 }
 
 #[tokio::test]
-async fn order_extension_nulls_roundtrip_through_toml_journal() {
+async fn order_and_authorization_extension_nulls_roundtrip_through_journal() {
     let fixture = fixture().await;
     let session = fixture
         .store
@@ -132,6 +132,27 @@ async fn order_extension_nulls_roundtrip_through_toml_journal() {
         }))
         .unwrap(),
     );
+    record.authorizations = vec![
+        serde_json::from_value(serde_json::json!({
+            "url":"https://ca.example/auth/1",
+            "resource":{
+                "identifier":{"type":"dns","value":"example.com"},
+                "status":"pending",
+                "wildcard":false,
+                "challenges":[{
+                    "type":"dns-01",
+                    "url":"https://ca.example/challenge/1",
+                    "status":"pending",
+                    "token":"saved-token",
+                    "x-ca-challenge":[null]
+                }],
+                "x-ca-evidence":[null]
+            },
+            "cleanup_pending":false,
+            "acknowledgement":"not_submitted"
+        }))
+        .unwrap(),
+    ];
     session.save(&record).await.unwrap();
     drop(session);
 
@@ -144,12 +165,57 @@ async fn order_extension_nulls_roundtrip_through_toml_journal() {
         .await
         .unwrap();
     assert_eq!(
-        restored.order.unwrap().extensions["futureExtension"],
-        serde_json::json!({
-            "nullable":null,
-            "values":[null,true,{"nested":null}]
-        })
+        serde_json::to_value(&restored.order).unwrap(),
+        serde_json::to_value(&record.order).unwrap(),
     );
+    assert_eq!(
+        serde_json::to_value(&restored.authorizations).unwrap(),
+        serde_json::to_value(&record.authorizations).unwrap(),
+    );
+
+    // Version-one journals written before JSON snapshots stored authorization
+    // objects inline. Keep reading that layout when the snapshot is absent.
+    let mut legacy = restored;
+    legacy.order = None;
+    legacy.authorizations[0].resource.challenges.clear();
+    legacy.authorizations[0]
+        .resource
+        .extensions
+        .insert("x-ca-evidence".into(), serde_json::json!(["legacy"]));
+    let legacy_text = toml::to_string_pretty(&Journal {
+        version: JOURNAL_VERSION,
+        operation: &legacy,
+        order_json: None,
+        authorizations_json: None,
+    })
+    .unwrap();
+    let legacy_path = fixture
+        .temp
+        .path()
+        .join("certs/example.com")
+        .join(legacy.generation_name())
+        .join("operation.toml");
+    std::fs::write(&legacy_path, legacy_text).unwrap();
+    assert_eq!(
+        read_journal(&legacy_path).unwrap().authorizations[0]
+            .resource
+            .extensions["x-ca-evidence"],
+        serde_json::json!(["legacy"])
+    );
+
+    let too_many = serde_json::to_string(&vec![legacy.authorizations[0].clone(); 101]).unwrap();
+    for encoded in ["invalid JSON".to_owned(), "{}".to_owned(), too_many] {
+        let text = toml::to_string_pretty(&Journal {
+            version: JOURNAL_VERSION,
+            operation: &legacy,
+            order_json: None,
+            authorizations_json: Some(encoded),
+        })
+        .unwrap();
+        std::fs::write(&legacy_path, &text).unwrap();
+        assert!(read_journal(&legacy_path).is_err());
+        assert_eq!(std::fs::read_to_string(&legacy_path).unwrap(), text);
+    }
 }
 
 fn request() -> IssueRequest {

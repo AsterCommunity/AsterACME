@@ -340,14 +340,25 @@ async fn finalize_download_and_complete_follow_the_real_http_transport() {
     let solver = Solver(AtomicUsize::new(0), true);
     let workflow = f.workflow();
     let identity = f.identity();
-    let context = execution();
+    let mut context = execution();
+    context.context.deadline = Instant::now() + Duration::from_secs(30);
     let cancellation = context.context.cancellation.clone();
     let server = &f.server;
     let session = &mut f.session;
-    let (result, ()) = tokio::join!(
-        workflow.run(identity, session, &solver, &context),
-        cancel_when_ari_is_requested(server, cancellation)
-    );
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let task = workflow.run(identity, session, &solver, &context);
+        tokio::pin!(task);
+        tokio::select! {
+            result = &mut task => panic!("workflow returned before ARI cancellation: {:?}", result.err()),
+            () = cancel_when_ari_is_requested(server, cancellation) => {
+                tokio::time::timeout(Duration::from_secs(1), task)
+                    .await
+                    .expect("workflow must stop promptly after cancellation")
+            }
+        }
+    })
+    .await
+    .expect("test must finish before the operation deadline");
     assert!(
         result.is_ok(),
         "{:?}; requests: {:?}",
@@ -360,7 +371,9 @@ async fn finalize_download_and_complete_follow_the_real_http_transport() {
             .map(|request| (request.method.clone(), request.url.path().to_owned()))
             .collect::<Vec<_>>()
     );
-    assert!(matches!(result.unwrap(), IssueOutcome::Completed { .. }));
+    let IssueOutcome::Completed { record, .. } = result.unwrap() else {
+        panic!("workflow did not complete after recording the advisory cancellation");
+    };
     assert_eq!(
         f.session.1.lock().unwrap().as_deref(),
         Some(b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n".as_slice())
@@ -368,16 +381,11 @@ async fn finalize_download_and_complete_follow_the_real_http_transport() {
     assert_eq!(f.count("/finalize").await, 1);
     assert_eq!(f.count("/certificate").await, 1);
     assert_eq!(f.count("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE").await, 1);
-    assert!(
-        f.session
-            .record()
-            .await
-            .unwrap()
-            .renewal
-            .unwrap()
-            .next_check_at
-            .is_some()
-    );
+    let persisted = f.session.record().await.unwrap();
+    let returned_next_check_at = record.renewal.as_ref().unwrap().next_check_at;
+    let persisted_next_check_at = persisted.renewal.as_ref().unwrap().next_check_at;
+    assert!(persisted_next_check_at.is_some());
+    assert_eq!(returned_next_check_at, persisted_next_check_at);
     assert_eq!(solver.0.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]

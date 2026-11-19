@@ -42,6 +42,10 @@ struct Dns {
     cancel_after_present: AtomicBool,
     preexisting: AtomicBool,
     hide_txt: AtomicBool,
+    timeout_present: AtomicBool,
+    cancel_during_present_timeout: AtomicBool,
+    timeout_cleanup: AtomicBool,
+    per_record_timeout: AtomicBool,
 }
 #[async_trait]
 impl DnsLookup for Dns {
@@ -71,6 +75,19 @@ impl DnsProvider for Dns {
         execution: &ProviderExecution,
     ) -> Result<Vec<PresentResult>, ProviderFailure> {
         self.present_calls.fetch_add(1, Ordering::SeqCst);
+        let timed_out = self.timeout_present.swap(false, Ordering::SeqCst);
+        if timed_out {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(execution.deadline)).await;
+            if self
+                .cancel_during_present_timeout
+                .swap(false, Ordering::SeqCst)
+            {
+                execution.cancellation.cancel();
+            }
+            if !self.per_record_timeout.load(Ordering::SeqCst) {
+                return Err(timeout_error().into());
+            }
+        }
         if self.rate_limited.load(Ordering::SeqCst) {
             return Err(ProviderError {
                 code: ProviderErrorCode::RateLimited,
@@ -83,7 +100,14 @@ impl DnsProvider for Dns {
         }
         let mut remote = self.records.lock().unwrap();
         let mut output = Vec::new();
-        for record in records {
+        for (index, record) in records.iter().enumerate() {
+            if timed_out && index == records.len() - 1 {
+                output.push(PresentResult {
+                    publication_id: record.publication_id.clone(),
+                    result: Err(timeout_error()),
+                });
+                continue;
+            }
             let (_, receipt) = remote
                 .entry(record.publication_id.clone())
                 .or_insert_with(|| {
@@ -123,13 +147,27 @@ impl DnsProvider for Dns {
         &self,
         _: &ProviderContext,
         records: &[CleanupRequest],
-        _: &ProviderExecution,
+        execution: &ProviderExecution,
     ) -> Result<Vec<CleanupResult>, ProviderFailure> {
+        let timed_out = self.timeout_cleanup.swap(false, Ordering::SeqCst);
+        if timed_out {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(execution.deadline)).await;
+            if !self.per_record_timeout.load(Ordering::SeqCst) {
+                return Err(timeout_error().into());
+            }
+        }
         self.cleanups.fetch_add(1, Ordering::SeqCst);
         let mut remote = self.records.lock().unwrap();
         Ok(records
             .iter()
-            .map(|record| {
+            .enumerate()
+            .map(|(index, record)| {
+                if timed_out && index == records.len() - 1 {
+                    return CleanupResult {
+                        publication_id: record.publication_id.clone(),
+                        result: Err(timeout_error()),
+                    };
+                }
                 if self.fail_cleanup.load(Ordering::SeqCst) {
                     return CleanupResult {
                         publication_id: record.publication_id.clone(),
@@ -160,6 +198,17 @@ impl DnsProvider for Dns {
             .collect())
     }
 }
+
+fn timeout_error() -> ProviderError {
+    ProviderError {
+        code: ProviderErrorCode::ProviderTimeout,
+        message: "provider operation timed out".into(),
+        side_effect: SideEffect::Unknown,
+        retry_after_seconds: None,
+        provider_code: None,
+    }
+}
+
 fn solver(dns: Arc<Dns>) -> ProviderDns {
     ProviderDns {
         ttl_seconds: 120,
@@ -260,6 +309,136 @@ async fn cancellation_after_provider_success_persists_receipt_before_waiting() {
     ));
     assert_eq!(dns.writes.load(Ordering::SeqCst), 1);
 }
+
+fn timed_publication(id: &str, ownership: RecordOwnership) -> ChallengePublication {
+    let plan = DnsRecord {
+        publication_id: id.into(),
+        challenge_name: "_acme-challenge.example.com.".into(),
+        cname_chain: vec![
+            "_acme-challenge.example.com.".into(),
+            "delegated.validation.net.".into(),
+        ],
+        name: "delegated.validation.net.".into(),
+        value: "expected".into(),
+        ttl_seconds: Some(120),
+    };
+    let receipt = PublicationReceipt {
+        effective_ttl_seconds: Some(120),
+        record_id: format!("record-{id}"),
+        ownership,
+        record_name: plan.name.clone(),
+        cname_chain: plan.cname_chain.clone(),
+    };
+    ChallengePublication {
+        identifier: aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
+        publication_id: id.into(),
+        requirement: ValidationRequirement::Dns01 {
+            name: "_acme-challenge.example.com".into(),
+            value: "expected".into(),
+        },
+        receipt: Some(receipt),
+        plan: Some(plan),
+    }
+}
+
+fn short_execution(deadline: Duration) -> aster_acme::solver::ExecutionContext {
+    aster_acme::solver::ExecutionContext {
+        cancellation: tokio_util::sync::CancellationToken::new(),
+        deadline: std::time::Instant::now() + deadline,
+    }
+}
+
+#[tokio::test]
+async fn provider_timeouts_respect_the_execution_deadline_and_cancellation() {
+    let dns = Arc::new(Dns::default());
+    let provider = solver(dns.clone());
+    let mut unpublished = timed_publication("present-timeout", RecordOwnership::Created);
+    unpublished.receipt = None;
+    dns.timeout_present.store(true, Ordering::SeqCst);
+    let present = provider
+        .ready(
+            &[unpublished.clone()],
+            &short_execution(Duration::from_millis(100)),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(present.failure, Some(IssueError::TimedOut)),
+        "{:?}",
+        present.failure
+    );
+    assert_eq!(
+        present.receipts,
+        [] as [aster_acme::solver::PublicationReceiptUpdate; 0]
+    );
+    assert_eq!(dns.writes.load(Ordering::SeqCst), 0);
+
+    dns.timeout_present.store(true, Ordering::SeqCst);
+    dns.cancel_during_present_timeout
+        .store(true, Ordering::SeqCst);
+    let present = provider
+        .ready(&[unpublished], &short_execution(Duration::from_millis(100)))
+        .await
+        .unwrap();
+    assert!(matches!(present.failure, Some(IssueError::Cancelled)));
+
+    dns.timeout_cleanup.store(true, Ordering::SeqCst);
+    let cleanup = provider
+        .cleanup(
+            &[
+                timed_publication("preexisting", RecordOwnership::Preexisting),
+                timed_publication("cleanup-timeout", RecordOwnership::Created),
+            ],
+            &short_execution(Duration::from_millis(100)),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(cleanup.failure, Some(IssueError::TimedOut)));
+    assert_eq!(cleanup.completed, ["preexisting"]);
+    assert_eq!(dns.cleanups.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn per_record_timeouts_preserve_successful_receipts_and_cleanup_results() {
+    let dns = Arc::new(Dns::default());
+    let provider = solver(dns.clone());
+    dns.per_record_timeout.store(true, Ordering::SeqCst);
+    dns.timeout_present.store(true, Ordering::SeqCst);
+    let mut publications = [
+        timed_publication("success", RecordOwnership::Created),
+        timed_publication("timeout", RecordOwnership::Created),
+    ];
+    for publication in &mut publications {
+        publication.receipt = None;
+    }
+    let present = provider
+        .ready(&publications, &short_execution(Duration::from_millis(100)))
+        .await
+        .unwrap();
+    assert!(matches!(present.failure, Some(IssueError::TimedOut)));
+    assert!(!present.ready);
+    assert_eq!(present.receipts.len(), 1);
+    assert_eq!(present.receipts[0].publication_id, "success");
+    assert_eq!(dns.writes.load(Ordering::SeqCst), 1);
+
+    dns.timeout_cleanup.store(true, Ordering::SeqCst);
+    let mut saved = timed_publication("success", RecordOwnership::Created);
+    saved.receipt = Some(present.receipts[0].receipt.clone());
+    let cleanup = provider
+        .cleanup(
+            &[
+                saved,
+                timed_publication("timeout", RecordOwnership::Created),
+            ],
+            &short_execution(Duration::from_millis(100)),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(cleanup.failure, Some(IssueError::TimedOut)));
+    assert_eq!(cleanup.completed, ["success"]);
+    assert!(dns.records.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn failed_cleanup_retains_certificate_and_retries_without_any_ca_request() {
     let mut fixture = Fixture::new(ValidationMethod::DnsProvider).await;

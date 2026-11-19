@@ -16,7 +16,7 @@
 
 ### Changed
 
-- **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget.
+- **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. Journal JSON snapshots retain null-valued order and authorization extensions. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget, including provider timeouts.
 
 - **DNS provider diagnostics** — Include the API action, HTTP status, validated provider error code, and safe request ID in native backend failures when available. Raw response bodies and provider messages remain hidden; the same CLI path also displays safe provider codes from external backends.
 
@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- **Saved request selection** — Accept valid operation IDs beginning with `-` in issue recovery, show, remove and revoke commands instead of interpreting them as options.
 - **ACME mutation recovery** — Retain revocation Pending and challenge/finalize Submitted evidence after 408/429 instead of treating these transient responses as definitive rejection. Preserve acknowledgement/finalize retry deadlines, prior uncertain revocations and the existing explicit-retry boundaries.
 - **Maintenance diagnostics** — Preserve both the refresh failure and subsequent durable-read failure for one certificate, report its latest schedule as unavailable, and continue processing the remaining certificates.
 

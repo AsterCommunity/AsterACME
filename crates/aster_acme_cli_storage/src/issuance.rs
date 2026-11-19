@@ -112,6 +112,8 @@ struct Journal<T = IssueRecord> {
     operation: T,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     order_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorizations_json: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -239,6 +241,10 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
                 .map_err(|_| failure("issuance journal order snapshot is corrupt"))?,
         );
     }
+    if let Some(encoded) = stored.authorizations_json {
+        stored.operation.authorizations = serde_json::from_str(&encoded)
+            .map_err(|_| failure("issuance journal authorization snapshot is corrupt"))?;
+    }
     if stored.version != JOURNAL_VERSION
         || !valid_operation_id(&stored.operation.operation_id)
         || stored.operation.identifiers.is_empty()
@@ -260,10 +266,19 @@ fn write_journal(path: &Path, record: &IssueRecord) -> Result<(), IssueError> {
                 .map_err(|_| failure("cannot encode issuance journal order snapshot"))
         })
         .transpose()?;
+    let authorizations_json = if operation.authorizations.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&std::mem::take(&mut operation.authorizations))
+                .map_err(|_| failure("cannot encode issuance journal authorization snapshot"))?,
+        )
+    };
     let text = toml::to_string_pretty(&Journal {
         version: JOURNAL_VERSION,
         operation: &operation,
         order_json,
+        authorizations_json,
     })
     .map_err(|_| failure("cannot encode issuance journal"))?;
     toml_file::write_text(

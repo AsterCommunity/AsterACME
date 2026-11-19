@@ -114,7 +114,7 @@ pub(crate) struct SavedTargetArgs {
     #[command(flatten)]
     pub identity: CertificateNameArgs,
     /// Exact request ID when the name has multiple generations.
-    #[arg(long,value_parser=parse_operation)]
+    #[arg(long, allow_hyphen_values = true,value_parser=parse_operation)]
     pub operation: Option<String>,
 }
 
@@ -197,7 +197,7 @@ pub(crate) struct IssueArgs {
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "CERTIFICATE", value_parser = parse_resume)]
     pub resume: Option<ResumeTarget>,
     /// Exact saved request ID; required for ambiguous noninteractive recovery.
-    #[arg(long, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
+    #[arg(long, allow_hyphen_values = true, requires = "resume",value_parser=parse_operation, conflicts_with_all = ["domain", "name", "account"])]
     pub operation: Option<String>,
     #[command(flatten)]
     pub run: RunArgs,

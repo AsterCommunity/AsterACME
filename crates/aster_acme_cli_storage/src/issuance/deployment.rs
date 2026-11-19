@@ -162,7 +162,7 @@ pub struct DeploymentArtifacts {
     pub certificate: Vec<u8>,
     /// CA chain (without the leaf) in PEM form.
     pub ca_chain: Vec<u8>,
-    /// PEM private key, kept out of ordinary memory dumps while held.
+    /// PEM private key, zeroized when this artifact snapshot is dropped.
     pub private_key: Zeroizing<Vec<u8>>,
 }
 
