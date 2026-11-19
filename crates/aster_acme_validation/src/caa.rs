@@ -37,7 +37,7 @@ impl aster_acme::precheck::Check for Caa<'_> {
         }
         check(self.lookup, input, &self.request)
             .await
-            .map_err(|error| aster_acme::precheck::Failure::Unavailable {
+            .map_err(|error| aster_acme::precheck::Failure::LookupFailed {
                 reason: error.to_string(),
             })
     }

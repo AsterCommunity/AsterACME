@@ -39,12 +39,16 @@ pub struct IssueExecution {
 pub enum IssueOutcome {
     /// Caller must publish the method-specific requirements then resume.
     ActionRequired {
+        /// Durable issuance record to resume once publications are in place.
         record: Box<IssueRecord>,
+        /// Outstanding manual publication requirements, one per required record.
         records: Vec<ValidationRequirement>,
     },
     /// Persisted certificate and independent manual cleanup instructions.
     Completed {
+        /// Durable issuance record holding the saved certificate.
         record: Box<IssueRecord>,
+        /// Manual cleanup instructions the caller may apply independently.
         cleanup: Vec<ValidationRequirement>,
     },
 }

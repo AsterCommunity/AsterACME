@@ -28,10 +28,15 @@ pub enum DeploymentIntent<'a, Snapshot> {
     /// Operator explicitly requested publication/reload, including reconciliation.
     Explicit,
     /// Deploy this exact generation after a successful issuance.
-    AfterIssuance { generation: &'a str },
+    AfterIssuance {
+        /// Generation identifier of the newly issued certificate.
+        generation: &'a str,
+    },
     /// Retry one inventory snapshot after rechecking it under the object lease.
     Retry {
+        /// Generation identifier the snapshot was captured under.
         generation: &'a str,
+        /// Observed storage snapshot the adapter rechecks before executing.
         snapshot: &'a Snapshot,
     },
 }

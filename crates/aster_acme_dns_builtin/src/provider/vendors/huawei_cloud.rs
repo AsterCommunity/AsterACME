@@ -21,6 +21,7 @@ use zeroize::ZeroizeOnDrop;
 mod api;
 mod operation;
 mod txt;
+/// Backend identifier under which the Huawei Cloud DNS provider registers.
 pub const BACKEND_ID: &str = "com.astercosm.acme.dns.huawei-cloud";
 const DEFAULT_REGION: &str = "cn-north-4";
 
@@ -29,6 +30,7 @@ static REGISTRATION: BackendRegistration = BackendRegistration {
     create: || Arc::new(HuaweiCloudBackend),
 };
 
+/// Huawei Cloud DNS backend over the Huawei Cloud public API.
 pub struct HuaweiCloudBackend;
 
 #[derive(Clone, Deserialize, ZeroizeOnDrop)]

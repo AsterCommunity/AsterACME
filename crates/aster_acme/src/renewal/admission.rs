@@ -6,8 +6,11 @@ use time::OffsetDateTime;
 /// Failure evidence the execution host asks the storage session to checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenewalFailure {
+    /// When the failed foreground attempt was classified.
     pub occurred_at: OffsetDateTime,
+    /// CA-signalled retry deadline from the saved failure, if any.
     pub ca_retry_at: Option<OffsetDateTime>,
+    /// Durable explanation of an uncertain blocked state, if any.
     pub blocked_reason: Option<String>,
 }
 

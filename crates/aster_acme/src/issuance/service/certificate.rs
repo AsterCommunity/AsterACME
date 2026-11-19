@@ -43,7 +43,8 @@ impl IssueService {
         self.observe(&IssueEvent::CertificateSaved {
             name: record.name.clone(),
         });
-        self.plan_renewal(session, &execution.context).await
+        self.plan_renewal_after_download(session, &execution.context)
+            .await
     }
 
     // A cancelled ARI lookup must not turn an already committed issuance into failure.
@@ -53,10 +54,17 @@ impl IssueService {
         session: &mut dyn IssueSession,
         execution: &crate::solver::ExecutionContext,
     ) -> Result<IssueRecord, IssueError> {
-        match crate::renewal::RenewalService::new(self.client.clone())
+        crate::renewal::RenewalService::new(self.client.clone())
             .refresh(session, execution)
             .await
-        {
+    }
+
+    async fn plan_renewal_after_download(
+        &self,
+        session: &mut dyn IssueSession,
+        execution: &crate::solver::ExecutionContext,
+    ) -> Result<IssueRecord, IssueError> {
+        match self.plan_renewal(session, execution).await {
             Err(IssueError::Cancelled | IssueError::TimedOut) => session.record().await,
             result => result,
         }

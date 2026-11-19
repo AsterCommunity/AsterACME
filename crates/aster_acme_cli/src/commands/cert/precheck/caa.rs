@@ -48,7 +48,16 @@ impl aster_acme::precheck::order::Observer<aster_acme_validation::caa::Report> f
                         crate::common::output::safe(reason)
                     ),
                 ),
-                Err(Failure::LookupFailed | Failure::UnsupportedInput) => {
+                Err(Failure::LookupFailed { reason }) => {
+                    self.progress.output.progress(
+                        MessageKind::Warning,
+                        &format!(
+                            "CAA {name}: DNS lookup failed: {}; result unknown, continuing to CA",
+                            crate::common::output::safe(reason)
+                        ),
+                    );
+                }
+                Err(Failure::UnsupportedInput) => {
                     self.progress.output.progress(
                         MessageKind::Warning,
                         &format!("CAA {name}: DNS lookup failed; result unknown, continuing to CA"),

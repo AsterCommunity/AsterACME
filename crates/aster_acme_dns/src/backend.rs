@@ -17,19 +17,28 @@ pub const ADPP_BACKEND_ID: &str = "com.astercosm.acme.adpp";
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigFieldKind {
+    /// Free-form text value.
     Text,
+    /// `true`/`false` value.
     Boolean,
+    /// Integral numeric value.
     Integer,
+    /// Embedded JSON document value.
     Json,
 }
 
 /// One provider-owned configuration field used by generic hosts.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ConfigField {
+    /// Stable machine-readable field key inside `BackendConfig::custom`.
     pub name: &'static str,
+    /// Human-readable field name rendered by generic hosts.
     pub label: &'static str,
+    /// Whether the backend cannot construct without this field.
     pub required: bool,
+    /// Value kind the host should render and validate.
     pub kind: ConfigFieldKind,
+    /// Whether values must be kept out of logs and display output.
     pub sensitive: bool,
 }
 
@@ -37,29 +46,43 @@ pub struct ConfigField {
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MutationModel {
+    /// Creates and deletes one DNS record per API call.
     IndividualRecords,
+    /// Replaces `RRsets` atomically with a precondition on the current state.
     ConditionalRrsets,
+    /// Replaces `RRsets` without read-back; concurrent edits may be overwritten.
     BestEffortRrsets,
+    /// Mutations happen in an external process over the ADPP wire protocol.
     ExternalProtocol,
 }
 
 /// Transport-independent metadata; describes precisely the implementation built here.
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendDescriptor {
+    /// Stable backend identifier matching `valid_backend_id`.
     pub id: &'static str,
+    /// Human-readable backend name rendered by generic hosts.
     pub label: &'static str,
+    /// Configuration schema version; configuration files carry a matching version.
     pub config_version: u32,
+    /// Whether the implementation dispatches to an external ADPP executable.
     pub executable: bool,
+    /// Remote write primitive the implementation requires.
     pub mutation_model: MutationModel,
+    /// Configuration fields the host should render, in declaration order.
     pub fields: &'static [ConfigField],
 }
 
 /// Private construction input. Never log or display arbitrary configuration values.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BackendConfig {
+    /// Configuration schema version; must equal the descriptor's `config_version`.
     pub version: u32,
+    /// External ADPP executable path; unused by native implementations.
     pub executable: PathBuf,
+    /// Additional arguments passed to the external executable.
     pub args: Vec<String>,
+    /// Provider-defined field values keyed by `ConfigField::name`.
     pub custom: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -82,12 +105,15 @@ impl std::fmt::Debug for BackendConfig {
 
 /// Implementation selected by a descriptor, without host I/O during construction.
 pub enum BackendImplementation {
+    /// In-process provider operation state machine driven by the host runner.
     Native(Arc<dyn OperationFactory>),
+    /// External ADPP executable owning its DNS-level concurrency and protocol.
     External(Arc<dyn DnsProvider>),
 }
 
 /// One backend owns its configuration, remote identity and operation construction.
 pub trait DnsBackend: Send + Sync {
+    /// Static catalog metadata describing this backend implementation.
     fn descriptor(&self) -> BackendDescriptor;
     /// Validate configuration offline. Errors must not echo credentials.
     /// # Errors
@@ -104,9 +130,12 @@ pub trait DnsBackend: Send + Sync {
 
 /// Statically collected factories. Runtime registry instances remain caller-owned.
 pub struct BackendRegistration {
+    /// Constructs the backend instance linked into this binary.
     pub create: fn() -> Arc<dyn DnsBackend>,
 }
 
+/// Distributed slice of all backends linked into this binary, traversed by
+/// [`ProviderRegistry::linked`] in unspecified link order.
 #[linkme::distributed_slice]
 pub static BACKENDS: [BackendRegistration];
 
@@ -148,6 +177,7 @@ impl ProviderRegistry {
         Ok(Self { backends: entries })
     }
 
+    /// Descriptor for every registered backend, sorted by backend ID.
     #[must_use]
     pub fn descriptors(&self) -> Vec<BackendDescriptor> {
         self.backends
@@ -200,6 +230,8 @@ impl ProviderRegistry {
     }
 }
 
+/// Whether `id` is a valid reversed-DNS backend identifier: at least three
+/// lowercase alphanumeric-or-hyphen labels with no empty or edge-punctuation parts.
 #[must_use]
 pub fn valid_backend_id(id: &str) -> bool {
     id.len() <= 192
@@ -220,6 +252,7 @@ pub fn valid_backend_id(id: &str) -> bool {
         })
 }
 
+/// Provider error for invalid host or configuration input; never a remote side effect.
 #[must_use]
 pub fn configuration_error(message: &'static str) -> ProviderError {
     ProviderError {

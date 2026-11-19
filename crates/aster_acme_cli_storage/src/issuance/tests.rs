@@ -113,6 +113,45 @@ async fn fixture() -> Fixture {
     }
 }
 
+#[tokio::test]
+async fn order_extension_nulls_roundtrip_through_toml_journal() {
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    record.order = Some(
+        serde_json::from_value(serde_json::json!({
+            "status":"pending",
+            "identifiers":[{"type":"dns","value":"example.com"}],
+            "authorizations":[],
+            "finalize":"https://ca.example/finalize",
+            "futureExtension":{"nullable":null,"values":[null,true,{"nested":null}]}
+        }))
+        .unwrap(),
+    );
+    session.save(&record).await.unwrap();
+    drop(session);
+
+    let restored = fixture
+        .store
+        .open(&record.name, &record.operation_id)
+        .await
+        .unwrap()
+        .record()
+        .await
+        .unwrap();
+    assert_eq!(
+        restored.order.unwrap().extensions["futureExtension"],
+        serde_json::json!({
+            "nullable":null,
+            "values":[null,true,{"nested":null}]
+        })
+    );
+}
+
 fn request() -> IssueRequest {
     IssueRequest {
         challenge: aster_acme::challenge::ChallengeKind::Dns01,

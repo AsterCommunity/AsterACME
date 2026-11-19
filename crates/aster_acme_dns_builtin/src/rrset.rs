@@ -17,13 +17,19 @@ use std::{collections::BTreeSet, sync::Arc};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RrsetSnapshot {
+    /// All record values currently in the `RRset`, excluding preserved metadata.
     pub values: BTreeSet<String>,
+    /// Opaque revision token; empty means the backend lacks a usable precondition.
     pub revision: String,
+    /// Opaque provider metadata that write-back must preserve verbatim.
     pub metadata: serde_json::Value,
 }
 
+/// Outcome of one conditional `RRset` write interpreted by the protocol.
 pub enum ConditionalWrite {
+    /// The provider proved the new revision was applied.
     Applied,
+    /// The provider proved the precondition failed and the write did not apply.
     Conflict,
 }
 
@@ -54,6 +60,7 @@ pub struct ConditionalRrsetFactory {
     protocol: Arc<dyn RrsetProtocol>,
 }
 impl ConditionalRrsetFactory {
+    /// Reuses one protocol implementation across every operation it starts.
     pub fn new(protocol: Arc<dyn RrsetProtocol>) -> Self {
         Self { protocol }
     }

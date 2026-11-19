@@ -29,9 +29,13 @@ pub fn renewal_action<T: Ord + Copy>(
 /// Decision for one explicit renewal invocation; I/O and clocks stay outside core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenewalDecision {
+    /// The renewal window has not arrived, or a confirmed revocation stays unless explicitly renewed.
     NotDue,
+    /// Due or explicitly requested; begin a new renewal.
     Start,
+    /// A durable pending renewal exists; resume it before considering a new one.
     Resume,
+    /// A revocation is pending with unknown outcome; no renewal may bypass the wait.
     RevocationUncertain,
 }
 
@@ -76,9 +80,13 @@ pub fn renewal_decision<T: Ord + Copy>(
 /// Independent barriers to another renewal attempt, in precedence order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryAdmission {
+    /// No barrier applies; another attempt may proceed now.
     Ready,
+    /// The local retry delay has not elapsed; an explicit early request bypasses this barrier.
     LocalBackoff,
+    /// The CA signaled a retry-after deadline; explicit early requests do not bypass it.
     CaBackoff,
+    /// The last attempt outcome is unknown; neither automatic nor explicit requests proceed.
     Uncertain,
 }
 

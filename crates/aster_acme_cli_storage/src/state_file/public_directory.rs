@@ -9,6 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Handle-based view of one public directory; all operations go through the
+/// checked directory handle so renamed or linked paths cannot redirect them.
 pub struct PublicDirectory {
     file: File,
     path: PathBuf,

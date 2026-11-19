@@ -24,6 +24,7 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
+/// Backend identifier under which the Tencent Cloud `DNSPod` provider registers.
 pub const BACKEND_ID: &str = "com.astercosm.acme.dns.tencent-cloud";
 const HOST: &str = "dnspod.tencentcloudapi.com";
 const SERVICE: &str = "dnspod";
@@ -111,6 +112,7 @@ static REGISTRATION: BackendRegistration = BackendRegistration {
     create: || Arc::new(TencentCloudBackend),
 };
 
+/// Tencent Cloud `DNSPod` backend over the Tencent Cloud 2021-03-23 API.
 pub struct TencentCloudBackend;
 
 #[derive(Deserialize, ZeroizeOnDrop)]

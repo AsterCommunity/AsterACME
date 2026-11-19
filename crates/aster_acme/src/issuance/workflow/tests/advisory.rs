@@ -39,7 +39,9 @@ impl BeforeOrder for Advice<'_> {
                 index: 0,
                 result: match self.result {
                     0 => Ok(false),
-                    1 => Err(Failure::LookupFailed),
+                    1 => Err(Failure::LookupFailed {
+                        reason: "injected lookup failure".into(),
+                    }),
                     _ => Err(Failure::TimedOut),
                 },
             }],

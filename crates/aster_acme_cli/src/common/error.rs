@@ -340,4 +340,20 @@ mod tests {
             diagnostic(&aster_acme::issuance::IssueError::InvalidOrder { problem: None });
         assert!(message.contains("did not provide problem details"));
     }
+
+    #[test]
+    fn cancellation_timeout_and_uncertain_mutations_share_recovery_guidance() {
+        for error in [
+            aster_acme::issuance::IssueError::Cancelled,
+            aster_acme::issuance::IssueError::TimedOut,
+            aster_acme::issuance::IssueError::MutationUncertain("finalize"),
+        ] {
+            let (message, hint) = diagnostic(&error);
+            assert_ne!(message, "");
+            let hint = hint.unwrap();
+            assert!(hint.contains("cert issue --resume"));
+            assert!(hint.contains("--operation"));
+            assert!(hint.contains("Saved validation files"));
+        }
+    }
 }

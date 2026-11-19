@@ -76,10 +76,16 @@ pub enum IssueError {
     Expired,
     /// This invocation reached its configured order-poll budget.
     #[error("CA polling limit reached ({completed}/{limit}); resume the saved request to continue")]
-    PollLimit { completed: u32, limit: u32 },
+    PollLimit {
+        /// Order queries completed in this invocation.
+        completed: u32,
+        /// Configured maximum order queries per invocation.
+        limit: u32,
+    },
     /// The CA made this order terminal; embedded problems remain available offline.
     #[error("CA order is invalid; start a new request after correcting validation")]
     InvalidOrder {
+        /// The CA's terminal problem explanation when provided.
         problem: Option<Box<aster_acme_protocol::problem::Problem>>,
     },
     /// The caller cancelled issuance; its durable checkpoint remains available.

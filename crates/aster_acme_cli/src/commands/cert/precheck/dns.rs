@@ -106,6 +106,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_rejects_expired_execution_before_resolver_initialization() {
+        let (output, stdout, diagnostics) = crate::common::session::tests::session(false);
+        let progress = Progress::new(output);
+        let expired = ExecutionContext {
+            deadline: Instant::now(),
+            ..execution()
+        };
+        assert!(matches!(
+            run(&[], &expired, &progress).await,
+            Err(IssueError::TimedOut)
+        ));
+        assert_eq!(stdout.text(), "");
+        assert_eq!(diagnostics.text(), "");
+    }
+
+    #[tokio::test]
+    async fn observe_reports_resolver_initialization_failure_and_continues_advisory() {
+        let (output, stdout, diagnostics) = crate::common::session::tests::session(false);
+        let progress = Progress::new(output);
+        observe(Err(configuration_error()), &[], &execution(), &progress)
+            .await
+            .unwrap();
+        assert_eq!(stdout.text(), "");
+        let text = diagnostics.text();
+        assert!(!text.contains("Checking local DNS visibility"));
+        assert!(text.contains("failed to parse nameserver address"));
+        assert!(text.contains("continuing to CA validation"));
+    }
+
+    #[tokio::test]
     async fn diagnostics_escape_control_characters_and_json_stays_silent() {
         for json in [false, true] {
             let (output, stdout, diagnostics) = crate::common::session::tests::session(json);

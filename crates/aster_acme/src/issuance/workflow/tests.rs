@@ -20,6 +20,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio_util::sync::CancellationToken;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -44,9 +45,24 @@ impl IssueSession for Session {
         record: &IssueRecord,
         chain: &[u8],
     ) -> Result<IssueRecord, IssueError> {
-        *self.0.lock().unwrap() = record.clone();
+        let mut completed = record.clone();
+        let now = time::OffsetDateTime::now_utc();
+        completed.is_in_use = true;
+        completed.renewal = Some(crate::renewal::RenewalPlan {
+            certificate_id: Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
+            not_before: now - time::Duration::days(30),
+            not_after: now + time::Duration::days(60),
+            renew_at: now - time::Duration::seconds(1),
+            source: crate::renewal::RenewalSource::Fallback,
+            suggested_window: None,
+            explanation_url: None,
+            last_checked_at: None,
+            next_check_at: None,
+            last_query_failed: false,
+        });
+        *self.0.lock().unwrap() = completed.clone();
         *self.1.lock().unwrap() = Some(chain.to_vec());
-        Ok(record.clone())
+        Ok(completed)
     }
     async fn record_renewal_failure(
         &self,
@@ -214,10 +230,17 @@ async fn discovers_then_drives_protocol_and_always_shuts_down_without_recreating
     assert_eq!(solver.0.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test]
-async fn finalize_download_and_complete_follow_the_real_http_transport() {
-    let mut f = Fixture::new().await;
+async fn mount_complete_ca(f: &Fixture) {
     let url = |suffix: &str| format!("{}{suffix}", f.server.uri());
+    Mock::given(method("GET"))
+        .and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":url("/nonce"),"newAccount":url("/account"),"newOrder":url("/create"),
+            "keyChange":url("/key-change"),"renewalInfo":url("/ari")
+        })))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
     let pending = serde_json::json!({
         "status":"pending","expires":"2099-01-01T00:00:00Z",
         "identifiers":[{"type":"dns","value":"example.com"}],
@@ -282,11 +305,49 @@ async fn finalize_download_and_complete_follow_the_real_http_transport() {
         .expect(1)
         .mount(&f.server)
         .await;
-    let solver = Solver(AtomicUsize::new(0), true);
-    let result = f
-        .workflow()
-        .run(f.identity(), &mut f.session, &solver, &execution())
+    Mock::given(method("GET"))
+        .and(path("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .expect(1)
+        .mount(&f.server)
         .await;
+}
+
+async fn cancel_when_ari_is_requested(server: &MockServer, cancellation: CancellationToken) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| request.url.path().starts_with("/ari/"))
+            {
+                cancellation.cancel();
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn finalize_download_and_complete_follow_the_real_http_transport() {
+    let mut f = Fixture::new().await;
+    mount_complete_ca(&f).await;
+    let solver = Solver(AtomicUsize::new(0), true);
+    let workflow = f.workflow();
+    let identity = f.identity();
+    let context = execution();
+    let cancellation = context.context.cancellation.clone();
+    let server = &f.server;
+    let session = &mut f.session;
+    let (result, ()) = tokio::join!(
+        workflow.run(identity, session, &solver, &context),
+        cancel_when_ari_is_requested(server, cancellation)
+    );
     assert!(
         result.is_ok(),
         "{:?}; requests: {:?}",
@@ -306,6 +367,17 @@ async fn finalize_download_and_complete_follow_the_real_http_transport() {
     );
     assert_eq!(f.count("/finalize").await, 1);
     assert_eq!(f.count("/certificate").await, 1);
+    assert_eq!(f.count("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE").await, 1);
+    assert!(
+        f.session
+            .record()
+            .await
+            .unwrap()
+            .renewal
+            .unwrap()
+            .next_check_at
+            .is_some()
+    );
     assert_eq!(solver.0.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
@@ -384,6 +456,100 @@ async fn inspect_honors_caller_cancellation_and_deadline_without_mutations() {
             before
         );
     }
+}
+
+#[tokio::test]
+async fn inspect_returns_cancellation_during_ari_query() {
+    use crate::{
+        issuance::service::IssueService,
+        renewal::{RenewalPlan, RenewalSource},
+    };
+    use aster_acme_protocol::url::AcmeUrl;
+
+    let mut f = Fixture::new().await;
+    let url = |suffix: &str| format!("{}{suffix}", f.server.uri());
+    Mock::given(method("GET"))
+        .and(path("/directory"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "newNonce":url("/nonce"),"newAccount":url("/account"),"newOrder":url("/create"),
+            "keyChange":url("/key-change"),"renewalInfo":url("/ari")
+        })))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
+    let now = time::OffsetDateTime::now_utc();
+    {
+        let mut record = f.session.record().await.unwrap();
+        record.phase = aster_acme_core::workflow::IssuancePhase::Completed;
+        record.is_in_use = true;
+        record.order_url = Some(AcmeUrl::new(&url("/order")).unwrap());
+        record.renewal = Some(RenewalPlan {
+            certificate_id: Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
+            not_before: now - time::Duration::days(30),
+            not_after: now + time::Duration::days(60),
+            renew_at: now - time::Duration::seconds(1),
+            source: RenewalSource::Fallback,
+            suggested_window: None,
+            explanation_url: None,
+            last_checked_at: None,
+            next_check_at: None,
+            last_query_failed: false,
+        });
+        f.session.save(&record).await.unwrap();
+    }
+    Mock::given(method("POST"))
+        .and(path("/order"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status":"valid","expires":"2099-01-01T00:00:00Z",
+            "identifiers":[{"type":"dns","value":"example.com"}],
+            "authorizations":[],"finalize":url("/finalize"),"certificate":url("/certificate")
+        })))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .mount(&f.server)
+        .await;
+    let client = HttpPool::default()
+        .discover(
+            f.identity.account.directory_url.clone(),
+            TransportOptions {
+                allow_loopback_http: true,
+                ..TransportOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let service = IssueService::new(Arc::new(client), f.identity()).unwrap();
+    let context = execution().context;
+    let cancellation = context.cancellation.clone();
+    let server = &f.server;
+    let session = &mut f.session;
+    let (result, ()) = tokio::join!(service.inspect(session, &context), async move {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|request| request.url.path().starts_with("/ari/"))
+                {
+                    cancellation.cancel();
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+    assert!(matches!(result, Err(IssueError::Cancelled)));
+    assert_eq!(f.count("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE").await, 1);
+    assert_eq!(f.count("/create").await, 0);
+    assert_eq!(f.count("/finalize").await, 0);
 }
 
 #[tokio::test]

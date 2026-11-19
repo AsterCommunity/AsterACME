@@ -33,6 +33,13 @@ fn scope(execution: &ExecutionContext) -> ProviderExecution {
         deadline: execution.deadline,
     }
 }
+
+fn interrupted(execution: &ExecutionContext) -> IssueError {
+    execution
+        .check()
+        .map_or_else(IssueError::from, |()| IssueError::Cancelled)
+}
+
 impl ProviderDns {
     fn validate_plan(
         &self,
@@ -215,7 +222,7 @@ impl ChallengeSolver for ProviderDns {
                     )
                     .await
                     .map_err(|error| match error {
-                        aster_acme_dns::routing::RouteError::Interrupted => IssueError::Cancelled,
+                        aster_acme_dns::routing::RouteError::Interrupted => interrupted(execution),
                         error => IssueError::DnsRouting(error),
                     })?;
                     let target = chain
@@ -271,7 +278,7 @@ impl ChallengeSolver for ProviderDns {
             })
             .await
             .map_err(|error| match error {
-                aster_acme_dns::propagation::PropagationError::Interrupted => IssueError::Cancelled,
+                aster_acme_dns::propagation::PropagationError::Interrupted => interrupted(execution),
                 error @ PropagationError::InvalidPolicy => IssueError::DnsPropagation(error),
             })?;
         self.progress.output.progress(
@@ -402,4 +409,29 @@ fn retry_at(error: &aster_acme_dns::ProviderError) -> Option<time::OffsetDateTim
         .and_then(|seconds| {
             time::OffsetDateTime::now_utc().checked_add(time::Duration::seconds(seconds))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::commands::cert::validation::dns_provider::interrupted;
+    use aster_acme::issuance::IssueError;
+    use aster_acme::solver::ExecutionContext;
+    use std::time::{Duration, Instant};
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn route_and_propagation_interruptions_recover_caller_reason() {
+        let cancelled = ExecutionContext {
+            cancellation: CancellationToken::new(),
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+        cancelled.cancellation.cancel();
+        assert!(matches!(interrupted(&cancelled), IssueError::Cancelled));
+
+        let timed_out = ExecutionContext {
+            cancellation: CancellationToken::new(),
+            deadline: Instant::now(),
+        };
+        assert!(matches!(interrupted(&timed_out), IssueError::TimedOut));
+    }
 }

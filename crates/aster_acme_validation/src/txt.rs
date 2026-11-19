@@ -46,7 +46,9 @@ impl Check for Txt {
             self.resolver.txt_lookup(format!("{name}.")).await,
             value,
         )
-        .map_err(|_| Failure::LookupFailed)
+        .map_err(|error| Failure::LookupFailed {
+            reason: error.to_string(),
+        })
     }
 }
 

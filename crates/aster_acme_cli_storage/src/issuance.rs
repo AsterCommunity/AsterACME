@@ -37,14 +37,19 @@ pub mod removal;
 const MAX_JOURNAL: u64 = 1024 * 1024;
 const JOURNAL_VERSION: u32 = 1;
 
+/// Solver classification recorded with saved challenge publications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSolverId {
+    /// Current built-in DNS provider solver (`dns_provider`).
     Current,
+    /// Legacy external-script solver saved by older versions (`dns_external`).
     LegacyExternal,
+    /// Any other or unrecognized saved solver ID.
     Other,
 }
 
 impl ProviderSolverId {
+    /// Classify a persisted solver ID; unknown values stay readable instead of failing.
     #[must_use]
     pub fn from_saved_id(id: &str) -> Self {
         match id {
@@ -105,6 +110,8 @@ impl CliIssueStore {
 struct Journal<T = IssueRecord> {
     version: u32,
     operation: T,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    order_json: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -222,10 +229,16 @@ fn managed_file_present(path: &Path) -> Result<bool, IssueError> {
 fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
     let bytes = read_private(path, MAX_JOURNAL)
         .map_err(|_| failure("issuance journal missing, oversized or unsafe"))?;
-    let stored: Journal = toml::from_str(
+    let mut stored: Journal = toml::from_str(
         std::str::from_utf8(&bytes).map_err(|_| failure("invalid journal encoding"))?,
     )
     .map_err(|_| failure("issuance journal is corrupt"))?;
+    if let Some(encoded) = stored.order_json {
+        stored.operation.order = Some(
+            serde_json::from_str(&encoded)
+                .map_err(|_| failure("issuance journal order snapshot is corrupt"))?,
+        );
+    }
     if stored.version != JOURNAL_VERSION
         || !valid_operation_id(&stored.operation.operation_id)
         || stored.operation.identifiers.is_empty()
@@ -238,9 +251,19 @@ fn read_journal(path: &Path) -> Result<IssueRecord, IssueError> {
 }
 
 fn write_journal(path: &Path, record: &IssueRecord) -> Result<(), IssueError> {
+    let mut operation = record.clone();
+    let order_json = operation
+        .order
+        .take()
+        .map(|order| {
+            serde_json::to_string(&order)
+                .map_err(|_| failure("cannot encode issuance journal order snapshot"))
+        })
+        .transpose()?;
     let text = toml::to_string_pretty(&Journal {
         version: JOURNAL_VERSION,
-        operation: record,
+        operation: &operation,
+        order_json,
     })
     .map_err(|_| failure("cannot encode issuance journal"))?;
     toml_file::write_text(
