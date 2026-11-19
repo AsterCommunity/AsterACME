@@ -126,6 +126,8 @@ struct CertificateSelection {
     name: CertificateName,
     identifiers: Vec<aster_acme::identifier::Identifier>,
     key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
     account_name: String,
     account_id: String,
     directory: aster_acme_protocol::url::AcmeUrl,
@@ -142,6 +144,7 @@ impl CertificateSelection {
         self.name == record.name
             && self.identifiers == record.identifiers
             && self.key_algorithm == record.key_algorithm
+            && self.profile == record.profile
             && self.account_name == record.account_name
             && self.account_id == record.account_id
             && self.directory == record.directory
@@ -190,6 +193,7 @@ impl Session {
             || record.solver_id != self.initial.solver_id
             || record.renewal_of != self.initial.renewal_of
             || record.identifiers != self.initial.identifiers
+            || record.profile != self.initial.profile
             || record.key_algorithm != self.initial.key_algorithm
         {
             return Err(failure("immutable issuance identity changed"));

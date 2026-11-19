@@ -1,4 +1,4 @@
-//! Public account JWKs with RFC 7638 canonical required-member ordering.
+//! Public account JWKs with [RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) canonical required-member ordering.
 use crate::crypto::{CryptoError, key_algorithm::KeyAlgorithm};
 use aws_lc_rs::signature::{self, ParsedPublicKey};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -10,11 +10,11 @@ use x509_parser::prelude::FromDer as _;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Jwk {
-    /// RFC 7518 elliptic-curve key.
+    /// [RFC 7518](https://datatracker.ietf.org/doc/html/rfc7518) elliptic-curve key.
     Ec(EcJwk),
-    /// RFC 7518 RSA key.
+    /// [RFC 7518](https://datatracker.ietf.org/doc/html/rfc7518) RSA key.
     Rsa(RsaJwk),
-    /// RFC 8037 Ed25519 key.
+    /// [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037) Ed25519 key.
     Okp(OkpJwk),
 }
 
@@ -110,7 +110,7 @@ impl Jwk {
         }))
     }
 
-    /// Read and validate an RFC 8017 DER RSA public key.
+    /// Read and validate an [RFC 8017](https://datatracker.ietf.org/doc/html/rfc8017) DER RSA public key.
     ///
     /// # Errors
     /// Rejects invalid keys, trailing data and unsupported modulus sizes.
@@ -136,7 +136,7 @@ impl Jwk {
         }))
     }
 
-    /// Read a raw RFC 8037 Ed25519 public key.
+    /// Read a raw [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037) Ed25519 public key.
     ///
     /// # Errors
     /// Rejects wrong widths and invalid public keys.
@@ -152,7 +152,7 @@ impl Jwk {
         }))
     }
 
-    /// SHA-256 thumbprint of only the sorted required members (RFC 7638 / RFC 8037).
+    /// SHA-256 thumbprint of only the sorted required members ([RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) / [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037)).
     ///
     /// # Errors
     /// Returns an encoding error if canonical JSON cannot be generated.

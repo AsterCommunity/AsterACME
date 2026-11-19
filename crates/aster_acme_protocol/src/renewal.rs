@@ -1,4 +1,4 @@
-//! RFC 9773 renewal information wire resources and certificate-specific URLs.
+//! [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) renewal information wire resources and certificate-specific URLs.
 
 use crate::url::{AcmeUrl, InvalidAcmeUrl};
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ pub struct SuggestedWindow {
     pub end: time::OffsetDateTime,
 }
 
-/// RFC 9773 section 4.2 response; unknown extensions are retained.
+/// [RFC 9773 §4.2](https://datatracker.ietf.org/doc/html/rfc9773#section-4.2) response; unknown extensions are retained.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenewalInfo {
@@ -29,7 +29,7 @@ pub struct RenewalInfo {
 }
 
 /// Append a certificate identifier to the discovered endpoint, preserving query data.
-/// This suffix is defined by RFC 9773 section 4.1, unlike CA-specific ACME paths.
+/// This suffix is defined by [RFC 9773 §4.1](https://datatracker.ietf.org/doc/html/rfc9773#section-4.1), unlike CA-specific ACME paths.
 ///
 /// # Errors
 /// Rejects unsafe identifiers or endpoints that cannot be used as a base URL.

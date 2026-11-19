@@ -1,4 +1,4 @@
-//! RFC 8555 §7.3 account request and response contracts.
+//! [RFC 8555 §7.3](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3) account request and response contracts.
 use crate::jws::FlattenedJws;
 use aster_acme_core::protocol::AccountStatus;
 use serde::{Deserialize, Serialize};
@@ -33,14 +33,14 @@ pub struct AccountStatusRequest {
     pub status: AccountStatus,
 }
 
-/// RFC 8555 section 7.3.2 replaces the account's complete contact URL set.
+/// [RFC 8555 §7.3.2](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.2) replaces the account's complete contact URL set.
 #[derive(Serialize)]
 pub struct AccountUpdateRequest<'a> {
     /// Empty clears all server contacts.
     pub contact: &'a [String],
 }
 
-/// Inner RFC 8555 section 7.3.5 keyChange payload. JWK schema is supplied by crypto.
+/// Inner [RFC 8555 §7.3.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5) keyChange payload. JWK schema is supplied by crypto.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyChangePayload<'a, J> {

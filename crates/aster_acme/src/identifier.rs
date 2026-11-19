@@ -24,7 +24,7 @@ pub enum IdentifierError {
     /// ACME authorization identifiers must not contain a wildcard prefix.
     #[error("authorization identifier must contain the base DNS name")]
     WildcardAuthorizationValue,
-    /// RFC 8738 defines no wildcard concept for IP identifiers.
+    /// [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738) defines no wildcard concept for IP identifiers.
     #[error("IP identifiers do not support wildcard authorizations")]
     WildcardIpAuthorization,
 }
@@ -86,9 +86,9 @@ impl From<DnsName> for String {
 
 /// Certificate DNS identifier with an optional leftmost wildcard.
 ///
-/// "DNS identifier" is the RFC 8555 wire type `dns`: the domain name a
+/// "DNS identifier" is the [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) wire type `dns`: the domain name a
 /// certificate is issued for, paired with [`IpIdentifier`] for wire type `ip`
-/// (RFC 8738). It differs from [`DnsName`], which only validates syntax and
+/// ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)). It differs from [`DnsName`], which only validates syntax and
 /// also accepts underscore TXT owners.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -156,8 +156,9 @@ impl From<DnsIdentifier> for String {
     }
 }
 
-/// Certificate IP identifier; the canonical RFC 5952 text is the wire value
-/// (RFC 8738 section 3). Zone IDs and ports are not part of an IP identifier.
+/// Certificate IP identifier; the canonical [RFC 5952](https://datatracker.ietf.org/doc/html/rfc5952)
+/// text is the wire value ([RFC 8738 §3](https://datatracker.ietf.org/doc/html/rfc8738#section-3)).
+/// Zone IDs and ports are not part of an IP identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct IpIdentifier(IpAddr);
@@ -185,8 +186,8 @@ impl IpIdentifier {
         self.0.to_string()
     }
 
-    /// RFC 8738 section 6 SNI: the IN-ADDR.ARPA or IP6.ARPA reverse mapping.
-    /// RFC 6066 forbids IP literals in the SNI host name field.
+    /// [RFC 8738 §6](https://datatracker.ietf.org/doc/html/rfc8738#section-6) SNI: the IN-ADDR.ARPA or IP6.ARPA reverse mapping.
+    /// [RFC 6066](https://datatracker.ietf.org/doc/html/rfc6066) forbids IP literals in the SNI host name field.
     #[must_use]
     pub fn reverse_name(&self) -> String {
         // One allocation: at most 32 hex nibbles, dots and the suffix.
@@ -261,9 +262,7 @@ fn push_decimal(out: &mut String, value: u8) {
 
 /// Identifiers supported for execution: the certificate subjects an order can request.
 ///
-/// [`Identifier::Dns`] covers RFC 8555 wire type `dns` (domain names,
-/// optionally with a leftmost wildcard); [`Identifier::Ip`] covers RFC 8738
-/// wire type `ip` (IPv4/IPv6 literals, never wildcarded). Use [`Identifier::new`]
+/// [`Identifier::Dns`] covers [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) wire type `dns` (domain names,/// optionally with a leftmost wildcard); [`Identifier::Ip`] covers [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)/// wire type `ip` (IPv4/IPv6 literals, never wildcarded). Use [`Identifier::new`]
 /// to parse a stored string, or construct the variant directly when the kind
 /// is known.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -271,7 +270,7 @@ fn push_decimal(out: &mut String, value: u8) {
 pub enum Identifier {
     /// DNS certificate identifier.
     Dns(DnsIdentifier),
-    /// IP certificate identifier (RFC 8738).
+    /// IP certificate identifier ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)).
     Ip(IpIdentifier),
 }
 
@@ -366,7 +365,7 @@ impl From<&Identifier> for WireIdentifier {
     }
 }
 
-/// Interpret RFC 8555 authorization `identifier` and its sibling `wildcard` flag.
+/// Interpret [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) authorization `identifier` and its sibling `wildcard` flag.
 ///
 /// # Errors
 /// Rejects unsupported types and wildcard flags that the identifier kind cannot carry.

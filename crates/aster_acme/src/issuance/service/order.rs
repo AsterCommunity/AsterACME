@@ -47,6 +47,7 @@ impl IssueService {
         let body = json_payload(&NewOrderRequest {
             identifiers: &identifiers,
             replaces: record.submitted_replaces.as_deref(),
+            profile: record.profile.as_deref(),
         })?;
         record.new_order_intent_saved = true;
         record.phase = IssuancePhase::CreatingOrder;

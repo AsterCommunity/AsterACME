@@ -1,4 +1,4 @@
-//! ACME account registration and recovery (RFC 8555 §7.3).
+//! ACME account registration and recovery ([RFC 8555 §7.3](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3)).
 
 use crate::storage::account::{AccountStore, AccountStoreError};
 use crate::{
@@ -60,7 +60,7 @@ pub struct AccountRecord {
     pub account_id: String,
     /// Exact CA directory URL bound to this account identity.
     pub directory_url: AcmeUrl,
-    /// RFC 7638 thumbprint of the persisted signing key.
+    /// [RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) thumbprint of the persisted signing key.
     pub key_thumbprint: String,
     /// `kid` returned by the server. None only while recovering a pending registration.
     pub account_url: Option<AcmeUrl>,
@@ -76,6 +76,11 @@ pub struct AccountRecord {
     pub key_rotation: Option<KeyRotation>,
     /// Terms URL shown to the user and explicitly accepted.
     pub accepted_terms_url: Option<AcmeUrl>,
+    /// Operator-selected default certificate profile ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles),    /// <https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>).
+    /// Local preference only; explicit issuance flags win, and existing saved
+    /// certificate definitions never adopt a changed default implicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_profile: Option<String>,
     /// Persisted opt-in to accept future directory terms URL changes.
     #[serde(default)]
     pub auto_accept_terms_updates: bool,

@@ -1,10 +1,10 @@
-//! TLS-ALPN-01 responder for RFC 8737 and RFC 8738.
+//! TLS-ALPN-01 responder for [RFC 8737](https://datatracker.ietf.org/doc/html/rfc8737) and [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738).
 //!
 //! The responder creates short-lived, self-signed challenge certificates with
-//! one SAN (dNSName, or iPAddress for RFC 8738 IP identifiers) and the critical
+//! one SAN (dNSName, or iPAddress for [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738) IP identifiers) and the critical
 //! `id-pe-acmeIdentifier` extension. It selects a certificate only when SNI and
 //! `acme-tls/1` are both present; IP identifiers are keyed by their
-//! IN-ADDR.ARPA/IP6.ARPA reverse name, the SNI form RFC 8738 section 6 mandates.
+//! IN-ADDR.ARPA/IP6.ARPA reverse name, the SNI form [RFC 8738 §6](https://datatracker.ietf.org/doc/html/rfc8738#section-6) mandates.
 use crate::commands::cert::validation::{
     Arc, ChallengeKind, ChallengeSolver, IssueError, Progress, listener::Listener,
 };

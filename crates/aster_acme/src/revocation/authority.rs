@@ -1,4 +1,4 @@
-//! RFC 8555 section 7.6 authorization, independent of revocation state transitions.
+//! [RFC 8555 §7.6](https://datatracker.ietf.org/doc/html/rfc8555#section-7.6) authorization, independent of revocation state transitions.
 use crate::{
     account::AccountRecord,
     crypto::{JwsSigner, jwk::Jwk},

@@ -62,6 +62,7 @@ struct Fixture {
     implementation: ValidationMethod,
     identifier: Identifier,
     identifier_json: serde_json::Value,
+    profile: Option<String>,
     temp: tempfile::TempDir,
     server: MockServer,
     store: CliIssueStore,
@@ -78,16 +79,21 @@ impl Fixture {
         Self::for_identifier(
             implementation,
             Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+            None,
         )
         .await
     }
 
-    async fn for_identifier(implementation: ValidationMethod, identifier: Identifier) -> Self {
+    async fn for_identifier(
+        implementation: ValidationMethod,
+        identifier: Identifier,
+        profile: Option<&str>,
+    ) -> Self {
         let identifier_json = serde_json::to_value(WireIdentifier::from(&identifier)).unwrap();
         let server = MockServer::start().await;
         Mock::given(method("GET")).and(path("/arbitrary-directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce": format!("{}/nonce",server.uri()), "newAccount": format!("{}/account",server.uri()), "newOrder": format!("{}/orders/create",server.uri()), "keyChange": format!("{}/key-change",server.uri()),
-            "meta": {"issuerDomainNames":["authority.example"], "caaIdentities":["authority.example"], "accountHashPrefix":"https://ca.example/account-hash/"}
+            "meta": {"issuerDomainNames":["authority.example"], "caaIdentities":["authority.example"], "accountHashPrefix":"https://ca.example/account-hash/", "profiles": {"classic": "https://ca.example/profiles#classic", "shortlived": "https://ca.example/profiles#shortlived"}}
         }))).mount(&server).await;
         mount_account_proof(&server).await;
         Mock::given(method("HEAD"))
@@ -134,7 +140,8 @@ impl Fixture {
         let solver_config = fixture_solver_config(implementation, &root);
         let request = IssueRequest {
             name: aster_acme::issuance::CertificateName::new("web").unwrap(),
-            identifiers: vec![identifier],
+            identifiers: vec![identifier.clone()],
+            profile: profile.map(str::to_owned),
             key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
             challenge: implementation.kind(),
@@ -148,8 +155,9 @@ impl Fixture {
         ));
         let fixture = Self {
             implementation,
-            identifier: request.identifiers.first().cloned().unwrap(),
+            identifier,
             identifier_json,
+            profile: profile.map(str::to_owned),
             temp,
             server,
             store,
@@ -168,7 +176,14 @@ impl Fixture {
         let stage = self.stage.clone();
         let base = self.server.uri();
         let identifier_json = self.identifier_json.clone();
-        let order = move |status: &str| serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
+        let profile = self.profile.clone();
+        let order = move |status: &str| {
+            let mut body = serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
+            if let Some(profile) = &profile {
+                body["profile"] = serde_json::json!(profile);
+            }
+            body
+        };
         let initial = order("pending");
         let reset = stage.clone();
         let location = format!("{}/order/1", self.server.uri());
@@ -704,7 +719,7 @@ async fn tls_alpn_completes_acme_order_and_resumes_without_reacknowledging() {
     }
 }
 
-/// Pin the RFC 8738 wire contract: newOrder must transmit the ip identifier
+/// Pin the [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738) wire contract: newOrder must transmit the ip identifier
 /// kind through the single Identifier-to-WireIdentifier conversion owner,
 /// never a DNS spelling of the address.
 async fn assert_ip_order_wire_kind(fixture: &Fixture, expected: &str) {
@@ -731,6 +746,7 @@ async fn standalone_ip_identifier_completes_loopback_issuance_and_resumes_withou
         let mut fixture = Fixture::for_identifier(
             ValidationMethod::Standalone,
             Identifier::Ip(aster_acme::identifier::IpIdentifier::new("127.0.0.1").unwrap()),
+            None,
         )
         .await;
         let record = fixture.session.as_ref().unwrap().record().await.unwrap();
@@ -828,6 +844,7 @@ async fn tls_alpn_ip_identifier_completes_loopback_issuance_with_reverse_name_sn
         let mut fixture = Fixture::for_identifier(
             ValidationMethod::TlsAlpn,
             Identifier::Ip(aster_acme::identifier::IpIdentifier::new("127.0.0.1").unwrap()),
+            None,
         )
         .await;
         let original = fixture.session.as_ref().unwrap().record().await.unwrap();
@@ -921,6 +938,99 @@ async fn tls_alpn_ip_identifier_completes_loopback_issuance_with_reverse_name_sn
         assert_eq!(renewal.solver_id, "tls_alpn");
         assert_eq!(renewal.solver_config, record.solver_config);
     }
+}
+
+#[tokio::test]
+async fn selected_profile_flows_through_new_order_and_is_fixed_for_resume() {
+    for resume in [false, true] {
+        let mut fixture = Fixture::for_identifier(
+            ValidationMethod::Webroot,
+            Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+            Some("shortlived"),
+        )
+        .await;
+        if resume {
+            // A mid-flight restart keeps the saved selection without replaying newOrder.
+            let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+            assert_eq!(saved.profile.as_deref(), Some("shortlived"));
+            let solver = adapter(&saved, false, false, progress()).unwrap();
+            assert!(matches!(
+                fixture
+                    .service
+                    .run(
+                        fixture.session.as_mut().unwrap().as_mut(),
+                        solver.as_ref(),
+                        &IssueExecution {
+                            max_polls: 1,
+                            context: ExecutionContext {
+                                deadline: Instant::now() + Duration::from_secs(10),
+                                ..execution()
+                            },
+                            poll_interval: Duration::from_millis(1)
+                        }
+                    )
+                    .await,
+                Err(IssueError::PollLimit { .. })
+            ));
+            assert_eq!(fixture.count("/orders/create").await, 1);
+            fixture.reopen().await;
+        }
+        let outcome = fixture.run(true).await.unwrap();
+        let IssueOutcome::Completed { record, .. } = outcome else {
+            panic!("expected completed profile order");
+        };
+        assert_eq!(record.profile.as_deref(), Some("shortlived"));
+        // Draft-ietf-acme-profiles §4: the newOrder payload carries the
+        // singular profile field with the advertised name.
+        let created = fixture
+            .server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|request| request.url.path() == "/orders/create")
+            .expect("newOrder request captured");
+        let jws: FlattenedJws = serde_json::from_slice(&created.body).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
+        assert_eq!(payload["profile"], serde_json::json!("shortlived"));
+        assert_eq!(fixture.count("/orders/create").await, 1);
+    }
+}
+
+#[tokio::test]
+async fn unadvertised_profiles_fail_before_any_order_or_side_effect() {
+    let mut fixture = Fixture::for_identifier(
+        ValidationMethod::Webroot,
+        Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+        Some("classic-premium"),
+    )
+    .await;
+    let saved = fixture.session.as_ref().unwrap().record().await.unwrap();
+    let solver = adapter(&saved, false, true, progress()).unwrap();
+    let Err(error) = fixture
+        .service
+        .run(
+            fixture.session.as_mut().unwrap().as_mut(),
+            solver.as_ref(),
+            &IssueExecution {
+                max_polls: 30,
+                context: ExecutionContext {
+                    deadline: Instant::now() + Duration::from_secs(10),
+                    ..execution()
+                },
+                poll_interval: Duration::from_millis(1),
+            },
+        )
+        .await
+    else {
+        panic!("unadvertised profile must fail before issuance");
+    };
+    let text = error.to_string();
+    assert!(text.contains("classic-premium"), "{text}");
+    assert!(text.contains("classic, shortlived"), "{text}");
+    assert_eq!(fixture.count("/orders/create").await, 0);
+    assert_eq!(fixture.count("/http-challenge").await, 0);
 }
 
 async fn wait_standalone_publication(address: std::net::SocketAddr, acknowledged: &AtomicUsize) {
@@ -1318,6 +1428,7 @@ async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_
     let mut request = IssueRequest {
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),
+        profile: None,
         key_algorithm: record.key_algorithm,
         account_name: record.account_name.clone(),
         challenge: record.challenge,
@@ -1399,6 +1510,7 @@ async fn matching_includes_every_unfinished_phase_but_unconfirmed_creation_never
     let request = IssueRequest {
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),
+        profile: None,
         key_algorithm: record.key_algorithm,
         account_name: record.account_name.clone(),
         challenge: record.challenge,
@@ -1483,6 +1595,7 @@ async fn expired_invalid_or_csr_rejected_requests_are_not_automatic_recovery_can
     let request = IssueRequest {
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),
+        profile: None,
         key_algorithm: record.key_algorithm,
         account_name: record.account_name.clone(),
         challenge: record.challenge,

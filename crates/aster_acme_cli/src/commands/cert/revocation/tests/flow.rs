@@ -80,6 +80,7 @@ impl Fixture {
             solver_config: serde_json::json!({}),
             name: CertificateName::new("web").unwrap(),
             identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
+            profile: None,
             key_algorithm: KeyAlgorithm::EcdsaP256,
             account_name: "issuer".into(),
         };

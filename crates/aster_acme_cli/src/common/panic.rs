@@ -169,6 +169,8 @@ pub(crate) fn data_root(args: &crate::app::Args) -> CliResult<Option<PathBuf>> {
                 &options.local.data_dir
             }
             AccountCommand::Switch(args) => &args.local.data_dir,
+            AccountCommand::Profiles(args) => &args.local.data_dir,
+            AccountCommand::SetProfile(args) => &args.network.local.data_dir,
             AccountCommand::Register(args) => &args.local.data_dir,
             AccountCommand::UpdateContact(args) => &args.network.local.data_dir,
             AccountCommand::RotateKey(args) => &args.network.local.data_dir,

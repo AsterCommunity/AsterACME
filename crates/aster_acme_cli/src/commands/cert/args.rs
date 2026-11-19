@@ -164,7 +164,7 @@ pub(crate) struct IssueArgs {
         value_parser = parse_domain
     )]
     pub domain: Vec<aster_acme::identifier::DnsIdentifier>,
-    /// IP identifier (RFC 8738); repeat for SANs. Requires HTTP-01 or TLS-ALPN-01 validation.
+    /// IP identifier ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)); repeat for SANs. Requires HTTP-01 or TLS-ALPN-01 validation.
     #[arg(
         long = "ip",
         value_name = "ADDRESS",
@@ -178,6 +178,10 @@ pub(crate) struct IssueArgs {
     /// Certificate key algorithm; CA acceptance varies. Account signing key is unchanged.
     #[arg(short = 'k', long = "key-type", value_parser = key_algorithm_parser(), default_value = "ecdsa-p256", conflicts_with = "resume")]
     pub key_algorithm: KeyAlgorithm,
+    /// CA certificate profile (e.g. shortlived for IP identifiers on Let's Encrypt);
+    /// the CA directory must advertise it. Omitted keeps the CA default.
+    #[arg(long, value_name = "NAME", conflicts_with = "resume", value_parser = parse_profile)]
+    pub profile: Option<String>,
     /// Validation implementation; omitted prompts on terminals, required in scripts.
     #[arg(short = 'c', long, value_enum, conflicts_with = "resume")]
     pub challenge: Option<crate::commands::cert::validation::ValidationMethod>,
@@ -280,6 +284,13 @@ fn parse_domain(value: &str) -> Result<aster_acme::identifier::DnsIdentifier, St
 
 fn parse_ip(value: &str) -> Result<aster_acme::identifier::IpIdentifier, String> {
     aster_acme::identifier::IpIdentifier::new(value).map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_profile(value: &str) -> Result<String, String> {
+    if value.is_empty() || value.len() > 64 || value.chars().any(char::is_control) {
+        return Err("a certificate profile is a nonempty name of at most 64 bytes without control characters".into());
+    }
+    Ok(value.to_owned())
 }
 
 fn parse_certificate_name(value: &str) -> Result<String, String> {

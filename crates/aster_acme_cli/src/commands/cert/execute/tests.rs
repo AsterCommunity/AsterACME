@@ -34,6 +34,7 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
     let mut request = IssueRequest {
         name: CertificateName::new("dns-cert").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
+        profile: None,
         account_name: "default".into(),
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
@@ -239,6 +240,7 @@ async fn renewal_failure_predecessor(
     let request = IssueRequest {
         name: CertificateName::new("deadline").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
+        profile: None,
         account_name: "default".into(),
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
@@ -303,6 +305,7 @@ async fn renewal_material_logs_name_before_ca_for_each_batch_item() {
                     DnsIdentifier::new("cdn.example.com").unwrap(),
                 )],
                 account_name: "default".into(),
+                profile: None,
                 key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 challenge: aster_acme::challenge::ChallengeKind::Dns01,
                 solver_id: "manual_dns".into(),
@@ -353,6 +356,7 @@ async fn automatic_allocation_retries_only_name_collisions_while_explicit_names_
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         name: CertificateName::new("example.com-collision").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
+        profile: None,
         account_name: "default".into(),
     };
     let initial = store.create(&request, &account).await.unwrap();
@@ -386,6 +390,7 @@ async fn allocation_propagates_unsafe_storage_errors_without_creating_another_ra
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         name: CertificateName::new("example.com-existing").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
+        profile: None,
         account_name: "default".into(),
     };
     drop(store.create(&request, &account).await.unwrap());
@@ -437,6 +442,7 @@ async fn renew_not_due_uses_saved_definition_and_never_contacts_ca_or_creates_a_
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
         name: CertificateName::new("web").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
+        profile: None,
         key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP384,
         account_name: "default".into(),
     };

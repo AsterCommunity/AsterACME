@@ -1,8 +1,8 @@
-//! RFC 7515 flattened JWS and RFC 8555 protected headers, independent of signing keys.
+//! [RFC 7515](https://datatracker.ietf.org/doc/html/rfc7515) flattened JWS and [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) protected headers, independent of signing keys.
 use serde::{Deserialize, Serialize};
 
 /// JWS algorithms implemented by this client. CA acceptance is independent.
-/// RFC 8555 mandates ES256 and recommends RFC 8037 `EdDSA` with Ed25519.
+/// [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) mandates ES256 and recommends [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037) `EdDSA` with Ed25519.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SignatureAlgorithm {
     /// P-256 / SHA-256, fixed 64-byte R || S.
@@ -14,7 +14,7 @@ pub enum SignatureAlgorithm {
     /// P-521 / SHA-512, fixed 132-byte R || S (not 128 bytes).
     #[serde(rename = "ES512")]
     Es512,
-    /// Ed25519 using the RFC 8037 JOSE name accepted by ACME.
+    /// Ed25519 using the [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037) JOSE name accepted by ACME.
     #[serde(rename = "EdDSA")]
     EdDsa,
     /// RSA PKCS#1 v1.5 / SHA-256; modulus size is a separate key property.
@@ -74,7 +74,7 @@ pub struct EabHeader<'a> {
     pub url: &'a str,
 }
 
-/// RFC 8555 keyChange inner protected header: new-key JWK, exact URL, and no nonce.
+/// [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) keyChange inner protected header: new-key JWK, exact URL, and no nonce.
 #[derive(Serialize)]
 pub struct KeyChangeHeader<'a, J> {
     /// Signing algorithm.

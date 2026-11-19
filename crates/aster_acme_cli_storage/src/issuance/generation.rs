@@ -80,6 +80,7 @@ impl CliIssueStore {
                     .ok_or_else(|| failure("missing account URL"))?,
                 account_thumbprint: account.key_thumbprint,
                 key_algorithm: request.key_algorithm,
+                profile: request.profile,
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
                 new_order_intent_saved: false,
@@ -276,6 +277,7 @@ fn initialize_definition(
                         name: request.name.clone(),
                         identifiers: request.identifiers.clone(),
                         key_algorithm: request.key_algorithm,
+                        profile: request.profile.clone(),
                         account_name: request.account_name.clone(),
                         account_id: account.account_id.clone(),
                         directory: account.directory_url.clone(),
@@ -314,6 +316,7 @@ fn initialize_definition(
                 name,
                 identifiers: config.cert.identifiers,
                 key_algorithm: config.cert.key_algorithm,
+                profile: config.cert.profile,
                 account_name: config.cert.account_name,
             };
             validate_request(&request, account)?;

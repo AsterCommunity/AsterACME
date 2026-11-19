@@ -175,6 +175,7 @@ fn fixture(directory: &AcmeUrl, thumbprint: &str) -> AccountRecord {
         deactivation: aster_acme_core::account::DeactivationState::NotRequested,
         key_rotation: None,
         accepted_terms_url: None,
+        preferred_profile: None,
         auto_accept_terms_updates: false,
         state: AccountRecordState::RegistrationPending,
     }

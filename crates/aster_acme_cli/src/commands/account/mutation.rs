@@ -1,6 +1,6 @@
 //! Confirmed account mutations share selection, normalization, and service boundaries.
 use crate::commands::account::{
-    args::{AccountArgs, RotateKeyArgs, UpdateContactArgs},
+    args::{AccountArgs, NetworkArgs, RotateKeyArgs, UpdateContactArgs},
     report::{AccountReport, RemoteAction},
 };
 use crate::common::output;
@@ -29,6 +29,133 @@ async fn context(
     let context = settings.account(options).await?;
     context.require_account().await?;
     Ok(context)
+}
+
+/// Draft-ietf-acme-profiles (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>):
+/// read-only listing of the certificate profiles a CA advertises. Directory
+/// discovery is unauthenticated; no account key or CA mutation is involved.
+pub(super) async fn profiles(
+    args: NetworkArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
+    let mut options = AccountArgs::from(args);
+    let settings = CliSettings::load(&options).await?;
+    crate::commands::account::selection::complete(
+        &mut options,
+        &settings,
+        crate::commands::account::selection::Mode::Existing,
+        cli,
+    )
+    .await?;
+    let context = settings.account(&options).await?;
+    context.require_account().await?;
+    let transport = context.transport_options(&options)?;
+    let client = cli
+        .http
+        .discover(context.directory.clone(), transport)
+        .await?;
+    Ok(AccountReport::Profiles {
+        directory: context.directory,
+        profiles: client.directory().meta.profiles.clone(),
+    })
+}
+
+/// Set or clear the account's default certificate profile. The preference is
+/// local metadata: an explicit `cert issue --profile` always wins, and saved
+/// certificate definitions never adopt a new default implicitly. A new name
+/// must be advertised by the CA directory; an unreachable directory never
+/// silently accepts a change.
+pub(super) async fn set_profile(
+    args: crate::commands::account::args::SetProfileArgs,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
+    let mut options = AccountArgs::from(args.network);
+    let settings = CliSettings::load(&options).await?;
+    crate::commands::account::selection::complete(
+        &mut options,
+        &settings,
+        crate::commands::account::selection::Mode::Existing,
+        cli,
+    )
+    .await?;
+    let context = settings.account(&options).await?;
+    context.require_account().await?;
+    let signer = context
+        .store
+        .signer(
+            &context.directory,
+            &context.name,
+            aster_acme::storage::account::KeyAccess::Existing,
+        )
+        .await?;
+    let mut record = context
+        .store
+        .load(&context.directory, &signer.jwk()?.thumbprint()?)
+        .await?
+        .ok_or(AccountError::AccountDoesNotExist)?;
+    record
+        .action(aster_acme_core::account::AccountOperation::Update)
+        .map_err(AccountError::from)?;
+    let target = if args.clear {
+        None
+    } else {
+        Some(
+            args.profile
+                .clone()
+                .ok_or("Specify --profile <NAME> or --clear.")?,
+        )
+    };
+    let transport = context.transport_options(&options)?;
+    let client = cli
+        .http
+        .discover(context.directory.clone(), transport)
+        .await?;
+    let advertised = client.directory().meta.profiles.clone();
+    if let Some(profile) = &target {
+        match &advertised {
+            None => {
+                return Err(format!(
+                    "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved"
+                )
+                .into());
+            }
+            Some(advertised) if !advertised.contains_key(profile) => {
+                return Err(format!(
+                    "CA directory does not advertise profile {profile:?}; available: {}",
+                    advertised.keys().cloned().collect::<Vec<_>>().join(", ")
+                )
+                .into());
+            }
+            Some(_) => {}
+        }
+    }
+    let previous = record.preferred_profile.clone();
+    record.preferred_profile = target;
+    terminal::confirm_action(
+        &format!(
+            "Set account default profile\n  Name: {}\n  CA: {}\n  Profile: {}",
+            output::safe(&context.name),
+            output::safe(context.directory.as_str()),
+            record
+                .preferred_profile
+                .as_deref()
+                .map_or_else(|| "(none; the CA default applies)".to_owned(), output::safe,),
+        ),
+        "Save this profile preference?",
+        args.yes,
+        &cli.output,
+    )?;
+    let lease = context
+        .store
+        .lock_account(&context.directory, &record.key_thumbprint)
+        .await?;
+    aster_acme::storage::account::AccountStore::save(context.store.as_ref(), &record, &lease)
+        .await?;
+    Ok(AccountReport::ProfilePreference {
+        name: context.name,
+        previous,
+        current: record.preferred_profile,
+    })
 }
 
 pub(super) async fn update_contacts(

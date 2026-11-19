@@ -1,4 +1,4 @@
-//! Persistent, domain-bound TXT records for draft-ietf-acme-dns-persist-02.
+//! Persistent, domain-bound TXT records for [draft-ietf-acme-dns-persist-02](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist-02).
 //! No DNS mutation or ACME request occurs here. Callers must authenticate the
 //! account before handing publication instructions to an external DNS operator.
 

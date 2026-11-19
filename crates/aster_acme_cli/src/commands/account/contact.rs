@@ -1,4 +1,4 @@
-//! User email addresses become RFC 8555 contact URIs at the CLI boundary.
+//! User email addresses become [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) contact URIs at the CLI boundary.
 
 use aster_acme::account::AccountError;
 

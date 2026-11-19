@@ -31,6 +31,17 @@ pub(super) enum Output<'a> {
         default_account: &'a str,
         directory: &'a AcmeUrl,
     },
+    /// Draft-ietf-acme-profiles listing
+    /// (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>).
+    Profiles {
+        directory: &'a AcmeUrl,
+        profiles: &'a Option<std::collections::BTreeMap<String, String>>,
+    },
+    ProfilePreference {
+        name: &'a str,
+        previous: &'a Option<String>,
+        current: &'a Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -163,6 +174,39 @@ struct ListEntry<'a> {
     is_default: bool,
 }
 
+/// Project one saved account row into its JSON view; verified-only CA status.
+fn saved_account(local: &crate::commands::account::report::LocalAccountReport) -> SavedAccount<'_> {
+    let record = local.record.as_ref();
+    SavedAccount {
+        key_algorithm: record.map(|record| record.key_algorithm),
+        user_agent: record.and_then(|record| record.user_agent.as_deref()),
+        key_rotation: record.and_then(|record| record.key_rotation.as_ref()),
+        times: record.map_or_else(aster_acme::account::AccountTimes::default, |record| {
+            record.times
+        }),
+        name: &local.name,
+        ca_query: AccountQuery {
+            account_refreshed: local.verified,
+        },
+        directory: &local.directory,
+        key_thumbprint: &local.key_thumbprint,
+        account_id: record.map(|record| record.account_id.as_str()),
+        account_url: record.and_then(|record| record.account_url.as_ref()),
+        local_state: record.map(|record| record.state),
+        status: if local.verified {
+            record.and_then(|record| record.last_status.clone())
+        } else {
+            None
+        },
+        last_status: record.and_then(|record| record.last_status.as_ref()),
+        deactivation: record.map(|record| record.deactivation),
+        contacts: record.map_or(&[], |record| record.contacts.as_slice()),
+        server_contacts: record.and_then(|record| record.server_contacts.as_deref()),
+        accepted_terms_url: record.and_then(|record| record.accepted_terms_url.as_ref()),
+        auto_accept_terms_updates: record.is_some_and(|record| record.auto_accept_terms_updates),
+    }
+}
+
 impl<'a> From<&'a AccountReport> for Output<'a> {
     fn from(report: &'a AccountReport) -> Self {
         match report {
@@ -179,40 +223,7 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 removed_locally: true,
                 ca_request_performed: false,
             },
-            AccountReport::Local(local) => {
-                let record = local.record.as_ref();
-                Self::Local(SavedAccount {
-                    key_algorithm: record.map(|record| record.key_algorithm),
-                    user_agent: record.and_then(|record| record.user_agent.as_deref()),
-                    key_rotation: record.and_then(|record| record.key_rotation.as_ref()),
-                    times: record
-                        .map_or_else(aster_acme::account::AccountTimes::default, |record| {
-                            record.times
-                        }),
-                    name: &local.name,
-                    ca_query: AccountQuery {
-                        account_refreshed: local.verified,
-                    },
-                    directory: &local.directory,
-                    key_thumbprint: &local.key_thumbprint,
-                    account_id: record.map(|record| record.account_id.as_str()),
-                    account_url: record.and_then(|record| record.account_url.as_ref()),
-                    local_state: record.map(|record| record.state),
-                    status: if local.verified {
-                        record.and_then(|record| record.last_status.clone())
-                    } else {
-                        None
-                    },
-                    last_status: record.and_then(|record| record.last_status.as_ref()),
-                    deactivation: record.map(|record| record.deactivation),
-                    contacts: record.map_or(&[], |record| record.contacts.as_slice()),
-                    server_contacts: record.and_then(|record| record.server_contacts.as_deref()),
-                    accepted_terms_url: record
-                        .and_then(|record| record.accepted_terms_url.as_ref()),
-                    auto_accept_terms_updates: record
-                        .is_some_and(|record| record.auto_accept_terms_updates),
-                })
-            }
+            AccountReport::Local(local) => Self::Local(saved_account(local)),
             AccountReport::Remote {
                 action,
                 name,
@@ -237,6 +248,22 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
             AccountReport::Switched { name, directory } => Self::Switched {
                 default_account: name,
                 directory,
+            },
+            AccountReport::Profiles {
+                directory,
+                profiles,
+            } => Self::Profiles {
+                directory,
+                profiles,
+            },
+            AccountReport::ProfilePreference {
+                name,
+                previous,
+                current,
+            } => Self::ProfilePreference {
+                name,
+                previous,
+                current,
             },
             AccountReport::List {
                 accounts,

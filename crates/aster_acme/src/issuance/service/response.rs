@@ -23,6 +23,18 @@ pub(super) fn parse_order(
             return Err(IssueError::InvalidInput("duplicate order identifiers"));
         }
     }
+    // A CA-selected profile is informational; an explicit selection that the
+    // CA overrode would change certificate content and is rejected instead.
+    if let Some(selected) = &order.profile
+        && record
+            .profile
+            .as_ref()
+            .is_some_and(|requested| requested != selected)
+    {
+        return Err(IssueError::InvalidInput(
+            "CA order selected a different certificate profile than requested",
+        ));
+    }
     if expected != actual
         || order.authorizations.len() > 100
         || order

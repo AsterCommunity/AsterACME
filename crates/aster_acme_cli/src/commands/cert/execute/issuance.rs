@@ -37,7 +37,7 @@ pub(super) async fn issue(
             .metadata()
             .await?
             .ok_or("No registered account exists.")?;
-        let mut request = request(&args, &context.name)?;
+        let mut request = request(&args, &context.name, account.preferred_profile.as_deref())?;
         if args.challenge == Some(crate::commands::cert::validation::ValidationMethod::DnsProvider)
         {
             request.solver_config =
@@ -165,7 +165,13 @@ pub(super) async fn select_saved_issue(
     })
 }
 
-pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
+/// The explicit `--profile` flag wins; otherwise the account's saved default
+/// ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles)) applies; without either the CA default is used.pub(super)
+fn request(
+    args: &IssueArgs,
+    account: &str,
+    account_default_profile: Option<&str>,
+) -> CliResult<IssueRequest> {
     let method = args
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
@@ -202,6 +208,10 @@ pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest
             None => CertificateName::generated(primary)?,
         },
         identifiers,
+        profile: args
+            .profile
+            .clone()
+            .or_else(|| account_default_profile.map(str::to_owned)),
         account_name: account.into(),
     };
     request.validate()?;

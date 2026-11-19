@@ -1,4 +1,4 @@
-//! RFC 8737 and RFC 8738 TLS-ALPN-01 response material and identifier constraints.
+//! [RFC 8737](https://datatracker.ietf.org/doc/html/rfc8737) and [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738) TLS-ALPN-01 response material and identifier constraints.
 use crate::{
     challenge::{ChallengeError, ChallengeToken, KeyAuthorization},
     identifier::Identifier,
@@ -32,9 +32,7 @@ impl TlsAlpn01Response {
         })
     }
 
-    /// SNI host name for this validation certificate. RFC 6066 forbids IP
-    /// literals in SNI, so RFC 8738 section 6 mandates the IN-ADDR.ARPA or
-    /// IP6.ARPA reverse mapping of the address instead of its textual form.
+    /// SNI host name for this validation certificate. [RFC 6066](https://datatracker.ietf.org/doc/html/rfc6066) forbids IP    /// literals in SNI, so [RFC 8738 §6](https://datatracker.ietf.org/doc/html/rfc8738#section-6) mandates the IN-ADDR.ARPA or    /// IP6.ARPA reverse mapping of the address instead of its textual form.
     #[must_use]
     pub fn sni_name(&self) -> String {
         match &self.identifier {

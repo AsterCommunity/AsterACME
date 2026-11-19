@@ -217,6 +217,7 @@ mod tests {
                     solver_id: "manual_dns".into(),
                     solver_config: serde_json::Value::Object(serde_json::Map::default()),
                     key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                    profile: None,
                     name: name.clone(),
                     identifiers: vec![aster_acme::identifier::Identifier::Dns(
                         aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),

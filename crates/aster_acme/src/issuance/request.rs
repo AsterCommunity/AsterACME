@@ -96,6 +96,11 @@ pub struct IssueRequest {
     pub identifiers: Vec<Identifier>,
     /// Certificate key choice, independent of the account signing key.
     pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
+    /// CA-advertised certificate profile selected by the operator
+    /// (draft-ietf-acme-profiles <https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>);
+    /// `None`
+    /// keeps the CA default. Fixed for the lifetime of this definition.
+    pub profile: Option<String>,
     /// Stable local account name, never transmitted to the CA.
     pub account_name: String,
 }
@@ -106,7 +111,7 @@ impl IssueRequest {
     ///
     /// # Errors
     /// Rejects duplicate/empty identifiers, wildcard requests using non-DNS
-    /// methods, and DNS methods combined with IP identifiers (RFC 8738).
+    /// methods, and DNS methods combined with IP identifiers ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)).
     pub fn validate(&self) -> Result<(), IssueError> {
         if self.identifiers.is_empty()
             || self.identifiers.len() > 100
@@ -136,6 +141,13 @@ impl IssueRequest {
         {
             return Err(IssueError::InvalidInput(
                 "DNS validation methods cannot validate IP identifiers; RFC 8738 allows HTTP-01 and TLS-ALPN-01 only",
+            ));
+        }
+        if let Some(profile) = &self.profile
+            && (profile.is_empty() || profile.len() > 64 || profile.chars().any(char::is_control))
+        {
+            return Err(IssueError::InvalidInput(
+                "certificate profile must be a nonempty name of at most 64 bytes without control characters",
             ));
         }
         Ok(())

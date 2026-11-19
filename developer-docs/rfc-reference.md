@@ -12,6 +12,7 @@
 | 必读 | [RFC 9773 — ACME Renewal Information (ARI) Extension](https://www.rfc-editor.org/rfc/rfc9773.html) | 续期信息查询、建议续期窗口与替换证书关联；设计续期调度时一并考虑 |
 | 按需 | [RFC 8737 — ACME TLS Application-Layer Protocol Negotiation (ALPN) Challenge Extension](https://www.rfc-editor.org/rfc/rfc8737.html) | TLS-ALPN-01、专用 ALPN 协议与验证证书 |
 | 按需 | [RFC 8738 — ACME IP Identifier Validation Extension](https://www.rfc-editor.org/rfc/rfc8738.html) | IP 地址证书标识符与 HTTP/TLS 验证扩展；DNS-01 不用于 IP 标识符验证 |
+| 按需 | [draft-ietf-acme-profiles — ACME Profiles Extension](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles) | directory 广告 profiles、newOrder 单数 profile 字段与订单回显；草案未定稿，以 datatracker 最新版为准 |
 | 注册表 | [IANA ACME protocol registry (plain text)](https://www.iana.org/assignments/acme/acme.txt) · [HTML](https://www.iana.org/assignments/acme/acme.xhtml) · [XML](https://www.iana.org/assignments/acme/acme.xml) | ACME Error Types、Validation Methods、Identifier Types、Directory Metadata 等注册项；TXT 是便于人工审查的主链接，XML 适合机器处理 |
 | 诊断参考 | [RFC 8657 — CAA Record Extensions for Account URI and ACME Method Binding](https://www.rfc-editor.org/rfc/rfc8657.html) | CAA 中对 ACME 账户和验证方法的约束 |
 
@@ -187,7 +188,7 @@ CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取
 | 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | dns_provider可无人值守续期；真实凭据/权限/传播已在内置Cloudflare验收，其他provider接入时另验，人工方式不猜测已发布 |
 | 吊销 | 账户kid／证书私钥jwk签名、原因代码、alreadyRevoked及精确目标/不确定结果保存 | CLI目前管理已托管证书；库支持外部target/session，任意文件导入和其他已获全部标识符授权的账户选择入口尚未提供 |
 | 文件和部署 | 私有状态、跨进程租约、多世代与in_use、多目标发布、自动部署/reload与结果记录 | 不承诺整组原子替换或服务健康；真实断电及服务更新需另验 |
-| 扩展与运维成熟度 | 本表已列RFC8737、RFC8738、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | Profiles、STAR、S/MIME等未普遍实现；Pebble、ZeroSSL/Google等其他公网CA和各原生平台验收分别报告 |
+| 扩展与运维成熟度 | 本表已列RFC8737、RFC8738、draft-ietf-acme-profiles、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | STAR、S/MIME等未普遍实现；Pebble、ZeroSSL/Google等其他公网CA和各原生平台验收分别报告 |
 
 按“常规域名证书客户端”的功能目标作工程估算，当前约 **85%–90%**：主协议、账户、签发/恢复、续期/常驻维护、吊销和部署链路已经形成，ADPP external DNS已补充自动发布入口；内置DNS厂商adapter、候选链选择等仍待补齐。这个区间没有按RFC章节或测试数量机械计分，也不意味着整个ACME扩展家族已完成相同比例。生产可用性应逐项看真实CA、真实DNS与部署证据，不另造一个看似精确的“生产完成百分比”。
 

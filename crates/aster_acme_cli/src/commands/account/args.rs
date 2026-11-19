@@ -28,12 +28,39 @@ pub(crate) enum AccountCommand {
     Recover(NetworkArgs),
     /// Replace or clear the contact addresses on an existing CA account.
     UpdateContact(UpdateContactArgs),
+    /// List the certificate profiles the CA advertises
+    /// ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles)); read-only.
+    Profiles(NetworkArgs),
+    /// Set or clear this account's default certificate profile; future issues
+    /// use it unless cert issue --profile overrides it.
+    SetProfile(SetProfileArgs),
     /// Rotate the account signing key, or resume its saved rollover transaction.
     RotateKey(RotateKeyArgs),
     /// Permanently deactivate a CA account; this cannot be undone.
     Deactivate(DeactivateArgs),
     /// Remove local account metadata and private key; does not deactivate the CA account.
     Remove(RemoveArgs),
+}
+
+/// Set or clear the account's default certificate profile.
+#[derive(clap::Args)]
+pub(crate) struct SetProfileArgs {
+    #[command(flatten)]
+    pub(crate) network: NetworkArgs,
+    /// Profile name to set; the CA directory must advertise it.
+    #[arg(
+        long,
+        value_name = "NAME",
+        value_parser = crate::commands::cert::args::parse_profile,
+        conflicts_with = "clear"
+    )]
+    pub(crate) profile: Option<String>,
+    /// Remove the saved default profile so new issues use the CA default.
+    #[arg(long)]
+    pub(crate) clear: bool,
+    /// Confirm this command's action only.
+    #[arg(short = 'y', long)]
+    pub(crate) yes: bool,
 }
 
 #[derive(clap::Args, Default)]
@@ -150,6 +177,10 @@ pub(crate) struct RegisterArgs {
     pub(crate) auto_accept_new_terms: bool,
     #[command(flatten)]
     pub(crate) http: HttpArgs,
+    /// Default certificate profile for this account; the CA directory must
+    /// advertise it (see account profiles). cert issue --profile overrides it.
+    #[arg(long, value_parser = crate::commands::cert::args::parse_profile)]
+    pub(crate) profile: Option<String>,
     /// Confirm existing account reuse; does not accept terms or disable other prompts.
     #[arg(short = 'y', long)]
     pub(crate) yes: bool,
@@ -228,6 +259,8 @@ pub(crate) struct AccountArgs {
     pub(crate) contact: Vec<String>,
     /// Agree to the current terms published by the selected CA (register only).
     pub(crate) accept_terms: bool,
+    /// Default certificate profile to save on a new account (register only).
+    pub(crate) profile: Option<String>,
     /// Accept current terms and future terms URL updates (register only).
     pub(crate) auto_accept_new_terms: bool,
     /// EAB key ID; use --eab-key-file for its base64url HMAC key.
@@ -275,6 +308,7 @@ impl From<RegisterArgs> for AccountArgs {
             key_algorithm: args.key_algorithm,
             contact: args.contact,
             accept_terms: args.accept_terms,
+            profile: args.profile,
             auto_accept_new_terms: args.auto_accept_new_terms,
             eab_kid: args.eab_kid,
             eab_key_file: args.eab_key_file,
@@ -307,8 +341,12 @@ impl AccountCommand {
             Self::List(args) => args.local.json,
             Self::Deactivate(args) => args.network.local.json,
             Self::Register(args) => args.local.json,
-            Self::Recover(args) | Self::Show { options: args, .. } => args.local.json,
+            Self::Recover(args) | Self::Show { options: args, .. } | Self::Profiles(args) => {
+                args.local.json
+            }
+            // Same policy as the NetworkArgs arms, through the narrower type.
             Self::Switch(args) => args.local.json,
+            Self::SetProfile(args) => args.network.local.json,
         }
     }
 }

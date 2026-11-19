@@ -144,6 +144,7 @@ impl AccountService {
             deactivation: crate::account::DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            preferred_profile: None,
             auto_accept_terms_updates: false,
             state: AccountRecordState::RegistrationPending,
         });
@@ -258,6 +259,7 @@ impl AccountService {
             deactivation: crate::account::DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: self.client.directory().meta.terms_of_service.clone(),
+            preferred_profile: None,
             auto_accept_terms_updates: options.auto_accept_terms_updates,
             state: AccountRecordState::RegistrationPending,
         };

@@ -1,4 +1,4 @@
-//! RFC 8555 error responses are evidence, not synthesized order states.
+//! [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) error responses are evidence, not synthesized order states.
 use crate::issuance::tests::*;
 use aster_acme::crypto::JwsSigner as _;
 use aster_acme_protocol::problem::ProblemKind;

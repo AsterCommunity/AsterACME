@@ -80,5 +80,5 @@ aster-acme cert issue -d example.com --ip 203.0.113.10 -c webroot -w /var/www/ht
 ```
 
 - IP 标识符跳过 DNS 解析:HTTP-01 的 Host 为 IP 字面量(IPv6 带括号),TLS-ALPN-01 按反向解析名(IN-ADDR.ARPA/IP6.ARPA)响应并提供 iPAddress SAN 证书。
-- CA 必须支持 RFC 8738 才能签发 IP 证书;CA 的拒绝(如不支持 IP、地址不可公网路由)会原样保留为可诊断错误。CAA 预检对 IP 标识符显示不适用。
+- CA 必须支持 RFC 8738 才能签发 IP 证书;Let's Encrypt 还要求 `--profile shortlived`(约 6 天有效期,依赖无人值守续期)。CA 的拒绝(如不支持 IP、profile 不允许、地址不可公网路由)会原样保留为可诊断错误。CAA 预检对 IP 标识符显示不适用。
 - 默认证书名对 IP 主标识符使用 `ip-` 前缀(如 `ip-203.0.113.10`)。

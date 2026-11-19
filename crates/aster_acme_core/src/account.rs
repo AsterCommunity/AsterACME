@@ -24,7 +24,7 @@ pub enum DeactivationState {
     Confirmed,
 }
 
-/// Durable local progress for RFC 8555 §7.3.5 key rollover.
+/// Durable local progress for [RFC 8555 §7.3.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5) key rollover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyRotation {
     /// Thumbprint of the new key staged locally before the CA request.
@@ -60,7 +60,7 @@ pub enum AccountOperation {
     Select,
     /// Update account contacts at the CA.
     Update,
-    /// Begin or resume RFC 8555 §7.3.5 key rollover.
+    /// Begin or resume [RFC 8555 §7.3.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5) key rollover.
     RotateKey,
 }
 

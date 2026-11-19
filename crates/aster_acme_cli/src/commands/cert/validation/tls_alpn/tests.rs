@@ -1,4 +1,4 @@
-//! Real TLS handshakes and RFC 8737 challenge certificate checks.
+//! Real TLS handshakes and [RFC 8737](https://datatracker.ietf.org/doc/html/rfc8737) challenge certificate checks.
 use crate::commands::cert::validation::tests::publications;
 use crate::commands::cert::validation::tests::{execution, progress};
 use crate::commands::cert::validation::tls_alpn::*;
@@ -281,7 +281,7 @@ async fn ip_identifiers_route_by_reverse_arpa_sni_and_serve_ipaddress_sans() {
     assert!(tokio::net::TcpListener::bind(address).await.is_ok());
 }
 
-/// Decode an RFC 5280 iPAddress SAN into a typed address for comparisons.
+/// Decode an [RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280) iPAddress SAN into a typed address for comparisons.
 fn ip_from_san(bytes: &[u8]) -> Option<std::net::IpAddr> {
     match bytes {
         [a, b, c, d] => Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
@@ -449,7 +449,7 @@ async fn tls_connect(
         .map_err(std::io::Error::other)
 }
 
-/// Loopback CA helper for RFC 8738 scenarios: connect with the reverse-name
+/// Loopback CA helper for [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738) scenarios: connect with the reverse-name
 /// SNI the RFC mandates and require exactly one iPAddress SAN.
 pub(crate) async fn verify_ip_challenge_certificate(
     address: SocketAddr,

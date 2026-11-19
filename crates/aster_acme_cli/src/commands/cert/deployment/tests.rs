@@ -108,6 +108,7 @@ impl Fixture {
                         identifiers: vec![Identifier::Dns(
                             DnsIdentifier::new("example.com").unwrap(),
                         )],
+                        profile: None,
                         account_name: "default".into(),
                         challenge: aster_acme::challenge::ChallengeKind::Dns01,
                         solver_id: "manual_dns".into(),
@@ -152,6 +153,7 @@ impl Fixture {
                     identifiers: vec![Identifier::Dns(
                         DnsIdentifier::new("pending.example.com").unwrap(),
                     )],
+                    profile: None,
                     account_name: "default".into(),
                     challenge: aster_acme::challenge::ChallengeKind::Dns01,
                     solver_id: "manual_dns".into(),

@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use x509_parser::{pem::parse_x509_pem, prelude::FromDer as _, x509::X509Version};
 use zeroize::Zeroizing;
 
-/// Decode an RFC 5280 `iPAddress` SAN: four bytes for IPv4, sixteen for IPv6.
+/// Decode an [RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280) `iPAddress` SAN: four bytes for IPv4, sixteen for IPv6.
 ///
 /// # Errors
 /// Rejects any other length as a malformed address.
@@ -232,7 +232,7 @@ fn encode_certificate(der: &[u8]) -> String {
     pem
 }
 
-/// Extract the first PEM certificate as DER for RFC 8555 section 7.6.
+/// Extract the first PEM certificate as DER for [RFC 8555 §7.6.](https://datatracker.ietf.org/doc/html/rfc8555#section-7.6.)
 ///
 /// # Errors
 /// Rejects missing, non-certificate or malformed leaf data.

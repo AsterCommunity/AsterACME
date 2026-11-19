@@ -51,6 +51,12 @@ pub(crate) async fn execute(
         AccountCommand::UpdateContact(args) => {
             return crate::commands::account::mutation::update_contacts(args, cli).await;
         }
+        AccountCommand::Profiles(args) => {
+            return crate::commands::account::mutation::profiles(args, cli).await;
+        }
+        AccountCommand::SetProfile(args) => {
+            return crate::commands::account::mutation::set_profile(args, cli).await;
+        }
         AccountCommand::RotateKey(args) => {
             return crate::commands::account::mutation::rotate_key(args, cli).await;
         }
@@ -441,6 +447,7 @@ async fn remote(
     let interactive = crate::common::terminal::interactive(options.json);
     let account_user_agent = options.user_agent.clone();
     let mut persist_contacts = !options.contact.is_empty();
+    let requested_profile_flag = options.profile.clone();
     let thumbprint = signer.jwk()?.thumbprint()?;
     let saved = context.store.load(&context.directory, &thumbprint).await?;
     if matches!(operation, Operation::Register)
@@ -482,7 +489,8 @@ async fn remote(
         account_user_agent,
     )
     .await?;
-    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
+    let directory = context.directory.clone();
+    let client = Arc::new(cli.http.discover(directory.clone(), transport).await?);
     if let Some(registration) = &mut registration {
         if saved
             .as_ref()
@@ -511,6 +519,38 @@ async fn remote(
             &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
         )?;
     }
+    // Draft-ietf-acme-profiles
+    // (https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles): validate
+    // an explicit default profile before creating the account, and offer the
+    // advertised list interactively. The choice is local metadata; the CA is
+    // never told about it.
+    let mut requested_profile = requested_profile_flag.clone();
+    if matches!(operation, Operation::Register) {
+        let advertised = client.directory().meta.profiles.clone();
+        if let Some(profile) = &requested_profile {
+            match &advertised {
+                None => {
+                    return Err(format!(
+                        "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved. Register without --profile, then set it with account set-profile once the CA advertises profiles."
+                    )
+                    .into());
+                }
+                Some(advertised) if !advertised.contains_key(profile) => {
+                    return Err(format!(
+                        "CA directory does not advertise profile {profile:?}; available: {}",
+                        advertised.keys().cloned().collect::<Vec<_>>().join(", ")
+                    )
+                    .into());
+                }
+                Some(_) => {}
+            }
+        } else if interactive {
+            requested_profile = crate::commands::account::interaction::profile_choice(
+                advertised.as_ref(),
+                &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
+            )?;
+        }
+    }
     let auto_accept_requested = registration
         .as_ref()
         .is_some_and(|options| options.auto_accept_terms_updates);
@@ -533,6 +573,7 @@ async fn remote(
         .is_some_and(|record| record.account_url.is_some())
         && terms_changed_before_registration
         && (auto_accept_requested || auto_accept_already_authorized);
+    let store = context.store.clone();
     let service = AccountService::new(client, context.store);
     let account = match operation {
         Operation::Register => {
@@ -562,6 +603,20 @@ async fn remote(
             return Err("Unexpected remote action.".into());
         }
     };
+    // Draft-ietf-acme-profiles: persist the operator's default-profile choice
+    // selected above; local metadata only, never transmitted to the CA.
+    if matches!(operation, Operation::Register)
+        && let Some(profile) = &requested_profile
+    {
+        let thumbprint = signer.jwk()?.thumbprint()?;
+        let lease = store.lock_account(&directory, &thumbprint).await?;
+        let mut record = store
+            .load(&directory, &thumbprint)
+            .await?
+            .ok_or("Local account identity record is missing.")?;
+        record.preferred_profile = Some(profile.clone());
+        AccountStore::save(store.as_ref(), &record, &lease).await?;
+    }
     Ok(AccountReport::Remote {
         action,
         name,

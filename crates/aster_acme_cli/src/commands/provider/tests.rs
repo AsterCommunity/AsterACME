@@ -485,6 +485,7 @@ async fn cleanup_filters_legacy_foreign_idle_and_nonterminal_requests() {
             identifiers: vec![aster_acme::identifier::Identifier::Dns(
                 aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
             )],
+            profile: None,
             key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
         };
@@ -563,6 +564,7 @@ async fn cleanup_records_open_failures_and_continues_to_later_matching_certifica
             identifiers: vec![aster_acme::identifier::Identifier::Dns(
                 aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
             )],
+            profile: None,
             key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
             account_name: "default".into(),
         };

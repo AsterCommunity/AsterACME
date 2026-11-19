@@ -224,6 +224,7 @@ fn request() -> IssueRequest {
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
         key_algorithm: KeyAlgorithm::EcdsaP256,
+        profile: None,
         name: CertificateName::new("example.com").unwrap(),
         identifiers: vec![
             Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),

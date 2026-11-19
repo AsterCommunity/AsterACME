@@ -32,6 +32,10 @@ pub enum IssueError {
     /// Input invariant or CA resource mismatch.
     #[error("{0}")]
     InvalidInput(&'static str),
+    /// The requested CA certificate profile cannot be validated locally;
+    /// the detail names the request and every advertised alternative.
+    #[error("{0}")]
+    InvalidProfile(String),
     /// Sanitized application publication failure; never include credentials or keys.
     #[error("validation publication failed: {0}")]
     Publication(String),

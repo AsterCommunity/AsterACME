@@ -81,7 +81,76 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
         AccountReport::Switched { name, .. } => {
             success(&format!("Default account: {}.", safe(name)), color)
         }
+        AccountReport::Profiles {
+            directory,
+            profiles,
+        } => profiles_text(directory, profiles.as_ref()),
+        AccountReport::ProfilePreference {
+            name,
+            previous,
+            current,
+        } => profile_preference_text(name, previous.as_ref(), current.as_ref(), color),
     })
+}
+
+/// Draft-ietf-acme-profiles listing; an empty advertisement states the CA default.
+fn profiles_text(
+    directory: &aster_acme_protocol::url::AcmeUrl,
+    profiles: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
+    let Some(map) = profiles.filter(|map| !map.is_empty()) else {
+        return format!(
+            "Certificate profiles: the CA at {} advertises none; new orders use the CA default.",
+            safe(directory.as_str())
+        );
+    };
+    let mut text = String::from("Certificate profiles advertised by ");
+    text.push_str(&safe(directory.as_str()));
+    text.push(':');
+    for (name, description) in map {
+        let (name, description) = (name.as_str(), description.as_str());
+        text.push_str("\n  ");
+        text.push_str(&safe(name));
+        if !description.is_empty() {
+            text.push_str(" — ");
+            text.push_str(&safe(description));
+        }
+    }
+    text.push_str("\nSet an account default with account set-profile, or select per issue with cert issue --profile.");
+    text
+}
+
+/// Preference change text; cleared and set states share one honest sentence.
+fn profile_preference_text(
+    name: &str,
+    previous: Option<&String>,
+    current: Option<&String>,
+    color: bool,
+) -> String {
+    let describe = |value: Option<&String>| match value {
+        Some(profile) => safe(profile),
+        None => "(none; the CA default applies)".to_owned(),
+    };
+    if current.is_none() {
+        success(
+            &format!(
+                "Cleared account {} default profile (was {}).",
+                safe(name),
+                describe(previous)
+            ),
+            color,
+        )
+    } else {
+        success(
+            &format!(
+                "Account {} default profile: {} (was {}). Explicit cert issue --profile still wins; saved certificates keep their own selection.",
+                safe(name),
+                describe(current),
+                describe(previous)
+            ),
+            color,
+        )
+    }
 }
 
 fn success(message: &str, color: bool) -> String {
@@ -569,6 +638,7 @@ pub(super) mod tests {
             deactivation: DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            preferred_profile: None,
             auto_accept_terms_updates: false,
             state: AccountRecordState::Registered,
         };

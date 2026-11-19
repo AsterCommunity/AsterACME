@@ -39,6 +39,7 @@ async fn failed_cli_requires_confirmation_then_deletes_only_evidenced_failure_of
                     aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
                 )],
                 account_name: "default".into(),
+                profile: None,
                 key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
                 challenge: aster_acme::challenge::ChallengeKind::Dns01,
                 solver_id: "manual_dns".into(),

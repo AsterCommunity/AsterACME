@@ -15,6 +15,7 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 ## 提交与恢复
 
 1. newOrder前保存创建意图；201响应先保存Location再解析body。无URL且结果不确定时拒绝自动再下单。
+1. profile（draft-ietf-acme-profiles，https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles）属于请求定义：newOrder提交单数`profile`字段，按directory广告校验可用性（未广告或metadata缺失即拒绝，CA拒绝原样保留）；显式`--profile`优先于账户默认，已保存证书定义固定原选择，元数据漂移不触发隐式替换，订单回显不同profile按身份不一致拒绝。
 2. 保存全部验证材料后调用ready；返回false产生action_required。人工方式首次脚本执行先展示材料，后续显式确认。
 3. ack前保存Submitted。明确4xx Problem拒绝时恢复NotSubmitted供下次显式调用重试；超时/传输错误/5xx保留Submitted，不重放。
 4. finalize提交固定CSR；未知结果只轮询。明确4xx Problem拒绝后保存未提交状态和Retry-After，显式恢复先查订单再按ready推进；orderNotReady在本次有界流程内继续查询；badCSR拒绝保留原HTTP证据，不能靠resume更换CSR。

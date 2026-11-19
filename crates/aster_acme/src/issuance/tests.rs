@@ -65,6 +65,7 @@ fn protocol_method_validation_prevents_http_wildcards_before_material_or_network
         identifiers: vec![Identifier::Dns(
             DnsIdentifier::new("*.example.com").unwrap(),
         )],
+        profile: None,
         key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         account_name: "default".into(),
         challenge: crate::challenge::ChallengeKind::Http01,
@@ -93,6 +94,7 @@ fn dns_methods_reject_ip_identifiers_and_http_methods_accept_mixed_sans_before_a
             Identifier::Ip(IpIdentifier::new("192.0.2.1").unwrap()),
             Identifier::Ip(IpIdentifier::new("2001:db8::1").unwrap()),
         ],
+        profile: None,
         key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         account_name: "default".into(),
         challenge: crate::challenge::ChallengeKind::Dns01,
@@ -137,4 +139,105 @@ mod name_boundaries {
             assert!(crate::issuance::CertificateName::new(&"a".repeat(length)).is_err());
         }
     }
+}
+
+#[test]
+fn certificate_profile_names_are_bounded_and_become_resume_identity() {
+    let definition = |profile: Option<&str>| IssueRequest {
+        name: CertificateName::new("web").unwrap(),
+        identifiers: vec![crate::identifier::Identifier::Dns(
+            crate::identifier::DnsIdentifier::new("example.com").unwrap(),
+        )],
+        key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+        account_name: "default".into(),
+        challenge: crate::challenge::ChallengeKind::Http01,
+        solver_id: "webroot".into(),
+        solver_config: serde_json::Value::Object(serde_json::Map::default()),
+        profile: profile.map(str::to_owned),
+    };
+    for invalid in [
+        Some(""),
+        Some(&"x".repeat(65)[..]),
+        Some("short\nlived"),
+        Some("short\u{0}lived"),
+    ] {
+        assert!(
+            definition(invalid).validate().is_err(),
+            "accepted {invalid:?}"
+        );
+    }
+    definition(Some("shortlived")).validate().unwrap();
+    definition(None).validate().unwrap();
+    // The selection is part of the resume identity: a changed profile is a
+    // different certificate definition and never silently reuses an order.
+    let record_profile = |profile: Option<&str>| {
+        let request = definition(profile);
+        IssueRecord {
+            challenge: request.challenge,
+            solver_config: request.solver_config.clone(),
+            is_in_use: false,
+            deployment_count: None,
+            renewal_of: None,
+            solver_id: request.solver_id.clone(),
+            operation_id: "a".repeat(43),
+            name: request.name.clone(),
+            created_at: time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap(),
+            account_name: request.account_name.clone(),
+            account_id: "stable".into(),
+            directory: aster_acme_protocol::url::AcmeUrl::new("https://ca.example/directory")
+                .unwrap(),
+            account_url: aster_acme_protocol::url::AcmeUrl::new("https://ca.example/acct/1")
+                .unwrap(),
+            account_thumbprint: "A".repeat(43),
+            key_algorithm: request.key_algorithm,
+            profile: request.profile.clone(),
+            identifiers: request.identifiers.clone(),
+            phase: aster_acme_core::workflow::IssuancePhase::Authorizing,
+            new_order_intent_saved: true,
+            creation_failure: None,
+            submitted_replaces: None,
+            order_url: None,
+            order: None,
+            authorizations: Vec::new(),
+            finalize_submitted: aster_acme_core::workflow::SubmissionState::NotSubmitted,
+            finalize_rejection: None,
+            next_poll_at: None,
+            poll_wait_source: None,
+            revocation: crate::revocation::RevocationRecord::default(),
+            renewal: None,
+            renewal_retry: None,
+        }
+    };
+    let saved = record_profile(Some("shortlived"));
+    let account = crate::account::AccountRecord {
+        key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+        user_agent: None,
+        times: crate::account::AccountTimes::default(),
+        account_id: "stable".into(),
+        directory_url: aster_acme_protocol::url::AcmeUrl::new("https://ca.example/directory")
+            .unwrap(),
+        key_thumbprint: "A".repeat(43),
+        account_url: Some(
+            aster_acme_protocol::url::AcmeUrl::new("https://ca.example/acct/1").unwrap(),
+        ),
+        contacts: Vec::new(),
+        server_contacts: None,
+        last_status: Some(aster_acme_core::protocol::AccountStatus::Valid),
+        deactivation: aster_acme_core::account::DeactivationState::NotRequested,
+        key_rotation: None,
+        accepted_terms_url: None,
+        preferred_profile: None,
+        auto_accept_terms_updates: false,
+        state: aster_acme_core::account::AccountRecordState::Registered,
+    };
+    assert!(saved.matches_unfinished_request(
+        &definition(Some("shortlived")),
+        &account,
+        time::OffsetDateTime::from_unix_timestamp(1_800_000_001).unwrap()
+    ));
+    assert!(!saved.matches_unfinished_request(
+        &definition(None),
+        &account,
+        time::OffsetDateTime::from_unix_timestamp(1_800_000_001).unwrap()
+    ));
 }

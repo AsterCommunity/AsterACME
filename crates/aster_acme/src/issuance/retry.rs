@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct RenewalPredecessor {
     /// Exact previous local generation, not a DNS name or CA order identifier.
     pub operation_id: String,
-    /// RFC 9773 identifier, absent when the certificate cannot provide one.
+    /// [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) identifier, absent when the certificate cannot provide one.
     pub certificate_id: Option<String>,
     /// Confirmed persistent records captured under the predecessor lease.
     /// They retain historical-key binding across account rollover without
@@ -32,7 +32,7 @@ pub enum PollWaitSource {
 pub struct RequestFailure {
     /// Actual HTTP status, independent of the optional problem body.
     pub status: u16,
-    /// Structured RFC 8555 problem, including unknown extensions and subproblems.
+    /// Structured [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) problem, including unknown extensions and subproblems.
     pub problem: Option<aster_acme_protocol::problem::Problem>,
     /// Absolute retry deadline computed when the response was received.
     #[serde(default, with = "time::serde::rfc3339::option")]

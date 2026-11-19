@@ -26,7 +26,7 @@ pub enum ChallengeKind {
     /// DNS-01 TXT response.
     #[serde(rename = "dns-01")]
     Dns01,
-    /// Persistent DNS TXT response (draft-ietf-acme-dns-persist-02).
+    /// Persistent DNS TXT response ([draft-ietf-acme-dns-persist-02](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist-02)).
     #[serde(rename = "dns-persist-01")]
     DnsPersist01,
     /// TLS-ALPN-01 response (contract only until a solver is supplied).
@@ -55,7 +55,7 @@ impl ChallengeKind {
         }
     }
 
-    /// Whether this method can validate IP identifiers at all. RFC 8738
+    /// Whether this method can validate IP identifiers at all. [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)
     /// section 7 forbids DNS-based methods for IP identifiers.
     #[must_use]
     pub const fn supports_ip_identifiers(self) -> bool {
@@ -174,7 +174,7 @@ pub enum ChallengeError {
     /// Token must use the base64url alphabet and be long enough for 128 bits.
     #[error("invalid challenge token")]
     InvalidToken,
-    /// RFC 7638 SHA-256 JWK thumbprints must decode to 32 bytes.
+    /// [RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) SHA-256 JWK thumbprints must decode to 32 bytes.
     #[error("invalid SHA-256 JWK thumbprint")]
     InvalidThumbprint,
     /// Wildcards require a supported DNS validation method.
@@ -273,7 +273,7 @@ impl ChallengeToken {
 pub struct KeyAuthorization(String);
 
 impl KeyAuthorization {
-    /// Build the RFC 8555 key authorization.
+    /// Build the [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) key authorization.
     ///
     /// # Errors
     /// Rejects thumbprints that are not canonical unpadded base64url SHA-256 values.

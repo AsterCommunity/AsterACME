@@ -1,4 +1,4 @@
-//! RFC 8555 section 8.4 DNS-01 TXT material and owner constraints.
+//! [RFC 8555 §8.4](https://datatracker.ietf.org/doc/html/rfc8555#section-8.4) DNS-01 TXT material and owner constraints.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 use crate::{

@@ -60,9 +60,9 @@ impl AccountService {
         record
     }
 
-    /// Rotate a durable account key under RFC 8555 section 7.3.5.
+    /// Rotate a durable account key under [RFC 8555 §7.3.5.](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5.)
     /// The inner JWS uses the new key/algorithm, while the outer JWS uses the current
-    /// account key/algorithm (RFC 8555 §7.3.5); they need not be the same algorithm.
+    /// account key/algorithm ([RFC 8555 §7.3.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5)); they need not be the same algorithm.
     /// A previous pending request is reconciled using the new key and original account
     /// URL; failure never authorizes another keyChange POST. No private key enters metadata.
     ///

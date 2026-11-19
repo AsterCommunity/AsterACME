@@ -53,6 +53,7 @@
 | `-a` | `--account` | cert issue 的账户选择 |
 | `-d` | `--domain` | cert issue 的 DNS 域名，可重复 |
 | `--ip` |  | cert issue 的 IP 标识符（RFC 8738），可重复；仅 HTTP-01/TLS-ALPN-01 支持，主标识符为首个 `-d`，否则首个 `--ip` |
+| `--profile` |  | cert issue 显式证书 profile（draft-ietf-acme-profiles）；优先级高于账户默认，CA directory 未广告时在 newOrder 前拒绝 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |

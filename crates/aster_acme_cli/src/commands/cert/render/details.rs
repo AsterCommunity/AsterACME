@@ -50,6 +50,9 @@ pub(in crate::commands::cert::render) fn request_lines(
         ),
         field("CA:", &output::safe(record.directory.as_str()), color),
     ];
+    if let Some(profile) = &record.profile {
+        lines.push(field("Profile:", &output::safe(profile), color));
+    }
     if matches!(
         crate::commands::cert::validation::ValidationMethod::from_record(record),
         Ok(crate::commands::cert::validation::ValidationMethod::Webroot)

@@ -189,11 +189,25 @@ fn protocol_messages(
             "Renewal timing: randomized local fallback before 2/3 validity (half for certificates shorter than 10 days; no advertised RFC 9773 ARI)"
         }
     };
-    vec![
-        format!("CA capabilities (advertised): {}", capabilities.join(", ")),
-        strategy.into(),
-        timing.into(),
-    ]
+    let mut lines = vec![format!(
+        "CA capabilities (advertised): {}",
+        capabilities.join(", ")
+    )];
+    // Draft-ietf-acme-profiles §3 (https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles):
+    // surface advertised profiles so operators
+    // can pass the exact name to --profile without a separate lookup.
+    if let Some(profiles) = &directory.meta.profiles {
+        lines.push(format!(
+            "CA certificate profiles (advertised): {}",
+            profiles.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if let Some(profile) = &record.profile {
+        lines.push(format!("Certificate profile: {profile}"));
+    }
+    lines.push(strategy.into());
+    lines.push(timing.into());
+    lines
 }
 
 #[cfg(test)]

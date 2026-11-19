@@ -1,4 +1,4 @@
-//! CSR SAN typing and issued-leaf identity boundaries, including RFC 8738
+//! CSR SAN typing and issued-leaf identity boundaries, including [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)
 //! iPAddress subjects.
 
 use crate::{

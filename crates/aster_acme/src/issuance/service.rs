@@ -1,4 +1,4 @@
-//! RFC 8555 issuance orchestration. All mutations follow durable checkpoints.
+//! [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) issuance orchestration. All mutations follow durable checkpoints.
 
 use crate::issuance::progress::{IssueEvent, IssueObserver};
 use crate::issuance::service::{
@@ -267,6 +267,10 @@ impl IssueService {
             record
                 .challenge
                 .validate_directory(&self.client.directory().meta)?;
+            validate_profile_availability(
+                &self.client.directory().meta,
+                record.profile.as_deref(),
+            )?;
         }
         if !matches!(
             record.revocation.state,
@@ -336,5 +340,72 @@ impl IssueService {
             .await?;
         }
         Ok(())
+    }
+}
+
+/// Draft-ietf-acme-profiles (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>):
+/// an explicit selection must be advertised before
+/// the first newOrder. Resumed orders keep their saved selection even when
+/// metadata drifts; a CA-side rejection stays the terminal evidence.
+pub(crate) fn validate_profile_availability(
+    meta: &aster_acme_protocol::directory::DirectoryMeta,
+    profile: Option<&str>,
+) -> Result<(), IssueError> {
+    let Some(profile) = profile else {
+        return Ok(());
+    };
+    match &meta.profiles {
+        None => Err(IssueError::InvalidProfile(format!(
+            "CA directory does not advertise certificate profiles; profile {profile:?} cannot be validated"
+        ))),
+        Some(advertised) if !advertised.contains_key(profile) => {
+            Err(IssueError::InvalidProfile(format!(
+                "CA directory does not advertise profile {profile:?}; available: {}",
+                advertised.keys().cloned().collect::<Vec<_>>().join(", ")
+            )))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::issuance::service::validate_profile_availability;
+    use aster_acme_protocol::directory::DirectoryMeta;
+    use serde_json::json;
+
+    fn meta(profiles: &serde_json::Value) -> DirectoryMeta {
+        serde_json::from_value(json!({"profiles": profiles})).unwrap()
+    }
+
+    #[test]
+    fn explicit_profiles_must_be_advertised_and_absence_selects_the_default() {
+        let advertised = meta(&json!({
+            "classic": "https://ca.example/classic",
+            "shortlived": "https://ca.example/shortlived"
+        }));
+        validate_profile_availability(&advertised, None).unwrap();
+        validate_profile_availability(&advertised, Some("shortlived")).unwrap();
+        let error =
+            validate_profile_availability(&advertised, Some("classic-premium")).unwrap_err();
+        assert!(error.to_string().contains("classic-premium"));
+        assert!(error.to_string().contains("classic, shortlived"));
+        // A CA without any advertised profile rejects explicit selections early.
+        let unadvertised: DirectoryMeta = serde_json::from_value(json!({})).unwrap();
+        let error = validate_profile_availability(&unadvertised, Some("shortlived")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not advertise certificate profiles")
+        );
+        // Damaged metadata is unavailable, not silently permissive.
+        let broken = meta(&json!({"classic": 7}));
+        let error = validate_profile_availability(&broken, Some("classic")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not advertise certificate profiles")
+        );
+        validate_profile_availability(&broken, None).unwrap();
     }
 }

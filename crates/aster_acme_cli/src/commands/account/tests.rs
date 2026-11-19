@@ -203,6 +203,9 @@ fn all_single_account_commands_share_positional_and_named_targets() {
                 AccountCommand::Switch(options) => options.into(),
                 AccountCommand::Remove(options) => options.into(),
                 AccountCommand::Register(options) => options.into(),
+                AccountCommand::Profiles(_) | AccountCommand::SetProfile(_) => {
+                    panic!("expected register")
+                }
                 AccountCommand::Deactivate(options) => options.into(),
                 AccountCommand::UpdateContact(options) => options.network.into(),
                 AccountCommand::RotateKey(options) => options.network.into(),
@@ -654,6 +657,7 @@ impl From<crate::commands::account::args::AccountArgs>
             contact,
             eab_kid,
             eab_key_file,
+            profile: None,
         }
     }
 }
@@ -1021,6 +1025,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
                     deactivation: aster_acme_core::account::DeactivationState::NotRequested,
                     key_rotation: None,
                     accepted_terms_url: None,
+                    preferred_profile: None,
                     auto_accept_terms_updates: false,
                     state,
                 })

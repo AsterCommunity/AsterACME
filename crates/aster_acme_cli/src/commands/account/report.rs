@@ -39,6 +39,19 @@ pub(crate) enum AccountReport {
         name: String,
         directory: AcmeUrl,
     },
+    /// Draft-ietf-acme-profiles listing
+    /// (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>).
+    Profiles {
+        directory: AcmeUrl,
+        /// Advertised profile name to CA-provided description.
+        profiles: Option<std::collections::BTreeMap<String, String>>,
+    },
+    /// The account's default profile preference after a set/clear operation.
+    ProfilePreference {
+        name: String,
+        previous: Option<String>,
+        current: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, serde::Serialize)]
@@ -71,7 +84,9 @@ impl AccountReport {
             | Self::Remote { .. }
             | Self::Switched { .. }
             | Self::Removed { .. }
-            | Self::Deactivated { .. } => false,
+            | Self::Deactivated { .. }
+            | Self::Profiles { .. }
+            | Self::ProfilePreference { .. } => false,
         }
     }
 }

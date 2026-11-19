@@ -131,6 +131,7 @@ fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option
         IssueError::RevocationUncertain(error)=>(format!("Certificate revocation outcome is unconfirmed. {}", transport_diagnostic(error).0),Some("Inspect cert show <NAME>. Rerun cert revoke <NAME> --yes with the same reason; select --sign-with certificate-key when applicable. Local files are retained.".into())),
         IssueError::Transport(error)=>transport_diagnostic(error),
         IssueError::Store(error)=>(format!("Could not access certificate storage: {}", error.message),Some("Check --data-dir, managed files and permissions. Retain any .removing marker and remaining files for inspection.".into())),
+        IssueError::InvalidProfile(_) => (issue.to_string(), Some("Run account profiles to list the profiles this CA advertises, then pass the exact name with cert issue --profile or account update --profile. Let's Encrypt IP identifiers require the shortlived profile. No order was created.".into())),
         IssueError::PollLimit { .. } => (issue.to_string(), Some("Resume the saved request, or increase --max-polls. Retry-After and the overall --operation-timeout still apply; no new order is created.".into())),
         IssueError::InvalidOrder { problem } => self::problem::invalid_order(problem.as_deref()),
         IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; local readiness cannot bypass CA expiry.".into())),

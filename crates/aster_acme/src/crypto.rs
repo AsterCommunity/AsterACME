@@ -1,4 +1,4 @@
-//! Shared JWS signing, RFC 7638 thumbprints and RFC 8555 flattened JWS.
+//! Shared JWS signing, [RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) thumbprints and [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) flattened JWS.
 
 use aster_acme_protocol::jws::{
     EabHeader, FlattenedJws, KeyChangeHeader, ProtectedHeader, RequestIdentity,
@@ -81,7 +81,7 @@ pub(crate) fn sign_request(
     })
 }
 
-/// Sign the nonce-free inner JWS required by RFC 8555 §7.3.5.
+/// Sign the nonce-free inner JWS required by [RFC 8555 §7.3.5.](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5.)
 pub(crate) fn sign_key_change(
     new_signer: &dyn JwsSigner,
     old_key: &Jwk,
