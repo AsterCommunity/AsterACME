@@ -95,7 +95,7 @@ impl ProviderDns {
         publications: &[ChallengePublication],
         execution: &ExecutionContext,
     ) -> Result<ReadyResult, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let mut records = Vec::new();
         for publication in publications {
             let plan = publication.plan.as_ref().ok_or(IssueError::InvalidInput(
@@ -132,7 +132,7 @@ impl ProviderDns {
                     aster_acme_dns::ProviderFailure::Host {
                         code: aster_acme_dns::HostErrorCode::ProcessCancelled,
                         ..
-                    } => IssueError::Interrupted,
+                    } => IssueError::Cancelled,
                     error => IssueError::DnsProvider(error),
                 });
                 return Ok(outcome);
@@ -149,7 +149,7 @@ impl ProviderDns {
                     outcome.ready = false;
                     if outcome.failure.is_none() {
                         outcome.failure = Some(if execution.cancellation.is_cancelled() {
-                            IssueError::Interrupted
+                            IssueError::Cancelled
                         } else {
                             IssueError::DnsProvider(error.into())
                         });
@@ -215,7 +215,7 @@ impl ChallengeSolver for ProviderDns {
                     )
                     .await
                     .map_err(|error| match error {
-                        aster_acme_dns::routing::RouteError::Interrupted => IssueError::Interrupted,
+                        aster_acme_dns::routing::RouteError::Interrupted => IssueError::Cancelled,
                         error => IssueError::DnsRouting(error),
                     })?;
                     let target = chain
@@ -271,7 +271,7 @@ impl ChallengeSolver for ProviderDns {
             })
             .await
             .map_err(|error| match error {
-                aster_acme_dns::propagation::PropagationError::Interrupted => IssueError::Interrupted,
+                aster_acme_dns::propagation::PropagationError::Interrupted => IssueError::Cancelled,
                 error @ PropagationError::InvalidPolicy => IssueError::DnsPropagation(error),
             })?;
         self.progress.output.progress(
@@ -305,7 +305,7 @@ impl ChallengeSolver for ProviderDns {
             MessageKind::Info,
             &format!("Cleaning up {} DNS TXT publication(s)", publications.len()),
         );
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let mut outcome = CleanupResult::default();
         let mut records = Vec::new();
         for publication in publications {
@@ -379,7 +379,7 @@ impl ChallengeSolver for ProviderDns {
                                 if outcome.failure.is_none() {
                                     outcome.failure =
                                         Some(if execution.cancellation.is_cancelled() {
-                                            IssueError::Interrupted
+                                            IssueError::Cancelled
                                         } else {
                                             IssueError::DnsProvider(error.into())
                                         });

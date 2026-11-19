@@ -114,10 +114,7 @@ impl Workflow {
         let saved = session.record().await?;
         tracing::debug!(operation_id = %saved.operation_id, phase = ?saved.phase, new_order_intent_saved = saved.new_order_intent_saved, has_order_url = saved.order_url.is_some(), "Checking saved request before CA discovery");
         saved.check_recovery(time::OffsetDateTime::now_utc())?;
-        execution
-            .context
-            .check()
-            .map_err(|_| IssueError::Interrupted)?;
+        execution.context.check().map_err(IssueError::from)?;
         if saved.challenge != solver.kind() {
             return Err(IssueError::InvalidInput(
                 "challenge solver method does not match saved request",
@@ -128,8 +125,8 @@ impl Workflow {
         }
         let client = tokio::select! {
             biased;
-            () = execution.context.cancellation.cancelled() => return Err(IssueError::Interrupted),
-            result = tokio::time::timeout_at(execution.context.deadline.into(), self.pool.discover(self.directory.clone(), self.transport.clone())) => Arc::new(result.map_err(|_| IssueError::Interrupted)??),
+            () = execution.context.cancellation.cancelled() => return Err(IssueError::Cancelled),
+            result = tokio::time::timeout_at(execution.context.deadline.into(), self.pool.discover(self.directory.clone(), self.transport.clone())) => Arc::new(result.map_err(|_| IssueError::TimedOut)??),
         };
         let mut service = IssueService::new(client.clone(), identity)?;
         service.check_execution(&saved, solver, execution)?;
@@ -142,14 +139,11 @@ impl Workflow {
         if !saved.new_order_intent_saved && saved.order_url.is_none() {
             tokio::select! {
                 biased;
-                () = execution.context.cancellation.cancelled() => return Err(IssueError::Interrupted),
-                result = tokio::time::timeout_at(execution.context.deadline.into(), before_order(client.directory(), &saved, &execution.context)) => result.map_err(|_| IssueError::Interrupted)??,
+                () = execution.context.cancellation.cancelled() => return Err(IssueError::Cancelled),
+                result = tokio::time::timeout_at(execution.context.deadline.into(), before_order(client.directory(), &saved, &execution.context)) => result.map_err(|_| IssueError::TimedOut)??,
             };
         }
-        execution
-            .context
-            .check()
-            .map_err(|_| IssueError::Interrupted)?;
+        execution.context.check().map_err(IssueError::from)?;
         service.run_active(session, solver, execution).await
     }
 }

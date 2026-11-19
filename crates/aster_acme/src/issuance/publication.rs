@@ -14,7 +14,7 @@ pub(super) async fn prepare(
     execution: &crate::solver::ExecutionContext,
 ) -> Result<(), IssueError> {
     check_retry(record)?;
-    execution.check().map_err(|_| IssueError::Interrupted)?;
+    execution.check().map_err(IssueError::from)?;
     let publications = record
         .authorizations
         .iter()
@@ -184,7 +184,7 @@ pub(super) async fn cleanup_saved(
     solver: &dyn ChallengeSolver,
     execution: &crate::solver::ExecutionContext,
 ) -> Result<(), IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
+    execution.check().map_err(IssueError::from)?;
     check_retry(record)?;
     let pending = record
         .authorizations
@@ -305,4 +305,91 @@ fn check_retry(record: &IssueRecord) -> Result<(), IssueError> {
         return Err(IssueError::DnsRetryAt(retry_at));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{issuance::publication::apply_receipts, solver::PublicationReceiptUpdate};
+    use aster_acme_dns::{PublicationReceipt, RecordOwnership};
+
+    fn record() -> crate::issuance::IssueRecord {
+        serde_json::from_value(serde_json::json!({
+            "operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z",
+            "account_name":"default","account_id":"a".repeat(43),
+            "directory":"https://ca.example/directory","account_url":"https://ca.example/account/1",
+            "account_thumbprint":"a".repeat(43),"key_algorithm":"ecdsa-p256",
+            "identifiers":["example.com"],"solver_id":"provider","solver_config":{},
+            "challenge":"dns-01","phase":"authorizing","new_order_intent_saved":true,
+            "authorizations":[{
+                "url":"https://ca.example/auth/1",
+                "resource":{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[]},
+                "challenge_url":null,
+                "validation_requirement":{"method":"dns-01","name":"_acme-challenge.example.com","value":"expected"},
+                "publication_id":"publication-1",
+                "publication_plan":{"publication_id":"publication-1","challenge_name":"_acme-challenge.example.com.","cname_chain":["_acme-challenge.example.com.","target.example.net."],"name":"target.example.net.","value":"expected","ttl_seconds":120},
+                "publication_receipt":null,"publication_retry_at":null,"cleanup_pending":false,
+                "acknowledgement":"not_submitted"
+            }],"finalize_submitted":"not_submitted"
+        })).unwrap()
+    }
+
+    fn update() -> PublicationReceiptUpdate {
+        PublicationReceiptUpdate {
+            publication_id: "publication-1".into(),
+            receipt: PublicationReceipt {
+                record_id: "provider-record-1".into(),
+                effective_ttl_seconds: Some(120),
+                ownership: RecordOwnership::Created,
+                record_name: "target.example.net.".into(),
+                cname_chain: vec![
+                    "_acme-challenge.example.com.".into(),
+                    "target.example.net.".into(),
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn receipt_checkpoint_accepts_exact_plan_and_is_idempotent() {
+        let mut saved = record();
+        assert!(apply_receipts(&mut saved, &[update()]).unwrap());
+        assert_eq!(
+            saved.authorizations[0].publication_receipt,
+            Some(update().receipt)
+        );
+        assert!(!apply_receipts(&mut saved, &[update()]).unwrap());
+    }
+
+    #[test]
+    fn invalid_receipt_batches_are_atomic_and_reject_boundary_violations() {
+        let baseline = record();
+        let mut duplicate = update();
+        duplicate.receipt.record_id = "second".into();
+        let mut unknown = update();
+        unknown.publication_id = "unknown".into();
+        let mut empty_id = update();
+        empty_id.receipt.record_id.clear();
+        let mut long_id = update();
+        long_id.receipt.record_id = "x".repeat(1025);
+        let mut control_id = update();
+        control_id.receipt.record_id = "record\n1".into();
+        let mut wrong_name = update();
+        wrong_name.receipt.record_name = "other.example.net.".into();
+        let mut wrong_chain = update();
+        wrong_chain.receipt.cname_chain.pop();
+
+        for batch in [
+            vec![update(), duplicate],
+            vec![unknown],
+            vec![empty_id],
+            vec![long_id],
+            vec![control_id],
+            vec![wrong_name],
+            vec![wrong_chain],
+        ] {
+            let mut saved = baseline.clone();
+            assert!(apply_receipts(&mut saved, &batch).is_err());
+            assert_eq!(saved.authorizations[0].publication_receipt, None);
+        }
+    }
 }

@@ -16,6 +16,8 @@
 
 ### 变更
 
+- **ACME wire 与检查契约** — 账户、标识符、订单、授权、directory metadata 和 ARI 资源保留未知扩展成员，同时保留 `keyChange`、`newOrder`、`revokeCert` 等 directory 能力 URL 的可选语义。`IssueService::inspect` 改为接收调用方的取消/截止时间上下文，签发结果区分调用方取消与操作预算耗尽。
+
 - **DNS Provider 错误诊断** — 内置后端失败时尽可能显示 API action、HTTP 状态、通过校验的厂商错误码及安全 request ID；原始响应正文和厂商 message 仍不输出，外部后端的安全 provider code 也由同一 CLI 路径展示。
 
 - **DNS 读回对账** — 内置 provider 共用有界只读重试预算，保留厂商各自的可见性及所有权检查；不重放不确定创建，不把响应格式错误或身份冲突视为可见性延迟。
@@ -24,6 +26,8 @@
 
 - **部署核验** — reload 前对整组发布文件核验暂存内容、身份和适用权限；失败报告已完成替换的路径，继续保留部分文件集和整组重试契约，不承诺整组原子性或自动回滚。已有目的路径无法规范化、不能证明所有权无冲突时，拒绝配置及部署；恢复访问或移除失效绑定后再重试。
 - **可选验证依赖** — `aster_acme_validation` 空 feature 不再引入生产 Tokio 依赖，独立检查并测试可选 feature 组合。
+
+- **签发与发布核验** — 增加 loopback HTTP 的 finalize、证书下载和 storage completion 闭环测试，并直接覆盖发布回执身份、重复 ID、控制字符和批次原子性边界。
 
 ### 修复
 

@@ -12,7 +12,7 @@ impl Lookup for Fake {
     async fn lookup(&self, name: &str) -> Result<Vec<Property>, LookupError> {
         self.queries.lock().unwrap().push(name.into());
         if self.fails {
-            return Err(LookupError);
+            return Err(LookupError::new("injected resolver failure"));
         }
         Ok(self.values.get(name).cloned().unwrap_or_default())
     }

@@ -58,9 +58,9 @@ impl Drop for Terminal {
 }
 
 fn check(execution: &ExecutionContext, stop: &CancellationToken) -> Result<(), IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
+    execution.check().map_err(IssueError::from)?;
     if stop.is_cancelled() {
-        return Err(IssueError::Interrupted);
+        return Err(IssueError::Cancelled);
     }
     Ok(())
 }
@@ -136,7 +136,7 @@ fn read_answer(
         match input.key(key) {
             AnswerAction::Cancel => {
                 execution.cancellation.cancel();
-                return Err(IssueError::Interrupted);
+                return Err(IssueError::Cancelled);
             }
             AnswerAction::Accepted(answer) => {
                 check(execution, stop)?;

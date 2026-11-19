@@ -14,7 +14,7 @@ pub struct SuggestedWindow {
     pub end: time::OffsetDateTime,
 }
 
-/// RFC 9773 section 4.2 response; unknown extensions are ignored.
+/// RFC 9773 section 4.2 response; unknown extensions are retained.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenewalInfo {
@@ -23,6 +23,9 @@ pub struct RenewalInfo {
     /// Optional operator-facing explanation; never fetched automatically.
     #[serde(rename = "explanationURL")]
     pub explanation_url: Option<String>,
+    /// Fields introduced by CA extensions unknown to this client.
+    #[serde(flatten)]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Append a certificate identifier to the discovered endpoint, preserving query data.

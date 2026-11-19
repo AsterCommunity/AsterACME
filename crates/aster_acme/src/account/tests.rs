@@ -45,10 +45,11 @@ async fn account_requests_follow_custom_directory_and_location_urls() {
             new_order: None,
             renewal_info: None,
             revoke_cert: None,
-            key_change: None,
+            key_change: Some(resource("/vendor/key-change")),
             new_nonce: resource("/vendor/replay"),
             new_account: new_account.clone(),
             meta: DirectoryMeta::default(),
+            extensions: std::collections::BTreeMap::new(),
         }))
         .mount(&server)
         .await;
@@ -61,6 +62,7 @@ async fn account_requests_follow_custom_directory_and_location_urls() {
         status: AccountStatus::Valid,
         contact: None,
         external_account_binding: None,
+        extensions: std::collections::BTreeMap::new(),
     };
     Mock::given(method("POST"))
         .and(path("/vendor/custom-create"))

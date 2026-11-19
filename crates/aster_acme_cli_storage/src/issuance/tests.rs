@@ -62,7 +62,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let server = MockServer::start().await;
-    Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/unused",server.uri()),"newOrder":format!("{}/vendor/create",server.uri())}))).mount(&server).await;
+    Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/unused",server.uri()),"newOrder":format!("{}/vendor/create",server.uri()),"keyChange":format!("{}/key-change",server.uri())}))).mount(&server).await;
     Mock::given(method("HEAD"))
         .and(path("/nonce"))
         .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "fresh"))
@@ -668,7 +668,7 @@ async fn cancellation_and_pending_finalization_never_replay_a_mutation() {
             .service
             .run(session.as_mut(), &Dns(true), &execution)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::TimedOut)
     ));
     assert!(
         !fixture
@@ -685,7 +685,7 @@ async fn cancellation_and_pending_finalization_never_replay_a_mutation() {
             .service
             .run(session.as_mut(), &Dns(true), &execution)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
 }
 
@@ -791,7 +791,12 @@ async fn order_inspection_only_observes_and_preserves_pending_publication_state(
         .open(&record.name, &record.operation_id)
         .await
         .unwrap();
-    let observed = fixture.service.inspect(session.as_mut()).await.unwrap();
+    let execution = execution();
+    let observed = fixture
+        .service
+        .inspect(session.as_mut(), &execution.context)
+        .await
+        .unwrap();
     assert_eq!(observed.operation_id, record.operation_id);
     assert_eq!(observed.finalize_submitted, SubmissionState::NotSubmitted);
     for authorization in &observed.authorizations {
@@ -1453,6 +1458,7 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
+            "keyChange":format!("{}/key-change",fixture.server.uri()),
             "renewalInfo":format!("{}/vendor/renewal",fixture.server.uri())
         }))).with_priority(1).mount(&fixture.server).await;
     let now = time::OffsetDateTime::now_utc();
@@ -1462,6 +1468,7 @@ async fn renewal_fallback_and_ari_selection_survive_reopen_without_new_get_or_ke
             end: now + time::Duration::days(2),
         },
         explanation_url: None,
+        extensions: std::collections::BTreeMap::new(),
     };
     Mock::given(method("GET"))
         .and(path(format!("/vendor/renewal/{id}")))
@@ -2586,7 +2593,7 @@ async fn renewal_client(fixture: &Fixture, ari: bool) -> Arc<IssueService> {
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce":format!("{}/nonce",fixture.server.uri()),"newAccount":format!("{}/unused",fixture.server.uri()),
-            "newOrder":format!("{}/vendor/create",fixture.server.uri()),"renewalInfo":ari.then(||format!("{}/renewal-info",fixture.server.uri()))
+            "newOrder":format!("{}/vendor/create",fixture.server.uri()),"keyChange":format!("{}/key-change",fixture.server.uri()),"renewalInfo":ari.then(||format!("{}/renewal-info",fixture.server.uri()))
         }))).with_priority(1).mount(&fixture.server).await;
     let client = aster_acme::transport::HttpPool::default()
         .discover(
@@ -2985,7 +2992,7 @@ async fn interrupted_manual_renewal_retains_old_in_use_and_resumes_the_same_orde
             .service
             .run(restored.as_mut(), &Dns(true), &cancelled)
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     assert_eq!(
         selected_view(&slot),

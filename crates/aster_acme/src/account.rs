@@ -175,7 +175,7 @@ pub enum AccountError {
     /// Account key rollover has an uncertain result and requires reconciliation.
     #[error("account key rotation is pending reconciliation")]
     KeyRotationUncertain,
-    /// The CA does not advertise keyChange in its directory.
+    /// The CA directory does not advertise keyChange in its directory.
     #[error("the CA directory does not advertise the keyChange endpoint")]
     KeyChangeUnavailable,
     /// Adapter storage failure.

@@ -27,7 +27,7 @@ pub(crate) enum CertCommand {
         local: LocalArgs,
     },
     /// Show a local certificate request, or explicitly refresh its CA resources without advancing it.
-    #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","request_timeout"]).multiple(true).requires("verify")))]
+    #[command(group(clap::ArgGroup::new("certificate_http").args(["user_agent","request_timeout","operation_timeout"]).multiple(true).requires("verify")))]
     Show {
         #[command(flatten)]
         target: SavedTargetArgs,
@@ -37,6 +37,9 @@ pub(crate) enum CertCommand {
         /// Query existing order/authorizations and refresh due ARI; never advance issuance.
         #[arg(long)]
         verify: bool,
+        /// Overall CA inspection budget in seconds; defaults to the configured operation timeout.
+        #[arg(long,value_parser=clap::value_parser!(u64).range(1..=86400))]
+        operation_timeout: Option<u64>,
         #[command(flatten)]
         http: HttpArgs,
         #[command(flatten)]

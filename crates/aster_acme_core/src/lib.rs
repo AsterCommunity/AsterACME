@@ -1,6 +1,8 @@
-//! ACME resource states and state machine decisions.
+//! Pure ACME protocol states, durable operation transitions, and renewal decisions.
 //!
-//! This crate must remain independent of async runtimes and external I/O.
+//! `aster_acme_core` owns deterministic domain rules used by embedded services and the
+//! CLI. It has no network, filesystem, signing, async-runtime, or terminal dependencies;
+//! adapters persist its outputs and perform external effects at explicit boundaries.
 
 #![cfg_attr(
     not(test),

@@ -29,6 +29,7 @@ async fn first_confirmation_is_stable_success_updates_and_failures_do_not_touch_
                     status: AccountStatus::Valid,
                     contact: None,
                     external_account_binding: None,
+                    extensions: std::collections::BTreeMap::new(),
                 }),
         )
         .mount(&server)
@@ -51,6 +52,7 @@ async fn first_confirmation_is_stable_success_updates_and_failures_do_not_touch_
                     status: AccountStatus::Valid,
                     contact: None,
                     external_account_binding: None,
+                    extensions: std::collections::BTreeMap::new(),
                 }),
         )
         .mount(&server)
@@ -84,6 +86,7 @@ async fn first_confirmation_is_stable_success_updates_and_failures_do_not_touch_
                     status: AccountStatus::Deactivated,
                     contact: None,
                     external_account_binding: None,
+                    extensions: std::collections::BTreeMap::new(),
                 }),
         )
         .expect(1)

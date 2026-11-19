@@ -167,6 +167,7 @@ impl From<&Identifier> for WireIdentifier {
             Identifier::Dns(dns) => Self {
                 kind: "dns".into(),
                 value: dns.value(),
+                extensions: std::collections::BTreeMap::new(),
             },
         }
     }

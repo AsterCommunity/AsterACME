@@ -13,7 +13,7 @@ pub(in crate::commands::cert) async fn run(
     execution: &ExecutionContext,
     progress: &Progress,
 ) -> Result<(), IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
+    execution.check().map_err(IssueError::from)?;
     progress.output.progress(
         MessageKind::Info,
         &format!(
@@ -31,7 +31,7 @@ async fn observe(
     execution: &ExecutionContext,
     progress: &Progress,
 ) -> Result<(), IssueError> {
-    execution.check().map_err(|_| IssueError::Interrupted)?;
+    execution.check().map_err(IssueError::from)?;
     let check = match check {
         Ok(check) => check,
         Err(error) => {
@@ -48,7 +48,14 @@ async fn observe(
     let report = Runner::default()
         .run(&check, requirements, execution)
         .await
-        .map_err(|_| IssueError::Interrupted)?;
+        .map_err(|error| match error {
+            aster_acme::precheck::Error::Interrupted => execution
+                .check()
+                .map_or_else(IssueError::from, |()| IssueError::Cancelled),
+            aster_acme::precheck::Error::InvalidBudget => {
+                IssueError::InvalidInput("invalid DNS precheck budget")
+            }
+        })?;
     if report
         .observations
         .iter()
@@ -133,15 +140,16 @@ mod tests {
                 execution.deadline = Instant::now();
             }
             let (output, _, diagnostics) = crate::common::session::tests::session(false);
+            let result = observe(
+                Err(configuration_error()),
+                &[],
+                &execution,
+                &Progress::new(output),
+            )
+            .await;
             assert!(matches!(
-                observe(
-                    Err(configuration_error()),
-                    &[],
-                    &execution,
-                    &Progress::new(output)
-                )
-                .await,
-                Err(IssueError::Interrupted)
+                (cancelled, result),
+                (true, Err(IssueError::Cancelled)) | (false, Err(IssueError::TimedOut))
             ));
             assert_eq!(diagnostics.text(), "");
         }

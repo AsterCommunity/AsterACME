@@ -38,10 +38,13 @@ async fn directory_identity_is_required_and_request_inputs_reach_the_evaluator()
         new_nonce: aster_acme_protocol::url::AcmeUrl::new("https://ca.example/nonce").unwrap(),
         new_account: aster_acme_protocol::url::AcmeUrl::new("https://ca.example/account").unwrap(),
         new_order: None,
-        key_change: None,
+        key_change: Some(
+            aster_acme_protocol::url::AcmeUrl::new("https://ca.example/key-change").unwrap(),
+        ),
         revoke_cert: None,
         renewal_info: None,
         meta: aster_acme_protocol::directory::DirectoryMeta::default(),
+        extensions: std::collections::BTreeMap::new(),
     };
     let execution = ExecutionContext {
         cancellation: tokio_util::sync::CancellationToken::new(),

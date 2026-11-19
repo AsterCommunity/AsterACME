@@ -62,7 +62,7 @@ impl<'a> RefreshCycle<'a> {
         session: &mut dyn IssueSession,
         execution: &ExecutionContext,
     ) -> Result<RefreshResult, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let mut record = session.record().await?;
         if !refresh_due(&record, OffsetDateTime::now_utc()) {
             return Ok(RefreshResult {
@@ -76,10 +76,10 @@ impl<'a> RefreshCycle<'a> {
         } else {
             let result = tokio::select! {
                 biased;
-                () = execution.cancellation.cancelled() => Err(IssueError::Interrupted),
+                () = execution.cancellation.cancelled() => Err(IssueError::Cancelled),
                 result = tokio::time::timeout_at(execution.deadline.into(), self.pool.discover(record.directory.clone(), self.options.clone())) => match result {
                     Ok(result) => result.map_err(IssueError::from),
-                    Err(_) => Err(IssueError::Interrupted),
+                    Err(_) => Err(IssueError::TimedOut),
                 },
             };
             let client = match result {

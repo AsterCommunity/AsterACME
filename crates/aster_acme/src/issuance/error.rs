@@ -82,9 +82,12 @@ pub enum IssueError {
     InvalidOrder {
         problem: Option<Box<aster_acme_protocol::problem::Problem>>,
     },
-    /// Execution deadline or cancellation; checkpoint remains available.
-    #[error("issuance interrupted or execution deadline exceeded; resume the saved certificate")]
-    Interrupted,
+    /// The caller cancelled issuance; its durable checkpoint remains available.
+    #[error("issuance cancelled; resume the saved certificate when ready")]
+    Cancelled,
+    /// The caller's monotonic operation budget expired; its durable checkpoint remains available.
+    #[error("issuance execution deadline exceeded; resume the saved certificate")]
+    TimedOut,
     /// Typed transport error.
     #[error(transparent)]
     Transport(#[from] crate::transport::TransportError),

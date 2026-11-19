@@ -32,6 +32,7 @@ fn info(start: i64, end: i64) -> RenewalInfo {
             end: at(end),
         },
         explanation_url: Some("https://ca.example/notice".into()),
+        extensions: std::collections::BTreeMap::new(),
     }
 }
 
@@ -80,6 +81,7 @@ async fn fixture(endpoint: bool, timeout: Duration) -> (MockServer, RenewalServi
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "newNonce":format!("{}/unused",server.uri()),"newAccount":format!("{}/unused",server.uri()),
+            "keyChange":format!("{}/key-change",server.uri()),
             "renewalInfo":endpoint.then(|| format!("{}/custom/renewal",server.uri()))
         }))).mount(&server).await;
     let client = crate::transport::HttpPool::default()
@@ -376,12 +378,12 @@ async fn cancellation_and_deadline_keep_persisted_plan_without_requery() {
     cancelled.cancellation.cancel();
     assert!(matches!(
         service.refresh(&mut session, &cancelled).await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     assert_eq!(session.saves.load(Ordering::SeqCst), 0);
     assert!(matches!(
         service.refresh(&mut session, &execution(1)).await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::TimedOut)
     ));
     let saved = session.record().await.unwrap().renewal.unwrap();
     assert!(saved.next_check_at.is_some());
@@ -475,7 +477,7 @@ async fn cancellation_during_backoff_prevents_another_attempt() {
     });
     assert!(matches!(
         service.refresh(&mut session, &execution).await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     stop.await.unwrap();
     assert!(
@@ -663,6 +665,7 @@ async fn expiry_during_discovery_prevents_ari_query_and_writes() {
     Mock::given(method("GET")).and(path("/directory"))
         .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(1200)).set_body_json(serde_json::json!({
             "newNonce":format!("{}/unused",server.uri()), "newAccount":format!("{}/unused",server.uri()),
+            "keyChange":format!("{}/key-change",server.uri()),
             "renewalInfo":format!("{}/custom/renewal",server.uri())
         }))).with_priority(1).mount(&server).await;
     let pool = crate::transport::HttpPool::default();

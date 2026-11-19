@@ -37,7 +37,9 @@ impl aster_acme::precheck::Check for Caa<'_> {
         }
         check(self.lookup, input, &self.request)
             .await
-            .map_err(|_| aster_acme::precheck::Failure::LookupFailed)
+            .map_err(|error| aster_acme::precheck::Failure::Unavailable {
+                reason: error.to_string(),
+            })
     }
 }
 
@@ -64,8 +66,19 @@ pub trait Lookup: Send + Sync {
 }
 /// DNS observation failed; intentionally excludes response data and credentials.
 #[derive(Debug, thiserror::Error)]
-#[error("local CAA DNS lookup failed")]
-pub struct LookupError;
+#[error("local CAA DNS lookup failed: {reason}")]
+pub struct LookupError {
+    reason: String,
+}
+impl LookupError {
+    /// Preserve a sanitized resolver or input-validation cause for advisory diagnostics.
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
 
 /// Production adapter uses the platform's recursive DNS configuration.
 pub struct SystemLookup(hickory_resolver::TokioResolver);
@@ -94,7 +107,7 @@ impl Lookup for SystemLookup {
                 })
                 .collect()),
             Err(error) if empty_answer(&error) => Ok(Vec::new()),
-            Err(_) => Err(LookupError),
+            Err(error) => Err(LookupError::new(error.to_string())),
         }
     }
 }
@@ -110,7 +123,7 @@ pub async fn check(
 ) -> Result<Report, LookupError> {
     let name = identifier.strip_prefix("*.").unwrap_or(identifier);
     let normalized = aster_acme::identifier::DnsIdentifier::new(name)
-        .map_err(|_| LookupError)?
+        .map_err(|error| LookupError::new(error.to_string()))?
         .value();
     let mut owner = normalized.as_str();
     let request = Request {

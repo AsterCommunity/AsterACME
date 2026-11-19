@@ -84,7 +84,7 @@ impl ChallengeSolver for Webroot {
         let progress = self.progress.clone();
         self.workers.run(move || {
             for requirement in &requirements {
-                execution.check().map_err(|_| IssueError::Interrupted)?;
+                execution.check().map_err(IssueError::from)?;
                 let (target, _, _) = paths(&root, &operation, requirement, true)?;
                 if let ValidationRequirement::Http01 { url, path, .. } = requirement {
                     tracing::debug!(webroot = %root.display(), local_file = %target.display(), public_url = %url, "HTTP-01 server mapping: serve this local file at the public URL; HTTP port 80 must be reachable, permitted redirects may lead to HTTPS");
@@ -93,7 +93,7 @@ impl ChallengeSolver for Webroot {
                 let action = publish(&root, &operation, requirement)?;
                 progress.output.progress(MessageKind::Info, &action.message(&target));
             }
-            execution.check().map_err(|_| IssueError::Interrupted)?;
+            execution.check().map_err(IssueError::from)?;
             Ok::<_, IssueError>(())
         })
         .await?;
@@ -122,7 +122,7 @@ impl ChallengeSolver for Webroot {
         self.workers
             .run(move || {
                 for requirement in &requirements {
-                    execution.check().map_err(|_| IssueError::Interrupted)?;
+                    execution.check().map_err(IssueError::from)?;
                     let (target, _, _) = paths(&root, &operation, requirement, false)?;
                     let action = remove_owned(&root, &operation, requirement)?;
                     progress

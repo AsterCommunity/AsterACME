@@ -38,9 +38,15 @@ pub struct FlattenedJws {
 #[serde(untagged)]
 pub enum RequestIdentity<'a, J> {
     /// Public key for account creation/lookup or certificate-key revocation.
-    Jwk { jwk: &'a J },
+    Jwk {
+        /// Public JWK value.
+        jwk: &'a J,
+    },
     /// Account URL for authenticated account requests.
-    Kid { kid: &'a str },
+    Kid {
+        /// Exact account URL.
+        kid: &'a str,
+    },
 }
 
 /// Standard ACME asymmetric-signature header. EAB uses its own nonce-free type.

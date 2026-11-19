@@ -47,7 +47,7 @@ impl Fixture {
     async fn new(implementation: ValidationMethod) -> Self {
         let server = MockServer::start().await;
         Mock::given(method("GET")).and(path("/arbitrary-directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "newNonce": format!("{}/nonce",server.uri()), "newAccount": format!("{}/account",server.uri()), "newOrder": format!("{}/orders/create",server.uri()),
+            "newNonce": format!("{}/nonce",server.uri()), "newAccount": format!("{}/account",server.uri()), "newOrder": format!("{}/orders/create",server.uri()), "keyChange": format!("{}/key-change",server.uri()),
             "meta": {"issuerDomainNames":["authority.example"], "caaIdentities":["authority.example"], "accountHashPrefix":"https://ca.example/account-hash/"}
         }))).mount(&server).await;
         mount_account_proof(&server).await;
@@ -349,7 +349,7 @@ impl Fixture {
             self.service
                 .run(self.session.as_mut().unwrap().as_mut(), &solver, &controls)
                 .await,
-            Err(IssueError::Interrupted)
+            Err(IssueError::Cancelled)
         ));
     }
 
@@ -682,6 +682,44 @@ async fn wait_standalone_publication(address: std::net::SocketAddr, acknowledged
     .unwrap();
 }
 
+async fn assert_standalone_released(
+    fixture: &Fixture,
+    address: std::net::SocketAddr,
+    operation_id: &str,
+) {
+    assert!(tokio::net::TcpListener::bind(address).await.is_ok());
+    assert_eq!(fixture.count("/orders/create").await, 1);
+    assert_eq!(fixture.count("/http-challenge").await, 1);
+    assert_eq!(fixture.count("/finalize").await, 0);
+    assert_eq!(
+        fixture
+            .session
+            .as_ref()
+            .unwrap()
+            .record()
+            .await
+            .unwrap()
+            .operation_id,
+        operation_id
+    );
+    assert!(
+        fixture
+            .generation
+            .lock()
+            .unwrap()
+            .join("private-key.pk8")
+            .is_file()
+    );
+    assert!(
+        fixture
+            .generation
+            .lock()
+            .unwrap()
+            .join("request.der")
+            .is_file()
+    );
+}
+
 #[tokio::test]
 async fn standalone_releases_listener_on_cancellation_timeout_and_invalid_order() {
     for mode in ["cancel", "timeout", "invalid"] {
@@ -747,43 +785,12 @@ async fn standalone_releases_listener_on_cancellation_timeout_and_invalid_order(
             };
             assert_eq!(problem.detail.as_deref(), Some("HTTP validation failed"));
         } else {
-            assert!(matches!(result, Err(IssueError::Interrupted)));
+            assert!(matches!(
+                (mode, result),
+                ("cancel", Err(IssueError::Cancelled)) | ("timeout", Err(IssueError::TimedOut))
+            ));
         }
-        assert!(
-            tokio::net::TcpListener::bind(config.listen_address)
-                .await
-                .is_ok()
-        );
-        assert_eq!(fixture.count("/orders/create").await, 1);
-        assert_eq!(fixture.count("/http-challenge").await, 1);
-        assert_eq!(fixture.count("/finalize").await, 0);
-        assert_eq!(
-            fixture
-                .session
-                .as_ref()
-                .unwrap()
-                .record()
-                .await
-                .unwrap()
-                .operation_id,
-            saved.operation_id
-        );
-        assert!(
-            fixture
-                .generation
-                .lock()
-                .unwrap()
-                .join("private-key.pk8")
-                .is_file()
-        );
-        assert!(
-            fixture
-                .generation
-                .lock()
-                .unwrap()
-                .join("request.der")
-                .is_file()
-        );
+        assert_standalone_released(&fixture, config.listen_address, &saved.operation_id).await;
     }
 }
 
@@ -972,7 +979,7 @@ async fn cancellation_after_webroot_publication_keeps_owned_files_and_resumes_wi
                 &context
             )
             .await,
-        Err(IssueError::Interrupted)
+        Err(IssueError::Cancelled)
     ));
     assert_eq!(fixture.count("/http-challenge").await, 0);
     assert!(

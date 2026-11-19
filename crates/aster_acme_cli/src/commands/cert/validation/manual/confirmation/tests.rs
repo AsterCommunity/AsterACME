@@ -139,18 +139,17 @@ fn exact_deadline_cancellation_and_stop_reject_before_terminal_access() {
             "cancel" => execution.cancellation.cancel(),
             _ => stop.cancel(),
         }
-        assert!(matches!(
-            check(&execution, &stop),
-            Err(IssueError::Interrupted)
-        ));
-        assert!(matches!(
+        for result in [
+            check(&execution, &stop).map(|()| false),
             confirm("test", &execution, &stop),
-            Err(IssueError::Interrupted)
-        ));
-        assert!(matches!(
             read_answer("test", &execution, &stop, &mut io::sink()),
-            Err(IssueError::Interrupted)
-        ));
+        ] {
+            assert!(matches!(
+                (mode, result),
+                ("deadline", Err(IssueError::TimedOut))
+                    | ("cancel" | "stop", Err(IssueError::Cancelled))
+            ));
+        }
         assert_eq!(execution.cancellation.is_cancelled(), mode == "cancel");
     }
 }

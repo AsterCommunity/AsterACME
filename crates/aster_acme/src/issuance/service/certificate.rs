@@ -57,7 +57,7 @@ impl IssueService {
             .refresh(session, execution)
             .await
         {
-            Err(IssueError::Interrupted) => session.record().await,
+            Err(IssueError::Cancelled | IssueError::TimedOut) => session.record().await,
             result => result,
         }
     }

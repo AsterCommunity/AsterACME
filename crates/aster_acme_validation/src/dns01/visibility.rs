@@ -21,7 +21,7 @@ impl ChallengeSolver for DnsVisibility {
         publications: &[ChallengePublication],
         execution: &ExecutionContext,
     ) -> Result<ReadyResult, IssueError> {
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let resolver = crate::resolver::system()
             .map_err(|error| IssueError::Publication(error.to_string()))?;
         for publication in publications {
@@ -33,8 +33,8 @@ impl ChallengeSolver for DnsVisibility {
             };
             let lookup = tokio::select! {
                 biased;
-                ()=execution.cancellation.cancelled()=>return Err(IssueError::Interrupted),
-                result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::Interrupted)?,
+                ()=execution.cancellation.cancelled()=>return Err(IssueError::Cancelled),
+                result=tokio::time::timeout_at(tokio::time::Instant::from_std(execution.deadline),resolver.txt_lookup(format!("{name}.")))=>result.map_err(|_|IssueError::TimedOut)?,
             };
             if !observe_lookup(lookup, value)? {
                 return Ok(ReadyResult::default());
@@ -108,7 +108,7 @@ mod tests {
         cancelled.cancellation.cancel();
         assert!(matches!(
             DnsVisibility.ready(&[], &cancelled).await,
-            Err(IssueError::Interrupted)
+            Err(IssueError::Cancelled)
         ));
         let expired = ExecutionContext {
             cancellation: CancellationToken::new(),
@@ -116,7 +116,7 @@ mod tests {
         };
         assert!(matches!(
             DnsVisibility.ready(&[], &expired).await,
-            Err(IssueError::Interrupted)
+            Err(IssueError::TimedOut)
         ));
     }
 }

@@ -21,6 +21,7 @@ pub(super) async fn show(
     target: crate::commands::cert::args::SavedTargetArgs,
     history: bool,
     verify: bool,
+    operation_timeout: Option<u64>,
     http: HttpArgs,
     local: LocalArgs,
     cli: &crate::common::context::CommandContext,
@@ -40,13 +41,16 @@ pub(super) async fn show(
     )
     .await?;
     if verify {
+        let operation_timeout = operation_timeout
+            .or(settings.config.operation_timeout)
+            .unwrap_or(600);
         let context = settings
             .account(&AccountArgs {
                 name: Some(record.account_name.clone()),
                 ..options
             })
             .await?;
-        record = inspect_remote(context, &http, &record, &store, cli).await?;
+        record = inspect_remote(context, &http, operation_timeout, &record, &store, cli).await?;
     }
     let view = if history || target.operation.is_some() {
         render::inspection::DetailView::Version
@@ -105,10 +109,17 @@ pub(in crate::commands::cert) async fn selected_record(
 pub(super) async fn inspect_remote(
     context: CliContext,
     http: &HttpArgs,
+    operation_timeout: u64,
     record: &IssueRecord,
     store: &CliIssueStore,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<IssueRecord> {
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let _signal = crate::common::signal::InterruptGuard::new(cancellation.clone());
+    let execution = aster_acme::solver::ExecutionContext {
+        cancellation,
+        deadline: std::time::Instant::now() + Duration::from_secs(operation_timeout),
+    };
     let signer = context
         .store
         .signer(
@@ -133,9 +144,18 @@ pub(super) async fn inspect_remote(
         request_timeout: http.request_timeout,
         ..AccountArgs::default()
     })?;
-    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
+    execution
+        .check()
+        .map_err(aster_acme::issuance::IssueError::from)?;
+    let client = tokio::select! {
+        biased;
+        () = execution.cancellation.cancelled() => return Err(aster_acme::issuance::IssueError::Cancelled.into()),
+        result = tokio::time::timeout_at(execution.deadline.into(), cli.http.discover(context.directory, transport)) => {
+            Arc::new(result.map_err(|_| aster_acme::issuance::IssueError::TimedOut)??)
+        }
+    };
     let identity = IssueIdentity { account, signer };
     Ok(IssueService::new(client, identity)?
-        .inspect(session.as_mut())
+        .inspect(session.as_mut(), &execution)
         .await?)
 }

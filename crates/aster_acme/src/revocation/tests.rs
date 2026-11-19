@@ -84,7 +84,7 @@ impl Fixture {
         let server = MockServer::start().await;
         let url = |p: &str| AcmeUrl::new(&format!("{}{p}", server.uri())).unwrap();
         Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "newNonce":url("/nonce"),"newAccount":url("/must-not-register"),"revokeCert":url("/vendor/revoke")
+            "newNonce":url("/nonce"),"newAccount":url("/must-not-register"),"revokeCert":url("/vendor/revoke"),"keyChange":url("/key-change")
         }))).mount(&server).await;
         Mock::given(method("HEAD"))
             .and(path("/nonce"))

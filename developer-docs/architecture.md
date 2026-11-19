@@ -14,7 +14,7 @@ AsterACME 提供可嵌入的 Rust ACME 客户端与 CLI。本文只说明层次�
 | `aster_acme_dns_http` | Forge HTTP执行、响应大小/取消/期限 | 厂商签名、错误语义、自动重试、文件存储 |
 | `aster_acme_dns_adpp` | ADPP wire、外部provider适配、响应校验和错误分类 | 终端、文件布局、ACME推进 |
 | `aster_acme_dns_resolver` | Hickory系统查询adapter，保留初始化/查询原因 | vendor/修补依赖、公共DNS回退、DNS写入 |
-| `aster_acme_validation` | 验证方法实现，目前DNS可见性检查 | ACME协议推进、CLI选择 |
+| `aster_acme_validation` | CAA/TXT/HTTP建议性预检与DNS可见性检查 | ACME协议推进、CLI选择 |
 | `aster_acme_cli_storage` | 账户/证书文件、查询、租约、恢复、部署文件发布及检查点的条件写入 | 续期/部署准入、退避计算、CLI配置schema、CA请求、reload进程 |
 | `aster_acme_cli` | 参数/配置、交互、solver适配、维护任务执行器、报告、reload | 重新实现协议状态机、维护候选筛选或重试准入 |
 

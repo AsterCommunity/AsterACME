@@ -132,7 +132,7 @@ impl ChallengeSolver for EmbeddedWebroot {
     ) -> Result<ReadyResult, IssueError> {
         let mut newly = Vec::new();
         for publication in publications {
-            execution.check().map_err(|_| IssueError::Interrupted)?;
+            execution.check().map_err(IssueError::from)?;
             let Some((target, content)) = self.target(&publication.requirement) else {
                 return Err(IssueError::InvalidInput(
                     "webroot solver received non-HTTP-01 material",
@@ -153,7 +153,7 @@ impl ChallengeSolver for EmbeddedWebroot {
         self.published
             .lock()
             .map(|mut published| published.extend(newly))
-            .map_err(|_| IssueError::Interrupted)?;
+            .map_err(|_| IssueError::Cancelled)?;
         Ok(ReadyResult {
             ready: true,
             ..ReadyResult::default()
@@ -172,7 +172,7 @@ impl ChallengeSolver for EmbeddedWebroot {
             };
             // Claim and drop ownership under one short lock; IO happens without it.
             let claimed = {
-                let mut published = self.published.lock().map_err(|_| IssueError::Interrupted)?;
+                let mut published = self.published.lock().map_err(|_| IssueError::Cancelled)?;
                 published
                     .iter()
                     .position(|(path, saved)| path == &target && saved == &content)

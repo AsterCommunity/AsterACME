@@ -214,13 +214,15 @@ impl HttpPool {
         check_transport(&directory.new_account, &options)?;
         for endpoint in [
             directory.new_order.as_ref(),
-            directory.key_change.as_ref(),
             directory.renewal_info.as_ref(),
             directory.revoke_cert.as_ref(),
         ]
         .into_iter()
         .flatten()
         {
+            check_transport(endpoint, &options)?;
+        }
+        if let Some(endpoint) = &directory.key_change {
             check_transport(endpoint, &options)?;
         }
         let client = AcmeClient {

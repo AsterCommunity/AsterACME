@@ -11,7 +11,7 @@ use wiremock::{
 
 pub(crate) async fn server(options: TransportOptions) -> (MockServer, AcmeClient) {
     let server = MockServer::start().await;
-    Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/account",server.uri()),"unknownExtension":true}))).mount(&server).await;
+    Mock::given(method("GET")).and(path("/directory")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":format!("{}/nonce",server.uri()),"newAccount":format!("{}/account",server.uri()),"keyChange":format!("{}/key-change",server.uri()),"unknownExtension":true}))).mount(&server).await;
     Mock::given(method("HEAD"))
         .and(path("/nonce"))
         .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "initial_nonce"))
@@ -474,7 +474,7 @@ async fn concurrent_requests_consume_distinct_nonces_and_send_valid_signatures()
 async fn discovery_timeout_malformed_json_and_insecure_endpoints_are_errors() {
     for response in [
         ResponseTemplate::new(200).set_body_string("not JSON"),
-        ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":"http://remote.example/nonce","newAccount":"https://ca/account"})),
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"newNonce":"http://remote.example/nonce","newAccount":"https://ca/account","keyChange":"https://ca.example/key-change"})),
         ResponseTemplate::new(200).set_delay(Duration::from_millis(400)),
         ResponseTemplate::new(500).set_body_string("server failure"),
     ] {
@@ -534,7 +534,8 @@ async fn pool_clones_reuse_tcp_connections_without_sharing_account_policy_or_non
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let body = serde_json::to_string(&serde_json::json!({
-        "newNonce": format!("{base}/nonce"), "newAccount": format!("{base}/account")
+        "newNonce": format!("{base}/nonce"), "newAccount": format!("{base}/account"),
+        "keyChange": format!("{base}/key-change")
     }))
     .unwrap();
     let connections = Arc::new(AtomicUsize::new(0));

@@ -642,7 +642,7 @@ async fn retained_material_can_only_skip_confirmation_for_unchanged_persistent_p
             solver
                 .ready(&publications(&[requirement]), &cancelled)
                 .await,
-            Err(IssueError::Interrupted)
+            Err(IssueError::Cancelled)
         ));
         assert!(
             !solver

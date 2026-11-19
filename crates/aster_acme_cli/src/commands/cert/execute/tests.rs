@@ -197,7 +197,7 @@ async fn renewal_failures_retain_ca_deadlines_but_user_cancellation_does_not_cou
             &record,
             &progress,
             &execution,
-            Box::new(IssueError::Interrupted),
+            Box::new(IssueError::Cancelled),
         )
         .await
         .err()

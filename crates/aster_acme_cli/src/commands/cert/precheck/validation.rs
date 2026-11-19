@@ -58,7 +58,7 @@ impl ChallengeSolver for Checked {
         execution: &ExecutionContext,
     ) -> Result<(), IssueError> {
         self.inner.wait_ready(publications, execution).await?;
-        execution.check().map_err(|_| IssueError::Interrupted)?;
+        execution.check().map_err(IssueError::from)?;
         let requirements = publications
             .iter()
             .map(|publication| publication.requirement.clone())
@@ -85,7 +85,14 @@ impl ChallengeSolver for Checked {
         let report = Runner::default()
             .run(&Http::new(&self.pool), &requirements, execution)
             .await
-            .map_err(|_| IssueError::Interrupted)?;
+            .map_err(|error| match error {
+                aster_acme::precheck::Error::Interrupted => execution
+                    .check()
+                    .map_or_else(IssueError::from, |()| IssueError::Cancelled),
+                aster_acme::precheck::Error::InvalidBudget => {
+                    IssueError::InvalidInput("invalid HTTP precheck budget")
+                }
+            })?;
         if report
             .observations
             .iter()
@@ -198,8 +205,11 @@ mod tests {
                 context.cancellation.cancel();
             }
             assert!(matches!(
-                checked.wait_ready(&publications(&[]), &context).await,
-                Err(IssueError::Interrupted)
+                (
+                    cancelled,
+                    checked.wait_ready(&publications(&[]), &context).await
+                ),
+                (true, Err(IssueError::Cancelled)) | (false, Err(IssueError::TimedOut))
             ));
         }
     }
@@ -242,7 +252,7 @@ mod tests {
                 assert!(started.elapsed() < Duration::from_secs(8));
                 assert!(diagnostics.text().contains("could not be confirmed"));
             } else {
-                assert!(matches!(result, Err(IssueError::Interrupted)));
+                assert!(matches!(result, Err(IssueError::TimedOut)));
                 assert!(started.elapsed() < Duration::from_secs(2));
             }
         }

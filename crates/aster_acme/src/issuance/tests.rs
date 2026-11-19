@@ -59,7 +59,7 @@ fn protocol_method_validation_prevents_http_wildcards_before_material_or_network
 }
 #[test]
 fn only_complete_error_responses_become_durable_failure_evidence() {
-    assert!(RequestFailure::from_error(&IssueError::Interrupted).is_none());
+    assert!(RequestFailure::from_error(&IssueError::Cancelled).is_none());
     assert!(RequestFailure::from_error(&IssueError::CreationUncertain).is_none());
     assert!(RequestFailure::from_error(&IssueError::InvalidInput("malformed response")).is_none());
 }
