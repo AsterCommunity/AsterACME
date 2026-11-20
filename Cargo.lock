@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_core",
  "aster_acme_dns",

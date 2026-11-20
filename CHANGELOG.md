@@ -6,7 +6,7 @@
 
 ### Added
 
-- **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests. The library release target advances to `0.1.0-alpha.4`; the CLI remains on its published `0.1.0-alpha.3` version.
+- **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests.
 
 ## [0.1.0-alpha.3] - 2026-11-20
 

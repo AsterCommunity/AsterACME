@@ -27,7 +27,7 @@ aster_forge_panic = { version = "=0.1.0-alpha.2", default-features = false }
 aster_forge_macros = { version = "=0.1.0-alpha.1" }
 aster_acme_protocol = { version = "0.1.0-alpha.3", path = "crates/aster_acme_protocol" }
 aster_acme_core = { version = "0.1.0-alpha.3", path = "crates/aster_acme_core" }
-aster_acme = { version = "0.1.0-alpha.4", path = "crates/aster_acme", default-features = false }
+aster_acme = { version = "0.1.0-alpha.3", path = "crates/aster_acme", default-features = false }
 aster_acme_validation = { version = "0.1.0-alpha.3", path = "crates/aster_acme_validation", default-features = false }
 aster_acme_cli_storage = { version = "0.1.0-alpha.3", path = "crates/aster_acme_cli_storage" }
 aster_acme_dns = { version = "0.1.0-alpha.3", path = "crates/aster_acme_dns" }

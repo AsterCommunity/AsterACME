@@ -30,7 +30,7 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 
 CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod 和华为云 DNS。华为云 RRset 更新无法保证与外部写入者原子隔离；嵌入式应用仍需显式选择所需 provider feature。[DNS Provider 配置](developer-docs/dns-providers.md)
 
-**当前库的发布目标：** `aster_acme` `0.1.0-alpha.4` 已准备发布。这是预发布版本，Rust API 与本地格式仍可能变化；CLI 仍是已发布的 `0.1.0-alpha.3`。真实 DNS/公网 CA 验收另计。
+**现已发布：** AsterACME `0.1.0-alpha.3` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。内置 Cloudflare 和 ADPP 后端已包含在统一的 DNS solver 之中，真实 DNS/公网 CA 验收另计。
 
 ## 能力
 
@@ -58,7 +58,7 @@ CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNS
 brew install astercommunity/tap/aster-acme
 ```
 
-在 alpha.4 正式上传前，从 crates.io 安装的 CLI 仍是已发布的 `0.1.0-alpha.3`。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
+从 crates.io 安装已发布的 `0.1.0-alpha.3` CLI。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
 
 ```sh
 cargo binstall aster_acme_cli@0.1.0-alpha.3
