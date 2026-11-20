@@ -30,7 +30,7 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Huawei Cloud DNS by default. Huawei Cloud RRset updates cannot guarantee atomic isolation from external writers. Embedded applications select provider features explicitly. [DNS provider setup](developer-docs/dns-providers.md)
 
-**Available now:** AsterACME `0.1.0-alpha.3` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. It includes native Cloudflare and ADPP backends behind a unified DNS solver. Live DNS/public-CA acceptance is separate.
+**Current library release target:** `aster_acme` `0.1.0-alpha.4` is prepared for publication. This is a pre-release; Rust APIs and local formats may still change. The CLI remains at its published `0.1.0-alpha.3` release. Live DNS/public-CA acceptance is separate.
 
 ## Capabilities
 
@@ -58,7 +58,7 @@ Install the CLI from Homebrew:
 brew install astercommunity/tap/aster-acme
 ```
 
-Install the published `0.1.0-alpha.3` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
+The published CLI remains `0.1.0-alpha.3` until the alpha.4 release is uploaded. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
 
 ```sh
 cargo binstall aster_acme_cli@0.1.0-alpha.3
@@ -78,13 +78,13 @@ cd AsterACME
 cargo install --path crates/aster_acme_cli --locked
 ```
 
-To embed the library, run the shipped end-to-end example — CA discovery, account registration or reuse, an embedder-owned HTTP-01 webroot solver, resume, and artifacts — against Let's Encrypt **staging** with a temporary data directory:
+To embed the library, run the shipped end-to-end example — CA discovery, account registration, an embedder-owned HTTP-01 webroot solver, and artifacts — against Let's Encrypt **staging** with a temporary data directory:
 
 ```sh
 cargo run -p aster_acme --example embedded_issuance -- --domain example.com --webroot /srv/www
 ```
 
-The [example source](crates/aster_acme/examples/embedded_issuance.rs) is the embedding entry point: the `ChallengeSolver` implementation and the `AccountService`/`Workflow` wiring are yours, protocol state and recovery stay in the library.
+The [example source](crates/aster_acme/examples/embedded_issuance.rs) is the embedding entry point: the `ChallengeSolver` implementation, storage adapters, and the `AccountService`/`Workflow` wiring are yours. The example's adapters are volatile; a real embedder supplies durable storage for restart recovery.
 
 Run the published container image instead of installing (multi-arch; `latest` tracks stable releases):
 

@@ -30,7 +30,7 @@ AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断
 
 CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod 和华为云 DNS。华为云 RRset 更新无法保证与外部写入者原子隔离；嵌入式应用仍需显式选择所需 provider feature。[DNS Provider 配置](developer-docs/dns-providers.md)
 
-**现已发布：** AsterACME `0.1.0-alpha.3` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。内置 Cloudflare 和 ADPP 后端已包含在统一的 DNS solver 之中，真实 DNS/公网 CA 验收另计。
+**当前库的发布目标：** `aster_acme` `0.1.0-alpha.4` 已准备发布。这是预发布版本，Rust API 与本地格式仍可能变化；CLI 仍是已发布的 `0.1.0-alpha.3`。真实 DNS/公网 CA 验收另计。
 
 ## 能力
 
@@ -58,7 +58,7 @@ CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNS
 brew install astercommunity/tap/aster-acme
 ```
 
-从 crates.io 安装已发布的 `0.1.0-alpha.3` CLI。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
+在 alpha.4 正式上传前，从 crates.io 安装的 CLI 仍是已发布的 `0.1.0-alpha.3`。若有匹配的预编译二进制，`cargo-binstall` 会优先使用；否则回退到 Cargo 源码构建：
 
 ```sh
 cargo binstall aster_acme_cli@0.1.0-alpha.3
@@ -78,13 +78,13 @@ cd AsterACME
 cargo install --path crates/aster_acme_cli --locked
 ```
 
-嵌入 Rust 库时可运行仓库自带的端到端示例——CA 发现、账户注册或复用、嵌入方实现的 HTTP-01 webroot solver、恢复与产物——默认指向 Let's Encrypt **staging** 并使用临时 data-dir：
+嵌入 Rust 库时可运行仓库自带的端到端示例——CA 发现、账户注册、嵌入方实现的 HTTP-01 webroot solver 与产物——默认指向 Let's Encrypt **staging** 并使用临时 data-dir：
 
 ```sh
 cargo run -p aster_acme --example embedded_issuance -- --domain example.com --webroot /srv/www
 ```
 
-[示例源码](crates/aster_acme/examples/embedded_issuance.rs)就是嵌入入口：`ChallengeSolver` 实现和 `AccountService`/`Workflow` 编排属于嵌入方，协议状态与恢复逻辑留在库内。
+[示例源码](crates/aster_acme/examples/embedded_issuance.rs)就是嵌入入口：`ChallengeSolver` 实现、存储适配器和 `AccountService`/`Workflow` 编排属于嵌入方。示例适配器只保留临时状态；实际嵌入时需提供持久存储以支持进程重启后的恢复。
 
 不本地安装时可直接运行已发布的容器镜像（多架构；`latest` 只跟随稳定版本）：
 
