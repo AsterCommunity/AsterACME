@@ -364,7 +364,7 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
             None => lines.push(field("CA contacts:", "not provided", color)),
         }
         if let Some(url) = &record.accepted_terms_url {
-            lines.push(field("Accepted terms:", &safe(url.as_str()), color));
+            lines.push(field("Accepted terms:", &safe(url), color));
         }
         lines.push(field(
             "Automatic terms updates:",

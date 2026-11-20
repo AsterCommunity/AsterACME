@@ -732,7 +732,7 @@ impl WorkflowObserver for ProgressPrinter {
     fn discovered(&self, directory: &Directory, _record: &IssueRecord) {
         let terms = directory.meta.terms_of_service.as_ref().map_or_else(
             || "none advertised".to_owned(),
-            |url| url.as_str().to_owned(),
+            |terms| display_terms(terms),
         );
         println!("directory ready; terms: {terms}");
     }
@@ -744,6 +744,29 @@ fn normalize_contact(contact: &str) -> String {
     } else {
         format!("mailto:{contact}")
     }
+}
+
+/// CA-controlled term identifiers are untrusted terminal text. Escape control
+/// and bidirectional-format characters at this display boundary only; the
+/// directory value and the recorded acceptance stay verbatim. Embedders should
+/// apply the same policy wherever server text reaches a terminal.
+fn display_terms(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|c| {
+            if c.is_control()
+                || matches!(
+                    c,
+                    '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+            {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 fn artifact_paths(data_dir: &Path, name: &CertificateName) -> PathBuf {

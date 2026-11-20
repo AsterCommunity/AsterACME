@@ -1,7 +1,7 @@
 //! Exercise the example's real adapters with temporary files and a loopback CA.
 use crate::{
     ACCOUNT_NAME, EmbeddedAccountStore, EmbeddedIssueStore, EmbeddedWebroot, artifact_paths,
-    ensure_account,
+    display_terms, ensure_account,
 };
 use aster_acme::{
     account::AccountRecord,
@@ -363,4 +363,16 @@ async fn loopback_ca_drives_the_real_workflow_and_example_adapters_to_completion
         session.record().await.unwrap().phase,
         IssuancePhase::Completed
     );
+}
+
+#[test]
+fn term_display_escapes_terminal_controls_and_keeps_plain_values() {
+    let plain = "data:text/plain,Do%20what%20thou%20wilt";
+    assert_eq!(display_terms(plain), plain);
+    assert_eq!(display_terms("none advertised"), "none advertised");
+    let hostile = "data:text/plain,\u{1b}[2J\u{1b}[Hfake success\u{202e}evil";
+    let rendered = display_terms(hostile);
+    assert!(!rendered.chars().any(char::is_control));
+    assert!(!rendered.contains('\u{202e}'));
+    assert!(rendered.contains("\\u{1b}"));
 }

@@ -1,5 +1,4 @@
 //! Interactive registration decisions. Terms consent is scoped to the discovered CA URL.
-use aster_acme_protocol::url::AcmeUrl;
 
 use crate::common::{
     error::CliResult,
@@ -138,8 +137,8 @@ pub(super) fn profile_choice(
 
 pub(super) fn terms(
     options: &mut RegistrationOptions,
-    current: Option<&AcmeUrl>,
-    accepted: Option<&AcmeUrl>,
+    current: Option<&String>,
+    accepted: Option<&String>,
     interactive: bool,
     prompts: &mut impl RegistrationPrompts,
 ) -> CliResult<()> {
@@ -152,10 +151,7 @@ pub(super) fn terms(
     if !interactive {
         return Err(AccountError::TermsRequired(current.clone()).into());
     }
-    let message = format!(
-        "CA terms: {}\nDo you agree to these terms?",
-        safe(current.as_str())
-    );
+    let message = format!("CA terms: {}\nDo you agree to these terms?", safe(current));
     if !prompts.confirm(&message)? {
         return Err(Box::new(Canceled));
     }
@@ -167,7 +163,7 @@ pub(super) fn terms(
 /// `--yes` and non-interactive output never reach this prompt.
 pub(super) fn auto_accept_terms_updates(
     options: &mut RegistrationOptions,
-    current: Option<&AcmeUrl>,
+    current: Option<&String>,
     already_authorized: bool,
     interactive: bool,
     yes: bool,
@@ -317,8 +313,8 @@ mod tests {
 
     #[test]
     fn terms_require_explicit_consent_for_the_current_url() {
-        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
-        let old = AcmeUrl::new("https://ca.example/terms/v1").unwrap();
+        let current = "https://ca.example/terms/v2".to_owned();
+        let old = "https://ca.example/terms/v1".to_owned();
         let mut options = RegistrationOptions::default();
         let mut yes = prompts(&[true], None);
         terms(&mut options, Some(&current), Some(&old), true, &mut yes).unwrap();
@@ -387,7 +383,7 @@ mod tests {
 
     #[test]
     fn yes_never_prompts_or_grants_future_consent_even_on_a_terminal() {
-        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+        let current = "https://ca.example/terms/v2".to_owned();
         for interactive in [false, true] {
             let mut options = RegistrationOptions {
                 terms_accepted: true,
@@ -424,7 +420,7 @@ mod tests {
 
     #[test]
     fn auto_accept_terms_requires_explicit_interactive_yes() {
-        let current = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+        let current = "https://ca.example/terms/v2".to_owned();
         let mut options = RegistrationOptions::default();
         auto_accept_terms_updates(
             &mut options,

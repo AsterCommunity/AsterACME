@@ -201,7 +201,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
 #[tokio::test]
 async fn consent_records_the_current_url_and_changed_terms_require_new_acceptance() {
     let (_server, mut client) = server(local_options()).await;
-    let first = AcmeUrl::new("https://ca.example/terms/v1").unwrap();
+    let first = "https://ca.example/terms/v1".to_owned();
     client.directory.meta.terms_of_service = Some(first.clone());
     let store = Arc::new(MemoryStore::default());
     let directory = client.directory_url().clone();
@@ -239,7 +239,7 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
             .await
             .is_ok()
     );
-    let second = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+    let second = "https://ca.example/terms/v2".to_owned();
     Arc::get_mut(&mut service.client)
         .unwrap()
         .directory
@@ -293,8 +293,8 @@ async fn consent_records_the_current_url_and_changed_terms_require_new_acceptanc
 #[tokio::test]
 async fn auto_acceptance_updates_terms_url_and_survives_implicit_ensure() {
     let (_server, mut client) = server(local_options()).await;
-    let first = AcmeUrl::new("https://ca.example/terms/v1").unwrap();
-    let second = AcmeUrl::new("https://ca.example/terms/v2").unwrap();
+    let first = "https://ca.example/terms/v1".to_owned();
+    let second = "https://ca.example/terms/v2".to_owned();
     client.directory.meta.terms_of_service = Some(first.clone());
     let store = Arc::new(MemoryStore::default());
     let directory = client.directory_url().clone();
@@ -373,8 +373,7 @@ async fn auto_acceptance_updates_terms_url_and_survives_implicit_ensure() {
 #[tokio::test]
 async fn enabling_delegation_on_existing_records_is_durable_and_failed_saves_never_post() {
     let (server, mut client) = server(local_options()).await;
-    client.directory.meta.terms_of_service =
-        Some(AcmeUrl::new("https://ca.example/terms").unwrap());
+    client.directory.meta.terms_of_service = Some("https://ca.example/terms".to_owned());
     let store = Arc::new(MemoryStore::default());
     let service = AccountService::new(Arc::new(client), store.clone());
     let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
@@ -575,7 +574,7 @@ async fn registration_is_recovered_after_lost_response_and_reuses_the_same_ident
 #[tokio::test]
 async fn consent_eab_and_contacts_fail_before_post_or_persisted_registration() {
     let (server, mut client) = server(local_options()).await;
-    let terms = AcmeUrl::new("https://ca.example/terms").unwrap();
+    let terms = "https://ca.example/terms".to_owned();
     client.directory.meta.terms_of_service = Some(terms.clone());
     let store = Arc::new(MemoryStore::default());
     let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();
