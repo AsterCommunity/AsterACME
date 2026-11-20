@@ -38,6 +38,12 @@ pub(super) async fn issue(
             .await?
             .ok_or("No registered account exists.")?;
         let mut request = request(&args, &context.name, account.preferred_profile.as_deref())?;
+        // Draft-ietf-acme-profiles: interactive issuance without an explicit
+        // --profile picks from the CA's advertised list (account default
+        // preselected); scripts and --profile keep the flag requirement.
+        if interactive && args.profile.is_none() {
+            prompt_profile(&mut request, &context, &options, &account, cli).await?;
+        }
         if args.challenge == Some(crate::commands::cert::validation::ValidationMethod::DnsProvider)
         {
             request.solver_config =
@@ -87,6 +93,52 @@ pub(super) async fn issue(
         result,
         data_dir: root,
     })
+}
+
+/// Interactive default-profile selection against the bound CA's directory:
+/// advertised names with descriptions, account default preselected, Esc
+/// cancels the issuance. CAs without advertisements keep the CA default.
+async fn prompt_profile(
+    request: &mut IssueRequest,
+    context: &crate::common::context::CliContext,
+    options: &crate::commands::account::args::AccountArgs,
+    account: &aster_acme::account::AccountRecord,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<()> {
+    let transport = context.transport_options(options)?;
+    let advertised = cli
+        .http
+        .discover(context.directory.clone(), transport)
+        .await?
+        .directory()
+        .meta
+        .profiles
+        .clone();
+    let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
+        return Ok(());
+    };
+    let names = advertised.keys().cloned().collect::<Vec<_>>();
+    let mut choices = names
+        .iter()
+        .map(|name| match advertised.get(name).map(String::as_str) {
+            None | Some("") => name.clone(),
+            Some(description) => format!("{name} — {description}"),
+        })
+        .collect::<Vec<_>>();
+    choices.push("(no default; the CA default applies)".to_owned());
+    let default = names
+        .iter()
+        .position(|name| account.preferred_profile.as_deref() == Some(name.as_str()))
+        .unwrap_or(0);
+    let selection = crate::common::terminal::select_index_or_back(
+        "Default certificate profile:",
+        &choices,
+        default,
+        &cli.output,
+    )?
+    .ok_or(crate::common::terminal::Canceled)?;
+    request.profile = names.get(selection).cloned();
+    Ok(())
 }
 
 pub(super) async fn select_saved_issue(

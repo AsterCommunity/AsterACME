@@ -293,3 +293,13 @@ CLI/文件集成回归使用生产preparation事务和真实journal：删除整�
 - 原生 PTY：Provider 29 场景、确认输入 18 场景通过。workspace/import/TLS/生产 feature 策略、本地文档链接与 `git diff HEAD --check` 通过；使用 `scripts/requirements.txt` 的隔离 Python 环境运行脚本单元测试，14 项通过。
 
 协议分类和 TTL 范围已核对 RFC 原文，依据见 [RFC 核对](rfc-reference.md#请求结果和-ttl-原文核对2026-11-18)。未执行 Linux/Windows 原生验收、真实公网 DNS/CA mutation 或整机掉电测试；逐文件部署仍不保证整组原子切换或核验后外部修改隔离。
+
+## IP 标识符真实 CA 验收（2026-11-20，分支 `feat/rfc8738-ip-identifiers`）
+
+Let's Encrypt 生产环境（acme-v02），单一公网 IPv4 标识符（地址属运维信息，不记录于此），`--profile shortlived`：
+
+- HTTP-01 standalone（80 端口）与 TLS-ALPN-01 standalone（443 端口）两条路径均完成真实签发：newOrder 携带 `type=ip` 标识符与 profile，CA 广告列表含 classic/shortlived/tlsserver，CAA 预检对 IP 输出"不适用"，授权/finalize/下载/校验/落盘全链路成功。
+- 签发产物人工核验：SAN 为 critical 单一 `iPAddress`，subject 为空（shortlived 无 CN/SKID），EKU 仅 serverAuth，有效期 6 天 16 小时（约 160 小时），私钥与叶子公钥一致，两份串号互异。
+- 信任链人工核验：leaf → LE YE1 → Root YE（cross-signed）→ ISRG Root X2，对 macOS 系统信任库（含 ISRG Root X2 锚）`openssl verify` 通过。
+- ARI 续期窗口已生成（约 3 天后）。本地 loopback 验收（签发/恢复/续期/取消/跨进程租约）与本记录分开：本地证据在 flow 测试与 profiles 流程测试。
+- 环境注意：`openssl verify` 默认 CApath 不含 macOS 钥匙串锚，需显式 `-CAfile` 导出的系统锚；浏览器/curl 使用系统锚时正常信任。

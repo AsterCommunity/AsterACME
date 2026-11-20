@@ -4,7 +4,7 @@ use aster_acme_protocol::url::AcmeUrl;
 use crate::common::{
     error::CliResult,
     output::safe,
-    terminal::{Canceled, prompt_result},
+    terminal::{self, Canceled, prompt_result},
 };
 use aster_acme::account::{AccountError, RegistrationOptions};
 
@@ -12,9 +12,8 @@ use aster_acme::account::{AccountError, RegistrationOptions};
 pub(super) trait RegistrationPrompts {
     fn confirm(&mut self, message: &str) -> CliResult<bool>;
     fn email(&mut self) -> CliResult<String>;
-    /// Free-form input for profile selection; scripts never reach this.
-    fn text(&mut self, message: &str) -> CliResult<String>;
-    fn invalid(&mut self, message: &str);
+    /// Arrow-key single choice; the default index is preselected.
+    fn select(&mut self, message: &str, choices: &[String], default: usize) -> CliResult<usize>;
 }
 
 pub(super) struct TerminalPrompts<'a>(pub(super) &'a crate::common::session::OutputSession);
@@ -75,20 +74,8 @@ impl RegistrationPrompts for TerminalPrompts<'_> {
         )
     }
 
-    fn text(&mut self, message: &str) -> CliResult<String> {
-        self.0.interaction_started();
-        prompt_result(
-            inquire::Text::new(message)
-                .with_render_config(crate::common::terminal::prompt_style(
-                    self.0.diagnostic_format().color,
-                    false,
-                ))
-                .prompt(),
-        )
-    }
-
-    fn invalid(&mut self, message: &str) {
-        self.0.context(&crate::common::output::safe(message));
+    fn select(&mut self, message: &str, choices: &[String], default: usize) -> CliResult<usize> {
+        terminal::select_index(message, choices, default, self.0)
     }
 }
 
@@ -115,6 +102,8 @@ pub(super) fn contact(
 /// Draft-ietf-acme-profiles (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>):
 /// interactive default-profile selection from the CA's advertised list.
 /// Blank input keeps the CA default; the answer must be an advertised name.
+/// Draft-ietf-acme-profiles interactive default-profile selection: one
+/// arrow-key menu over the advertised names plus an explicit skip entry.
 pub(super) fn profile_choice(
     advertised: Option<&std::collections::BTreeMap<String, String>>,
     prompts: &mut impl RegistrationPrompts,
@@ -123,40 +112,22 @@ pub(super) fn profile_choice(
         return Ok(None);
     };
     let names = advertised.keys().cloned().collect::<Vec<_>>();
-    let mut listing = String::from("Default certificate profile (blank to skip):");
-    for (index, name) in names.iter().enumerate() {
-        listing.push('\n');
-        listing.push_str("  ");
-        listing.push_str(&(index + 1).to_string());
-        listing.push_str(". ");
-        listing.push_str(name);
-        if let Some(description) = advertised.get(name)
-            && !description.is_empty()
-        {
-            listing.push_str(" — ");
-            listing.push_str(description);
-        }
-    }
-    loop {
-        let value = prompts.text(&listing)?;
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        let parsed = trimmed
-            .parse::<usize>()
-            .ok()
-            .and_then(|index| index.checked_sub(1))
-            .and_then(|index| names.get(index).cloned())
-            .or_else(|| names.iter().find(|name| name.as_str() == trimmed).cloned());
-        match parsed {
-            Some(name) => return Ok(Some(name)),
-            None => prompts.invalid(&format!(
-                "Enter a number between 1 and {}, the exact profile name, or nothing to skip.",
-                names.len()
-            )),
-        }
-    }
+    let mut choices = names
+        .iter()
+        .map(
+            |name| match advertised.get(name).filter(|text| !text.is_empty()) {
+                Some(description) => format!("{name} — {description}"),
+                None => name.clone(),
+            },
+        )
+        .collect::<Vec<_>>();
+    choices.push("(no default; the CA default applies)".to_owned());
+    let selection = prompts.select("Default certificate profile:", &choices, 0)?;
+    Ok(if selection < names.len() {
+        Some(names[selection].clone())
+    } else {
+        None
+    })
 }
 
 pub(super) fn terms(
@@ -218,6 +189,7 @@ mod tests {
     struct Prompts {
         answers: VecDeque<bool>,
         address: Option<String>,
+        selections: VecDeque<usize>,
         messages: Vec<String>,
     }
 
@@ -233,14 +205,16 @@ mod tests {
                 .take()
                 .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
         }
-        fn text(&mut self, message: &str) -> CliResult<String> {
+        fn select(
+            &mut self,
+            message: &str,
+            _choices: &[String],
+            _default: usize,
+        ) -> CliResult<usize> {
             self.messages.push(message.to_owned());
-            self.address
-                .take()
+            self.selections
+                .pop_front()
                 .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
-        }
-        fn invalid(&mut self, message: &str) {
-            self.messages.push(message.to_owned());
         }
     }
 
@@ -248,6 +222,7 @@ mod tests {
         Prompts {
             answers: answers.iter().copied().collect(),
             address: email.map(str::to_owned),
+            selections: VecDeque::new(),
             messages: vec![],
         }
     }
