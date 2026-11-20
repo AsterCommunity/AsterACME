@@ -678,3 +678,56 @@ pub(super) mod tests {
         assert_eq!(labels[0], labels[1]);
     }
 }
+
+#[test]
+fn profiles_listing_reports_advertised_names_and_descriptions() {
+    use aster_acme_protocol::url::AcmeUrl;
+    use std::collections::BTreeMap;
+    let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+    let profiles = BTreeMap::from([
+        (
+            "classic".to_owned(),
+            "https://ca.example/docs#classic".to_owned(),
+        ),
+        ("shortlived".to_owned(), String::new()),
+    ]);
+    let text = render(
+        &AccountReport::Profiles {
+            directory: directory.clone(),
+            profiles: Some(profiles),
+        },
+        Format::plain(false),
+    )
+    .unwrap();
+    assert!(text.contains("classic — https://ca.example/docs#classic"));
+    assert!(text.contains("shortlived"));
+    assert!(text.contains("account set-profile") && text.contains("cert issue --profile"));
+    // No advertisement: the CA default is stated explicitly, not assumed.
+    let text = render(
+        &AccountReport::Profiles {
+            directory,
+            profiles: None,
+        },
+        Format::plain(false),
+    )
+    .unwrap();
+    assert!(text.contains("advertises none"));
+}
+
+#[test]
+fn profile_preference_text_distinguishes_set_and_clear() {
+    let report = |previous: Option<&str>, current: Option<&str>| AccountReport::ProfilePreference {
+        name: "work".to_owned(),
+        previous: previous.map(str::to_owned),
+        current: current.map(str::to_owned),
+    };
+    let text = render(
+        &report(Some("classic"), Some("shortlived")),
+        Format::plain(false),
+    )
+    .unwrap();
+    assert!(text.contains("shortlived") && text.contains("(was classic)"));
+    assert!(text.contains("Explicit cert issue --profile still wins"));
+    let text = render(&report(Some("shortlived"), None), Format::plain(false)).unwrap();
+    assert!(text.contains("Cleared account work default profile"));
+}

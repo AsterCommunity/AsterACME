@@ -309,3 +309,12 @@ fn parse_operation(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[test]
+fn profile_names_reject_emptiness_oversize_and_control_characters() {
+    assert_eq!(parse_profile("shortlived").unwrap().as_str(), "shortlived");
+    assert_eq!(parse_profile(&"x".repeat(64)).unwrap(), "x".repeat(64));
+    assert!(parse_profile("").is_err());
+    assert!(parse_profile(&"x".repeat(65)).is_err());
+    assert!(parse_profile("short\nlived").is_err());
+}

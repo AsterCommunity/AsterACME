@@ -147,7 +147,8 @@ pub(super) async fn update(
             .ok_or(AccountError::AccountDoesNotExist)?;
         let previous = fresh.preferred_profile.clone();
         let target = profile_target;
-        save_profile_preference(&context, &fresh, target.clone(), &options, cli).await?;
+        let transport = context.transport_options(&options)?;
+        save_profile_preference(&context, &fresh, target.clone(), transport, cli).await?;
         return Ok(AccountReport::ProfilePreference {
             name: context.name,
             previous,
@@ -199,11 +200,10 @@ async fn save_profile_preference(
     context: &CliContext,
     record: &aster_acme::account::AccountRecord,
     target: Option<String>,
-    options: &AccountArgs,
+    transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<()> {
     if let Some(profile) = &target {
-        let transport = context.transport_options(options)?;
         let advertised = match cli
             .http
             .discover(context.directory.clone(), transport)
@@ -341,4 +341,270 @@ pub(super) async fn rotate_key(
         name: context.name,
         record,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::context::CommandContext;
+    use aster_acme::storage::account::KeyAccess;
+    use aster_acme_cli_storage::account::CliAccountStore;
+    use aster_acme_protocol::url::AcmeUrl;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn record(
+        directory: &AcmeUrl,
+        thumbprint: &str,
+        account_url: Option<AcmeUrl>,
+    ) -> aster_acme::account::AccountRecord {
+        aster_acme::account::AccountRecord {
+            key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+            user_agent: None,
+            times: aster_acme::account::AccountTimes::default(),
+            account_id: aster_acme::account::AccountRecord::stable_id(directory, thumbprint),
+            directory_url: directory.clone(),
+            key_thumbprint: thumbprint.to_owned(),
+            account_url,
+            contacts: Vec::new(),
+            server_contacts: None,
+            last_status: None,
+            deactivation: aster_acme_core::account::DeactivationState::NotRequested,
+            key_rotation: None,
+            accepted_terms_url: None,
+            preferred_profile: None,
+            auto_accept_terms_updates: false,
+            state: aster_acme_core::account::AccountRecordState::Registered,
+        }
+    }
+
+    /// Registered loopback account bound to a wiremock directory advertising
+    /// `meta.profiles` like a profiles-enabled CA.
+    struct HarnessHandles {
+        _temp: tempfile::TempDir,
+    }
+
+    async fn harness() -> (
+        MockServer,
+        CliContext,
+        Arc<dyn aster_acme::crypto::JwsSigner>,
+        aster_acme::transport::TransportOptions,
+        AcmeUrl,
+        HarnessHandles,
+    ) {
+        let server = MockServer::start().await;
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            Arc::new(CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap());
+        let directory = AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap();
+        let signer = store
+            .signer(&directory, "work", KeyAccess::Create(None))
+            .await
+            .unwrap();
+        let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
+        let account_url = AcmeUrl::new(&format!("{}/acct/1", server.uri())).unwrap();
+        let record = record(&directory, &thumbprint, Some(account_url));
+        store.save(&record).await.unwrap();
+        let options = AccountArgs {
+            name: Some("work".into()),
+            ca_directory: Some(directory.as_str().to_owned()),
+            data_dir: Some(temp.path().into()),
+            json: true,
+            ..AccountArgs::default()
+        };
+        let context = CliSettings::load(&options)
+            .await
+            .unwrap()
+            .account(&options)
+            .await
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/directory"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "newNonce": format!("{}/nonce", server.uri()),
+                "newAccount": format!("{}/new-account", server.uri()),
+                "newOrder": format!("{}/orders", server.uri()),
+                "meta": {"profiles": {
+                    "classic": "https://ca.example/classic",
+                    "shortlived": "https://ca.example/shortlived"
+                }}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("HEAD"))
+            .and(path("/nonce"))
+            .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "initial"))
+            .mount(&server)
+            .await;
+        let transport = aster_acme::transport::TransportOptions {
+            allow_loopback_http: true,
+            ..aster_acme::transport::TransportOptions::default()
+        };
+        (
+            server,
+            context,
+            signer,
+            transport,
+            directory,
+            HarnessHandles { _temp: temp },
+        )
+    }
+
+    async fn stored(
+        context: &CliContext,
+        signer: &Arc<dyn aster_acme::crypto::JwsSigner>,
+    ) -> aster_acme::account::AccountRecord {
+        let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
+        context
+            .store
+            .load(&context.directory, &thumbprint)
+            .await
+            .unwrap()
+            .expect("registered account record")
+    }
+
+    #[tokio::test]
+    async fn save_persists_advertised_selection() {
+        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        save_profile_preference(
+            &context,
+            &stored(&context, &signer).await,
+            Some("shortlived".into()),
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            stored(&context, &signer).await.preferred_profile.as_deref(),
+            Some("shortlived")
+        );
+    }
+
+    #[tokio::test]
+    async fn unadvertised_profile_is_rejected_with_available_names_and_store_untouched() {
+        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        let error = save_profile_preference(
+            &context,
+            &stored(&context, &signer).await,
+            Some("premium".into()),
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("premium"), "{text}");
+        assert!(
+            text.contains("classic") && text.contains("shortlived"),
+            "{text}"
+        );
+        assert_eq!(
+            stored(&context, &signer).await.preferred_profile,
+            None,
+            "a rejected change never half-persists"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_is_local_and_sets_none() {
+        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        save_profile_preference(
+            &context,
+            &stored(&context, &signer).await,
+            Some("classic".into()),
+            transport.clone(),
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        save_profile_preference(
+            &context,
+            &stored(&context, &signer).await,
+            None,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored(&context, &signer).await.preferred_profile, None);
+    }
+
+    #[tokio::test]
+    async fn unreachable_directory_blocks_change_without_silent_accept() {
+        // A fresh server with zero mounts: discovery fails, nothing changes.
+        let server = MockServer::start().await;
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            Arc::new(CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap());
+        let directory = AcmeUrl::new(&format!("{}/directory", server.uri())).unwrap();
+        let signer = store
+            .signer(&directory, "work", KeyAccess::Create(None))
+            .await
+            .unwrap();
+        let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
+        let account_url = AcmeUrl::new(&format!("{}/acct/1", server.uri())).unwrap();
+        let record = record(&directory, &thumbprint, Some(account_url));
+        store.save(&record).await.unwrap();
+        let options = AccountArgs {
+            name: Some("work".into()),
+            ca_directory: Some(directory.as_str().to_owned()),
+            data_dir: Some(temp.path().into()),
+            json: true,
+            ..AccountArgs::default()
+        };
+        let context = CliSettings::load(&options)
+            .await
+            .unwrap()
+            .account(&options)
+            .await
+            .unwrap();
+        let error = save_profile_preference(
+            &context,
+            &record,
+            Some("shortlived".into()),
+            aster_acme::transport::TransportOptions {
+                allow_loopback_http: true,
+                ..aster_acme::transport::TransportOptions::default()
+            },
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("no change was saved"));
+        assert_eq!(record.preferred_profile, None);
+    }
+
+    /// The review regression: contacts submission lands CA-observed contacts
+    /// in storage; the profile save must preserve that fresh server state
+    /// instead of reverting to the pre-update snapshot.
+    #[tokio::test]
+    async fn profile_save_preserves_server_contacts_landed_by_contact_update() {
+        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        let stale = stored(&context, &signer).await;
+        let mut fresh = stale.clone();
+        fresh.server_contacts = Some(vec!["mailto:new@example.com".into()]);
+        context.store.save(&fresh).await.unwrap();
+
+        save_profile_preference(
+            &context,
+            &stored(&context, &signer).await,
+            Some("shortlived".into()),
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let final_record = stored(&context, &signer).await;
+        assert_eq!(
+            final_record.preferred_profile.as_deref(),
+            Some("shortlived")
+        );
+        assert_eq!(
+            final_record.server_contacts.as_deref(),
+            Some(["mailto:new@example.com".to_owned()].as_slice()),
+            "profile save must not revert CA-observed contacts"
+        );
+    }
 }

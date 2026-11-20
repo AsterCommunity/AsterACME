@@ -459,6 +459,74 @@ mod tests {
             &mut already,
         )
         .unwrap();
-        assert_eq!(already.messages.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod profile_choice_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    struct FakePrompts {
+        selections: VecDeque<usize>,
+        messages: Vec<String>,
+    }
+
+    impl RegistrationPrompts for FakePrompts {
+        fn confirm(&mut self, message: &str) -> CliResult<bool> {
+            self.messages.push(message.to_owned());
+            Ok(true)
+        }
+        fn email(&mut self) -> CliResult<String> {
+            Ok("mailto:test@example.com".into())
+        }
+        fn select(
+            &mut self,
+            _message: &str,
+            _choices: &[String],
+            _default: usize,
+        ) -> CliResult<usize> {
+            self.selections.pop_front().ok_or_else(|| {
+                Box::new(crate::common::terminal::Canceled) as Box<dyn std::error::Error>
+            })
+        }
+    }
+
+    #[test]
+    fn profile_choice_maps_arrow_selections_and_skip_entry() {
+        let advertised = std::collections::BTreeMap::from([
+            (
+                "classic".to_owned(),
+                "https://ca.example/classic".to_owned(),
+            ),
+            ("shortlived".to_owned(), String::new()),
+        ]);
+        let mut prompts = FakePrompts {
+            selections: VecDeque::from([1]),
+            messages: vec![],
+        };
+        assert_eq!(
+            profile_choice(Some(&advertised), &mut prompts)
+                .unwrap()
+                .as_deref(),
+            Some("shortlived")
+        );
+        let mut prompts = FakePrompts {
+            selections: VecDeque::from([2]),
+            messages: vec![],
+        };
+        assert_eq!(
+            profile_choice(Some(&advertised), &mut prompts).unwrap(),
+            None
+        );
+        let mut prompts = FakePrompts {
+            selections: VecDeque::new(),
+            messages: vec![],
+        };
+        assert_eq!(profile_choice(None, &mut prompts).unwrap(), None);
+        assert!(
+            prompts.messages.is_empty(),
+            "no prompt without advertisement"
+        );
     }
 }
