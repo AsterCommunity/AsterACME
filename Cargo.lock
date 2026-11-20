@@ -123,7 +123,6 @@ dependencies = [
 name = "aster_acme"
 version = "0.1.0-alpha.3"
 dependencies = [
- "aster_acme_cli_storage",
  "aster_acme_core",
  "aster_acme_dns",
  "aster_acme_protocol",

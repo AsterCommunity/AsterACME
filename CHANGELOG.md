@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests.
+
 ## [0.1.0-alpha.3] - 2026-11-20
 
 ### Breaking

@@ -78,13 +78,13 @@ cd AsterACME
 cargo install --path crates/aster_acme_cli --locked
 ```
 
-To embed the library, run the shipped end-to-end example — CA discovery, account registration or reuse, an embedder-owned HTTP-01 webroot solver, resume, and artifacts — against Let's Encrypt **staging** with a temporary data directory:
+To embed the library, run the shipped end-to-end example — CA discovery, account registration, an embedder-owned HTTP-01 webroot solver, and artifacts — against Let's Encrypt **staging** with a temporary data directory:
 
 ```sh
 cargo run -p aster_acme --example embedded_issuance -- --domain example.com --webroot /srv/www
 ```
 
-The [example source](crates/aster_acme/examples/embedded_issuance.rs) is the embedding entry point: the `ChallengeSolver` implementation and the `AccountService`/`Workflow` wiring are yours, protocol state and recovery stay in the library.
+The [example source](crates/aster_acme/examples/embedded_issuance.rs) is the embedding entry point: the `ChallengeSolver` implementation, storage adapters, and the `AccountService`/`Workflow` wiring are yours. The example's adapters are volatile; a real embedder supplies durable storage for restart recovery.
 
 Run the published container image instead of installing (multi-arch; `latest` tracks stable releases):
 

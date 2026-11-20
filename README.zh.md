@@ -78,13 +78,13 @@ cd AsterACME
 cargo install --path crates/aster_acme_cli --locked
 ```
 
-嵌入 Rust 库时可运行仓库自带的端到端示例——CA 发现、账户注册或复用、嵌入方实现的 HTTP-01 webroot solver、恢复与产物——默认指向 Let's Encrypt **staging** 并使用临时 data-dir：
+嵌入 Rust 库时可运行仓库自带的端到端示例——CA 发现、账户注册、嵌入方实现的 HTTP-01 webroot solver 与产物——默认指向 Let's Encrypt **staging** 并使用临时 data-dir：
 
 ```sh
 cargo run -p aster_acme --example embedded_issuance -- --domain example.com --webroot /srv/www
 ```
 
-[示例源码](crates/aster_acme/examples/embedded_issuance.rs)就是嵌入入口：`ChallengeSolver` 实现和 `AccountService`/`Workflow` 编排属于嵌入方，协议状态与恢复逻辑留在库内。
+[示例源码](crates/aster_acme/examples/embedded_issuance.rs)就是嵌入入口：`ChallengeSolver` 实现、存储适配器和 `AccountService`/`Workflow` 编排属于嵌入方。示例适配器只保留临时状态；实际嵌入时需提供持久存储以支持进程重启后的恢复。
 
 不本地安装时可直接运行已发布的容器镜像（多架构；`latest` 只跟随稳定版本）：
 
