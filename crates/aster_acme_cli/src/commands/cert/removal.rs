@@ -156,11 +156,11 @@ fn confirmation_details(removal: &CertificateRemoval) -> String {
                 timestamp(Some(record.created_at))
             ));
             lines.push(format!(
-                "  Domains: {}",
+                "  Identifiers: {}",
                 record
                     .identifiers
                     .iter()
-                    .map(aster_acme::identifier::DnsIdentifier::value)
+                    .map(aster_acme::identifier::Identifier::value)
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -217,10 +217,11 @@ mod tests {
                     solver_id: "manual_dns".into(),
                     solver_config: serde_json::Value::Object(serde_json::Map::default()),
                     key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                    profile: None,
                     name: name.clone(),
-                    identifiers: vec![
+                    identifiers: vec![aster_acme::identifier::Identifier::Dns(
                         aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),
-                    ],
+                    )],
                     account_name: "default".into(),
                 },
                 &account,

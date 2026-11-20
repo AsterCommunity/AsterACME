@@ -12,6 +12,7 @@
 | 必读 | [RFC 9773 — ACME Renewal Information (ARI) Extension](https://www.rfc-editor.org/rfc/rfc9773.html) | 续期信息查询、建议续期窗口与替换证书关联；设计续期调度时一并考虑 |
 | 按需 | [RFC 8737 — ACME TLS Application-Layer Protocol Negotiation (ALPN) Challenge Extension](https://www.rfc-editor.org/rfc/rfc8737.html) | TLS-ALPN-01、专用 ALPN 协议与验证证书 |
 | 按需 | [RFC 8738 — ACME IP Identifier Validation Extension](https://www.rfc-editor.org/rfc/rfc8738.html) | IP 地址证书标识符与 HTTP/TLS 验证扩展；DNS-01 不用于 IP 标识符验证 |
+| 按需 | [draft-ietf-acme-profiles — ACME Profiles Extension](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles) | directory 广告 profiles、newOrder 单数 profile 字段与订单回显；草案未定稿，以 datatracker 最新版为准 |
 | 注册表 | [IANA ACME protocol registry (plain text)](https://www.iana.org/assignments/acme/acme.txt) · [HTML](https://www.iana.org/assignments/acme/acme.xhtml) · [XML](https://www.iana.org/assignments/acme/acme.xml) | ACME Error Types、Validation Methods、Identifier Types、Directory Metadata 等注册项；TXT 是便于人工审查的主链接，XML 适合机器处理 |
 | 诊断参考 | [RFC 8657 — CAA Record Extensions for Account URI and ACME Method Binding](https://www.rfc-editor.org/rfc/rfc8657.html) | CAA 中对 ACME 账户和验证方法的约束 |
 
@@ -181,13 +182,13 @@ CAA本地观察已接入issue/renew的新订单前预检：RFC8555 §7.1.1读取
 | RFC8555传输与发现 | Directory/资源URL、JWS/JWK/kid、nonce、POST-as-GET、badNonce、有界超时和Problem | 互操作持续回归；本地测试不等同所有CA兼容 |
 | 账户 | 注册、找回、EAB、联系人更新、查看、停用及跨算法换钥 | HSM/外部签名器具体适配由嵌入者提供 |
 | 订单/授权/签发 | newOrder、挑战选择/材料/ack/轮询、固定CSR finalize、下载及终态错误；取消与不确定提交可恢复 | 可选预授权/newAuthz、授权停用没有独立产品入口 |
-| HTTP/TLS验证 | HTTP-01人工/webroot/standalone，TLS-ALPN-01 standalone | 已通过Let's Encrypt production/staging真实CA验收（含公网80/443）；其他公网CA与部署环境差异另验 |
+| HTTP/TLS验证 | HTTP-01人工/webroot/standalone，TLS-ALPN-01 standalone；DNS与IP（RFC 8738）标识符均可用 | 已通过Let's Encrypt production/staging真实CA验收（含公网80/443）；其他公网CA与部署环境差异另验，真实CA的IP标识符签发验收单独记录 |
 | DNS验证 | DNS-01人工、TXT建议性观察；实验性DNS-PERSIST-01首次人工配置后复用 | ADPP external provider、受限CNAME路由、创建对账和所有权清理已接入；内置Cloudflare真实DNS与Let's Encrypt production/staging验收已通过；其他内置厂商adapter及DNS Persist真实CA签发验收仍待补齐 |
-| 标识符/证书材料 | DNS/IDN、SAN、通配符、多种密钥、CSR/私钥固定、SAN/公钥/有效期/相邻链签名检查 | IP标识符、外部CSR及候选证书链选择未实现；相邻签名检查不是系统信任路径验证 |
+| 标识符/证书材料 | DNS/IDN、IP（RFC 8738，IPv4/IPv6）、SAN、通配符、多种密钥、CSR/私钥固定、SAN/公钥/有效期/相邻链签名检查 | 外部CSR及候选证书链选择未实现；相邻签名检查不是系统信任路径验证 |
 | 续期与运行 | ARI、replaces、随机回退计划、单次/批量renew、常驻daemon与重试退避 | dns_provider可无人值守续期；真实凭据/权限/传播已在内置Cloudflare验收，其他provider接入时另验，人工方式不猜测已发布 |
 | 吊销 | 账户kid／证书私钥jwk签名、原因代码、alreadyRevoked及精确目标/不确定结果保存 | CLI目前管理已托管证书；库支持外部target/session，任意文件导入和其他已获全部标识符授权的账户选择入口尚未提供 |
 | 文件和部署 | 私有状态、跨进程租约、多世代与in_use、多目标发布、自动部署/reload与结果记录 | 不承诺整组原子替换或服务健康；真实断电及服务更新需另验 |
-| 扩展与运维成熟度 | 本表已列RFC8737、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | Profiles、STAR、IP、S/MIME等未普遍实现；Pebble、ZeroSSL/Google等其他公网CA和各原生平台验收分别报告 |
+| 扩展与运维成熟度 | 本表已列RFC8737、RFC8738、draft-ietf-acme-profiles、RFC9773与DNS Persist范围；Linux/macOS/Windows CI配置 | STAR、S/MIME等未普遍实现；Pebble、ZeroSSL/Google等其他公网CA和各原生平台验收分别报告 |
 
 按“常规域名证书客户端”的功能目标作工程估算，当前约 **85%–90%**：主协议、账户、签发/恢复、续期/常驻维护、吊销和部署链路已经形成，ADPP external DNS已补充自动发布入口；内置DNS厂商adapter、候选链选择等仍待补齐。这个区间没有按RFC章节或测试数量机械计分，也不意味着整个ACME扩展家族已完成相同比例。生产可用性应逐项看真实CA、真实DNS与部署证据，不另造一个看似精确的“生产完成百分比”。
 

@@ -156,7 +156,7 @@ pub(crate) struct IssueArgs {
     /// Local certificate name; default is the primary domain plus a random suffix.
     #[arg(short = 'n', long, conflicts_with = "resume",value_parser=parse_certificate_name)]
     pub name: Option<String>,
-    /// DNS identifier; repeat for SANs. First is the primary domain.
+    /// DNS identifier; repeat for SANs. With DNS identifiers present the first -d is primary; otherwise the first --ip is.
     #[arg(
         short = 'd',
         long,
@@ -164,12 +164,24 @@ pub(crate) struct IssueArgs {
         value_parser = parse_domain
     )]
     pub domain: Vec<aster_acme::identifier::DnsIdentifier>,
+    /// IP identifier ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)); repeat for SANs. Requires HTTP-01 or TLS-ALPN-01 validation.
+    #[arg(
+        long = "ip",
+        value_name = "ADDRESS",
+        conflicts_with = "resume",
+        value_parser = parse_ip
+    )]
+    pub ip: Vec<aster_acme::identifier::IpIdentifier>,
     /// Local account; default is the configured default account.
     #[arg(short = 'a', long, conflicts_with = "resume",value_parser=parse_account_name)]
     pub account: Option<String>,
     /// Certificate key algorithm; CA acceptance varies. Account signing key is unchanged.
     #[arg(short = 'k', long = "key-type", value_parser = key_algorithm_parser(), default_value = "ecdsa-p256", conflicts_with = "resume")]
     pub key_algorithm: KeyAlgorithm,
+    /// CA certificate profile (e.g. shortlived for IP identifiers on Let's Encrypt);
+    /// the CA directory must advertise it. Omitted keeps the CA default.
+    #[arg(long, value_name = "NAME", conflicts_with = "resume", value_parser = parse_profile)]
+    pub profile: Option<String>,
     /// Validation implementation; omitted prompts on terminals, required in scripts.
     #[arg(short = 'c', long, value_enum, conflicts_with = "resume")]
     pub challenge: Option<crate::commands::cert::validation::ValidationMethod>,
@@ -270,6 +282,19 @@ fn parse_domain(value: &str) -> Result<aster_acme::identifier::DnsIdentifier, St
     aster_acme::identifier::DnsIdentifier::new(value).map_err(|error| error.to_string())
 }
 
+fn parse_ip(value: &str) -> Result<aster_acme::identifier::IpIdentifier, String> {
+    aster_acme::identifier::IpIdentifier::new(value).map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_profile(value: &str) -> Result<String, String> {
+    // The profiles draft caps nothing about the name; only emptiness and
+    // control characters are rejected here. CA advertisement decides the rest.
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err("a certificate profile is a nonempty name without control characters".into());
+    }
+    Ok(value.to_owned())
+}
+
 fn parse_certificate_name(value: &str) -> Result<String, String> {
     aster_acme::issuance::CertificateName::new(value)
         .map(|name| name.as_str().to_owned())
@@ -286,3 +311,14 @@ fn parse_operation(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[test]
+fn profile_names_reject_emptiness_control_characters_and_multibyte_names_pass() {
+    assert_eq!(parse_profile("shortlived").unwrap().as_str(), "shortlived");
+    assert!(parse_profile("").is_err());
+    assert!(parse_profile("short\nlived").is_err());
+    // The profiles draft caps nothing about length or encoding: a CA may
+    // advertise multibyte names (22 chars of 型 = 66 bytes) and must parse.
+    let multibyte = "\u{578b}".repeat(22);
+    assert_eq!(parse_profile(&multibyte).unwrap().as_str(), multibyte);
+}

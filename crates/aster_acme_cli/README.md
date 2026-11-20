@@ -18,7 +18,7 @@ cargo install --path crates/aster_acme_cli --locked
 ## Commands
 
 ```text
-aster-acme account register|recover|show|list|switch|update-contact|rotate-key|deactivate|remove
+aster-acme account register|recover|show|list|default|update|rotate-key|remove [--deactivate]
 aster-acme cert issue|list|show|renew|revoke|remove|deploy
 aster-acme daemon run-once|run
 aster-acme provider backends|add|list|show|update|cleanup|remove

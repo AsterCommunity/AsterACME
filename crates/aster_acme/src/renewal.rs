@@ -1,4 +1,4 @@
-//! RFC 9773 renewal planning. No background task or certificate issuance is started here.
+//! [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) renewal planning. No background task or certificate issuance is started here.
 
 pub mod admission;
 pub mod refresh;
@@ -61,10 +61,10 @@ pub enum RenewalSource {
     Fallback,
 }
 
-/// Durable per-certificate schedule; timestamps preserve RFC 3339 precision on disk.
+/// Durable per-certificate schedule; timestamps preserve [RFC 3339](https://datatracker.ietf.org/doc/html/rfc3339) precision on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenewalPlan {
-    /// RFC 9773 AKI/serial identifier, absent when the leaf has no AKI keyIdentifier.
+    /// [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) AKI/serial identifier, absent when the leaf has no AKI keyIdentifier.
     pub certificate_id: Option<String>,
     /// Leaf validity begins here, not at local download time.
     #[serde(with = "time::serde::rfc3339")]
@@ -184,7 +184,7 @@ impl RenewalPlan {
 }
 
 // RFC 9773 requires raw DER INTEGER bytes, including a positive serial's leading zero.
-/// Extract an RFC 9773 identifier without creating a new renewal schedule.
+/// Extract an [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) identifier without creating a new renewal schedule.
 ///
 /// # Errors
 /// Rejects malformed certificates and duplicate extensions; expired leaves remain valid inputs.

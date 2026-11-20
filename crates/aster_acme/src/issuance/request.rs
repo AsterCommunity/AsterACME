@@ -1,5 +1,5 @@
 //! Issuance request contracts.
-use crate::identifier::DnsIdentifier;
+use crate::identifier::Identifier;
 use crate::issuance::IssueError;
 use serde::{Deserialize, Serialize};
 
@@ -24,18 +24,27 @@ impl CertificateName {
         Ok(Self(value.into()))
     }
     /// Generate an independent management name; truncate only its display prefix,
-    /// never the requested DNS identifier. Callers retry typed allocation collisions.
+    /// never the requested identifier. Callers retry typed allocation collisions.
+    ///
+    /// IP primaries produce an `ip-` label with colons replaced so the name
+    /// stays one portable directory component; `2001:db8::1` becomes
+    /// `ip-2001-db8--1`. DNS primaries keep the wildcard/`cert-` rules.
     ///
     /// # Errors
     /// Reports OS randomness failure or an unsafe generated component.
-    pub fn generated(primary: &DnsIdentifier) -> Result<Self, IssueError> {
+    pub fn generated(primary: &Identifier) -> Result<Self, IssueError> {
         let mut random = [0; 4];
         aws_lc_rs::rand::fill(&mut random).map_err(|_| crate::crypto::CryptoError::Randomness)?;
-        let domain = primary.value();
-        let source = if let Some(base) = domain.strip_prefix("*.") {
-            format!("wildcard-{base}")
-        } else {
-            domain
+        let source = match primary {
+            Identifier::Dns(dns) => {
+                let domain = dns.value();
+                if let Some(base) = domain.strip_prefix("*.") {
+                    format!("wildcard-{base}")
+                } else {
+                    domain
+                }
+            }
+            Identifier::Ip(ip) => format!("ip-{}", ip.value().replace(':', "-")),
         };
         let source = if aster_acme_core::local_name::valid_component(&source) {
             source
@@ -81,12 +90,17 @@ pub struct IssueRequest {
     pub solver_id: String,
     /// Non-secret implementation configuration retained unchanged for resume/renew.
     pub solver_config: serde_json::Value,
-    /// Defaults to the first normalized DNS identifier in the CLI.
+    /// Defaults to the first normalized identifier in the CLI.
     pub name: CertificateName,
-    /// Canonical, duplicate-free domains; first is the primary domain.
-    pub identifiers: Vec<DnsIdentifier>,
+    /// Canonical, duplicate-free DNS and IP identifiers; first is the primary.
+    pub identifiers: Vec<Identifier>,
     /// Certificate key choice, independent of the account signing key.
     pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
+    /// CA-advertised certificate profile selected by the operator
+    /// (draft-ietf-acme-profiles <https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>);
+    /// `None`
+    /// keeps the CA default. Fixed for the lifetime of this definition.
+    pub profile: Option<String>,
     /// Stable local account name, never transmitted to the CA.
     pub account_name: String,
 }
@@ -96,7 +110,8 @@ impl IssueRequest {
     /// Product implementation IDs/configuration stay opaque to the ACME library.
     ///
     /// # Errors
-    /// Rejects duplicate/empty identifiers and wildcard requests using non-DNS methods.
+    /// Rejects duplicate/empty identifiers, wildcard requests using non-DNS
+    /// methods, and DNS methods combined with IP identifiers ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)).
     pub fn validate(&self) -> Result<(), IssueError> {
         if self.identifiers.is_empty()
             || self.identifiers.len() > 100
@@ -111,13 +126,29 @@ impl IssueRequest {
             || self.solver_id.chars().any(char::is_control)
         {
             return Err(IssueError::InvalidInput(
-                "issuance requires unique domains and a valid publication implementation",
+                "issuance requires unique identifiers and a valid publication implementation",
             ));
         }
         if !self.challenge.supports_wildcards()
-            && self.identifiers.iter().any(DnsIdentifier::is_wildcard)
+            && self.identifiers.iter().any(Identifier::is_wildcard)
         {
             return Err(crate::challenge::ChallengeError::WildcardMethod.into());
+        }
+        if !self
+            .identifiers
+            .iter()
+            .all(|identifier| self.challenge.validates_identifier(identifier))
+        {
+            return Err(IssueError::InvalidInput(
+                "DNS validation methods cannot validate IP identifiers; RFC 8738 allows HTTP-01 and TLS-ALPN-01 only",
+            ));
+        }
+        if let Some(profile) = &self.profile
+            && (profile.is_empty() || profile.chars().any(char::is_control))
+        {
+            return Err(IssueError::InvalidInput(
+                "certificate profile must be a nonempty name without control characters",
+            ));
         }
         Ok(())
     }

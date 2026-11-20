@@ -1,4 +1,4 @@
-//! RFC 8555 section 7.6 certificate revocation wire payload.
+//! [RFC 8555 §7.6](https://datatracker.ietf.org/doc/html/rfc8555#section-7.6) certificate revocation wire payload.
 use serde::{Deserialize, Serialize};
 
 /// Revocation request; DER leaf bytes use unpadded base64url, never PEM or the full chain.
@@ -6,12 +6,12 @@ use serde::{Deserialize, Serialize};
 pub struct RevocationRequest {
     /// Issued leaf certificate in base64url DER form.
     pub certificate: String,
-    /// RFC 5280 reason code, omitted when the operator has not selected one.
+    /// [RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280) reason code, omitted when the operator has not selected one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<RevocationReason>,
 }
 
-/// RFC 5280 section 5.3.1 reason codes. Seven is unassigned; CA policy may reject
+/// [RFC 5280 §5.3.1](https://datatracker.ietf.org/doc/html/rfc5280#section-5.3.1) reason codes. Seven is unassigned; CA policy may reject
 /// any code. removeFromCRL is a CRL delta mechanism, not an ACME unrevocation API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
@@ -53,7 +53,7 @@ impl RevocationReason {
         Self::AaCompromise,
     ];
 
-    /// Numeric wire code defined by RFC 5280.
+    /// Numeric wire code defined by [RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280).
     #[must_use]
     pub const fn code(self) -> u8 {
         match self {

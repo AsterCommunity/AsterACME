@@ -98,7 +98,7 @@ impl KeyAlgorithm {
         result.map_err(|_| CryptoError::InvalidKey)
     }
 
-    /// JOSE signature algorithm used for account requests (RFC 7518 / RFC 8037).
+    /// JOSE signature algorithm used for account requests ([RFC 7518](https://datatracker.ietf.org/doc/html/rfc7518) / [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037)).
     #[must_use]
     pub const fn jws_algorithm(self) -> aster_acme_protocol::jws::SignatureAlgorithm {
         use aster_acme_protocol::jws::SignatureAlgorithm;

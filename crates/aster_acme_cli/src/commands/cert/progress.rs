@@ -189,11 +189,25 @@ fn protocol_messages(
             "Renewal timing: randomized local fallback before 2/3 validity (half for certificates shorter than 10 days; no advertised RFC 9773 ARI)"
         }
     };
-    vec![
-        format!("CA capabilities (advertised): {}", capabilities.join(", ")),
-        strategy.into(),
-        timing.into(),
-    ]
+    let mut lines = vec![format!(
+        "CA capabilities (advertised): {}",
+        capabilities.join(", ")
+    )];
+    // Draft-ietf-acme-profiles §3 (https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles):
+    // surface advertised profiles so operators
+    // can pass the exact name to --profile without a separate lookup.
+    if let Some(profiles) = &directory.meta.profiles {
+        lines.push(format!(
+            "CA certificate profiles (advertised): {}",
+            profiles.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if let Some(profile) = &record.profile {
+        lines.push(format!("Certificate profile: {profile}"));
+    }
+    lines.push(strategy.into());
+    lines.push(timing.into());
+    lines
 }
 
 #[cfg(test)]
@@ -275,6 +289,94 @@ mod tests {
         record.renewal_of.as_mut().unwrap().certificate_id = None;
         assert!(
             protocol_messages(&directory, &record)[1].contains("no usable certificate identifier")
+        );
+    }
+
+    #[test]
+    fn advertised_profiles_and_selected_profile_are_surfaced_to_the_operator() {
+        let with_profiles: aster_acme_protocol::directory::Directory = serde_json::from_value(
+            serde_json::json!({
+                "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
+                "newOrder": "https://ca.example/order", "keyChange": "https://ca.example/key-change",
+                "renewalInfo": "https://ca.example/ari",
+                "meta": {"profiles": {"classic": "https://ca.example/classic", "shortlived": "https://ca.example/shortlived"}}
+            }),
+        )
+        .unwrap();
+        let record_with_profile: aster_acme::issuance::IssueRecord =
+            serde_json::from_value(serde_json::json!({
+                "challenge": "http-01",
+                "solver_config": {},
+                "solver_id": "standalone",
+                "operation_id": "a".repeat(43),
+                "name": "web",
+                "created_at": "2026-01-01T00:00:00Z",
+                "account_name": "default",
+                "account_id": "stable",
+                "account_thumbprint": "key",
+                "directory": "https://ca.example/directory",
+                "account_url": "https://ca.example/account",
+                "key_algorithm": "ecdsa-p256",
+                "identifiers": ["example.com"],
+                "profile": "shortlived",
+                "phase": "authorizing",
+                "new_order_intent_saved": true,
+                "finalize_submitted": "not_submitted",
+                "authorizations": []
+            }))
+            .unwrap();
+        let lines = protocol_messages(&with_profiles, &record_with_profile);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line
+                    .contains("CA certificate profiles (advertised): classic, shortlived")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Certificate profile: shortlived")),
+            "{lines:?}"
+        );
+
+        // No advertisement and no explicit selection: neither line appears.
+        let plain: aster_acme_protocol::directory::Directory = serde_json::from_value(
+            serde_json::json!({
+                "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
+                "newOrder": "https://ca.example/order", "keyChange": "https://ca.example/key-change",
+                "renewalInfo": "https://ca.example/ari"
+            }),
+        )
+        .unwrap();
+        let record_plain: aster_acme::issuance::IssueRecord =
+            serde_json::from_value(serde_json::json!({
+                "challenge": "http-01",
+                "solver_config": {},
+                "solver_id": "standalone",
+                "operation_id": "a".repeat(43),
+                "name": "web",
+                "created_at": "2026-01-01T00:00:00Z",
+                "account_name": "default",
+                "account_id": "stable",
+                "account_thumbprint": "key",
+                "directory": "https://ca.example/directory",
+                "account_url": "https://ca.example/account",
+                "key_algorithm": "ecdsa-p256",
+                "identifiers": ["example.com"],
+                "phase": "authorizing",
+                "new_order_intent_saved": true,
+                "finalize_submitted": "not_submitted",
+                "authorizations": []
+            }))
+            .unwrap();
+        let lines = protocol_messages(&plain, &record_plain);
+        assert!(!lines.iter().any(|line| line.contains("profile")));
+        let lines = protocol_messages(&plain, &record_plain);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Certificate profile:"))
         );
     }
 }

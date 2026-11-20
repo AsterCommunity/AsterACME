@@ -21,9 +21,9 @@
 | 命令 | --yes 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已经存在的本地身份；不代替 --accept-terms |
-| `account update-contact` | 替换或显式清空已有账户联系人 |
+| `account update` | 替换/清空联系人，和/或设置/清除默认证书 profile |
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
-| `account deactivate` | 不可逆地停用 CA 账户 |
+| `account remove --deactivate` | 删除本地账户并不可逆停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
 | `cert remove` | 确认所选申请或显式 --history/--revoked/--failed/--all 的本地清理范围；不会吊销 CA 证书 |
 | `cert revoke` | 永久吊销所选版本；多版本仍需明确选择，超时后显式重试沿用原原因 |
@@ -36,7 +36,7 @@
 ## 名称与选择
 
 - account 的单账户命令支持位置 `[NAME]` 和 `-n/--name`，互斥；名称统一为 1–64 位 ASCII 字母、数字、下划线或连字符。
-- `cert issue -n/--name` 设置长期证书名称，缺省为首个规范化域名加随机后缀；自动名称碰撞换串重试，仅用户指定的已存在名称拒绝；`-a/--account` 使用与账户命令一致的名称校验。
+- `cert issue -n/--name` 设置长期证书名称，缺省为首个规范化标识符加随机后缀：域名原样、通配符加 `wildcard-` 前缀、IP 地址加 `ip-` 前缀且冒号替换为连字符（如 `ip-192.0.2.1`、`ip-2001-db8--1`）；自动名称碰撞换串重试，仅用户指定的已存在名称拒绝；`-a/--account` 使用与账户命令一致的名称校验。
 - `cert list -n/--name` 筛选证书；`cert show [NAME]` 和 `cert show -n/--name NAME` 等价且互斥。
 - `cert issue --resume [NAME]` 从证书名称恢复（终端可省略 NAME 交互选择，脚本必须提供），不与创建用的 -d/-n/-a 混用。`--operation` 接受完整申请 ID，恢复时必须与 --resume 一起使用。
 - `cert show --operation ID` 可以直接定位申请；无参数时终端先选证书，多申请再选具体请求，脚本必须明确目标。
@@ -51,10 +51,12 @@
 | `-V` | `--version` | 根命令版本 |
 | `-n` | `--name` | 账户目标、证书名称/目标/筛选 |
 | `-a` | `--account` | cert issue 的账户选择 |
-| `-d` | `--domain` | cert issue 的域名，可重复 |
+| `-d` | `--domain` | cert issue 的 DNS 域名，可重复 |
+| `--ip` |  | cert issue 的 IP 标识符（RFC 8738），可重复；仅 HTTP-01/TLS-ALPN-01 支持，主标识符为首个 `-d`，否则首个 `--ip` |
+| `--profile` |  | cert issue 显式证书 profile（draft-ietf-acme-profiles）；优先级高于账户默认，CA directory 未广告时在 newOrder 前拒绝 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
-| `-m` | `--contact` | account register/update-contact 的邮箱，可重复 |
+| `-m` | `--contact` | account register/update 的邮箱，可重复 |
 | `-y` | `--yes` | 上述命令的操作确认 |
 
 其他参数保留明确长名称，不为每个选项硬配短字母。删除的 order、--solver、-c dns-01、--config 不保留兼容别名。
@@ -67,16 +69,16 @@
 | --- | --- |
 | account list | --verify；--user-agent / --request-timeout 仅在 verify 时可用 |
 | account show | [NAME] / -n；--verify；已有账户 CA 选择；HTTP 参数要求 verify |
-| account switch | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
+| account default | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
 | account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、--auto-accept-new-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
-| account update-contact | [NAME] / -n、-m 或 --clear-contacts、已有账户 CA 选择、HTTP、-y |
+| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、已有账户 CA 选择、HTTP、-y |
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
-| account deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y |
+| account remove --deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y；纯本地删除时无 CA/HTTP |
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、重复 --ip、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、--sign-with account/certificate-key、可选 --reason、-y、HTTP、--operation-timeout；不删除本地文件 |
@@ -252,7 +254,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | --- | --- | --- |
 | account register | 新建/继续、账户名、CA、联系人、条款、未来条款更新授权和复用确认 | EAB、密钥算法等高级选项 |
 | account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
-| account update-contact/rotate-key/deactivate/remove | 账户选择、联系人输入或操作确认 | key-type 等可选参数使用默认/显式值 |
+| account update/rotate-key/remove --deactivate | 账户选择、联系人/profile 输入或操作确认 | key-type 等可选参数使用默认/显式值 |
 | cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
 | cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
 | cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |

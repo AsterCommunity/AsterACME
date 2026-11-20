@@ -3,7 +3,7 @@
 use aster_forge_macros::wire_enum;
 
 wire_enum! {
-    /// Server account status (RFC 8555 §7.1.2).
+    /// Server account status ([RFC 8555 §7.1.2](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.2)).
     pub enum AccountStatus {
         /// Active account.
         Valid => "valid",
@@ -14,7 +14,7 @@ wire_enum! {
     }
 }
 wire_enum! {
-    /// Server order status (RFC 8555 §7.1.3).
+    /// Server order status ([RFC 8555 §7.1.3](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.3)).
     pub enum OrderStatus {
         /// Authorizations are outstanding.
         Pending => "pending",
@@ -29,7 +29,7 @@ wire_enum! {
     }
 }
 wire_enum! {
-    /// Server authorization status (RFC 8555 §7.1.4).
+    /// Server authorization status ([RFC 8555 §7.1.4](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.4)).
     pub enum AuthorizationStatus {
         /// Identifier validation is outstanding.
         Pending => "pending",
@@ -46,7 +46,7 @@ wire_enum! {
     }
 }
 wire_enum! {
-    /// Server challenge status (RFC 8555 §7.1.5).
+    /// Server challenge status ([RFC 8555 §7.1.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.5)).
     pub enum ChallengeStatus {
         /// Challenge has not been acknowledged.
         Pending => "pending",

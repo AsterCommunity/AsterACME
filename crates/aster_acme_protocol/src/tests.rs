@@ -1,6 +1,10 @@
 //! Wire-contract tests compare literal JSON, independent of transport implementations.
-use crate::{account::*, directory::Directory, jws::*, problem::Problem, url::AcmeUrl};
+use crate::{
+    account::*, directory::Directory, jws::*, order::NewOrderRequest, order::OrderObject,
+    problem::Problem, url::AcmeUrl,
+};
 use aster_acme_core::protocol::AccountStatus;
+use serde_json::json;
 
 #[test]
 fn public_provider_names_serde_and_directories_have_one_registry() {
@@ -304,4 +308,75 @@ fn directory_caa_identities_preserve_alternatives_and_optional_absence() {
         }))
         .unwrap();
     assert!(missing_key_change.key_change.is_none());
+}
+
+#[test]
+fn directory_profiles_parse_and_stay_lossless() {
+    let directory: Directory = serde_json::from_value(json!({
+        "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
+        "newOrder": "https://ca.example/order",
+        "meta": {"profiles": {"classic": "https://ca.example/profiles#classic", "shortlived": "https://ca.example/profiles#shortlived"}}
+    }))
+    .unwrap();
+    let expected = [
+        (
+            "classic".to_owned(),
+            "https://ca.example/profiles#classic".to_owned(),
+        ),
+        (
+            "shortlived".to_owned(),
+            "https://ca.example/profiles#shortlived".to_owned(),
+        ),
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(directory.meta.profiles.as_ref(), Some(&expected));
+    // A malformed shape is unavailable metadata, not a discovery failure.
+    let broken: Directory = serde_json::from_value(json!({
+        "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
+        "newOrder": "https://ca.example/order",
+        "meta": {"profiles": {"classic": 42}}
+    }))
+    .unwrap();
+    assert_eq!(broken.meta.profiles, None);
+    // Absent metadata stays absent.
+    let plain: Directory = serde_json::from_value(json!({
+        "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
+        "newOrder": "https://ca.example/order"
+    }))
+    .unwrap();
+    assert_eq!(plain.meta.profiles, None);
+}
+
+#[test]
+fn new_order_omits_profile_and_order_objects_carry_the_selection() {
+    let order: OrderObject = serde_json::from_value(json!({
+        "status": "pending", "identifiers": [], "authorizations": [], "finalize": "https://ca.example/finalize",
+        "profile": "shortlived"
+    }))
+    .unwrap();
+    assert_eq!(order.profile.as_deref(), Some("shortlived"));
+    let plain: OrderObject = serde_json::from_value(json!({
+        "status": "pending", "identifiers": [], "authorizations": [], "finalize": "https://ca.example/finalize"
+    }))
+    .unwrap();
+    assert_eq!(plain.profile, None);
+    let request = NewOrderRequest {
+        identifiers: &[],
+        replaces: None,
+        profile: Some("shortlived"),
+    };
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        json!({"identifiers": [], "profile": "shortlived"})
+    );
+    let request = NewOrderRequest {
+        identifiers: &[],
+        replaces: None,
+        profile: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        json!({"identifiers": []})
+    );
 }

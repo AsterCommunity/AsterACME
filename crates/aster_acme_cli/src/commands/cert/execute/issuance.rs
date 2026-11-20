@@ -8,7 +8,7 @@ use crate::common::{context::CliSettings, error::CliResult, terminal};
 use aster_acme::storage::issuance::{IssueSession, IssueStore};
 use aster_acme::storage::query::{IssueQuery, SimilarIssue};
 use aster_acme::{
-    identifier::DnsIdentifier,
+    identifier::Identifier,
     issuance::{CertificateName, IssueError, IssueRecord, IssueRequest},
 };
 use aster_acme_cli_storage::issuance::CliIssueStore;
@@ -37,7 +37,13 @@ pub(super) async fn issue(
             .metadata()
             .await?
             .ok_or("No registered account exists.")?;
-        let mut request = request(&args, &context.name)?;
+        let mut request = request(&args, &context.name, account.preferred_profile.as_deref())?;
+        // Draft-ietf-acme-profiles: interactive issuance without an explicit
+        // --profile picks from the CA's advertised list (account default
+        // preselected); scripts and --profile keep the flag requirement.
+        if interactive && args.profile.is_none() {
+            prompt_profile(&mut request, &context, &options, &account, cli).await?;
+        }
         if args.challenge == Some(crate::commands::cert::validation::ValidationMethod::DnsProvider)
         {
             request.solver_config =
@@ -87,6 +93,60 @@ pub(super) async fn issue(
         result,
         data_dir: root,
     })
+}
+
+/// Interactive default-profile selection against the bound CA's directory:
+/// advertised names with descriptions, account default preselected, Esc
+/// cancels the issuance. CAs without advertisements keep the CA default.
+async fn prompt_profile(
+    request: &mut IssueRequest,
+    context: &crate::common::context::CliContext,
+    options: &crate::commands::account::args::AccountArgs,
+    account: &aster_acme::account::AccountRecord,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<()> {
+    let transport = context.transport_options(options)?;
+    let advertised = cli
+        .http
+        .discover(context.directory.clone(), transport)
+        .await?
+        .directory()
+        .meta
+        .profiles
+        .clone();
+    let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
+        return Ok(());
+    };
+    let names = advertised.keys().cloned().collect::<Vec<_>>();
+    // CA-provided names/descriptions are untrusted terminal text: escape the
+    // display labels, while selection still indexes the original names.
+    let mut choices = names
+        .iter()
+        .map(|name| match advertised.get(name).map(String::as_str) {
+            None | Some("") => crate::common::output::safe(name),
+            Some(description) => {
+                format!(
+                    "{} — {}",
+                    crate::common::output::safe(name),
+                    crate::common::output::safe(description)
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    choices.push("(no default; the CA default applies)".to_owned());
+    let default = names
+        .iter()
+        .position(|name| account.preferred_profile.as_deref() == Some(name.as_str()))
+        .unwrap_or(0);
+    let selection = crate::common::terminal::select_index_or_back(
+        "Default certificate profile:",
+        &choices,
+        default,
+        &cli.output,
+    )?
+    .ok_or(crate::common::terminal::Canceled)?;
+    request.profile = names.get(selection).cloned();
+    Ok(())
 }
 
 pub(super) async fn select_saved_issue(
@@ -165,7 +225,13 @@ pub(super) async fn select_saved_issue(
     })
 }
 
-pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest> {
+/// The explicit `--profile` flag wins; otherwise the account's saved default
+/// ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles)) applies; without either the CA default is used.pub(super)
+fn request(
+    args: &IssueArgs,
+    account: &str,
+    account_default_profile: Option<&str>,
+) -> CliResult<IssueRequest> {
     let method = args
         .challenge
         .ok_or("Specify -c/--challenge for a new certificate.")?;
@@ -181,10 +247,17 @@ pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest
                 args.listen_address,
             )?
         };
-    let identifiers = args.domain.clone();
+    // Command-line order is preserved per flag; DNS entries precede IP
+    // entries in the certificate SAN list, and the first entry is primary.
+    let mut identifiers = args
+        .domain
+        .iter()
+        .map(|dns| Identifier::Dns(dns.clone()))
+        .collect::<Vec<_>>();
+    identifiers.extend(args.ip.iter().map(|ip| Identifier::Ip(ip.clone())));
     let primary = identifiers
         .first()
-        .ok_or("At least one domain is required.")?;
+        .ok_or("At least one domain or IP address is required.")?;
     let request = IssueRequest {
         challenge: method.kind(),
         solver_id: method.id().into(),
@@ -195,6 +268,10 @@ pub(super) fn request(args: &IssueArgs, account: &str) -> CliResult<IssueRequest
             None => CertificateName::generated(primary)?,
         },
         identifiers,
+        profile: args
+            .profile
+            .clone()
+            .or_else(|| account_default_profile.map(str::to_owned)),
         account_name: account.into(),
     };
     request.validate()?;
@@ -231,11 +308,11 @@ pub(super) async fn prepare_session(
             progress.output.progress(
                 MessageKind::Info,
                 &format!(
-                    "Domains: {}",
+                    "Identifiers: {}",
                     request
                         .identifiers
                         .iter()
-                        .map(DnsIdentifier::value)
+                        .map(Identifier::value)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -271,7 +348,7 @@ pub(super) async fn allocate_certificate(
                     request
                         .identifiers
                         .first()
-                        .ok_or(IssueError::InvalidInput("missing primary domain"))?,
+                        .ok_or(IssueError::InvalidInput("missing primary identifier"))?,
                 )?;
             }
             result => return result,

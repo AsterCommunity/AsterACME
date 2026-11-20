@@ -4,7 +4,7 @@ use aster_acme_protocol::url::AcmeUrl;
 use crate::common::{
     error::CliResult,
     output::safe,
-    terminal::{Canceled, prompt_result},
+    terminal::{self, Canceled, prompt_result},
 };
 use aster_acme::account::{AccountError, RegistrationOptions};
 
@@ -12,6 +12,8 @@ use aster_acme::account::{AccountError, RegistrationOptions};
 pub(super) trait RegistrationPrompts {
     fn confirm(&mut self, message: &str) -> CliResult<bool>;
     fn email(&mut self) -> CliResult<String>;
+    /// Arrow-key single choice; the default index is preselected.
+    fn select(&mut self, message: &str, choices: &[String], default: usize) -> CliResult<usize>;
 }
 
 pub(super) struct TerminalPrompts<'a>(pub(super) &'a crate::common::session::OutputSession);
@@ -71,6 +73,10 @@ impl RegistrationPrompts for TerminalPrompts<'_> {
                 .prompt(),
         )
     }
+
+    fn select(&mut self, message: &str, choices: &[String], default: usize) -> CliResult<usize> {
+        terminal::select_index(message, choices, default, self.0)
+    }
 }
 
 /// Explicit CLI/config/local contacts bypass the question. Declining optional contact
@@ -93,6 +99,43 @@ pub(super) fn contact(
 
 /// A previous acceptance is reusable only for the exact current terms URL. `--yes`
 /// is deliberately absent: account reuse confirmation must never imply terms consent.
+/// Draft-ietf-acme-profiles (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>):
+/// interactive default-profile selection from the CA's advertised list.
+/// Blank input keeps the CA default; the answer must be an advertised name.
+/// Draft-ietf-acme-profiles interactive default-profile selection: one
+/// arrow-key menu over the advertised names plus an explicit skip entry.
+pub(super) fn profile_choice(
+    advertised: Option<&std::collections::BTreeMap<String, String>>,
+    prompts: &mut impl RegistrationPrompts,
+) -> CliResult<Option<String>> {
+    let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
+        return Ok(None);
+    };
+    let names = advertised.keys().cloned().collect::<Vec<_>>();
+    // CA-provided names/descriptions are untrusted terminal text: escape the
+    // display labels, while selection still indexes the original names.
+    let mut choices = names
+        .iter()
+        .map(
+            |name| match advertised.get(name).filter(|text| !text.is_empty()) {
+                Some(description) => format!(
+                    "{} — {}",
+                    crate::common::output::safe(name),
+                    crate::common::output::safe(description)
+                ),
+                None => crate::common::output::safe(name),
+            },
+        )
+        .collect::<Vec<_>>();
+    choices.push("(no default; the CA default applies)".to_owned());
+    let selection = prompts.select("Default certificate profile:", &choices, 0)?;
+    Ok(if selection < names.len() {
+        Some(names[selection].clone())
+    } else {
+        None
+    })
+}
+
 pub(super) fn terms(
     options: &mut RegistrationOptions,
     current: Option<&AcmeUrl>,
@@ -152,6 +195,7 @@ mod tests {
     struct Prompts {
         answers: VecDeque<bool>,
         address: Option<String>,
+        selections: VecDeque<usize>,
         messages: Vec<String>,
     }
 
@@ -167,12 +211,24 @@ mod tests {
                 .take()
                 .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
         }
+        fn select(
+            &mut self,
+            message: &str,
+            _choices: &[String],
+            _default: usize,
+        ) -> CliResult<usize> {
+            self.messages.push(message.to_owned());
+            self.selections
+                .pop_front()
+                .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
+        }
     }
 
     fn prompts(answers: &[bool], email: Option<&str>) -> Prompts {
         Prompts {
             answers: answers.iter().copied().collect(),
             address: email.map(str::to_owned),
+            selections: VecDeque::new(),
             messages: vec![],
         }
     }
@@ -409,6 +465,75 @@ mod tests {
             &mut already,
         )
         .unwrap();
-        assert_eq!(already.messages.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod profile_choice_tests {
+    use crate::commands::account::interaction::*;
+
+    use std::collections::VecDeque;
+
+    struct FakePrompts {
+        selections: VecDeque<usize>,
+        messages: Vec<String>,
+    }
+
+    impl RegistrationPrompts for FakePrompts {
+        fn confirm(&mut self, message: &str) -> CliResult<bool> {
+            self.messages.push(message.to_owned());
+            Ok(true)
+        }
+        fn email(&mut self) -> CliResult<String> {
+            Ok("mailto:test@example.com".into())
+        }
+        fn select(
+            &mut self,
+            _message: &str,
+            _choices: &[String],
+            _default: usize,
+        ) -> CliResult<usize> {
+            self.selections.pop_front().ok_or_else(|| {
+                Box::new(crate::common::terminal::Canceled) as Box<dyn std::error::Error>
+            })
+        }
+    }
+
+    #[test]
+    fn profile_choice_maps_arrow_selections_and_skip_entry() {
+        let advertised = std::collections::BTreeMap::from([
+            (
+                "classic".to_owned(),
+                "https://ca.example/classic".to_owned(),
+            ),
+            ("shortlived".to_owned(), String::new()),
+        ]);
+        let mut prompts = FakePrompts {
+            selections: VecDeque::from([1]),
+            messages: vec![],
+        };
+        assert_eq!(
+            profile_choice(Some(&advertised), &mut prompts)
+                .unwrap()
+                .as_deref(),
+            Some("shortlived")
+        );
+        let mut prompts = FakePrompts {
+            selections: VecDeque::from([2]),
+            messages: vec![],
+        };
+        assert_eq!(
+            profile_choice(Some(&advertised), &mut prompts).unwrap(),
+            None
+        );
+        let mut prompts = FakePrompts {
+            selections: VecDeque::new(),
+            messages: vec![],
+        };
+        assert_eq!(profile_choice(None, &mut prompts).unwrap(), None);
+        assert!(
+            prompts.messages.is_empty(),
+            "no prompt without advertisement"
+        );
     }
 }

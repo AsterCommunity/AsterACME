@@ -1,14 +1,17 @@
 //! Generate every advertised key and verify the actual CSR signature and PEM artifacts.
 use crate::crypto::key_algorithm::*;
-use crate::{identifier::DnsIdentifier, issuance::certificate};
+use crate::{
+    identifier::{DnsIdentifier, Identifier},
+    issuance::certificate,
+};
 use aws_lc_rs::signature;
 use rcgen::{CertificateParams, Issuer};
 
 #[test]
 fn every_supported_algorithm_generates_valid_csr_and_matching_certificate_artifacts() {
     let identifiers = [
-        DnsIdentifier::new("example.com").unwrap(),
-        DnsIdentifier::new("*.example.com").unwrap(),
+        Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+        Identifier::Dns(DnsIdentifier::new("*.example.com").unwrap()),
     ];
     let ca = Issuer::new(
         CertificateParams::new(Vec::<String>::new()).unwrap(),
@@ -59,13 +62,12 @@ fn every_supported_algorithm_generates_valid_csr_and_matching_certificate_artifa
             .unwrap();
         assert_eq!(names.len(), 2);
         let key = KeyPair::try_from(material.key.as_slice()).unwrap();
-        let params = CertificateParams::new(
-            identifiers
-                .iter()
-                .map(DnsIdentifier::value)
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
+        let mut params = CertificateParams::new(Vec::new()).unwrap();
+        params.subject_alt_names = identifiers
+            .iter()
+            .filter_map(|identifier| identifier.as_dns())
+            .map(|dns| rcgen::SanType::DnsName(dns.value().as_str().try_into().unwrap()))
+            .collect();
         let leaf = params.signed_by(&key, &ca).unwrap();
         let pem = leaf.pem();
         certificate::validate(pem.as_bytes(), &material.key, &identifiers).unwrap();

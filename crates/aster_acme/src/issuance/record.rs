@@ -3,7 +3,7 @@ use crate::issuance::{
     AuthorizationRecord, CertificateName, IssueError, IssueRequest, PollWaitSource,
     RenewalPredecessor, RenewalRetryState, RequestFailure, ValidationRequirement,
 };
-use crate::{account::AccountRecord, identifier::DnsIdentifier};
+use crate::{account::AccountRecord, identifier::Identifier};
 use aster_acme_core::workflow::{IssuancePhase, SubmissionState};
 use aster_acme_protocol::{order::OrderObject, url::AcmeUrl};
 use serde::{Deserialize, Serialize};
@@ -47,8 +47,11 @@ pub struct IssueRecord {
     pub account_thumbprint: String,
     /// Immutable certificate key choice used by this generation.
     pub key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm,
-    /// Ordered canonical DNS identifiers.
-    pub identifiers: Vec<DnsIdentifier>,
+    /// CA certificate profile selected at creation; fixed for this generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Ordered canonical DNS and IP identifiers.
+    pub identifiers: Vec<Identifier>,
     /// Local execution stage, independent of order status.
     pub phase: IssuancePhase,
     /// `NewOrder` intent was durably saved before sending; without a Location the
@@ -56,7 +59,7 @@ pub struct IssueRecord {
     pub new_order_intent_saved: bool,
     /// A complete newOrder error response; no Order status is inferred from it.
     pub creation_failure: Option<RequestFailure>,
-    /// Actual RFC 9773 replaces value selected before newOrder; a refreshed directory
+    /// Actual [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) replaces value selected before newOrder; a refreshed directory
     /// cannot change the submitted request identity during recovery.
     #[serde(default)]
     pub submitted_replaces: Option<String>,
@@ -200,6 +203,7 @@ impl IssueRecord {
             && self.solver_id == request.solver_id
             && self.solver_config == request.solver_config
             && self.key_algorithm == request.key_algorithm
+            && self.profile == request.profile
             && self.identifiers.len() == request.identifiers.len()
             && self
                 .identifiers

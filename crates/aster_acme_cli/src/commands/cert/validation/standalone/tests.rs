@@ -337,7 +337,6 @@ fn material_validation_rejects_other_methods_bad_paths_urls_and_conflicts() {
     }
     for url in [
         "https://example.com",
-        "http://127.0.0.1",
         "http://example.com:8080",
         "http://u:p@example.com",
         "http://example.com/",
@@ -347,6 +346,17 @@ fn material_validation_rejects_other_methods_bad_paths_urls_and_conflicts() {
             *u = format!("{url}/.well-known/acme-challenge/{TOKEN}");
         }
         assert!(validate(&[requirement]).is_err());
+    }
+    // RFC 8738 section 5: IP-literal hosts are valid challenge material. The
+    // bracketed IPv6 form normalizes to the same routing key a CA's Host
+    // header uses.
+    for host in ["127.0.0.1", "192.0.2.1", "[2001:db8::1]"] {
+        let requirement = ValidationRequirement::Http01 {
+            url: format!("http://{host}/.well-known/acme-challenge/{TOKEN}"),
+            path: format!("/.well-known/acme-challenge/{TOKEN}"),
+            content: format!("{TOKEN}.thumbprint"),
+        };
+        assert!(validate(&[requirement]).is_ok(), "accepted {host}");
     }
     for content in [
         "wrong".to_owned(),

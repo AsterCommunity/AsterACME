@@ -1,4 +1,4 @@
-//! System-DNS CAA observations (RFC 8659 §3). No issuance gate or DNS mutation.
+//! System-DNS CAA observations ([RFC 8659 §3](https://datatracker.ietf.org/doc/html/rfc8659#section-3)). No issuance gate or DNS mutation.
 use crate::{
     dns::empty_answer,
     resolver::{self, InitializationError},
@@ -59,7 +59,7 @@ pub struct Report {
 /// Recursive lookup includes alias chasing. Errors must not become empty `RRset`s.
 #[async_trait]
 pub trait Lookup: Send + Sync {
-    /// Query one absolute owner name, following DNS aliases per RFC 1034.
+    /// Query one absolute owner name, following DNS aliases per [RFC 1034](https://datatracker.ietf.org/doc/html/rfc1034).
     /// # Errors
     /// Reports DNS failures, including alias loops and DNSSEC failures.
     async fn lookup(&self, name: &str) -> Result<Vec<Property>, LookupError>;
@@ -113,7 +113,7 @@ impl Lookup for SystemLookup {
 }
 
 /// Find the first nonempty `RRset`. Alias chasing belongs to each DNS query;
-/// only the original identifier's parent chain is searched (RFC 8659 §3).
+/// only the original identifier's parent chain is searched ([RFC 8659 §3](https://datatracker.ietf.org/doc/html/rfc8659#section-3)).
 /// # Errors
 /// Reports invalid identifiers and DNS failures; caller bounds time/cancellation.
 pub async fn check(

@@ -136,7 +136,7 @@ pub(super) fn domain_summary(record: &IssueRecord) -> String {
         .identifiers
         .iter()
         .take(3)
-        .map(aster_acme::identifier::DnsIdentifier::value)
+        .map(aster_acme::identifier::Identifier::value)
         .collect::<Vec<_>>();
     let remaining = record.identifiers.len().saturating_sub(domains.len());
     if remaining > 0 {

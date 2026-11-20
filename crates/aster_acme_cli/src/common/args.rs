@@ -60,12 +60,11 @@ mod tests {
                 vec![
                     "list",
                     "show",
-                    "switch",
+                    "default",
                     "register",
                     "recover",
-                    "update-contact",
+                    "update",
                     "rotate-key",
-                    "deactivate",
                     "remove",
                 ],
             ),
@@ -85,10 +84,8 @@ mod tests {
                     longs.contains(&"yes"),
                     matches!(
                         (group, name),
-                        (
-                            "account",
-                            "register" | "update-contact" | "rotate-key" | "deactivate" | "remove"
-                        ) | ("cert", "issue" | "renew")
+                        ("account", "register" | "update" | "rotate-key" | "remove")
+                            | ("cert", "issue" | "renew")
                     ),
                     "{group} {name}"
                 );
@@ -111,7 +108,7 @@ mod tests {
 
     #[test]
     fn account_contact_and_certificate_target_short_options_are_consistent() {
-        for command in ["register", "update-contact"] {
+        for command in ["register", "update"] {
             assert!(
                 Args::try_parse_from([
                     "aster-acme",
@@ -243,15 +240,7 @@ mod tests {
                 );
             }
         }
-        for command in [
-            "show",
-            "list",
-            "recover",
-            "switch",
-            "remove",
-            "deactivate",
-            "update-contact",
-        ] {
+        for command in ["show", "list", "recover", "default", "remove", "update"] {
             assert!(
                 Args::try_parse_from([
                     "aster-acme",

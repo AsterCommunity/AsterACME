@@ -32,8 +32,8 @@ pub(in crate::commands::cert) fn requirement_lines(
                     output::safe(content)
                 ));
             }
-            ValidationRequirement::TlsAlpn01 { domain, .. } => {
-                lines.push(format!("TLS-ALPN: {}", output::safe(domain)));
+            ValidationRequirement::TlsAlpn01 { identifier, .. } => {
+                lines.push(format!("TLS-ALPN: {}", output::safe(identifier)));
             }
         }
     }

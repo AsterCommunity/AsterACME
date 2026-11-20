@@ -2,71 +2,71 @@
 use serde::{Deserialize, Serialize};
 
 aster_forge_macros::wire_enum! {
-    /// IANA ACME error types, including RFC 8555 §6.7 and registered extensions; unknown types remain lossless.
+    /// IANA ACME error types, including [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7) and registered extensions; unknown types remain lossless.
     pub enum ProblemKind {
-        /// RFC 9773 §5: predecessor was already replaced by another order.
+        /// [RFC 9773 §5](https://datatracker.ietf.org/doc/html/rfc9773#section-5): predecessor was already replaced by another order.
         AlreadyReplaced => "urn:ietf:params:acme:error:alreadyReplaced",
-        /// RFC 8739: an auto-renewal order was explicitly canceled.
+        /// [RFC 8739](https://datatracker.ietf.org/doc/html/rfc8739): an auto-renewal order was explicitly canceled.
         AutoRenewalCanceled => "urn:ietf:params:acme:error:autoRenewalCanceled",
-        /// RFC 8739: an auto-renewal order expired.
+        /// [RFC 8739](https://datatracker.ietf.org/doc/html/rfc8739): an auto-renewal order expired.
         AutoRenewalExpired => "urn:ietf:params:acme:error:autoRenewalExpired",
-        /// RFC 8739: an auto-renewal cancellation request was invalid.
+        /// [RFC 8739](https://datatracker.ietf.org/doc/html/rfc8739): an auto-renewal cancellation request was invalid.
         AutoRenewalCancellationInvalid => "urn:ietf:params:acme:error:autoRenewalCancellationInvalid",
-        /// RFC 8739: auto-renewal certificate revocation is unsupported.
+        /// [RFC 8739](https://datatracker.ietf.org/doc/html/rfc8739): auto-renewal certificate revocation is unsupported.
         AutoRenewalRevocationNotSupported => "urn:ietf:params:acme:error:autoRenewalRevocationNotSupported",
-        /// RFC 8555 §6.7: Account identity does not exist.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Account identity does not exist.
         AccountDoesNotExist => "urn:ietf:params:acme:error:accountDoesNotExist",
-        /// RFC 8555 §6.7: Certificate was already revoked.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Certificate was already revoked.
         AlreadyRevoked => "urn:ietf:params:acme:error:alreadyRevoked",
-        /// RFC 8555 §6.7: The CSR is unacceptable.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): The CSR is unacceptable.
         BadCsr => "urn:ietf:params:acme:error:badCSR",
-        /// RFC 8555 §6.7: Nonce rejected; retry with the supplied fresh nonce.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Nonce rejected; retry with the supplied fresh nonce.
         BadNonce => "urn:ietf:params:acme:error:badNonce",
-        /// RFC 8555 §6.7: Unsupported JWS public key.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Unsupported JWS public key.
         BadPublicKey => "urn:ietf:params:acme:error:badPublicKey",
-        /// RFC 8555 §6.7: CA policy rejects the requested revocation reason.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): CA policy rejects the requested revocation reason.
         BadRevocationReason => "urn:ietf:params:acme:error:badRevocationReason",
-        /// RFC 8555 §6.7: Unsupported JWS signing algorithm.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Unsupported JWS signing algorithm.
         BadSignatureAlgorithm => "urn:ietf:params:acme:error:badSignatureAlgorithm",
         /// `draft-ietf-acme-device-attest-09` (IANA reference `RFC-ietf-acme-device-attest-09`): unacceptable device attestation; not a published RFC.
         BadAttestationStatement => "urn:ietf:params:acme:error:badAttestationStatement",
-        /// RFC 8555 §6.7: CAA records forbid issuance.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): CAA records forbid issuance.
         Caa => "urn:ietf:params:acme:error:caa",
-        /// RFC 8555 §6.7: Inspect per-identifier subproblems.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Inspect per-identifier subproblems.
         Compound => "urn:ietf:params:acme:error:compound",
-        /// RFC 8555 §6.7: CA could not connect to the validation target.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): CA could not connect to the validation target.
         Connection => "urn:ietf:params:acme:error:connection",
-        /// RFC 8555 §6.7: DNS validation query failed.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): DNS validation query failed.
         Dns => "urn:ietf:params:acme:error:dns",
-        /// RFC 8555 §6.7: External account binding is required.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): External account binding is required.
         ExternalAccountRequired => "urn:ietf:params:acme:error:externalAccountRequired",
-        /// RFC 8555 §6.7: Challenge response did not match.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Challenge response did not match.
         IncorrectResponse => "urn:ietf:params:acme:error:incorrectResponse",
-        /// RFC 8555 §6.7: Invalid contact URI.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Invalid contact URI.
         InvalidContact => "urn:ietf:params:acme:error:invalidContact",
-        /// RFC 9115: the order delegation configuration is unknown.
+        /// [RFC 9115](https://datatracker.ietf.org/doc/html/rfc9115): the order delegation configuration is unknown.
         UnknownDelegation => "urn:ietf:params:acme:error:unknownDelegation",
-        /// RFC 8555 §6.7: Malformed request.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Malformed request.
         Malformed => "urn:ietf:params:acme:error:malformed",
-        /// RFC 8555 §6.7: Order is not ready to finalize.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Order is not ready to finalize.
         OrderNotReady => "urn:ietf:params:acme:error:orderNotReady",
-        /// RFC 9799 §6.4.1: in-band onion CAA was required.
+        /// [RFC 9799 §6.4.1](https://datatracker.ietf.org/doc/html/rfc9799#section-6.4.1): in-band onion CAA was required.
         OnionCaaRequired => "urn:ietf:params:acme:error:onionCAARequired",
-        /// RFC 8555 §6.7: Request rate limit exceeded.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Request rate limit exceeded.
         RateLimited => "urn:ietf:params:acme:error:rateLimited",
-        /// RFC 8555 §6.7: CA refuses the requested identifier.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): CA refuses the requested identifier.
         RejectedIdentifier => "urn:ietf:params:acme:error:rejectedIdentifier",
-        /// RFC 8555 §6.7: CA internal error.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): CA internal error.
         ServerInternal => "urn:ietf:params:acme:error:serverInternal",
-        /// RFC 8555 §6.7: TLS validation error.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): TLS validation error.
         Tls => "urn:ietf:params:acme:error:tls",
-        /// RFC 8555 §6.7: Account is not authorized.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Account is not authorized.
         Unauthorized => "urn:ietf:params:acme:error:unauthorized",
-        /// RFC 8555 §6.7: Unsupported contact scheme.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Unsupported contact scheme.
         UnsupportedContact => "urn:ietf:params:acme:error:unsupportedContact",
-        /// RFC 8555 §6.7: Unsupported identifier type.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Unsupported identifier type.
         UnsupportedIdentifier => "urn:ietf:params:acme:error:unsupportedIdentifier",
-        /// RFC 8555 §6.7: Operator action is required.
+        /// [RFC 8555 §6.7](https://datatracker.ietf.org/doc/html/rfc8555#section-6.7): Operator action is required.
         UserActionRequired => "urn:ietf:params:acme:error:userActionRequired",
     }
 }

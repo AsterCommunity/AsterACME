@@ -9,7 +9,7 @@ mod rfc_errors;
 mod workflow;
 use crate::issuance::*;
 use aster_acme::crypto::key_algorithm::KeyAlgorithm;
-use aster_acme::identifier::DnsIdentifier;
+use aster_acme::identifier::{DnsIdentifier, Identifier};
 use aster_acme::issuance::service::IssueService;
 use aster_acme::solver::ChallengeSolver;
 use aster_acme::storage::account::KeyAccess;
@@ -41,7 +41,7 @@ fn provider_solver_ids_preserve_current_legacy_and_unknown_categories() {
 }
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rcgen::PublicKeyData as _;
-use rcgen::{CertificateParams, DistinguishedName, Issuer, KeyPair};
+use rcgen::{CertificateParams, DistinguishedName, Issuer, KeyPair, SanType};
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
@@ -224,10 +224,11 @@ fn request() -> IssueRequest {
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
         key_algorithm: KeyAlgorithm::EcdsaP256,
+        profile: None,
         name: CertificateName::new("example.com").unwrap(),
         identifiers: vec![
-            DnsIdentifier::new("example.com").unwrap(),
-            DnsIdentifier::new("*.example.com").unwrap(),
+            Identifier::Dns(DnsIdentifier::new("example.com").unwrap()),
+            Identifier::Dns(DnsIdentifier::new("*.example.com").unwrap()),
         ],
         account_name: "default".into(),
     }
@@ -353,20 +354,21 @@ async fn mount_flow(fixture: &Fixture) -> Arc<AtomicUsize> {
     stage
 }
 
-fn leaf_for(generation: &Path, identifiers: &[DnsIdentifier]) -> String {
+fn leaf_for(generation: &Path, identifiers: &[Identifier]) -> String {
     let key = KeyPair::try_from(
         fs::read(generation.join("private-key.pk8"))
             .unwrap()
             .as_slice(),
     )
     .unwrap();
-    let mut params = CertificateParams::new(
-        identifiers
-            .iter()
-            .map(DnsIdentifier::value)
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
+    let mut params = CertificateParams::new(Vec::new()).unwrap();
+    params.subject_alt_names = identifiers
+        .iter()
+        .map(|identifier| match identifier {
+            Identifier::Dns(dns) => SanType::DnsName(dns.value().as_str().try_into().unwrap()),
+            Identifier::Ip(ip) => SanType::IpAddress(ip.address()),
+        })
+        .collect();
     params.distinguished_name = DistinguishedName::new();
     params.use_authority_key_identifier_extension = true;
     let ca_key = KeyPair::generate().unwrap();
@@ -704,7 +706,9 @@ async fn failed_artifact_checks_never_replace_in_use_certificate() {
     assert!(second.complete(&new, b"invalid PEM").await.is_err());
     let other = leaf_for(
         &fixture.store.slot(&new.name).join(new.generation_name()),
-        &[DnsIdentifier::new("other.example").unwrap()],
+        &[Identifier::Dns(
+            DnsIdentifier::new("other.example").unwrap(),
+        )],
     );
     assert!(second.complete(&new, other.as_bytes()).await.is_err());
     assert_eq!(
@@ -1326,7 +1330,7 @@ async fn complete_persists_leaf_ca_fullchain_and_same_pem_key_before_promoting()
         record
             .identifiers
             .iter()
-            .map(DnsIdentifier::value)
+            .map(Identifier::value)
             .collect::<Vec<_>>(),
     )
     .unwrap()
@@ -3346,7 +3350,7 @@ async fn renewing_an_expired_predecessor_does_not_try_to_reschedule_the_old_cert
     let mut params = CertificateParams::new(
         old.identifiers
             .iter()
-            .map(DnsIdentifier::value)
+            .map(Identifier::value)
             .collect::<Vec<_>>(),
     )
     .unwrap();

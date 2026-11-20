@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::identifier::{DnsIdentifier, IdentifierError};
+use crate::identifier::IdentifierError;
 
 pub mod dns01;
 pub mod dns_persist;
@@ -26,7 +26,7 @@ pub enum ChallengeKind {
     /// DNS-01 TXT response.
     #[serde(rename = "dns-01")]
     Dns01,
-    /// Persistent DNS TXT response (draft-ietf-acme-dns-persist-02).
+    /// Persistent DNS TXT response ([draft-ietf-acme-dns-persist-02](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist-02)).
     #[serde(rename = "dns-persist-01")]
     DnsPersist01,
     /// TLS-ALPN-01 response (contract only until a solver is supplied).
@@ -52,6 +52,26 @@ impl ChallengeKind {
         match self {
             Self::Dns01 | Self::DnsPersist01 => true,
             Self::Http01 | Self::TlsAlpn01 => false,
+        }
+    }
+
+    /// Whether this method can validate IP identifiers at all. [RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)
+    /// section 7 forbids DNS-based methods for IP identifiers.
+    #[must_use]
+    pub const fn supports_ip_identifiers(self) -> bool {
+        match self {
+            Self::Dns01 | Self::DnsPersist01 => false,
+            Self::Http01 | Self::TlsAlpn01 => true,
+        }
+    }
+
+    /// Whether this method can validate exactly this identifier. The central
+    /// capability dispatch; material owners only see compatible identifiers.
+    #[must_use]
+    pub fn validates_identifier(self, identifier: &crate::identifier::Identifier) -> bool {
+        match identifier {
+            crate::identifier::Identifier::Dns(_) => true,
+            crate::identifier::Identifier::Ip(_) => self.supports_ip_identifiers(),
         }
     }
 }
@@ -154,7 +174,7 @@ pub enum ChallengeError {
     /// Token must use the base64url alphabet and be long enough for 128 bits.
     #[error("invalid challenge token")]
     InvalidToken,
-    /// RFC 7638 SHA-256 JWK thumbprints must decode to 32 bytes.
+    /// [RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) SHA-256 JWK thumbprints must decode to 32 bytes.
     #[error("invalid SHA-256 JWK thumbprint")]
     InvalidThumbprint,
     /// Wildcards require a supported DNS validation method.
@@ -199,7 +219,7 @@ impl ChallengePolicy {
     /// Returns an error when no candidate meets the policy and identifier constraints.
     pub fn select(
         &self,
-        identifier: &DnsIdentifier,
+        identifier: &crate::identifier::Identifier,
         offered: &[WireChallengeKind],
         supported: &[ChallengeKind],
     ) -> Result<ChallengeKind, ChallengeError> {
@@ -211,7 +231,8 @@ impl ChallengePolicy {
             .iter()
             .copied()
             .find(|kind| {
-                (!identifier.is_wildcard() || kind.supports_wildcards())
+                kind.validates_identifier(identifier)
+                    && (!identifier.is_wildcard() || kind.supports_wildcards())
                     && supported.contains(kind)
                     && offered.iter().any(|wire| known_method(wire) == Some(*kind))
             })
@@ -252,7 +273,7 @@ impl ChallengeToken {
 pub struct KeyAuthorization(String);
 
 impl KeyAuthorization {
-    /// Build the RFC 8555 key authorization.
+    /// Build the [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) key authorization.
     ///
     /// # Errors
     /// Rejects thumbprints that are not canonical unpadded base64url SHA-256 values.

@@ -11,7 +11,8 @@ pub(crate) enum AccountCommand {
     /// List saved accounts and the default selection without contacting a CA.
     #[command(group(clap::ArgGroup::new("list_verification_http").args(["user_agent", "request_timeout"]).multiple(true).requires("verify")))]
     List(ListArgs),
-    /// Inspect local metadata; --verify explicitly queries the CA.
+    /// Inspect local metadata; --verify queries the CA; --profiles lists the
+    /// advertised certificate profiles.
     #[command(group(clap::ArgGroup::new("verification_http").args(["user_agent", "request_timeout"]).multiple(true).requires("verify")))]
     Show {
         #[command(flatten)]
@@ -19,24 +20,69 @@ pub(crate) enum AccountCommand {
         #[arg(long)]
         /// Query the current CA status instead of only viewing local data.
         verify: bool,
+        /// List the certificate profiles the CA advertises
+        /// ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles));
+        /// contacts the CA directory.
+        #[arg(long)]
+        profiles: bool,
     },
     /// Select a registered local account as the default, without HTTP.
-    Switch(LocalTargetArgs),
+    Default(LocalTargetArgs),
     /// Register a new account or confirm reuse of a saved identity.
     Register(RegisterArgs),
     /// Find an existing CA account using its saved key; never create one.
     Recover(NetworkArgs),
-    /// Replace or clear the contact addresses on an existing CA account.
-    UpdateContact(UpdateContactArgs),
+    /// Update account preferences: CA contacts and/or the default profile.
+    Update(UpdateArgs),
     /// Rotate the account signing key, or resume its saved rollover transaction.
     RotateKey(RotateKeyArgs),
-    /// Permanently deactivate a CA account; this cannot be undone.
-    Deactivate(DeactivateArgs),
-    /// Remove local account metadata and private key; does not deactivate the CA account.
+    /// Remove local account metadata and private key; --deactivate also
+    /// irreversibly deactivates the account at the CA.
     Remove(RemoveArgs),
 }
 
+/// Replace contacts and/or set or clear the default certificate profile.
+/// Contact changes update the CA account; profile preferences are local
+/// metadata validated against the advertised list when the CA is reachable.
 #[derive(clap::Args, Default)]
+pub(crate) struct UpdateArgs {
+    #[command(flatten)]
+    pub(crate) network: NetworkArgs,
+    /// Complete replacement contact list; repeat for multiple email addresses.
+    #[arg(short = 'm', long, conflicts_with = "clear_contacts")]
+    pub(crate) contact: Vec<String>,
+    /// Remove all CA contacts explicitly.
+    #[arg(long)]
+    pub(crate) clear_contacts: bool,
+    /// Profile name to set; the CA directory must advertise it.
+    #[arg(
+        long,
+        value_name = "NAME",
+        value_parser = crate::commands::cert::args::parse_profile,
+        conflicts_with = "clear_profile"
+    )]
+    pub(crate) profile: Option<String>,
+    /// Remove the saved default profile so new issues use the CA default.
+    #[arg(long)]
+    pub(crate) clear_profile: bool,
+    /// Confirm this update without prompting.
+    #[arg(short = 'y', long)]
+    pub(crate) yes: bool,
+}
+
+impl UpdateArgs {
+    /// Any contact replacement intent, including an explicit clear.
+    pub(crate) fn contact_set(&self) -> bool {
+        !self.contact.is_empty()
+    }
+
+    /// Any profile preference intent, including an explicit clear.
+    pub(crate) fn profile_set(&self) -> bool {
+        self.profile.is_some()
+    }
+}
+
+#[derive(Clone, clap::Args, Default)]
 pub(crate) struct NameArgs {
     /// Local account name; omit to select interactively or use the configured default.
     #[arg(index = 1, value_name = "NAME", conflicts_with = "name", value_parser = parse_account_name)]
@@ -60,10 +106,16 @@ pub(crate) struct LocalTargetArgs {
     pub(crate) local: LocalArgs,
 }
 
-#[derive(clap::Args, Default)]
+#[derive(clap::Args)]
 pub(crate) struct RemoveArgs {
     #[command(flatten)]
     pub(crate) target: LocalTargetArgs,
+    /// Also deactivate the account at the CA; this cannot be undone and
+    /// requires the account key.
+    #[arg(long)]
+    pub(crate) deactivate: bool,
+    #[command(flatten)]
+    pub(crate) network_only_http: HttpArgs,
     /// Confirm deletion of local account metadata and private key without prompting.
     #[arg(short = 'y', long)]
     pub(crate) yes: bool,
@@ -73,6 +125,8 @@ impl From<RemoveArgs> for AccountArgs {
     fn from(args: RemoveArgs) -> Self {
         Self {
             yes: args.yes,
+            user_agent: args.network_only_http.user_agent,
+            request_timeout: args.network_only_http.request_timeout,
             ..args.target.into()
         }
     }
@@ -87,7 +141,7 @@ impl From<LocalTargetArgs> for AccountArgs {
     }
 }
 
-#[derive(clap::Args, Default)]
+#[derive(Clone, clap::Args, Default)]
 pub(crate) struct CaArgs {
     /// Public CA preset; letsencrypt, zerossl or google.
     #[arg(long, value_parser = crate::ca::ProviderParser, conflicts_with = "ca_directory")]
@@ -118,7 +172,7 @@ impl From<LocalArgs> for ListArgs {
     }
 }
 
-#[derive(clap::Args, Default)]
+#[derive(Clone, clap::Args, Default)]
 pub(crate) struct NetworkArgs {
     #[command(flatten)]
     pub(crate) identity: NameArgs,
@@ -150,6 +204,10 @@ pub(crate) struct RegisterArgs {
     pub(crate) auto_accept_new_terms: bool,
     #[command(flatten)]
     pub(crate) http: HttpArgs,
+    /// Default certificate profile for this account; the CA directory must
+    /// advertise it (see account profiles). cert issue --profile overrides it.
+    #[arg(long, value_parser = crate::commands::cert::args::parse_profile)]
+    pub(crate) profile: Option<String>,
     /// Confirm existing account reuse; does not accept terms or disable other prompts.
     #[arg(short = 'y', long)]
     pub(crate) yes: bool,
@@ -170,30 +228,6 @@ pub(crate) struct RegisterArgs {
         help_heading = "Advanced registration (EAB)"
     )]
     pub(crate) eab_key_file: Option<PathBuf>,
-}
-
-#[derive(clap::Args, Default)]
-pub(crate) struct DeactivateArgs {
-    #[command(flatten)]
-    pub(crate) network: NetworkArgs,
-    /// Confirm irreversible CA account deactivation without an interactive prompt.
-    #[arg(short = 'y', long)]
-    pub(crate) yes: bool,
-}
-
-#[derive(clap::Args, Default)]
-pub(crate) struct UpdateContactArgs {
-    #[command(flatten)]
-    pub(crate) network: NetworkArgs,
-    /// Complete replacement contact list; repeat for multiple email addresses.
-    #[arg(short = 'm', long, conflicts_with = "clear_contacts")]
-    pub(crate) contact: Vec<String>,
-    /// Remove all CA contacts explicitly.
-    #[arg(long)]
-    pub(crate) clear_contacts: bool,
-    /// Confirm this contact update without prompting.
-    #[arg(short = 'y', long)]
-    pub(crate) yes: bool,
 }
 
 #[derive(clap::Args, Default)]
@@ -228,6 +262,8 @@ pub(crate) struct AccountArgs {
     pub(crate) contact: Vec<String>,
     /// Agree to the current terms published by the selected CA (register only).
     pub(crate) accept_terms: bool,
+    /// Default certificate profile to save on a new account (register only).
+    pub(crate) profile: Option<String>,
     /// Accept current terms and future terms URL updates (register only).
     pub(crate) auto_accept_new_terms: bool,
     /// EAB key ID; use --eab-key-file for its base64url HMAC key.
@@ -275,6 +311,7 @@ impl From<RegisterArgs> for AccountArgs {
             key_algorithm: args.key_algorithm,
             contact: args.contact,
             accept_terms: args.accept_terms,
+            profile: args.profile,
             auto_accept_new_terms: args.auto_accept_new_terms,
             eab_kid: args.eab_kid,
             eab_key_file: args.eab_key_file,
@@ -289,26 +326,16 @@ impl From<RegisterArgs> for AccountArgs {
     }
 }
 
-impl From<DeactivateArgs> for AccountArgs {
-    fn from(args: DeactivateArgs) -> Self {
-        Self {
-            yes: args.yes,
-            ..args.network.into()
-        }
-    }
-}
-
 impl AccountCommand {
     pub(crate) fn json(&self) -> bool {
         match self {
-            Self::UpdateContact(args) => args.network.local.json,
             Self::RotateKey(args) => args.network.local.json,
+            Self::Update(args) => args.network.local.json,
             Self::Remove(args) => args.target.local.json,
             Self::List(args) => args.local.json,
-            Self::Deactivate(args) => args.network.local.json,
             Self::Register(args) => args.local.json,
             Self::Recover(args) | Self::Show { options: args, .. } => args.local.json,
-            Self::Switch(args) => args.local.json,
+            Self::Default(args) => args.local.json,
         }
     }
 }

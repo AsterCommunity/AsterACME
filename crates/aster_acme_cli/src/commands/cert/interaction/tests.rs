@@ -3,6 +3,7 @@ use crate::commands::cert::{
     args::{CertCommand, ResumeTarget},
     interaction::*,
 };
+use aster_acme::identifier::{DnsIdentifier, IpIdentifier};
 use clap::Parser as _;
 use std::collections::VecDeque;
 
@@ -228,6 +229,61 @@ async fn method_choices_respect_wildcards_and_supplied_configuration() {
 }
 
 #[tokio::test]
+async fn interactive_identifiers_route_ip_literals_and_reject_lookalikes() {
+    let mut mixed = args(&["-c", "standalone"]);
+    let mut prompts = Inputs {
+        answers: [
+            "example.com, 192.0.2.1, 2001:db8::1".into(),
+            "0.0.0.0:80".into(),
+        ]
+        .into(),
+        ..Inputs::default()
+    };
+    complete(&mut mixed, true, &mut prompts).await.unwrap();
+    assert_eq!(
+        mixed
+            .domain
+            .iter()
+            .map(DnsIdentifier::value)
+            .collect::<Vec<_>>(),
+        ["example.com"]
+    );
+    assert_eq!(
+        mixed.ip.iter().map(IpIdentifier::value).collect::<Vec<_>>(),
+        ["192.0.2.1", "2001:db8::1"]
+    );
+
+    // A dotted quad that is neither canonical IPv4 nor an ordinary DNS name is
+    // rejected with guidance, then the prompt retries with the corrected input.
+    let mut lookalike = args(&["-c", "standalone"]);
+    let mut prompts = Inputs {
+        answers: [
+            "01.02.03.04".into(),
+            "192.0.2.1".into(),
+            "0.0.0.0:80".into(),
+        ]
+        .into(),
+        ..Inputs::default()
+    };
+    complete(&mut lookalike, true, &mut prompts).await.unwrap();
+    assert_eq!(prompts.invalid.len(), 1);
+    assert!(
+        prompts.invalid[0].contains("not a canonical"),
+        "{}",
+        prompts.invalid[0]
+    );
+    assert_eq!(
+        lookalike
+            .ip
+            .iter()
+            .map(IpIdentifier::value)
+            .collect::<Vec<_>>(),
+        ["192.0.2.1"]
+    );
+    assert_eq!(lookalike.domain.len(), 0);
+}
+
+#[tokio::test]
 async fn invalid_domains_directories_and_addresses_retry_with_no_publication() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("file");
@@ -317,7 +373,7 @@ async fn cancellation_at_domains_method_or_method_configuration_is_preserved() {
         "example.com EXAMPLE.com",
         &vec!["x.example"; 101].join(" "),
     ] {
-        assert!(parse_domains(value).is_err());
+        assert!(crate::commands::cert::interaction::parse_identifiers(value).is_err());
     }
 }
 

@@ -62,7 +62,7 @@ fn authorization_details_escape_materials_and_keep_wildcard_and_status_observati
         (
             "valid",
             ValidationRequirement::TlsAlpn01 {
-                domain: "example.com\n".into(),
+                identifier: "example.com\n".into(),
                 digest: [0; 32],
             },
         ),

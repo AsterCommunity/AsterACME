@@ -35,14 +35,22 @@ impl BeforeOrder for OrderCaa<'_> {
         execution: &ExecutionContext,
     ) -> Result<StageReport<Report>, Error> {
         execution.check().map_err(|_| Error::Interrupted)?;
-        let names = record
+        // RFC 8659 CAA applies to DNS names only. IP identifiers keep their
+        // input index with an explicit unsupported observation so reports stay
+        // aligned with the requested identifiers.
+        let dns_slots = record
             .identifiers
             .iter()
-            .map(aster_acme::identifier::DnsIdentifier::value)
+            .map(aster_acme::identifier::Identifier::as_dns)
+            .collect::<Vec<_>>();
+        let names = dns_slots
+            .iter()
+            .flatten()
+            .map(|dns| dns.value())
             .collect::<Vec<_>>();
         if directory.meta.caa_identities.is_empty() {
             return Ok(unavailable(
-                names.len(),
+                dns_slots.len(),
                 "CA directory does not advertise caaIdentities",
             ));
         }
@@ -52,7 +60,7 @@ impl BeforeOrder for OrderCaa<'_> {
         } else {
             system = match SystemLookup::new() {
                 Ok(lookup) => lookup,
-                Err(error) => return Ok(unavailable(names.len(), &error.to_string())),
+                Err(error) => return Ok(unavailable(dns_slots.len(), &error.to_string())),
             };
             &system
         };
@@ -66,7 +74,27 @@ impl BeforeOrder for OrderCaa<'_> {
                 wildcard: false,
             },
         );
-        self.runner.run(&checker, &names, execution).await
+        let dns_report = self.runner.run(&checker, &names, execution).await?;
+        let mut dns_observations = dns_report.observations.into_iter();
+        let mut next = dns_observations.next();
+        let mut observations = Vec::with_capacity(dns_slots.len());
+        for (index, slot) in dns_slots.iter().enumerate() {
+            match slot {
+                Some(_) => {
+                    let Some(mut observation) = next.take() else {
+                        break;
+                    };
+                    observation.index = index;
+                    observations.push(observation);
+                    next = dns_observations.next();
+                }
+                None => observations.push(aster_acme::precheck::Observation {
+                    index,
+                    result: Err(aster_acme::precheck::Failure::UnsupportedInput),
+                }),
+            }
+        }
+        Ok(StageReport { observations })
     }
 }
 fn unavailable(count: usize, reason: &str) -> StageReport<Report> {

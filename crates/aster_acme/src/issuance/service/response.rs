@@ -14,14 +14,24 @@ pub(super) fn parse_order(
     let expected = record
         .identifiers
         .iter()
-        .map(crate::identifier::DnsIdentifier::value)
+        .cloned()
         .collect::<std::collections::BTreeSet<_>>();
     let mut actual = std::collections::BTreeSet::new();
     for wire in &order.identifiers {
-        let Identifier::Dns(identifier) = Identifier::try_from(wire.clone())?;
-        if !actual.insert(identifier.value()) {
+        let identifier = Identifier::try_from(wire.clone())?;
+        if !actual.insert(identifier) {
             return Err(IssueError::InvalidInput("duplicate order identifiers"));
         }
+    }
+    // The order identity is fixed at request time. When the request carries
+    // an explicit profile, the CA must echo it (draft-ietf-acme-profiles §4):
+    // a missing field means the CA ignored the selection and would issue
+    // under its default — rejected instead of silently downgraded. A profile
+    // on a request that asked for none is informational.
+    if record.profile.is_some() && order.profile.as_ref() != record.profile.as_ref() {
+        return Err(IssueError::InvalidInput(
+            "CA order omitted or selected a different certificate profile than requested",
+        ));
     }
     if expected != actual
         || order.authorizations.len() > 100
@@ -105,5 +115,68 @@ pub(super) fn completed(record: IssueRecord) -> IssueOutcome {
     IssueOutcome::Completed {
         record: Box::new(record),
         cleanup,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::issuance::service::response::parse_order;
+    use crate::transport::AcmeResponse;
+    use serde_json::json;
+
+    fn record_with_profile(profile: Option<&str>) -> crate::issuance::IssueRecord {
+        serde_json::from_value(json!({
+            "challenge": "http-01",
+            "solver_config": {},
+            "solver_id": "standalone",
+            "operation_id": "a".repeat(43),
+            "name": "web",
+            "created_at": "2026-01-01T00:00:00Z",
+            "account_name": "default",
+            "account_id": "stable",
+            "account_thumbprint": "key",
+            "directory": "https://ca.example/directory",
+            "account_url": "https://ca.example/account",
+            "key_algorithm": "ecdsa-p256",
+            "identifiers": ["example.com"],
+            "profile": profile,
+            "phase": "authorizing",
+            "new_order_intent_saved": true,
+            "finalize_submitted": "not_submitted",
+            "authorizations": []
+        }))
+        .unwrap()
+    }
+
+    fn order_body(profile: Option<&str>) -> AcmeResponse {
+        let mut body = json!({
+            "status": "pending",
+            "expires": "2099-01-01T00:00:00Z",
+            "identifiers": [{"type": "dns", "value": "example.com"}],
+            "authorizations": ["https://ca.example/authz"],
+            "finalize": "https://ca.example/finalize"
+        });
+        if let Some(profile) = profile {
+            body["profile"] = json!(profile);
+        }
+        AcmeResponse {
+            status: reqwest::StatusCode::OK,
+            headers: reqwest::header::HeaderMap::new(),
+            body: serde_json::to_vec(&body).unwrap(),
+        }
+    }
+
+    #[test]
+    fn explicit_profile_requires_an_echoing_order() {
+        let record = record_with_profile(Some("shortlived"));
+        parse_order(&order_body(Some("shortlived")), &record).unwrap();
+        // Omitted echo or a different profile both change certificate content.
+        for observed in [None, Some("classic")] {
+            assert!(parse_order(&order_body(observed), &record).is_err());
+        }
+        // Without an explicit request, absence stays informational.
+        let record = record_with_profile(None);
+        parse_order(&order_body(Some("classic")), &record).unwrap();
+        parse_order(&order_body(None), &record).unwrap();
     }
 }

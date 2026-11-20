@@ -35,7 +35,8 @@ CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNS
 ## 能力
 
 - 具名 CA 账户：注册、找回、联系人更新、换钥和停用。
-- 单域名、多 SAN 与通配符证书，账户与证书可独立选择密钥类型。
+- 单域名、多 SAN、通配符与 IP 地址（RFC 8738）证书，账户与证书可独立选择密钥类型。
+- CA 证书 profile（draft-ietf-acme-profiles）：发现广告列表、设置账户默认或按次选择——Let's Encrypt 的 IP 标识符需要 `shortlived`。
 - 保存申请后恢复、ARI 刷新、前台单次／批量续期，以及受支持验证方式的无人值守维护。
 - 每张证书绑定多个部署目标，续期后自动部署，reload 有界执行并展示 stdout/stderr。
 - 交互式输入、结构化 JSON、离线查看及可选 debug 诊断。
@@ -44,8 +45,8 @@ CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNS
 | --- | --- |
 | DNS-01 | `dns_provider --provider NAME`：内置 DNS 或 ADPP 自动发布；`manual_dns`：手动发布 TXT，支持通配符 |
 | DNS-PERSIST-01（草案 -02） | `dns_persist`：首次手动配置长期 TXT，后续续期复用；支持通配符 |
-| HTTP-01 | `manual_http`、`webroot`，或临时监听 80 端口的 `standalone` |
-| TLS-ALPN-01 | 临时监听 443 端口的 `tls_alpn` |
+| HTTP-01 | `manual_http`、`webroot`，或临时监听 80 端口的 `standalone`；支持 DNS 与 IP 标识符 |
+| TLS-ALPN-01 | 临时监听 443 端口的 `tls_alpn`；支持 DNS 与 IP 标识符 |
 
 `dns_persist`要求CA支持[对应草案版本](developer-docs/rfc-reference.md#dns-persist-草案实现2026-11-14)。TXT保留供续期使用；它不包含DNS provider自动写入，也不表示已通过公网CA验收。
 

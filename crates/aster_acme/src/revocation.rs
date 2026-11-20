@@ -1,4 +1,4 @@
-//! RFC 8555 section 7.6 revocation with account or certificate-key authorization.
+//! [RFC 8555 §7.6](https://datatracker.ietf.org/doc/html/rfc8555#section-7.6) revocation with account or certificate-key authorization.
 use crate::revocation::authority::RevocationAuthority;
 use crate::{
     issuance::IssueError,
@@ -103,7 +103,7 @@ pub enum RevocationSigner {
     },
     /// Public fingerprint of the key matching the certificate.
     CertificateKey {
-        /// RFC 7638 public JWK thumbprint.
+        /// [RFC 7638](https://datatracker.ietf.org/doc/html/rfc7638) public JWK thumbprint.
         key_thumbprint: String,
     },
 }

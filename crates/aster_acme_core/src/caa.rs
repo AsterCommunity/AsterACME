@@ -1,10 +1,10 @@
-//! Advisory CAA policy evaluation (RFC 8659 §§3–4, RFC 8657 §§3–4).
+//! Advisory CAA policy evaluation ([RFC 8659](https://datatracker.ietf.org/doc/html/rfc8659) §§3–4, [RFC 8657](https://datatracker.ietf.org/doc/html/rfc8657) §§3–4).
 //! A local observation never authorizes or prevents a CA operation.
 
 /// Raw CAA property; keep opaque values so unknown tags remain observable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
-    /// RFC 8659 issuer-critical bit (128), distinct from reserved flag bits.
+    /// [RFC 8659](https://datatracker.ietf.org/doc/html/rfc8659) issuer-critical bit (128), distinct from reserved flag bits.
     pub critical: bool,
     /// Case-insensitive property tag.
     pub tag: String,
@@ -14,7 +14,7 @@ pub struct Property {
 
 /// Inputs known from directory, account and selected challenge method.
 pub struct Request<'a> {
-    /// RFC 8555 §7.1.1 alternatives, not a list of required records.
+    /// [RFC 8555 §7.1.1](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.1) alternatives, not a list of required records.
     pub issuers: &'a [String],
     /// Exact account resource URL, if known.
     pub account_uri: Option<&'a str>,

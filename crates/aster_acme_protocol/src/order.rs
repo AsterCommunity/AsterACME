@@ -1,4 +1,4 @@
-//! RFC 8555 sections 7.1.3–7.1.5, 7.4 and 7.5 wire resources and requests.
+//! [RFC 8555 §7.1.3](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.3)–7.1.5, 7.4 and 7.5 wire resources and requests.
 use crate::{problem::Problem, url::AcmeUrl};
 use aster_acme_core::protocol::{AuthorizationStatus, ChallengeStatus, OrderStatus};
 use aster_forge_macros::wire_enum;
@@ -11,7 +11,7 @@ wire_enum! {
         Http01 => "http-01",
         /// DNS TXT publication.
         Dns01 => "dns-01",
-        /// Persistent DNS TXT publication (draft-ietf-acme-dns-persist-02).
+        /// Persistent DNS TXT publication ([draft-ietf-acme-dns-persist-02](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist-02)).
         DnsPersist01 => "dns-persist-01",
         /// Dedicated TLS ALPN response.
         TlsAlpn01 => "tls-alpn-01",
@@ -34,14 +34,18 @@ pub struct WireIdentifier {
 /// Complete newOrder payload. Requested certificate dates are omitted by this client.
 #[derive(Serialize)]
 pub struct NewOrderRequest<'a> {
-    /// Requested DNS identifiers, preserving primary-domain order.
+    /// Requested DNS and IP identifiers, preserving primary-domain order.
     pub identifiers: &'a [WireIdentifier],
-    /// RFC 9773 predecessor; only sent to servers advertising renewalInfo.
+    /// [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) predecessor; only sent to servers advertising renewalInfo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaces: Option<&'a str>,
+    /// Selected certificate profile ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles) §4,    /// <https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>); omitted
+    /// unless the operator explicitly chose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<&'a str>,
 }
 
-/// CSR encoded as unpadded base64url DER (RFC 8555 section 7.4).
+/// CSR encoded as unpadded base64url DER ([RFC 8555 §7.4](https://datatracker.ietf.org/doc/html/rfc8555#section-7.4)).
 #[derive(Serialize)]
 pub struct FinalizeRequest<'a> {
     /// Stable, already persisted CSR.
@@ -52,13 +56,13 @@ pub struct FinalizeRequest<'a> {
 #[derive(Serialize)]
 pub struct AcknowledgeRequest {}
 
-/// CA order resource. Optional dates are parsed strictly as RFC 3339.
+/// CA order resource. Optional dates are parsed strictly as [RFC 3339](https://datatracker.ietf.org/doc/html/rfc3339).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderObject {
     /// Authoritative CA lifecycle state.
     pub status: OrderStatus,
-    /// Required by RFC 8555 for pending and valid orders; checked by the client.
+    /// Required by [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) for pending and valid orders; checked by the client.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub expires: Option<time::OffsetDateTime>,
     /// Identifiers authorized by this order.
@@ -69,9 +73,13 @@ pub struct OrderObject {
     pub finalize: AcmeUrl,
     /// Issued certificate URL when available.
     pub certificate: Option<AcmeUrl>,
-    /// RFC 9773 replacement acknowledgement; required to echo a submitted replaces.
+    /// [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) replacement acknowledgement; required to echo a submitted replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
+    /// Certificate profile the CA associated with this order
+    /// (draft-ietf-acme-profiles §4 <https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Optional CA explanation for an invalid order.
     pub error: Option<Problem>,
     /// Fields introduced by CA extensions unknown to this client.
@@ -111,7 +119,7 @@ pub struct ChallengeObject {
     pub status: ChallengeStatus,
     /// Optional validation failure.
     pub error: Option<Problem>,
-    /// Method-specific fields. RFC 8555 section 7.1.5 does not require every method
+    /// Method-specific fields. [RFC 8555 §7.1.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.5) does not require every method
     /// to have a token; unsupported methods retain their complete extension data.
     #[serde(flatten)]
     pub parameters: std::collections::BTreeMap<String, serde_json::Value>,

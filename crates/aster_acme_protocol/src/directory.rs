@@ -1,4 +1,4 @@
-//! RFC 8555 directory discovery; endpoints are supplied by the CA, never fixed paths.
+//! [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) directory discovery; endpoints are supplied by the CA, never fixed paths.
 use crate::url::AcmeUrl;
 use serde::{Deserialize, Serialize};
 
@@ -59,13 +59,13 @@ pub struct Directory {
     /// Certificate order creation endpoint, when supported.
     #[serde(default)]
     pub new_order: Option<AcmeUrl>,
-    /// Optional RFC 8555 keyChange endpoint; absent means rotation is unsupported.
+    /// Optional [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) keyChange endpoint; absent means rotation is unsupported.
     #[serde(default)]
     pub key_change: Option<AcmeUrl>,
-    /// RFC 8555 certificate revocation endpoint.
+    /// [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) certificate revocation endpoint.
     #[serde(default)]
     pub revoke_cert: Option<AcmeUrl>,
-    /// RFC 9773 unauthenticated renewal information endpoint.
+    /// [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773) unauthenticated renewal information endpoint.
     #[serde(default)]
     pub renewal_info: Option<AcmeUrl>,
     /// Optional server metadata.
@@ -76,11 +76,11 @@ pub struct Directory {
     pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-/// RFC 8555 directory metadata relevant to account registration.
+/// [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) directory metadata relevant to account registration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryMeta {
-    /// RFC 8555 §7.1.1: issuer names accepted as alternatives in CAA properties.
+    /// [RFC 8555 §7.1.1](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.1): issuer names accepted as alternatives in CAA properties.
     /// Absence provides no identity; never infer it from the directory hostname.
     #[serde(default, deserialize_with = "caa_identities")]
     pub caa_identities: Vec<String>,
@@ -99,6 +99,17 @@ pub struct DirectoryMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub account_hash_prefix: Option<String>,
+    /// Draft-ietf-acme-profiles §3
+    /// (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>): advertised
+    /// certificate profiles by name,
+    /// each with a CA-provided human-readable description. Malformed metadata
+    /// is unavailable, not a discovery failure.
+    #[serde(
+        default,
+        deserialize_with = "optional_metadata",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub profiles: Option<std::collections::BTreeMap<String, String>>,
     /// Terms must be accepted explicitly before creating an account.
     pub terms_of_service: Option<AcmeUrl>,
     /// Whether registration requires EAB credentials.

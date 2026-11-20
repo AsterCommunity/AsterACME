@@ -18,11 +18,10 @@ use std::sync::Arc;
 
 enum Operation {
     Register,
-    Deactivate,
     Recover,
-    Show { verify: bool },
-    Switch,
-    Remove,
+    Show { verify: bool, profiles: bool },
+    Default,
+    Remove { deactivate: bool },
 }
 
 impl Operation {
@@ -32,7 +31,7 @@ impl Operation {
     ) -> aster_acme::storage::account::KeyAccess {
         match self {
             Self::Register => aster_acme::storage::account::KeyAccess::Create(algorithm),
-            Self::Recover | Self::Deactivate | Self::Show { .. } | Self::Switch | Self::Remove => {
+            Self::Recover | Self::Show { .. } | Self::Default | Self::Remove { .. } => {
                 aster_acme::storage::account::KeyAccess::Existing
             }
         }
@@ -48,37 +47,41 @@ pub(crate) async fn execute(
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let (mut options, operation) = match command {
-        AccountCommand::UpdateContact(args) => {
-            return crate::commands::account::mutation::update_contacts(args, cli).await;
+        AccountCommand::Update(args) => {
+            return crate::commands::account::mutation::update(args, cli).await;
         }
         AccountCommand::RotateKey(args) => {
             return crate::commands::account::mutation::rotate_key(args, cli).await;
         }
         AccountCommand::List(args) => return list(args, cli).await,
-        AccountCommand::Remove(options) => (AccountArgs::from(options), Operation::Remove),
-        AccountCommand::Deactivate(options) => (AccountArgs::from(options), Operation::Deactivate),
+        AccountCommand::Remove(args) => {
+            let deactivate = args.deactivate;
+            (AccountArgs::from(args), Operation::Remove { deactivate })
+        }
         AccountCommand::Register(options) => (AccountArgs::from(options), Operation::Register),
         AccountCommand::Recover(options) => (AccountArgs::from(options), Operation::Recover),
-        AccountCommand::Show { options, verify } => {
-            (AccountArgs::from(options), Operation::Show { verify })
-        }
-        AccountCommand::Switch(options) => (AccountArgs::from(options), Operation::Switch),
+        AccountCommand::Show {
+            options,
+            verify,
+            profiles,
+        } => (
+            AccountArgs::from(options),
+            Operation::Show { verify, profiles },
+        ),
+        AccountCommand::Default(options) => (AccountArgs::from(options), Operation::Default),
     };
     let settings = CliSettings::load(&options).await?;
     let mode = match operation {
         Operation::Register => crate::commands::account::selection::Mode::Register,
-        Operation::Recover | Operation::Remove | Operation::Show { .. } => {
+        Operation::Recover | Operation::Show { .. } | Operation::Remove { .. } => {
             crate::commands::account::selection::Mode::Existing
         }
-        Operation::Deactivate => crate::commands::account::selection::Mode::Operation(
-            aster_acme_core::account::AccountOperation::Deactivate,
-        ),
-        Operation::Switch => crate::commands::account::selection::Mode::Registered,
+        Operation::Default => crate::commands::account::selection::Mode::Registered,
     };
     crate::commands::account::selection::complete(&mut options, &settings, mode, cli).await?;
-    if matches!(operation, Operation::Switch) && options.name.is_none() {
+    if matches!(operation, Operation::Default) && options.name.is_none() {
         return Err(
-            "Specify account switch <NAME> or --name <NAME>, or use an interactive terminal to select an account."
+            "Specify account default <NAME> or --name <NAME>, or use an interactive terminal to select an account."
                 .into(),
         );
     }
@@ -86,14 +89,13 @@ pub(crate) async fn execute(
     match operation {
         Operation::Register => {}
         Operation::Recover
-        | Operation::Remove
         | Operation::Show { .. }
-        | Operation::Deactivate
-        | Operation::Switch => {
+        | Operation::Default
+        | Operation::Remove { .. } => {
             context.require_account().await?;
         }
     }
-    if matches!(operation, Operation::Remove) {
+    if matches!(operation, Operation::Remove { deactivate: false }) {
         return remove(context, &options, cli).await;
     }
     // Check before loading/creating keys, changing contacts, or constructing HTTP.
@@ -111,10 +113,14 @@ pub(crate) async fn execute(
             &cli.output,
         )?;
     }
-    if let Operation::Switch = operation {
+    if let Operation::Default = operation {
         return switch(context).await;
     }
-    if matches!(operation, Operation::Show { verify: false }) {
+    if let Operation::Show {
+        verify: false,
+        profiles: false,
+    } = operation
+    {
         return offline(&context).await;
     }
     let name = context.name.clone();
@@ -126,23 +132,32 @@ pub(crate) async fn execute(
             operation.key_access(options.key_algorithm),
         )
         .await?;
-    if matches!(operation, Operation::Deactivate) {
-        return deactivate(context, signer, options, cli).await;
+    if let Operation::Remove { deactivate: true } = operation {
+        // Deactivate first (irreversible CA state), then local removal; the
+        // deactivation report is the outcome — removal failure still errors.
+        let report = deactivate(&context, signer, &options, cli).await?;
+        remove(context, &options, cli).await?;
+        return Ok(report);
     }
     match operation {
-        Operation::Show { verify } => {
+        Operation::Show { verify, profiles } => {
+            let transport = context.transport_options(&options)?;
+            let client = Arc::new(
+                cli.http
+                    .discover(context.directory.clone(), transport.clone())
+                    .await?,
+            );
             if verify {
-                let client = Arc::new(
-                    cli.http
-                        .discover(
-                            context.directory.clone(),
-                            context.transport_options(&options)?,
-                        )
-                        .await?,
-                );
-                AccountService::new(client, context.store.clone())
+                AccountService::new(client.clone(), context.store.clone())
                     .inspect(signer.as_ref())
                     .await?;
+            }
+            if profiles {
+                return Ok(
+                    crate::commands::account::mutation::profiles_listing_from_client(
+                        &context, &client,
+                    ),
+                );
             }
             local(&context, signer.as_ref(), name, verify).await
         }
@@ -277,9 +292,9 @@ async fn remove(
 /// Confirm from local metadata before discovery, then let the protocol service persist
 /// its intent under the operation lock. No unknown account URL is recovered implicitly.
 async fn deactivate(
-    context: CliContext,
+    context: &CliContext,
     signer: Arc<dyn JwsSigner>,
-    options: AccountArgs,
+    options: &AccountArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
     let thumbprint = signer.jwk()?.thumbprint()?;
@@ -298,13 +313,13 @@ async fn deactivate(
     {
         aster_acme_core::account::AccountAction::AlreadyDeactivated => {
             return Ok(AccountReport::Deactivated {
-                name: context.name,
+                name: context.name.clone(),
                 verified: false,
                 account: aster_acme::account::AcmeAccount {
                     key_algorithm: record.key_algorithm,
                     times: record.times,
                     account_id: record.account_id,
-                    directory_url: context.directory,
+                    directory_url: context.directory.clone(),
                     account_url,
                     status: aster_acme_core::protocol::AccountStatus::Deactivated,
                     contacts: record.server_contacts.unwrap_or_default(),
@@ -325,7 +340,7 @@ async fn deactivate(
     }
     crate::common::terminal::confirm_action(
         &format!(
-            "Permanently deactivate account\n  Name: {}\n  CA: {}\n  Account URL: {}\n\nThis cannot be undone.\nThe account key will no longer authorize ACME requests.\nLocal key and metadata will be retained.",
+            "Permanently deactivate account\n  Name: {}\n  CA: {}\n  Account URL: {}\n\nThis cannot be undone.\nThe account key will no longer authorize ACME requests.\nAfter the CA confirms deactivation, the local key and metadata are deleted as part of this command.",
             crate::common::output::safe(&context.name),
             crate::common::output::safe(context.directory.as_str()),
             crate::common::output::safe(account_url.as_str()),
@@ -334,13 +349,17 @@ async fn deactivate(
         options.yes,
         &cli.output,
     )?;
-    let transport = context.transport_options(&options)?;
-    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
-    let account = AccountService::new(client, context.store)
+    let transport = context.transport_options(options)?;
+    let client = Arc::new(
+        cli.http
+            .discover(context.directory.clone(), transport)
+            .await?,
+    );
+    let account = AccountService::new(client, context.store.clone())
         .deactivate(signer.as_ref())
         .await?;
     Ok(AccountReport::Deactivated {
-        name: context.name,
+        name: context.name.clone(),
         account,
         verified: true,
     })
@@ -441,6 +460,7 @@ async fn remote(
     let interactive = crate::common::terminal::interactive(options.json);
     let account_user_agent = options.user_agent.clone();
     let mut persist_contacts = !options.contact.is_empty();
+    let requested_profile_flag = options.profile.clone();
     let thumbprint = signer.jwk()?.thumbprint()?;
     let saved = context.store.load(&context.directory, &thumbprint).await?;
     if matches!(operation, Operation::Register)
@@ -456,10 +476,9 @@ async fn remote(
             context.config.contact.clone(),
         )?),
         Operation::Recover
-        | Operation::Deactivate
         | Operation::Show { .. }
-        | Operation::Switch
-        | Operation::Remove => None,
+        | Operation::Default
+        | Operation::Remove { .. } => None,
     };
     if let Some(registration) = &mut registration {
         // Existing local input is preferable to asking again when no global default exists.
@@ -482,7 +501,8 @@ async fn remote(
         account_user_agent,
     )
     .await?;
-    let client = Arc::new(cli.http.discover(context.directory, transport).await?);
+    let directory = context.directory.clone();
+    let client = Arc::new(cli.http.discover(directory.clone(), transport).await?);
     if let Some(registration) = &mut registration {
         if saved
             .as_ref()
@@ -511,6 +531,38 @@ async fn remote(
             &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
         )?;
     }
+    // Draft-ietf-acme-profiles
+    // (https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles): validate
+    // an explicit default profile before creating the account, and offer the
+    // advertised list interactively. The choice is local metadata; the CA is
+    // never told about it.
+    let mut requested_profile = requested_profile_flag.clone();
+    if matches!(operation, Operation::Register) {
+        let advertised = client.directory().meta.profiles.clone();
+        if let Some(profile) = &requested_profile {
+            match &advertised {
+                None => {
+                    return Err(format!(
+                        "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved. Register without --profile, then set it with account update --profile once the CA advertises profiles."
+                    )
+                    .into());
+                }
+                Some(advertised) if !advertised.contains_key(profile) => {
+                    return Err(format!(
+                        "CA directory does not advertise profile {profile:?}; available: {}",
+                        advertised.keys().cloned().collect::<Vec<_>>().join(", ")
+                    )
+                    .into());
+                }
+                Some(_) => {}
+            }
+        } else if interactive {
+            requested_profile = crate::commands::account::interaction::profile_choice(
+                advertised.as_ref(),
+                &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
+            )?;
+        }
+    }
     let auto_accept_requested = registration
         .as_ref()
         .is_some_and(|options| options.auto_accept_terms_updates);
@@ -533,6 +585,7 @@ async fn remote(
         .is_some_and(|record| record.account_url.is_some())
         && terms_changed_before_registration
         && (auto_accept_requested || auto_accept_already_authorized);
+    let store = context.store.clone();
     let service = AccountService::new(client, context.store);
     let account = match operation {
         Operation::Register => {
@@ -544,7 +597,7 @@ async fn remote(
                 .await?
         }
         Operation::Recover => service.recover(signer.as_ref()).await?,
-        Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
+        Operation::Show { .. } | Operation::Default | Operation::Remove { .. } => {
             return Err("Local command was dispatched to the network executor.".into());
         }
     };
@@ -558,10 +611,24 @@ async fn remote(
             crate::commands::account::report::RemoteAction::Register
         }
         Operation::Recover => crate::commands::account::report::RemoteAction::Recover,
-        Operation::Show { .. } | Operation::Deactivate | Operation::Switch | Operation::Remove => {
+        Operation::Show { .. } | Operation::Default | Operation::Remove { .. } => {
             return Err("Unexpected remote action.".into());
         }
     };
+    // Draft-ietf-acme-profiles: persist the operator's default-profile choice
+    // selected above; local metadata only, never transmitted to the CA.
+    if matches!(operation, Operation::Register)
+        && let Some(profile) = &requested_profile
+    {
+        let thumbprint = signer.jwk()?.thumbprint()?;
+        let lease = store.lock_account(&directory, &thumbprint).await?;
+        let mut record = store
+            .load(&directory, &thumbprint)
+            .await?
+            .ok_or("Local account identity record is missing.")?;
+        record.preferred_profile = Some(profile.clone());
+        AccountStore::save(store.as_ref(), &record, &lease).await?;
+    }
     Ok(AccountReport::Remote {
         action,
         name,

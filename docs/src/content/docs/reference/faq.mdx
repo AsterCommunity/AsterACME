@@ -53,7 +53,7 @@ reload 进程可能已经执行(超时/取消时不保证进程边界清晰)。�
 
 ### 如何吊销一台已经丢失账户的机器上的证书?
 
-用 `cert revoke --sign-with certificate-key`:它使用本机保存的证书私钥,不需要 ACME 账户。账户疑似泄露时,在还能访问账户的机器上 `account rotate-key` / `account deactivate`;两张路径互不依赖。
+用 `cert revoke --sign-with certificate-key`:它使用本机保存的证书私钥,不需要 ACME 账户。账户疑似泄露时,在还能访问账户的机器上 `account rotate-key` / `account remove --deactivate`;两张路径互不依赖。
 
 ### 支持 staging 环境吗?
 

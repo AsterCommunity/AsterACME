@@ -74,7 +74,7 @@ register 的无名称交互改为先选择新建/继续，默认新建，仅继�
 
 协议抽离新增 5 项 wire 契约测试，验证字段省略、contact 缺省/空值、身份互斥、EAB 无 nonce、扩展/嵌套 problem、自定义 URL 精确保持；客户端新增 directory 自定义路径与 Location/query 端点签名验收，不假定 /account 路径。当前共 105 项测试。测试 fixture 仍可构造原始 JSON 来独立验证线上边界和非法响应，产品请求/响应和 CLI 输出不使用 json! 拼装。
 
-生产 CA provider/URL 表迁入 protocol，新增 Provider 名称、Serde、URL 和未知值边界测试；CLI 只验证输入适配与冲突规则。当前共 106 项测试。账户命令帮助顺序为 list/show/switch/register/recover/deactivate，依声明排列无 display_order。
+生产 CA provider/URL 表迁入 protocol，新增 Provider 名称、Serde、URL 和未知值边界测试；CLI 只验证输入适配与冲突规则。当前共 106 项测试。（历史记录，2026-11 命令面重构前）账户命令帮助顺序为 list/show/switch/register/recover/deactivate；重构后为 list/show/default/register/recover/update/rotate-key/remove，历史结论只证明当时形态。
 
 自动化与 CLI 收尾（当前 116 项测试）：单账户 register/recover/show/switch/deactivate/remove 统一位置 NAME 与 --name，冲突/非法名称在解析阶段拒绝。list 的 --verify/HTTP 参数组合、失败后继续、结构化逐项结果与非零退出码有测试；默认列表无需密钥/HTTP，NAME 标记列、Unicode 可见宽度补齐和默认高亮有呈现测试。deactivate 确认详情分行，问题简短；修改类成功摘要、异常状态保留、show/JSON 完整字段均验证。
 

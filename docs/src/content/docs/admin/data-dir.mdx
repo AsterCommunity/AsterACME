@@ -10,8 +10,8 @@ description: 默认位置、目录布局、config.toml、备份与迁移。
 | 平台 | 路径 |
 | --- | --- |
 | macOS | `~/Library/Application Support/com.astercosm.acme` |
-| Linux | `~/.local/share/com.astercosm.acme` |
-| Windows | `%APPDATA%\AsterCosm\acme` |
+| Linux | `~/.config/com.astercosm.acme` |
+| Windows | `%APPDATA%\com.astercosm.acme\config` |
 
 `--data-dir PATH` 或环境变量 `ASTER_ACME_DATA_DIR` 指定其他根目录;命令行参数优先于环境变量。容器镜像固定 `/data`。`version`/`help` 不加载状态目录。
 
@@ -62,3 +62,19 @@ CLI 显式参数优先于配置,配置缺省回退内置默认;CLI 不把单次�
 - 同时运行的两个实例必须使用不同 data-dir;同一 data-dir 的并发由文件锁协调
 
 预发布版本(0.1.0-alpha.x)的内部格式(`operation journal`、吊销记录等)可能在版本间演进:**升级前备份 data-dir**,格式不兼容时工具会失败关闭,不会猜测或迁移旧字段。
+
+## 从 `~/.config/acme` 迁移(Linux)
+
+0.1.0-alpha 起 Linux 默认目录改为 `~/.config/com.astercosm.acme`,旧目录不会自动迁移。按目标目录状态分三种情况:
+
+| 目标 `~/.config/com.astercosm.acme` | 操作 |
+| --- | --- |
+| 不存在 | 直接 `mv ~/.config/acme ~/.config/com.astercosm.acme` |
+| 已存在但为空 | 先 `rmdir ~/.config/com.astercosm.acme` 再 `mv` |
+| 已存在且非空 | **不得覆盖**:改用 `--data-dir ~/.config/acme` 指回旧目录,或逐文件手动合并 |
+
+注意:
+
+- 设置了 `XDG_CONFIG_HOME` 时,旧/新目录都在该变量之下(如 `/srv/config/acme` → `/srv/config/com.astercosm.acme`);`~/.config` 只是不设该变量时的回退
+- 迁移后用 `account list` 与 `cert list` 核对库存,再跑一轮 `daemon run-once`
+- 也可不改目录,始终用 `--data-dir ~/.config/acme` 或 `ASTER_ACME_DATA_DIR` 指向旧位置

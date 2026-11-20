@@ -1,4 +1,4 @@
-//! RFC 8555 HTTPS discovery, bounded responses, nonce consumption and signed POSTs.
+//! [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) HTTPS discovery, bounded responses, nonce consumption and signed POSTs.
 
 use std::{
     collections::VecDeque,
@@ -29,7 +29,7 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 const NONCE_POOL_CAPACITY: usize = 64;
 
 /// Status eligible for definitive rejection when accompanied by an ACME problem.
-/// RFC 9110 §15.5.9 permits retrying 408 and RFC 6585 §4 defines 429 throttling.
+/// [RFC 9110 §15.5.9](https://datatracker.ietf.org/doc/html/rfc9110#section-15.5.9) permits retrying 408 and [RFC 6585 §4](https://datatracker.ietf.org/doc/html/rfc6585#section-4) defines 429 throttling.
 /// Keeping both nonterminal is our conservative recovery policy, not a claim
 /// that either response proves the origin applied the mutation. Endpoints still
 /// own problem-specific transitions and must preserve prior uncertain attempts.
@@ -128,7 +128,7 @@ pub struct TransportOptions {
     pub bad_nonce_retries: u8,
     /// Permit numeric loopback HTTP (mock/Pebble testing only).
     pub allow_loopback_http: bool,
-    /// Optional RFC 9110 product token/comment string. Defaults to this crate's name/version.
+    /// Optional [RFC 9110](https://datatracker.ietf.org/doc/html/rfc9110) product token/comment string. Defaults to this crate's name/version.
     pub user_agent: Option<String>,
 }
 
@@ -264,7 +264,7 @@ impl AcmeClient {
         &self.directory_url
     }
 
-    /// Unauthenticated bounded GET for RFC 9773; no JWS or replay nonce is required.
+    /// Unauthenticated bounded GET for [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773); no JWS or replay nonce is required.
     pub(crate) async fn get(&self, url: &AcmeUrl) -> Result<AcmeResponse, TransportError> {
         check_transport(url, &self.options)?;
         let response = read_response(

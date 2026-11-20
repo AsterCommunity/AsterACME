@@ -575,7 +575,11 @@ fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_ret
         "unrelated.example.net",
         "extra.example.org",
     ]
-    .map(|name| aster_acme::identifier::DnsIdentifier::new(name).unwrap())
+    .map(|name| {
+        aster_acme::identifier::Identifier::Dns(
+            aster_acme::identifier::DnsIdentifier::new(name).unwrap(),
+        )
+    })
     .to_vec();
     request.is_in_use = true;
     let label = crate::commands::cert::selection::choice_label(&request);
@@ -587,7 +591,7 @@ fn selectors_and_table_share_san_summary_and_in_use_marker_with_full_details_ret
         crate::common::session::Format::plain(false),
     )
     .unwrap();
-    assert!(table.contains("DOMAINS"));
+    assert!(table.contains("IDENTIFIERS"));
     assert!(!table.contains("IN_USE"));
     assert!(table.contains("example.com, *.example.com, api.example.com, +2"));
     let details = crate::commands::cert::render::inspection::show(

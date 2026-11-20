@@ -3,19 +3,19 @@ title: Validation Methods
 description: Comparing, choosing, and configuring the seven validation implementations.
 ---
 
-`cert issue -c` selects the validation implementation. The protocol layer is a standard ACME challenge; the implementation layer decides **who publishes the validation material**. Two questions drive the choice: do you need wildcards (DNS protocols only), and do you need unattended renewal (automated implementations).
+`cert issue -c` selects the validation implementation. The protocol layer is a standard ACME challenge; the implementation layer decides **who publishes the validation material**. Three questions drive the choice: do you need wildcards (DNS protocols only), is the identifier a DNS name or an IP address (`-d` takes domain names, `--ip` takes RFC 8738 IP literals), and do you need unattended renewal (automated implementations).
 
 ## Comparison
 
-| Implementation | Protocol | Material published by | Wildcards | Unattended renewal | Typical use |
-| --- | --- | --- | --- | --- | --- |
-| `dns_provider` | DNS-01 | DNS API automatically | ✓ | ✓ | Supported DNS provider, full automation |
-| `manual_dns` | DNS-01 | You publish TXT records | ✓ | Reusable while values unchanged | One-off issuance; no DNS API automation |
-| `dns_persist` | DNS-PERSIST-01 (draft) | You configure long-lived TXT | ✓ | ✓ (reuses the same TXT) | Wildcards without handing the client DNS API credentials |
-| `webroot` | HTTP-01 | Written into the web root | ✗ | ✓ | Existing HTTP service with a stable webroot |
-| `standalone` | HTTP-01 | Temporary listener on port 80 | ✗ | ✓ | No existing HTTP service |
-| `tls_alpn` | TLS-ALPN-01 | Temporary listener on port 443 | ✗ | ✓ | Port 80 busy, port 443 available |
-| `manual_http` | HTTP-01 | You place the response file | ✗ | Reusable after first confirmation | Environments where files cannot be written automatically |
+| Implementation | Protocol | Material published by | Wildcards | IP identifiers | Unattended renewal | Typical use |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dns_provider` | DNS-01 | DNS API automatically | ✓ | — | ✓ | Supported DNS provider, full automation |
+| `manual_dns` | DNS-01 | You publish TXT records | ✓ | — | Reusable while values unchanged | One-off issuance; no DNS API automation |
+| `dns_persist` | DNS-PERSIST-01 (draft) | You configure long-lived TXT | ✓ | — | ✓ (reuses the same TXT) | Wildcards without handing the client DNS API credentials |
+| `webroot` | HTTP-01 | Written into the web root | ✗ | ✓ | ✓ | Existing HTTP service with a stable webroot |
+| `standalone` | HTTP-01 | Temporary listener on port 80 | ✗ | ✓ | ✓ | No existing HTTP service |
+| `tls_alpn` | TLS-ALPN-01 | Temporary listener on port 443 | ✗ | ✓ | ✓ | Port 80 busy, port 443 available |
+| `manual_http` | HTTP-01 | You place the response file | ✗ | ✓ | Reusable after first confirmation | Environments where files cannot be written automatically |
 
 ## DNS implementations
 
@@ -69,3 +69,18 @@ The resident daemon and `cert renew --all` auto-renew only implementations that 
 ## Advisory prechecks
 
 CLI builds with default features include advisory prechecks: CAA record inspection (before newOrder), DNS TXT local visibility, and HTTP URL reachability (after the challenge is published). Prechecks only produce WARN/INFO observations and **never replace CA validation** — DNS failures, CAA mismatches, and timeouts warn and continue, with the CA as the sole arbiter. CLI builds with `--no-default-features` and library default builds exclude prechecks.
+
+## IP identifiers (RFC 8738)
+
+DNS methods (`dns_provider`, `manual_dns`, `dns_persist`) never validate IP addresses. HTTP-01 and TLS-ALPN-01 accept both IPv4 and IPv6 identifiers:
+
+```sh
+# IPv4: the default 0.0.0.0:80 listener is fine
+aster-acme cert issue --ip 203.0.113.10 -c standalone
+# IPv6: pass the dual-stack listen address explicitly or the CA cannot connect
+aster-acme cert issue --ip 2001:db8:0:f00::1 -c standalone --listen-address '[::]:80'
+```
+
+- IP identifiers skip DNS resolution: HTTP-01 uses the IP literal as the Host header (IPv6 bracketed), and TLS-ALPN-01 answers the reverse mapping name (IN-ADDR.ARPA/IP6.ARPA) with an iPAddress SAN certificate.
+- The CA must support RFC 8738 to issue for IP addresses; Let's Encrypt additionally requires `--profile shortlived` (~6-day validity, unattended renewal expected). CA rejections (unsupported identifier type, disallowing profile, non-routable address) are preserved verbatim as diagnosable errors. The CAA precheck reports IP identifiers as not applicable.
+- Default certificate names prefix IP primaries with `ip-` (for example `ip-203.0.113.10`).

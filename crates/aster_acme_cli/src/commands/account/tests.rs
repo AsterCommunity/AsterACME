@@ -37,6 +37,8 @@ async fn remove_requires_confirmation_clears_matching_default_and_never_connects
         .unwrap();
     let args = |yes| RemoveArgs {
         yes,
+        deactivate: false,
+        network_only_http: HttpArgs::default(),
         target: crate::commands::account::args::LocalTargetArgs {
             identity: crate::commands::account::args::NameArgs {
                 positional_name: Some("personal".into()),
@@ -180,12 +182,11 @@ fn all_single_account_commands_share_positional_and_named_targets() {
     use crate::commands::account::args::AccountArgs;
     for command in [
         "show",
-        "switch",
+        "default",
         "register",
         "recover",
-        "deactivate",
         "remove",
-        "update-contact",
+        "update",
         "rotate-key",
     ] {
         for target in [vec!["work"], vec!["--name", "work"]] {
@@ -200,11 +201,10 @@ fn all_single_account_commands_share_positional_and_named_targets() {
                 AccountCommand::Show { options, .. } | AccountCommand::Recover(options) => {
                     options.into()
                 }
-                AccountCommand::Switch(options) => options.into(),
+                AccountCommand::Default(options) => options.into(),
                 AccountCommand::Remove(options) => options.into(),
                 AccountCommand::Register(options) => options.into(),
-                AccountCommand::Deactivate(options) => options.into(),
-                AccountCommand::UpdateContact(options) => options.network.into(),
+                AccountCommand::Update(options) => options.network.into(),
                 AccountCommand::RotateKey(options) => options.network.into(),
                 AccountCommand::List(_) => panic!("list has no target"),
             };
@@ -238,7 +238,7 @@ fn list_and_deactivate_expose_only_their_own_arguments() {
         Args::try_parse_from([
             "aster-acme",
             "account",
-            "deactivate",
+            "remove",
             "--name",
             "work",
             "--yes",
@@ -252,7 +252,7 @@ fn list_and_deactivate_expose_only_their_own_arguments() {
         vec!["--eab-kid", "id"],
         vec!["--verify"],
     ] {
-        let mut command = vec!["aster-acme", "account", "deactivate"];
+        let mut command = vec!["aster-acme", "account", "remove"];
         command.extend(flags);
         assert!(Args::try_parse_from(command).is_err());
     }
@@ -370,10 +370,7 @@ async fn empty_list_is_actionable_and_stale_default_is_explicit() {
 
 #[tokio::test]
 async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_failure() {
-    use crate::commands::account::{
-        args::{AccountArgs, DeactivateArgs},
-        execute,
-    };
+    use crate::commands::account::{args::RemoveArgs, execute};
     use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 
     use aster_acme_cli_storage::account::CliAccountStore;
@@ -405,19 +402,26 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
         temp.path().join("accounts/default/account-key.pk8"),
     ];
     let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
-    let args = |yes| DeactivateArgs {
+    let args = |yes| RemoveArgs {
         yes,
-        network: AccountArgs {
-            data_dir: Some(temp.path().into()),
-            name: Some("default".into()),
-            json: true,
+        deactivate: true,
+        network_only_http: crate::common::args::HttpArgs {
             request_timeout: Some(1),
-            ..AccountArgs::default()
-        }
-        .into(),
+            ..Default::default()
+        },
+        target: crate::commands::account::args::LocalTargetArgs {
+            identity: crate::commands::account::args::NameArgs {
+                positional_name: None,
+                name: Some("default".into()),
+            },
+            local: LocalArgs {
+                data_dir: Some(temp.path().into()),
+                json: true,
+            },
+        },
     };
     let error = execute::execute(
-        AccountCommand::Deactivate(args(false)),
+        AccountCommand::Remove(args(false)),
         &crate::common::context::CommandContext::new(true),
     )
     .await
@@ -448,7 +452,7 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
     });
     assert!(
         execute::execute(
-            AccountCommand::Deactivate(args(true)),
+            AccountCommand::Remove(args(true)),
             &crate::common::context::CommandContext::new(true)
         )
         .await
@@ -464,10 +468,7 @@ async fn deactivate_requires_confirmation_and_retains_identity_on_discovery_fail
 
 #[tokio::test]
 async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() {
-    use crate::commands::account::{
-        args::{AccountArgs, DeactivateArgs},
-        execute, render,
-    };
+    use crate::commands::account::{args::RemoveArgs, execute, render};
     use aster_acme::storage::account::{AccountKeyStore, AccountStore};
 
     use aster_acme_cli_storage::account::CliAccountStore;
@@ -490,15 +491,20 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
     record.deactivation = DeactivationState::Confirmed;
     store.save(&record).await.unwrap();
     let report = execute::execute(
-        AccountCommand::Deactivate(DeactivateArgs {
-            yes: false,
-            network: AccountArgs {
-                name: Some("old".into()),
-                data_dir: Some(temp.path().into()),
-                json: true,
-                ..AccountArgs::default()
-            }
-            .into(),
+        AccountCommand::Remove(RemoveArgs {
+            yes: true,
+            deactivate: true,
+            network_only_http: HttpArgs::default(),
+            target: crate::commands::account::args::LocalTargetArgs {
+                identity: crate::commands::account::args::NameArgs {
+                    positional_name: None,
+                    name: Some("old".into()),
+                },
+                local: LocalArgs {
+                    data_dir: Some(temp.path().into()),
+                    json: true,
+                },
+            },
         }),
         &crate::common::context::CommandContext::new(true),
     )
@@ -508,7 +514,7 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
     assert_eq!(render::tests::json_value(&report)["deactivated"], true);
     assert!(
         execute::execute(
-            AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+            AccountCommand::Default(crate::commands::account::args::LocalTargetArgs {
                 identity: crate::commands::account::args::NameArgs {
                     positional_name: Some("old".into()),
                     ..crate::commands::account::args::NameArgs::default()
@@ -523,22 +529,21 @@ async fn confirmed_deactivation_is_local_and_cannot_be_switched_to_active_use() 
         .await
         .is_err()
     );
+    // `remove --deactivate` deletes the local identity entirely: the CA-side
+    // deactivation is already confirmed, so nothing can be switched back on.
     let listed = aster_acme_cli_storage::inventory::query_accounts(
         temp.path().into(),
         AccountQuery::default(),
     )
     .await
     .unwrap();
-    assert!(!listed[0].usable);
-    assert_eq!(
-        listed[0].last_status,
-        Some(aster_acme_core::protocol::AccountStatus::Deactivated)
-    );
+    assert!(listed.is_empty());
+    assert!(!temp.path().join("accounts/old").exists());
 }
 
 #[test]
 fn command_specific_options_are_rejected_by_unrelated_commands() {
-    for command in ["recover", "show", "switch"] {
+    for command in ["recover", "show", "default"] {
         for arguments in [
             vec!["--accept-terms"],
             vec!["--auto-accept-new-terms"],
@@ -560,7 +565,7 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
         "--ca-directory",
     ] {
         assert!(
-            Args::try_parse_from(["aster-acme", "account", "switch", "work", flag, "value"])
+            Args::try_parse_from(["aster-acme", "account", "default", "work", flag, "value"])
                 .is_err()
         );
     }
@@ -654,16 +659,17 @@ impl From<crate::commands::account::args::AccountArgs>
             contact,
             eab_kid,
             eab_key_file,
+            profile: None,
         }
     }
 }
 
 #[tokio::test]
-async fn switch_without_a_name_in_automation_fails_without_selecting_the_default() {
+async fn default_without_a_name_in_automation_fails_without_selecting_the_default() {
     use crate::commands::account::{args::AccountArgs, execute};
     let temp = tempfile::tempdir().unwrap();
     let error = execute::execute(
-        AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+        AccountCommand::Default(crate::commands::account::args::LocalTargetArgs {
             identity: crate::commands::account::args::NameArgs {
                 positional_name: None,
                 ..crate::commands::account::args::NameArgs::default()
@@ -680,7 +686,7 @@ async fn switch_without_a_name_in_automation_fails_without_selecting_the_default
     .await
     .err()
     .unwrap();
-    assert!(error.to_string().contains("switch <NAME>"));
+    assert!(error.to_string().contains("default <NAME>"));
     assert!(!temp.path().join("accounts").exists());
 }
 
@@ -853,7 +859,7 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     };
     assert!(
         execute::execute(
-            AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+            AccountCommand::Default(crate::commands::account::args::LocalTargetArgs {
                 identity: crate::commands::account::args::NameArgs {
                     positional_name: Some("work".into()),
                     ..crate::commands::account::args::NameArgs::default()
@@ -871,7 +877,7 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     record.account_url = Some(AcmeUrl::new("https://custom.invalid/account/1").unwrap());
     store.save(&record).await.unwrap();
     let result = execute::execute(
-        AccountCommand::Switch(crate::commands::account::args::LocalTargetArgs {
+        AccountCommand::Default(crate::commands::account::args::LocalTargetArgs {
             identity: crate::commands::account::args::NameArgs {
                 positional_name: Some("work".into()),
                 ..crate::commands::account::args::NameArgs::default()
@@ -896,6 +902,7 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
     let result = execute::execute(
         AccountCommand::Show {
             verify: false,
+            profiles: false,
             options: options().into(),
         },
         &crate::common::context::CommandContext::new(true),
@@ -911,6 +918,7 @@ async fn switch_edits_config_and_uses_the_named_accounts_ca_offline() {
         execute::execute(
             AccountCommand::Show {
                 verify: false,
+                profiles: false,
                 options: wrong_ca.into()
             },
             &crate::common::context::CommandContext::new(true)
@@ -963,7 +971,7 @@ fn verify_is_an_explicit_show_only_option() {
         args.command,
         Command::Account { command } if matches!(command, AccountCommand::Show { verify: false, .. })
     ));
-    for command in ["register", "recover", "switch"] {
+    for command in ["register", "recover", "default"] {
         assert!(Args::try_parse_from(["aster-acme", "account", command, "--verify"]).is_err());
     }
 }
@@ -1021,6 +1029,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
                     deactivation: aster_acme_core::account::DeactivationState::NotRequested,
                     key_rotation: None,
                     accepted_terms_url: None,
+                    preferred_profile: None,
                     auto_accept_terms_updates: false,
                     state,
                 })
@@ -1031,6 +1040,7 @@ async fn show_reads_all_local_stages_without_connecting_or_changing_metadata() {
         let report = execute::execute(
             AccountCommand::Show {
                 verify: false,
+                profiles: false,
                 options: AccountArgs {
                     ca_directory: Some(directory.as_str().into()),
                     data_dir: Some(temp.path().into()),
@@ -1105,6 +1115,7 @@ async fn show_verify_attempts_network_and_retains_local_data_on_failure() {
         execute::execute(
             AccountCommand::Show {
                 verify: true,
+                profiles: false,
                 options: AccountArgs {
                     ca_directory: Some(directory.as_str().into()),
                     data_dir: Some(temp.path().into()),
@@ -1194,14 +1205,14 @@ fn parser_requires_commands_and_bounds_timeout_and_eab_pairs() {
         Args::try_parse_from([
             "aster-acme",
             "account",
-            "switch",
+            "default",
             "work",
             "--data-dir",
             "data"
         ])
         .is_ok()
     );
-    assert!(Args::try_parse_from(["aster-acme", "account", "switch"]).is_ok());
+    assert!(Args::try_parse_from(["aster-acme", "account", "default"]).is_ok());
 }
 
 #[tokio::test]
@@ -1211,10 +1222,9 @@ async fn existing_account_commands_reject_missing_names_before_prompts_keys_or_h
     for command in [
         "show",
         "recover",
-        "switch",
-        "deactivate",
+        "default",
         "remove",
-        "update-contact",
+        "update",
         "rotate-key",
     ] {
         let parsed = Args::try_parse_from([

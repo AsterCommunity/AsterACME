@@ -26,7 +26,7 @@ fn template() -> DocumentMut {
         (
             "default_account",
             value("default"),
-            "\n# Default local account; changed by account switch.\n",
+            "\n# Default local account; changed by account default.\n",
         ),
         (
             "request_timeout",
@@ -256,7 +256,11 @@ pub(crate) struct Config {
 
 /// Resolve platform paths like gcop-rs, keeping config and private state under one root.
 pub(crate) fn default_data_dir() -> CliResult<PathBuf> {
-    directories::ProjectDirs::from("com", "astercosm", "acme")
+    // A uniform reverse-DNS project path on every platform: the directories
+    // crate derives Linux/XDG paths from the application name alone and would
+    // otherwise produce a bare `acme` directory there, diverging from the
+    // macOS/Windows identifier `com.astercosm.acme`.
+    directories::ProjectDirs::from_path(std::path::PathBuf::from("com.astercosm.acme"))
         .map(|dirs| dirs.config_dir().to_path_buf())
         .ok_or_else(|| {
             "Cannot determine the default state directory; pass --data-dir <PATH>.".into()
@@ -362,9 +366,21 @@ mod tests {
     }
 
     #[test]
-    fn default_directory_uses_the_platform_reverse_domain_identity() {
-        let expected = directories::ProjectDirs::from("com", "astercosm", "acme").unwrap();
+    fn default_directory_is_the_uniform_reverse_domain_path() {
+        let expected =
+            directories::ProjectDirs::from_path(std::path::PathBuf::from("com.astercosm.acme"))
+                .unwrap();
         assert_eq!(default_data_dir().unwrap(), expected.config_dir());
+        // Guard against the directories crate changing its layout: the path
+        // must keep the uniform reverse-DNS suffix on every platform.
+        #[cfg(target_os = "windows")]
+        assert!(
+            default_data_dir()
+                .unwrap()
+                .ends_with(std::path::Path::new("com.astercosm.acme").join("config"))
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert!(default_data_dir().unwrap().ends_with("com.astercosm.acme"));
     }
 
     #[test]

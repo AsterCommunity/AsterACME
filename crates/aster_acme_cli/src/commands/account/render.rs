@@ -81,7 +81,76 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
         AccountReport::Switched { name, .. } => {
             success(&format!("Default account: {}.", safe(name)), color)
         }
+        AccountReport::Profiles {
+            directory,
+            profiles,
+        } => profiles_text(directory, profiles.as_ref()),
+        AccountReport::ProfilePreference {
+            name,
+            previous,
+            current,
+        } => profile_preference_text(name, previous.as_ref(), current.as_ref(), color),
     })
+}
+
+/// Draft-ietf-acme-profiles listing; an empty advertisement states the CA default.
+fn profiles_text(
+    directory: &aster_acme_protocol::url::AcmeUrl,
+    profiles: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
+    let Some(map) = profiles.filter(|map| !map.is_empty()) else {
+        return format!(
+            "Certificate profiles: the CA at {} advertises none; new orders use the CA default.",
+            safe(directory.as_str())
+        );
+    };
+    let mut text = String::from("Certificate profiles advertised by ");
+    text.push_str(&safe(directory.as_str()));
+    text.push(':');
+    for (name, description) in map {
+        let (name, description) = (name.as_str(), description.as_str());
+        text.push_str("\n  ");
+        text.push_str(&safe(name));
+        if !description.is_empty() {
+            text.push_str(" — ");
+            text.push_str(&safe(description));
+        }
+    }
+    text.push_str("\nSet an account default with account update --profile, or select per issue with cert issue --profile.");
+    text
+}
+
+/// Preference change text; cleared and set states share one honest sentence.
+fn profile_preference_text(
+    name: &str,
+    previous: Option<&String>,
+    current: Option<&String>,
+    color: bool,
+) -> String {
+    let describe = |value: Option<&String>| match value {
+        Some(profile) => safe(profile),
+        None => "(none; the CA default applies)".to_owned(),
+    };
+    if current.is_none() {
+        success(
+            &format!(
+                "Cleared account {} default profile (was {}).",
+                safe(name),
+                describe(previous)
+            ),
+            color,
+        )
+    } else {
+        success(
+            &format!(
+                "Account {} default profile: {} (was {}). Explicit cert issue --profile still wins; saved certificates keep their own selection.",
+                safe(name),
+                describe(current),
+                describe(previous)
+            ),
+            color,
+        )
+    }
 }
 
 fn success(message: &str, color: bool) -> String {
@@ -569,6 +638,7 @@ pub(super) mod tests {
             deactivation: DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            preferred_profile: None,
             auto_accept_terms_updates: false,
             state: AccountRecordState::Registered,
         };
@@ -607,4 +677,93 @@ pub(super) mod tests {
         }
         assert_eq!(labels[0], labels[1]);
     }
+    #[test]
+    fn profiles_and_preference_reports_serialize_with_explicit_fields() {
+        use aster_acme_protocol::url::AcmeUrl;
+        let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+        let profiles = std::collections::BTreeMap::from([
+            ("classic".to_owned(), String::new()),
+            (
+                "shortlived".to_owned(),
+                "https://ca.example/shortlived".to_owned(),
+            ),
+        ]);
+        let json = json_value(&AccountReport::Profiles {
+            directory: directory.clone(),
+            profiles: Some(profiles),
+        });
+        assert_eq!(json["directory"], "https://ca.example/directory");
+        assert_eq!(json["profiles"]["classic"], "");
+        assert_eq!(
+            json["profiles"]["shortlived"],
+            "https://ca.example/shortlived"
+        );
+        let json = json_value(&AccountReport::Profiles {
+            directory: directory.clone(),
+            profiles: None,
+        });
+        assert_eq!(json["profiles"], serde_json::Value::Null);
+
+        let json = json_value(&AccountReport::ProfilePreference {
+            name: "work".to_owned(),
+            previous: Some("classic".to_owned()),
+            current: None,
+        });
+        assert_eq!(json["name"], "work");
+        assert_eq!(json["previous"], "classic");
+        assert_eq!(json["current"], serde_json::Value::Null);
+    }
+}
+
+#[test]
+fn profiles_listing_reports_advertised_names_and_descriptions() {
+    use aster_acme_protocol::url::AcmeUrl;
+    use std::collections::BTreeMap;
+    let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+    let profiles = BTreeMap::from([
+        (
+            "classic".to_owned(),
+            "https://ca.example/docs#classic".to_owned(),
+        ),
+        ("shortlived".to_owned(), String::new()),
+    ]);
+    let text = render(
+        &AccountReport::Profiles {
+            directory: directory.clone(),
+            profiles: Some(profiles),
+        },
+        Format::plain(false),
+    )
+    .unwrap();
+    assert!(text.contains("classic — https://ca.example/docs#classic"));
+    assert!(text.contains("shortlived"));
+    assert!(text.contains("account update --profile") && text.contains("cert issue --profile"));
+    // No advertisement: the CA default is stated explicitly, not assumed.
+    let text = render(
+        &AccountReport::Profiles {
+            directory,
+            profiles: None,
+        },
+        Format::plain(false),
+    )
+    .unwrap();
+    assert!(text.contains("advertises none"));
+}
+
+#[test]
+fn profile_preference_text_distinguishes_set_and_clear() {
+    let report = |previous: Option<&str>, current: Option<&str>| AccountReport::ProfilePreference {
+        name: "work".to_owned(),
+        previous: previous.map(str::to_owned),
+        current: current.map(str::to_owned),
+    };
+    let text = render(
+        &report(Some("classic"), Some("shortlived")),
+        Format::plain(false),
+    )
+    .unwrap();
+    assert!(text.contains("shortlived") && text.contains("(was classic)"));
+    assert!(text.contains("Explicit cert issue --profile still wins"));
+    let text = render(&report(Some("shortlived"), None), Format::plain(false)).unwrap();
+    assert!(text.contains("Cleared account work default profile"));
 }

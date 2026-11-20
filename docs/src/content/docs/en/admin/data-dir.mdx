@@ -10,8 +10,8 @@ State lives in the platform directory for `com.astercosm.acme` by default:
 | Platform | Path |
 | --- | --- |
 | macOS | `~/Library/Application Support/com.astercosm.acme` |
-| Linux | `~/.local/share/com.astercosm.acme` |
-| Windows | `%APPDATA%\AsterCosm\acme` |
+| Linux | `~/.config/com.astercosm.acme` |
+| Windows | `%APPDATA%\com.astercosm.acme\config` |
 
 `--data-dir PATH` or the `ASTER_ACME_DATA_DIR` environment variable selects another root, with the CLI flag taking precedence. Container images pin `/data`. `version` and `help` never load the state directory.
 
@@ -62,3 +62,19 @@ Back up or migrate the whole data-dir as a unit (stop the daemon, copy the direc
 - Two simultaneously running instances must use different data-dirs; concurrency within one data-dir is coordinated by file locks
 
 Internal formats (operation journals, revocation records, and similar) may evolve between pre-release versions (0.1.0-alpha.x): **back up the data-dir before upgrading**. Incompatible formats fail closed — the tools never guess or migrate old fields.
+
+## Migrating from `~/.config/acme` (Linux)
+
+From 0.1.0-alpha the Linux default directory is `~/.config/com.astercosm.acme`; the old directory is not migrated automatically. Handle it by the state of the target directory:
+
+| Target `~/.config/com.astercosm.acme` | Action |
+| --- | --- |
+| Does not exist | `mv ~/.config/acme ~/.config/com.astercosm.acme` |
+| Exists but is empty | `rmdir ~/.config/com.astercosm.acme` first, then `mv` |
+| Exists and is non-empty | **Never overwrite**: point back at the old location with `--data-dir ~/.config/acme`, or merge file-by-file by hand |
+
+Notes:
+
+- With `XDG_CONFIG_HOME` set, both old and new directories live under that root (e.g. `/srv/config/acme` → `/srv/config/com.astercosm.acme`); `~/.config` is only the fallback when unset
+- After migrating, verify inventory with `account list` and `cert list`, then run one `daemon run-once` cycle
+- Alternatively keep the old location and always pass `--data-dir ~/.config/acme` or set `ASTER_ACME_DATA_DIR`

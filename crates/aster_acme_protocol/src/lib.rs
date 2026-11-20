@@ -1,4 +1,4 @@
-//! Typed ACME wire contracts for RFC 8555, RFC 9773, and implemented extensions.
+//! Typed ACME wire contracts for [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555), [RFC 9773](https://datatracker.ietf.org/doc/html/rfc9773), and implemented extensions.
 //!
 //! Resource URLs remain exact, unknown extension data is retained, and protocol
 //! serialization is kept independent of HTTP execution, storage, runtimes, and signing.

@@ -137,6 +137,7 @@ async fn ca_contact_is_optional_and_never_erases_local_registration_input() {
             deactivation: aster_acme_core::account::DeactivationState::NotRequested,
             key_rotation: None,
             accepted_terms_url: None,
+            preferred_profile: None,
             auto_accept_terms_updates: false,
             state: AccountRecordState::RegistrationPending,
         });

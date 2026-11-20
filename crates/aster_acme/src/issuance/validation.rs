@@ -36,8 +36,8 @@ pub enum ValidationRequirement {
     /// TLS-ALPN material is defined even when the product has no executable solver.
     #[serde(rename = "tls-alpn-01")]
     TlsAlpn01 {
-        /// Exact non-wildcard identifier for SNI/SAN.
-        domain: String,
+        /// Exact non-wildcard identifier for SNI/SAN selection.
+        identifier: String,
         /// SHA-256 key authorization digest for the critical acmeIdentifier extension.
         digest: [u8; 32],
     },
@@ -77,13 +77,13 @@ impl ValidationRequirement {
             ChallengeMaterial::Http01(response) => {
                 let path = format!("/.well-known/acme-challenge/{}", response.token.as_str());
                 Self::Http01 {
-                    url: format!("http://{}{path}", response.identifier.value()),
+                    url: format!("http://{}{path}", response.host()),
                     path,
                     content: response.key_authorization.as_str().into(),
                 }
             }
             ChallengeMaterial::TlsAlpn01(response) => Self::TlsAlpn01 {
-                domain: response.identifier.value(),
+                identifier: response.identifier.value(),
                 digest: response.authorization_digest,
             },
         }

@@ -35,11 +35,7 @@ impl IssueService {
         let identifiers = record
             .identifiers
             .iter()
-            .map(|dns| WireIdentifier {
-                kind: "dns".into(),
-                value: dns.value(),
-                extensions: std::collections::BTreeMap::new(),
-            })
+            .map(WireIdentifier::from)
             .collect::<Vec<_>>();
         record.submitted_replaces = match self.client.directory().renewal_info.as_ref() {
             Some(_) => record
@@ -51,6 +47,7 @@ impl IssueService {
         let body = json_payload(&NewOrderRequest {
             identifiers: &identifiers,
             replaces: record.submitted_replaces.as_deref(),
+            profile: record.profile.as_deref(),
         })?;
         record.new_order_intent_saved = true;
         record.phase = IssuancePhase::CreatingOrder;

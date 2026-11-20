@@ -207,6 +207,7 @@ async fn first_acceptance_is_not_an_update_and_delegation_survives_restart_and_c
     let shown = crate::commands::account::execute::execute(
         crate::commands::account::args::AccountCommand::Show {
             verify: false,
+            profiles: false,
             options: crate::commands::account::args::NetworkArgs::from(fixture.options()),
         },
         &CommandContext::new(true),
@@ -398,7 +399,7 @@ async fn contact_updates_preserve_terms_delegation_without_reporting_automatic_a
     let before = fixture.record().await;
     let contacts = vec!["mailto:new@example.com".to_owned()];
     let report = crate::commands::account::mutation::submit_contacts(
-        context,
+        &context,
         signer,
         contacts.clone(),
         TransportOptions {

@@ -4,7 +4,7 @@ use crate::commands::cert::{
     validation::{ValidationMethod, configuration},
 };
 use crate::common::{error::CliResult, session::OutputSession, terminal};
-use aster_acme::identifier::DnsIdentifier;
+use aster_acme::identifier::{DnsIdentifier, IpIdentifier};
 use clap::ValueEnum as _;
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -63,23 +63,64 @@ impl Prompts for TerminalPrompts<'_> {
     }
 }
 
-fn parse_domains(value: &str) -> CliResult<Vec<DnsIdentifier>> {
-    let domains = value
+/// Split interactive input into DNS and IP identifiers. Each token's kind is
+/// unambiguous: only exact IP literals become IP identifiers, and dotted-quad
+/// spellings that are neither canonical IPv4 nor ordinary names are rejected
+/// with guidance instead of a silent reinterpretation.
+fn parse_identifiers(value: &str) -> CliResult<(Vec<DnsIdentifier>, Vec<IpIdentifier>)> {
+    let tokens = value
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|value| !value.is_empty())
-        .map(DnsIdentifier::new)
-        .collect::<Result<Vec<_>, _>>()?;
-    if domains.is_empty()
-        || domains.len() > 100
+        .collect::<Vec<_>>();
+    let mut domains = Vec::new();
+    let mut addresses = Vec::new();
+    for token in tokens {
+        if let Ok(address) = IpIdentifier::new(token) {
+            addresses.push(address);
+            continue;
+        }
+        match DnsIdentifier::new(token) {
+            Ok(domain) => domains.push(domain),
+            Err(error) => {
+                if looks_like_address(token) {
+                    return Err(format!(
+                        "{token} looks like an IP address but is not a canonical IPv4/IPv6 literal (RFC 8738); enter it exactly as an address or use a DNS name"
+                    )
+                    .into());
+                }
+                return Err(error.to_string().into());
+            }
+        }
+    }
+    let total = domains.len() + addresses.len();
+    if total == 0
+        || total > 100
         || domains
             .iter()
             .collect::<std::collections::HashSet<_>>()
             .len()
             != domains.len()
+        || addresses
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != addresses.len()
     {
-        return Err("Enter 1–100 distinct DNS names; the first is the primary domain.".into());
+        return Err(
+            "Enter 1–100 distinct DNS names or bare IP addresses; the first is the primary identifier."
+                .into(),
+        );
     }
-    Ok(domains)
+    Ok((domains, addresses))
+}
+
+/// Dotted-quad or colon-bearing input that the strict parsers both rejected.
+fn looks_like_address(token: &str) -> bool {
+    token.contains(':')
+        || (token.split('.').count() == 4
+            && token
+                .split('.')
+                .all(|label| !label.is_empty() && label.bytes().all(|byte| byte.is_ascii_digit())))
 }
 
 pub(super) async fn complete(
@@ -92,10 +133,8 @@ pub(super) async fn complete(
     }
     if !interactive {
         let method = args.challenge.ok_or("Specify -c/--challenge <METHOD>; validation selection is interactive only on a terminal.")?;
-        if args.domain.is_empty() {
-            return Err(
-                "Specify -d/--domain <DOMAIN> (repeat for SANs), or --resume <CERTIFICATE>.".into(),
-            );
+        if args.domain.is_empty() && args.ip.is_empty() {
+            return Err("Specify -d/--domain <DOMAIN> or --ip <ADDRESS> (repeat for SANs), or --resume <CERTIFICATE>.".into());
         }
         if method == ValidationMethod::DnsProvider {
             if args.webroot.is_some() || args.listen_address.is_some() {
@@ -114,18 +153,23 @@ pub(super) async fn complete(
             }
             configuration(method, args.webroot.as_deref(), args.listen_address)?;
         }
-        validate_domains(args, method)?;
+        validate_identifiers(args, method)?;
         validate_dns_targets(args)?;
         return Ok(());
     }
-    if args.domain.is_empty() {
-        args.domain = loop {
-            let value = prompts.text("Domain names (space or comma separated):", None)?;
-            match parse_domains(&value) {
-                Ok(domains) => break domains,
+    if args.domain.is_empty() && args.ip.is_empty() {
+        let (domains, addresses) = loop {
+            let value = prompts.text(
+                "DNS names or IP addresses (space or comma separated):",
+                None,
+            )?;
+            match parse_identifiers(&value) {
+                Ok(parsed) => break parsed,
                 Err(error) => prompts.invalid(&error.to_string()),
             }
         };
+        args.domain = domains;
+        args.ip = addresses;
     }
     validate_dns_targets(args)?;
     let choices = ValidationMethod::value_variants()
@@ -142,16 +186,17 @@ pub(super) async fn complete(
                     ))
                 && (!args.domain.iter().any(DnsIdentifier::is_wildcard)
                     || method.kind().supports_wildcards())
+                && (args.ip.is_empty() || method.kind().supports_ip_identifiers())
         })
         .collect::<Vec<_>>();
     if args.challenge.is_none() {
         if choices.is_empty() {
-            return Err("No validation method supports the supplied domains and method-specific parameters.".into());
+            return Err("No validation method supports the supplied identifiers and method-specific parameters.".into());
         }
         args.challenge = Some(prompts.method(&choices)?);
     }
     let method = args.challenge.ok_or("Missing validation method.")?;
-    validate_domains(args, method)?;
+    validate_identifiers(args, method)?;
     if method == ValidationMethod::DnsProvider && args.provider.is_none() {
         args.provider = Some(prompts.provider(args.run.local.data_dir.as_deref()).await?);
     }
@@ -192,14 +237,37 @@ fn validate_dns_targets(args: &IssueArgs) -> CliResult<()> {
     Ok(())
 }
 
-fn validate_domains(args: &IssueArgs, method: ValidationMethod) -> CliResult<()> {
+fn validate_identifiers(args: &IssueArgs, method: ValidationMethod) -> CliResult<()> {
     if args.domain.iter().any(DnsIdentifier::is_wildcard) && !method.kind().supports_wildcards() {
         return Err(
             "Wildcard domains require DNS-01 or DNS-PERSIST-01; choose manual_dns, dns_provider or dns_persist."
                 .into(),
         );
     }
+    if !args.ip.is_empty() && !method.kind().supports_ip_identifiers() {
+        return Err(
+            "IP identifiers require HTTP-01 or TLS-ALPN-01 (RFC 8738); choose manual_http, webroot, standalone or tls_alpn."
+                .into(),
+        );
+    }
+    let total = args.domain.len() + args.ip.len();
+    if total == 0 || total > 100 {
+        return Err("Enter 1–100 identifiers in total across -d/--domain and --ip.".into());
+    }
     Ok(())
+}
+
+/// Listener default by validation port and identifier mix. Any IPv6
+/// identifier in the request makes the CA dial over IPv6, so an IPv4
+/// wildcard bind would be unreachable for it: those default to the
+/// dual-stack `[::]` address; pure IPv4 or DNS-only keeps `0.0.0.0`.
+fn listen_default(port: u16, addresses: &[aster_acme::identifier::IpIdentifier]) -> String {
+    let any_ipv6 = addresses.iter().any(|ip| ip.address().is_ipv6());
+    if any_ipv6 {
+        format!("[::]:{port}")
+    } else {
+        format!("0.0.0.0:{port}")
+    }
 }
 
 fn complete_method(
@@ -225,13 +293,17 @@ fn complete_method(
         ValidationMethod::Standalone | ValidationMethod::TlsAlpn
             if args.listen_address.is_none() =>
         {
-            let default = if method == ValidationMethod::Standalone {
-                "0.0.0.0:80"
+            let port = if method == ValidationMethod::Standalone {
+                80
             } else {
-                "0.0.0.0:443"
+                443
             };
+            let default = listen_default(port, &args.ip);
             args.listen_address = Some(loop {
-                let value = prompts.text("Validation listen address (IP:PORT):", Some(default))?;
+                let value = prompts.text(
+                    "Validation listen address (IP:PORT):",
+                    Some(default.as_str()),
+                )?;
                 match value.parse::<SocketAddr>() {
                     Ok(address) if address.port() != 0 => break address,
                     _ => prompts.invalid("Enter an IPv4/IPv6 socket address with a nonzero port."),
@@ -251,3 +323,6 @@ fn complete_method(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod listen_default_tests;

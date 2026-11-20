@@ -5,7 +5,7 @@ use crate::{
         dns_persist::DnsPersistRecord, dns01::Dns01Record, http01::Http01Response,
         tls_alpn01::TlsAlpn01Response,
     },
-    identifier::{Identifier, authorization_identifier},
+    identifier::authorization_identifier,
     issuance::{IssueError, IssueRecord, ValidationRequirement},
 };
 use aster_acme_core::{
@@ -54,10 +54,17 @@ pub(super) fn prepare(
                 if crate::challenge::known_method(&challenge.kind) != Some(record.challenge) {
                     return Err(IssueError::InvalidInput("saved challenge method changed"));
                 }
-                let Identifier::Dns(identifier) = authorization_identifier(
+                let identifier = authorization_identifier(
                     auth.resource.identifier.clone(),
                     auth.resource.wildcard,
                 )?;
+                if !record.challenge.validates_identifier(&identifier) {
+                    // No acknowledgement for a method that cannot validate this
+                    // identifier kind (RFC 8738 section 7).
+                    return Err(IssueError::InvalidInput(
+                        "the selected method cannot validate this authorization identifier",
+                    ));
+                }
                 let requirement = materials.derive(
                     &identifier,
                     challenge,
@@ -120,10 +127,16 @@ struct AuthorizationMaterials<'a> {
 impl AuthorizationMaterials<'_> {
     fn derive(
         &self,
-        identifier: &crate::identifier::DnsIdentifier,
+        identifier: &crate::identifier::Identifier,
         challenge: &ChallengeObject,
         saved: Option<&ValidationRequirement>,
     ) -> Result<ValidationRequirement, IssueError> {
+        let dns = || match identifier {
+            crate::identifier::Identifier::Dns(dns) => Ok(dns),
+            crate::identifier::Identifier::Ip(_) => Err(IssueError::InvalidInput(
+                "DNS validation methods cannot validate an IP identifier",
+            )),
+        };
         let material = match self.method {
             ChallengeKind::DnsPersist01 => {
                 let parameters = challenge.dns_persist_parameters().map_err(|_| {
@@ -132,7 +145,7 @@ impl AuthorizationMaterials<'_> {
                     )
                 })?;
                 ChallengeMaterial::DnsPersist01(DnsPersistRecord::derive(
-                    identifier,
+                    dns()?,
                     self.account_url,
                     self.account_thumbprint,
                     self.directory,
@@ -150,7 +163,7 @@ impl AuthorizationMaterials<'_> {
                 )?)
             }
             ChallengeKind::Dns01 => ChallengeMaterial::Dns01(Dns01Record::derive(
-                identifier,
+                dns()?,
                 &token(challenge)?,
                 self.account_thumbprint,
             )?),
@@ -237,5 +250,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The helper's DNS identifiers replaced by an IP: the record `identifiers`
+    /// parse back through the String serde path into the IP variant, and the
+    /// authorization resource carries RFC 8738 wire type "ip".
+    fn ip_record(method: ChallengeKind, expires: time::OffsetDateTime) -> IssueRecord {
+        let mut value = serde_json::to_value(record(method, expires)).unwrap();
+        value["identifiers"] = json!(["192.0.2.1"]);
+        value["authorizations"][0]["resource"]["identifier"] =
+            json!({"type":"ip","value":"192.0.2.1"});
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn dns01_guard_rejects_ip_identifiers_before_any_material_is_derived() {
+        let now = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let directory: DirectoryMeta =
+            serde_json::from_value(json!({"accountHashPrefix":"https://ca.example/hash/"}))
+                .unwrap();
+        let mut record = ip_record(ChallengeKind::Dns01, now + time::Duration::hours(1));
+        let message = match prepare(&mut record, &directory, now) {
+            Err(IssueError::InvalidInput(message)) => message,
+            other => panic!("dns-01 must not acknowledge an IP identifier: {other:?}"),
+        };
+        assert!(
+            message.contains("cannot validate"),
+            "unexpected guard message: {message}"
+        );
+        // Nothing was derived or acknowledged ahead of the identifier-kind guard.
+        assert_eq!(record.authorizations[0].validation_requirement, None);
+        assert_eq!(record.authorizations[0].challenge_url, None);
+    }
+
+    #[test]
+    fn http01_prepares_ip_identifiers_through_the_same_prepare_path() {
+        use aster_acme_protocol::url::AcmeUrl;
+        let now = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let directory: DirectoryMeta =
+            serde_json::from_value(json!({"accountHashPrefix":"https://ca.example/hash/"}))
+                .unwrap();
+        let mut record = ip_record(ChallengeKind::Http01, now + time::Duration::hours(1));
+        let outstanding = prepare(&mut record, &directory, now).unwrap();
+        assert_eq!(outstanding.len(), 1);
+        assert_eq!(outstanding[0].kind(), ChallengeKind::Http01);
+        // The offered http-01 challenge was selected and acknowledged.
+        assert_eq!(
+            record.authorizations[0]
+                .challenge_url
+                .as_ref()
+                .map(AcmeUrl::as_str),
+            Some("https://ca.example/challenge")
+        );
+        assert!(record.authorizations[0].validation_requirement.is_some());
     }
 }

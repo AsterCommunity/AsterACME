@@ -41,13 +41,14 @@ aster-acme account show default
 aster-acme account show default --verify
 ```
 
-`list` and `show` are offline by default and present the local snapshot; `--verify` queries the CA and refreshes observations. Verification output only expresses what was actually queried (`CA query: account refreshed`) — local data is never presented as current remote state. `account switch NAME` only changes the local default account and performs no CA operations.
+`list` and `show` are offline by default and present the local snapshot; `--verify` queries the CA and refreshes observations. Verification output only expresses what was actually queried (`CA query: account refreshed`) — local data is never presented as current remote state. `account default NAME` only changes the local default account and performs no CA operations.
 
 ## Contacts
 
 ```sh
-aster-acme account update-contact default -m new-admin@example.com
-aster-acme account update-contact default --clear-contacts --yes
+aster-acme account update default -m new-admin@example.com
+aster-acme account update default --clear-contacts --yes
+aster-acme account update default --profile shortlived --yes
 ```
 
 `--contact` is a full replacement list; `--clear-contacts` empties it explicitly. The two are mutually exclusive, and a missing value is never treated as a clear. `--yes` confirms replacing or clearing existing contacts.
@@ -64,11 +65,11 @@ Rotation follows the ACME keyChange flow: intent is persisted before the request
 ## Deactivation and removal
 
 ```sh
-aster-acme account deactivate default --yes
+aster-acme account remove default --deactivate --yes
 aster-acme account remove default --yes
 ```
 
-`deactivate` deactivates the account at the CA, irreversibly; the account can no longer issue. `remove` deletes only the locally managed account profile and key — it never calls the CA (local removal does not mean the account is deactivated remotely). Both default to "no" and require `--yes` in scripts.
+`remove` deletes the locally managed account profile and key without calling the CA (local removal does not mean the account is deactivated remotely); with `--deactivate` it first irreversibly deactivates the account at the CA — it can no longer issue — then deletes the local profile. Both default to "no" and require `--yes` in scripts.
 
 ## Operation summary
 
@@ -76,7 +77,7 @@ aster-acme account remove default --yes
 | --- | --- | --- |
 | `account register` | Create or continue a local account identity | Reusing/continuing an existing local identity |
 | `account recover` | Rebuild the account observation with the saved key | (no dangerous confirmation) |
-| `account update-contact` | Replace/clear contacts | Replacing or explicitly clearing |
+| `account update` | Replace/clear contacts; set/clear the default profile | Replacing or explicitly clearing |
 | `account rotate-key` | ACME keyChange rotation | Rotating or reconciling the transaction |
-| `account deactivate` | Deactivate the CA account (irreversible) | Deactivation |
+| `account remove --deactivate` | Deactivate the CA account (irreversible) + delete local profile | Deactivation + removal |
 | `account remove` | Delete the local profile and key | Local removal |

@@ -38,7 +38,7 @@ use aster_acme::{
     account::{AccountRecord, AccountService, RegistrationOptions},
     challenge::ChallengeKind,
     crypto::{JwsSigner, key_algorithm::KeyAlgorithm},
-    identifier::DnsIdentifier,
+    identifier::Identifier,
     issuance::{
         CertificateName, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
         IssueRequest, ValidationRequirement,
@@ -72,7 +72,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Arguments accepted by the example binary.
 #[derive(Debug, Parser)]
 struct Args {
-    /// DNS name to issue; wildcards are rejected because HTTP-01 cannot validate them.
+    /// DNS name or bare IP literal ([RFC 8738](https://datatracker.ietf.org/doc/html/rfc8738)) to issue; wildcards are rejected
+    /// because HTTP-01 cannot validate them.
     #[arg(short, long)]
     domain: String,
     /// Webroot of an already running HTTP server; challenge files are written below it.
@@ -276,7 +277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Discover the CA, then register once or reuse the persisted identity. The
 /// example accepts the advertised terms itself; a product must collect real
 /// user consent before this call.
-async fn ensure_account(
+async fn ensure_registered_account(
     pool: &HttpPool,
     directory: &AcmeUrl,
     transport: TransportOptions,
@@ -311,6 +312,35 @@ async fn ensure_account(
         .ok_or("registered account record is missing")?)
 }
 
+/// Load or create the account signing key, then register once or reuse the
+/// persisted identity.
+async fn ensure_account(
+    directory: &AcmeUrl,
+    transport: TransportOptions,
+    account_store: &Arc<CliAccountStore>,
+    contacts: Vec<String>,
+) -> Result<(AccountRecord, Arc<dyn JwsSigner>, HttpPool), Box<dyn std::error::Error>> {
+    // Account signing key: load the persisted one or generate and store a new key.
+    let signer = AccountKeyStore::signer(
+        account_store.as_ref(),
+        directory,
+        ACCOUNT_NAME,
+        KeyAccess::Create(Some(KeyAlgorithm::default())),
+    )
+    .await?;
+    let pool = HttpPool::default();
+    let account = ensure_registered_account(
+        &pool,
+        directory,
+        transport,
+        account_store,
+        &signer,
+        contacts,
+    )
+    .await?;
+    Ok((account, signer, pool))
+}
+
 /// Resume an unfinished saved request under this name, otherwise create one.
 async fn open_or_create(
     store: &CliIssueStore,
@@ -336,7 +366,7 @@ async fn open_or_create(
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let directory = AcmeUrl::new(&args.directory)?;
-    let identifier = DnsIdentifier::new(&args.domain)?;
+    let identifier = Identifier::new(&args.domain)?;
     if identifier.is_wildcard() {
         return Err("HTTP-01 cannot validate wildcard identifiers".into());
     }
@@ -356,31 +386,12 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         LOCK_TIMEOUT,
     )?);
     let issue_store = CliIssueStore::new(data_dir.path().to_path_buf(), LOCK_TIMEOUT);
-
-    // Account signing key: load the persisted one or generate and store a new key.
-    let signer = AccountKeyStore::signer(
-        account_store.as_ref(),
-        &directory,
-        ACCOUNT_NAME,
-        KeyAccess::Create(Some(KeyAlgorithm::default())),
-    )
-    .await?;
-
-    // Loopback HTTP stays opt-in for numeric-IP test CAs such as Pebble.
     let transport = TransportOptions {
         allow_loopback_http: directory.as_str().starts_with("http://"),
         ..TransportOptions::default()
     };
-    let pool = HttpPool::default();
-    let account_record = ensure_account(
-        &pool,
-        &directory,
-        transport.clone(),
-        &account_store,
-        &signer,
-        contacts,
-    )
-    .await?;
+    let (account_record, signer, pool) =
+        ensure_account(&directory, transport.clone(), &account_store, contacts).await?;
 
     let request = IssueRequest {
         challenge: ChallengeKind::Http01,
@@ -388,6 +399,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         solver_config: serde_json::json!({ "root": args.webroot.display().to_string() }),
         name: name.clone(),
         identifiers: vec![identifier],
+        profile: None,
         key_algorithm: KeyAlgorithm::default(),
         account_name: ACCOUNT_NAME.to_owned(),
     };

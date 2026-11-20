@@ -71,7 +71,7 @@ pub(in crate::commands::cert) fn list(
     let color = format.color;
     let mut rows = vec![[
         "NAME".into(),
-        "DOMAINS".into(),
+        "IDENTIFIERS".into(),
         "KEY TYPE".into(),
         "REQUESTED (UTC)".into(),
         "STATUS".into(),
