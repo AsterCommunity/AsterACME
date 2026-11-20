@@ -74,8 +74,8 @@ pub struct AccountRecord {
     pub deactivation: DeactivationState,
     /// Durable key rollover state; pending and confirmed phases make interrupted local swaps recoverable.
     pub key_rotation: Option<KeyRotation>,
-    /// Terms URL shown to the user and explicitly accepted.
-    pub accepted_terms_url: Option<AcmeUrl>,
+    /// CA terms value shown to the user and explicitly accepted, kept verbatim.
+    pub accepted_terms_url: Option<String>,
     /// Operator-selected default certificate profile ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles),    /// <https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>).
     /// Local preference only; explicit issuance flags win, and existing saved
     /// certificate definitions never adopt a changed default implicitly.
@@ -194,7 +194,7 @@ pub enum AccountError {
     Transport(#[from] TransportError),
     /// Required terms were not explicitly accepted.
     #[error("explicit acceptance of the CA terms is required: {0}")]
-    TermsRequired(AcmeUrl),
+    TermsRequired(String),
     /// EAB is required but no credentials were supplied.
     #[error("CA requires External Account Binding credentials")]
     ExternalAccountRequired,

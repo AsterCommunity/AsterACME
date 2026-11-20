@@ -111,7 +111,14 @@ pub struct DirectoryMeta {
     )]
     pub profiles: Option<std::collections::BTreeMap<String, String>>,
     /// Terms must be accepted explicitly before creating an account.
-    pub terms_of_service: Option<AcmeUrl>,
+    ///
+    /// [RFC 8555 §7.1.1](https://datatracker.ietf.org/doc/html/rfc8555#section-7.1.1)
+    /// only requires "A URL identifying the current terms of service" and does not
+    /// constrain the scheme, so the raw CA-supplied value is kept verbatim for
+    /// display. Unlike ACME endpoint URLs this field never carries a request, so
+    /// the endpoint HTTPS policy deliberately does not apply; test CAs advertise
+    /// non-HTTPS placeholders such as `data:` URIs.
+    pub terms_of_service: Option<String>,
     /// Whether registration requires EAB credentials.
     #[serde(default)]
     pub external_account_required: bool,

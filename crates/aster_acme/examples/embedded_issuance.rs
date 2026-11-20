@@ -730,10 +730,11 @@ impl WorkflowObserver for ProgressPrinter {
     }
 
     fn discovered(&self, directory: &Directory, _record: &IssueRecord) {
-        let terms = directory.meta.terms_of_service.as_ref().map_or_else(
-            || "none advertised".to_owned(),
-            |url| url.as_str().to_owned(),
-        );
+        let terms =
+            directory.meta.terms_of_service.as_ref().map_or_else(
+                || "none advertised".to_owned(),
+                std::clone::Clone::clone,
+            );
         println!("directory ready; terms: {terms}");
     }
 }

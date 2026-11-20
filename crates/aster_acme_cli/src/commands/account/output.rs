@@ -65,7 +65,7 @@ pub(super) struct SavedAccount<'a> {
     deactivation: Option<DeactivationState>,
     contacts: &'a [String],
     server_contacts: Option<&'a [String]>,
-    accepted_terms_url: Option<&'a AcmeUrl>,
+    accepted_terms_url: Option<&'a String>,
     auto_accept_terms_updates: bool,
 }
 

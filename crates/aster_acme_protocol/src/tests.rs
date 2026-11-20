@@ -311,6 +311,26 @@ fn directory_caa_identities_preserve_alternatives_and_optional_absence() {
 }
 
 #[test]
+fn meta_terms_keep_non_https_identifiers_while_endpoints_stay_https() {
+    // RFC 8555 §7.1.1 only requires "A URL" for termsOfService, so test CAs
+    // advertise data: placeholders; the display field keeps the raw value.
+    let directory: Directory = serde_json::from_str(
+        r#"{"newNonce":"https://ca.example/nonce","newAccount":"https://ca.example/account","meta":{"termsOfService":"data:text/plain,Do%20what%20thou%20wilt"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        directory.meta.terms_of_service.as_deref(),
+        Some("data:text/plain,Do%20what%20thou%20wilt")
+    );
+    // Endpoint URLs still enforce the HTTPS policy; loopback plaintext stays
+    // opt-in through the transport layer, never through directory parsing.
+    let plaintext_endpoint = serde_json::from_str::<Directory>(
+        r#"{"newNonce":"http://ca.example/nonce","newAccount":"https://ca.example/account"}"#,
+    );
+    assert!(plaintext_endpoint.is_err());
+}
+
+#[test]
 fn directory_profiles_parse_and_stay_lossless() {
     let directory: Directory = serde_json::from_value(json!({
         "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
