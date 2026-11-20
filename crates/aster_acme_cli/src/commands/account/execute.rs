@@ -153,10 +153,11 @@ pub(crate) async fn execute(
                     .await?;
             }
             if profiles {
-                return Ok(AccountReport::Profiles {
-                    directory: context.directory.clone(),
-                    profiles: client.directory().meta.profiles.clone(),
-                });
+                return Ok(
+                    crate::commands::account::mutation::profiles_listing_from_client(
+                        &context, &client,
+                    ),
+                );
             }
             local(&context, signer.as_ref(), name, verify).await
         }

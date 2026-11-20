@@ -318,6 +318,19 @@ async fn save_profile_preference(
 /// Validate an explicit registration profile against a directory response:
 /// `Err` names the requested profile and every advertised alternative.
 /// `Ok` on `None` means the CA default applies.
+/// Build the Profiles report from an already-discovered client. Split out of
+/// the Show arm so the loopback harness can exercise it with an explicit
+/// loopback-permitting transport.
+pub(super) fn profiles_listing_from_client(
+    context: &CliContext,
+    client: &aster_acme::transport::AcmeClient,
+) -> AccountReport {
+    AccountReport::Profiles {
+        directory: context.directory.clone(),
+        profiles: client.directory().meta.profiles.clone(),
+    }
+}
+
 pub(crate) fn validate_profile_advertisement(
     advertised: Option<&std::collections::BTreeMap<String, String>>,
     profile: &str,

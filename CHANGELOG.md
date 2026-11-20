@@ -6,7 +6,7 @@
 
 ### Breaking
 
-- **Default data-dir unified to the reverse-DNS path** — Fix the Linux fallback to a bare `~/.config/acme`: all platforms now use `com.astercosm.acme` (macOS `~/Library/Application Support/com.astercosm.acme`, Linux `~/.config/com.astercosm.acme`, Windows `%APPDATA%\com.astercosm.acme\config`). No automatic migration. Linux migration steps: if the target does not exist, move directly (`mv ~/.config/acme ~/.config/com.astercosm.acme`); if the target exists but is empty, `rmdir` it first and then move; if the target is non-empty, never overwrite — switch to `--data-dir`/`ASTER_ACME_DATA_DIR` or merge file-by-file by hand. Users with `XDG_CONFIG_HOME` set have both old and new directories under that root (e.g. `/srv/config/acme` → `/srv/config/com.astercosm.acme`) — `~/.config` is only the fallback when unset. The macOS path is unchanged.
+- **Default data-dir unified to the reverse-DNS path** — Fix the Linux fallback to a bare `~/.config/acme`: all platforms now use `com.astercosm.acme` (macOS `~/Library/Application Support/com.astercosm.acme`, Linux `~/.config/com.astercosm.acme`, Windows `%APPDATA%\com.astercosm.acme\config`). No automatic migration; on Linux the default moves from `~/.config/acme` to `~/.config/com.astercosm.acme` — see the [data directory documentation](docs/src/content/docs/en/admin/data-dir.mdx) for migration steps (existing target, `XDG_CONFIG_HOME`, non-empty targets). The macOS path is unchanged.
 
 
 ### Added
@@ -22,6 +22,7 @@
 - **Automatic CA terms updates** — `account register --auto-accept-new-terms` accepts the current directory terms and durably delegates future terms URL changes for unattended account ensure and renewal. The exact accepted URL remains visible in `account show`; `--yes`, JSON mode and implicit ensure never enable the delegation.
 
 ### Changed
+- **Account subcommand redesign (8 commands)** — `switch` → `default`, `update-contact` + `set-profile` merged into `update` (contacts and default profile in one place), `profiles` folded into `show --profiles`, `deactivate` folded into `remove --deactivate` (CA deactivation first, then local removal).
 
 - **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. Journal JSON snapshots retain null-valued order and authorization extensions. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget, including provider and host-process timeouts.
 
