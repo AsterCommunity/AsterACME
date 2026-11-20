@@ -156,7 +156,7 @@ pub(crate) struct IssueArgs {
     /// Local certificate name; default is the primary domain plus a random suffix.
     #[arg(short = 'n', long, conflicts_with = "resume",value_parser=parse_certificate_name)]
     pub name: Option<String>,
-    /// DNS identifier; repeat for SANs. The first -d or --ip is the primary identifier.
+    /// DNS identifier; repeat for SANs. With DNS identifiers present the first -d is primary; otherwise the first --ip is.
     #[arg(
         short = 'd',
         long,
@@ -287,8 +287,10 @@ fn parse_ip(value: &str) -> Result<aster_acme::identifier::IpIdentifier, String>
 }
 
 pub(crate) fn parse_profile(value: &str) -> Result<String, String> {
-    if value.is_empty() || value.len() > 64 || value.chars().any(char::is_control) {
-        return Err("a certificate profile is a nonempty name of at most 64 bytes without control characters".into());
+    // The profiles draft caps nothing about the name; only emptiness and
+    // control characters are rejected here. CA advertisement decides the rest.
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err("a certificate profile is a nonempty name without control characters".into());
     }
     Ok(value.to_owned())
 }
@@ -311,10 +313,12 @@ fn parse_operation(value: &str) -> Result<String, String> {
 mod tests;
 
 #[test]
-fn profile_names_reject_emptiness_oversize_and_control_characters() {
+fn profile_names_reject_emptiness_control_characters_and_multibyte_names_pass() {
     assert_eq!(parse_profile("shortlived").unwrap().as_str(), "shortlived");
-    assert_eq!(parse_profile(&"x".repeat(64)).unwrap(), "x".repeat(64));
     assert!(parse_profile("").is_err());
-    assert!(parse_profile(&"x".repeat(65)).is_err());
     assert!(parse_profile("short\nlived").is_err());
+    // The profiles draft caps nothing about length or encoding: a CA may
+    // advertise multibyte names (22 chars of 型 = 66 bytes) and must parse.
+    let multibyte = "\u{578b}".repeat(22);
+    assert_eq!(parse_profile(&multibyte).unwrap().as_str(), multibyte);
 }

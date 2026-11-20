@@ -58,6 +58,38 @@ pub(super) async fn update(
     args: crate::commands::account::args::UpdateArgs,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
+    let mut options = AccountArgs::from(args.network.clone());
+    let context = context(
+        &mut options,
+        aster_acme_core::account::AccountOperation::Update,
+        cli,
+    )
+    .await?;
+    let transport = context.transport_options(&options)?;
+    update_with_transport(args, &context, transport, cli).await
+}
+
+/// Command body after account selection; `transport` is injected so the
+/// loopback test harness can exercise the production path unchanged.
+/// Resolve the replacement contact list from flags or the interactive prompt.
+fn replacement_contacts(
+    args: &crate::commands::account::args::UpdateArgs,
+    output: &crate::common::session::OutputSession,
+) -> CliResult<Vec<String>> {
+    crate::commands::account::interaction::replacement_contacts(
+        args.contact.clone(),
+        args.clear_contacts,
+        terminal::interactive(args.network.local.json),
+        &mut crate::commands::account::interaction::TerminalPrompts(output),
+    )
+}
+
+async fn update_with_transport(
+    args: crate::commands::account::args::UpdateArgs,
+    context: &CliContext,
+    transport: aster_acme::transport::TransportOptions,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
     let wants_contacts = args.contact_set() || args.clear_contacts;
     let wants_profile = args.profile_set() || args.clear_profile;
     let explicit_profile_set = args.profile.is_some();
@@ -66,14 +98,7 @@ pub(super) async fn update(
     } else {
         args.profile.clone()
     };
-    let mut options = AccountArgs::from(args.network);
-    let context = context(
-        &mut options,
-        aster_acme_core::account::AccountOperation::Update,
-        cli,
-    )
-    .await?;
-    let interactive = terminal::interactive(options.json);
+    let interactive = terminal::interactive(args.network.local.json);
     let mut wants_contacts = wants_contacts;
     let mut wants_profile = wants_profile;
     let mut profile_target = profile_target;
@@ -105,13 +130,25 @@ pub(super) async fn update(
     record
         .action(aster_acme_core::account::AccountOperation::Update)
         .map_err(AccountError::from)?;
+    // Draft-ietf-acme-profiles: validate the requested profile against the
+    // advertisement BEFORE the contact mutation, so an invalid profile never
+    // half-applies. The advertised map then feeds the save without a second
+    // directory request.
+    let advertised = if wants_profile {
+        let client = cli
+            .http
+            .discover(context.directory.clone(), transport.clone())
+            .await?;
+        let advertised = client.directory().meta.profiles.clone();
+        if let Some(target) = &profile_target {
+            validate_profile_advertisement(advertised.as_ref(), target)?;
+        }
+        advertised
+    } else {
+        None
+    };
     if wants_contacts {
-        let contacts = crate::commands::account::interaction::replacement_contacts(
-            args.contact.clone(),
-            args.clear_contacts,
-            terminal::interactive(options.json),
-            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
-        )?;
+        let contacts = replacement_contacts(&args, &cli.output)?;
         terminal::confirm_action(
             &format!(
                 "Update account contacts\n  Name: {}\n  CA: {}\n  Contacts: {}",
@@ -127,48 +164,78 @@ pub(super) async fn update(
             args.yes,
             &cli.output,
         )?;
-        let transport = context.transport_options(&options)?;
-        let report = submit_contacts(&context, signer.clone(), contacts, transport, cli).await?;
+        let report =
+            submit_contacts(context, signer.clone(), contacts, transport.clone(), cli).await?;
         if !wants_profile {
             return Ok(report);
         }
     }
-    if wants_profile {
-        // Interactive path: pick from the advertised list, or clear explicitly.
-        if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
-            profile_target = interactive_profile_selection(&context, &options, cli).await?;
-        }
-        // Reload after a contact submission: the CA may have returned fresh
-        // server state that this profile save must preserve, never clobber.
-        let fresh = context
-            .store
-            .load(&context.directory, &signer.jwk()?.thumbprint()?)
-            .await?
-            .ok_or(AccountError::AccountDoesNotExist)?;
-        let previous = fresh.preferred_profile.clone();
-        let target = profile_target;
-        let transport = context.transport_options(&options)?;
-        save_profile_preference(&context, &fresh, target.clone(), transport, cli).await?;
-        return Ok(AccountReport::ProfilePreference {
-            name: context.name,
-            previous,
-            current: target,
-        });
+    if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
+        profile_target = interactive_profile_selection(
+            context,
+            record.preferred_profile.as_deref(),
+            transport.clone(),
+            cli,
+        )
+        .await?;
     }
-    // Contacts path already returned above when requested.
-    Err(
-        "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or both.".into(),
+    finish_profile_save(
+        context,
+        signer,
+        profile_target,
+        advertised.as_ref(),
+        args.yes || wants_contacts,
+        wants_contacts,
+        cli,
     )
+    .await
+}
+
+/// Reload past any contact mutation and persist the profile preference,
+/// mapping a late failure onto the fact that contacts may already be
+/// committed at the CA.
+async fn finish_profile_save(
+    context: &CliContext,
+    signer: Arc<dyn aster_acme::crypto::JwsSigner>,
+    target: Option<String>,
+    advertised: Option<&std::collections::BTreeMap<String, String>>,
+    confirmed: bool,
+    contacts_updated: bool,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
+    // Reload after a contact submission: the CA may have returned fresh
+    // server state that this profile save must preserve, never clobber.
+    let fresh = context
+        .store
+        .load(&context.directory, &signer.jwk()?.thumbprint()?)
+        .await?
+        .ok_or(AccountError::AccountDoesNotExist)?;
+    let previous = fresh.preferred_profile.clone();
+    if let Err(error) =
+        save_profile_preference(context, &fresh, target.clone(), advertised, confirmed, cli).await
+    {
+        let prefix = if contacts_updated {
+            "Contacts were updated at the CA; "
+        } else {
+            ""
+        };
+        return Err(format!("{prefix}the profile preference was not saved: {error}").into());
+    }
+    Ok(AccountReport::ProfilePreference {
+        name: context.name.clone(),
+        previous,
+        current: target,
+    })
 }
 
 /// Draft-ietf-acme-profiles interactive default-profile selection: the
 /// advertised names plus an explicit clear, or cancellation without a change.
 async fn interactive_profile_selection(
     context: &crate::common::context::CliContext,
-    options: &AccountArgs,
+    current_default: Option<&str>,
+    transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<Option<String>> {
-    let transport = context.transport_options(options)?;
     let advertised = cli
         .http
         .discover(context.directory.clone(), transport)
@@ -177,16 +244,25 @@ async fn interactive_profile_selection(
         .meta
         .profiles
         .clone();
-    let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
+    let Some(advertised) = advertised.as_ref().filter(|map| !map.is_empty()) else {
         return Err(
             "CA directory does not advertise certificate profiles; nothing to select. Remove the profile preference with --clear-profile.".into(),
         );
     };
     let mut choices = advertised.keys().cloned().collect::<Vec<_>>();
     choices.push("(no default; the CA default applies)".to_owned());
-    let selection =
-        terminal::select_index_or_back("Default certificate profile:", &choices, 0, &cli.output)?
-            .ok_or(crate::common::terminal::Canceled)?;
+    // Preselect the account's current default so plain confirmation keeps it.
+    let default = advertised
+        .keys()
+        .position(|name| Some(name.as_str()) == current_default)
+        .unwrap_or(0);
+    let selection = terminal::select_index_or_back(
+        "Default certificate profile:",
+        &choices,
+        default,
+        &cli.output,
+    )?
+    .ok_or(crate::common::terminal::Canceled)?;
     Ok(if selection < advertised.len() {
         Some(choices[selection].clone())
     } else {
@@ -200,38 +276,14 @@ async fn save_profile_preference(
     context: &CliContext,
     record: &aster_acme::account::AccountRecord,
     target: Option<String>,
-    transport: aster_acme::transport::TransportOptions,
+    advertised: Option<&std::collections::BTreeMap<String, String>>,
+    confirmed: bool,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<()> {
     if let Some(profile) = &target {
-        let advertised = match cli
-            .http
-            .discover(context.directory.clone(), transport)
-            .await
-        {
-            Ok(client) => client.directory().meta.profiles.clone(),
-            Err(error) => {
-                return Err(format!(
-                    "Cannot verify the profile against the CA directory ({error}); no change was saved. Retry when the CA is reachable."
-                )
-                .into());
-            }
-        };
-        if let Some(advertised) = &advertised
-            && !advertised.contains_key(profile)
-        {
-            return Err(format!(
-                "CA directory does not advertise profile {profile:?}; available: {}",
-                advertised.keys().cloned().collect::<Vec<_>>().join(", ")
-            )
-            .into());
-        }
-        if advertised.is_none() {
-            return Err(format!(
-                "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved"
-            )
-            .into());
-        }
+        // The advertisement was validated before the contact mutation ran;
+        // reaching here means the CA was reachable and the name checked out.
+        validate_profile_advertisement(advertised, profile)?;
     }
     terminal::confirm_action(
         &format!(
@@ -243,9 +295,7 @@ async fn save_profile_preference(
                 .map_or_else(|| "(none; the CA default applies)".to_owned(), output::safe,),
         ),
         "Save this profile preference?",
-        // The outer command already confirmed contact changes; profile writes
-        // ride the same confirmation unless this is the only change.
-        true,
+        confirmed,
         &cli.output,
     )?;
     let mut record = record.clone();
@@ -257,6 +307,27 @@ async fn save_profile_preference(
     aster_acme::storage::account::AccountStore::save(context.store.as_ref(), &record, &lease)
         .await?;
     Ok(())
+}
+
+/// Validate an explicit registration profile against a directory response:
+/// `Err` names the requested profile and every advertised alternative.
+/// `Ok` on `None` means the CA default applies.
+pub(crate) fn validate_profile_advertisement(
+    advertised: Option<&std::collections::BTreeMap<String, String>>,
+    profile: &str,
+) -> CliResult<()> {
+    match advertised {
+        None => Err(format!(
+            "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved. Register without --profile, then set it with account update --profile once the CA advertises profiles (account show --profiles lists the advertisement)."
+        )
+        .into()),
+        Some(advertised) if !advertised.contains_key(profile) => Err(format!(
+            "CA directory does not advertise profile {profile:?}; available: {}",
+            advertised.keys().cloned().collect::<Vec<_>>().join(", ")
+        )
+        .into()),
+        Some(_) => Ok(()),
+    }
 }
 
 pub(super) async fn submit_contacts(
@@ -345,7 +416,9 @@ pub(super) async fn rotate_key(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::commands::account::mutation::*;
+
+    use crate::common::args::HttpArgs;
     use crate::common::context::CommandContext;
     use aster_acme::storage::account::KeyAccess;
     use aster_acme_cli_storage::account::CliAccountStore;
@@ -466,12 +539,22 @@ mod tests {
 
     #[tokio::test]
     async fn save_persists_advertised_selection() {
-        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         save_profile_preference(
             &context,
             &stored(&context, &signer).await,
             Some("shortlived".into()),
-            transport,
+            Some(&std::collections::BTreeMap::from([
+                (
+                    "classic".to_owned(),
+                    "https://ca.example/classic".to_owned(),
+                ),
+                (
+                    "shortlived".to_owned(),
+                    "https://ca.example/shortlived".to_owned(),
+                ),
+            ])),
+            true,
             &CommandContext::new(true),
         )
         .await
@@ -484,12 +567,22 @@ mod tests {
 
     #[tokio::test]
     async fn unadvertised_profile_is_rejected_with_available_names_and_store_untouched() {
-        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         let error = save_profile_preference(
             &context,
             &stored(&context, &signer).await,
             Some("premium".into()),
-            transport,
+            Some(&std::collections::BTreeMap::from([
+                (
+                    "classic".to_owned(),
+                    "https://ca.example/classic".to_owned(),
+                ),
+                (
+                    "shortlived".to_owned(),
+                    "https://ca.example/shortlived".to_owned(),
+                ),
+            ])),
+            true,
             &CommandContext::new(true),
         )
         .await
@@ -509,12 +602,22 @@ mod tests {
 
     #[tokio::test]
     async fn clear_is_local_and_sets_none() {
-        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         save_profile_preference(
             &context,
             &stored(&context, &signer).await,
             Some("classic".into()),
-            transport.clone(),
+            Some(&std::collections::BTreeMap::from([
+                (
+                    "classic".to_owned(),
+                    "https://ca.example/classic".to_owned(),
+                ),
+                (
+                    "shortlived".to_owned(),
+                    "https://ca.example/shortlived".to_owned(),
+                ),
+            ])),
+            true,
             &CommandContext::new(true),
         )
         .await
@@ -523,7 +626,17 @@ mod tests {
             &context,
             &stored(&context, &signer).await,
             None,
-            transport,
+            Some(&std::collections::BTreeMap::from([
+                (
+                    "classic".to_owned(),
+                    "https://ca.example/classic".to_owned(),
+                ),
+                (
+                    "shortlived".to_owned(),
+                    "https://ca.example/shortlived".to_owned(),
+                ),
+            ])),
+            true,
             &CommandContext::new(true),
         )
         .await
@@ -560,10 +673,32 @@ mod tests {
             .account(&options)
             .await
             .unwrap();
-        let error = save_profile_preference(
+        // The hoisted validation in update_with_transport discovers the
+        // directory before anything else; with no mount the profile change
+        // fails before any contact mutation or persistence.
+        let args = crate::commands::account::args::UpdateArgs {
+            network: crate::commands::account::args::NetworkArgs {
+                identity: crate::commands::account::args::NameArgs {
+                    name: Some("work".into()),
+                    ..Default::default()
+                },
+                ca: crate::commands::account::args::CaArgs {
+                    ca_directory: Some(directory.as_str().to_owned()),
+                    ..Default::default()
+                },
+                http: HttpArgs::default(),
+                local: crate::common::args::LocalArgs {
+                    data_dir: Some(temp.path().into()),
+                    json: true,
+                },
+            },
+            profile: Some("shortlived".into()),
+            yes: true,
+            ..Default::default()
+        };
+        let error = match update_with_transport(
+            args,
             &context,
-            &record,
-            Some("shortlived".into()),
             aster_acme::transport::TransportOptions {
                 allow_loopback_http: true,
                 ..aster_acme::transport::TransportOptions::default()
@@ -571,8 +706,11 @@ mod tests {
             &CommandContext::new(true),
         )
         .await
-        .unwrap_err();
-        assert!(error.to_string().contains("no change was saved"));
+        {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("profile change must fail without advertisement"),
+        };
+        assert!(error.contains("404"), "{error}");
         assert_eq!(record.preferred_profile, None);
     }
 
@@ -581,7 +719,7 @@ mod tests {
     /// instead of reverting to the pre-update snapshot.
     #[tokio::test]
     async fn profile_save_preserves_server_contacts_landed_by_contact_update() {
-        let (_server, context, signer, transport, _directory, _handles) = harness().await;
+        let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         let stale = stored(&context, &signer).await;
         let mut fresh = stale.clone();
         fresh.server_contacts = Some(vec!["mailto:new@example.com".into()]);
@@ -591,7 +729,17 @@ mod tests {
             &context,
             &stored(&context, &signer).await,
             Some("shortlived".into()),
-            transport,
+            Some(&std::collections::BTreeMap::from([
+                (
+                    "classic".to_owned(),
+                    "https://ca.example/classic".to_owned(),
+                ),
+                (
+                    "shortlived".to_owned(),
+                    "https://ca.example/shortlived".to_owned(),
+                ),
+            ])),
+            true,
             &CommandContext::new(true),
         )
         .await
@@ -605,6 +753,70 @@ mod tests {
             final_record.server_contacts.as_deref(),
             Some(["mailto:new@example.com".to_owned()].as_slice()),
             "profile save must not revert CA-observed contacts"
+        );
+    }
+
+    /// End-to-end `update`: contact replacement (kid-signed POST to the CA)
+    /// followed by the profile save must land both — and the profile save
+    /// must preserve the CA-observed contacts (the review regression).
+    #[tokio::test]
+    async fn update_applies_contacts_then_profile_preserving_server_state() {
+        let (server, context, signer, transport, _directory, _handles) = harness().await;
+        let _thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
+        Mock::given(method("HEAD"))
+            .and(path("/nonce"))
+            .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "initial"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/acct/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "valid",
+                // ACME account objects carry the singular `contact` field.
+                "contact": ["mailto:new@example.com"]
+            })))
+            .mount(&server)
+            .await;
+        let args = crate::commands::account::args::UpdateArgs {
+            network: crate::commands::account::args::NetworkArgs {
+                identity: crate::commands::account::args::NameArgs {
+                    name: Some("work".into()),
+                    ..Default::default()
+                },
+                ca: crate::commands::account::args::CaArgs {
+                    ca_directory: Some(context.directory.as_str().to_owned()),
+                    ..Default::default()
+                },
+                http: HttpArgs::default(),
+                local: crate::common::args::LocalArgs {
+                    data_dir: Some(context.config_path.parent().unwrap().to_path_buf()),
+                    json: true,
+                },
+            },
+            contact: vec!["mailto:new@example.com".into()],
+            clear_contacts: false,
+            profile: Some("shortlived".into()),
+            clear_profile: false,
+            yes: true,
+        };
+        // Loopback CA: inject the loopback-permitting transport through the
+        // same seam the production path uses for its resolved transport.
+        let report = update_with_transport(args, &context, transport, &CommandContext::new(true))
+            .await
+            .unwrap();
+        let crate::commands::account::report::AccountReport::ProfilePreference { current, .. } =
+            &report
+        else {
+            panic!("expected ProfilePreference report");
+        };
+        assert_eq!(current.as_deref(), Some("shortlived"));
+        let record = stored(&context, &signer).await;
+        assert_eq!(record.preferred_profile.as_deref(), Some("shortlived"));
+        // Contacts: the local intent is kept and the CA-observed value stored.
+        assert_eq!(record.contacts, ["mailto:new@example.com"]);
+        assert_eq!(
+            record.server_contacts.as_deref(),
+            Some(["mailto:new@example.com".to_owned()].as_slice())
         );
     }
 }

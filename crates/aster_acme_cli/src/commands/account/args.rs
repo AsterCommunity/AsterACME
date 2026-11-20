@@ -44,7 +44,7 @@ pub(crate) enum AccountCommand {
 /// Replace contacts and/or set or clear the default certificate profile.
 /// Contact changes update the CA account; profile preferences are local
 /// metadata validated against the advertised list when the CA is reachable.
-#[derive(clap::Args)]
+#[derive(clap::Args, Default)]
 pub(crate) struct UpdateArgs {
     #[command(flatten)]
     pub(crate) network: NetworkArgs,
@@ -82,7 +82,7 @@ impl UpdateArgs {
     }
 }
 
-#[derive(clap::Args, Default)]
+#[derive(Clone, clap::Args, Default)]
 pub(crate) struct NameArgs {
     /// Local account name; omit to select interactively or use the configured default.
     #[arg(index = 1, value_name = "NAME", conflicts_with = "name", value_parser = parse_account_name)]
@@ -141,7 +141,7 @@ impl From<LocalTargetArgs> for AccountArgs {
     }
 }
 
-#[derive(clap::Args, Default)]
+#[derive(Clone, clap::Args, Default)]
 pub(crate) struct CaArgs {
     /// Public CA preset; letsencrypt, zerossl or google.
     #[arg(long, value_parser = crate::ca::ProviderParser, conflicts_with = "ca_directory")]
@@ -172,7 +172,7 @@ impl From<LocalArgs> for ListArgs {
     }
 }
 
-#[derive(clap::Args, Default)]
+#[derive(Clone, clap::Args, Default)]
 pub(crate) struct NetworkArgs {
     #[command(flatten)]
     pub(crate) identity: NameArgs,

@@ -47,6 +47,8 @@ pub(super) enum Output<'a> {
 #[derive(Serialize)]
 pub(super) struct SavedAccount<'a> {
     key_algorithm: Option<KeyAlgorithm>,
+    /// Draft-ietf-acme-profiles account default, when the operator set one.
+    preferred_profile: Option<&'a str>,
     user_agent: Option<&'a str>,
     key_rotation: Option<&'a aster_acme_core::account::KeyRotation>,
     #[serde(flatten)]
@@ -179,6 +181,7 @@ fn saved_account(local: &crate::commands::account::report::LocalAccountReport) -
     let record = local.record.as_ref();
     SavedAccount {
         key_algorithm: record.map(|record| record.key_algorithm),
+        preferred_profile: record.and_then(|record| record.preferred_profile.as_deref()),
         user_agent: record.and_then(|record| record.user_agent.as_deref()),
         key_rotation: record.and_then(|record| record.key_rotation.as_ref()),
         times: record.map_or_else(aster_acme::account::AccountTimes::default, |record| {

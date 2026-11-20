@@ -6,7 +6,7 @@
 
 ### 破坏性
 
-- **默认 data-dir 统一为反向域名路径** — 修复 Linux 默认目录回落为 `~/.config/acme` 的缺陷：三平台统一使用 `com.astercosm.acme`（macOS `~/Library/Application Support/com.astercosm.acme`，Linux `~/.config/com.astercosm.acme`，Windows `%APPDATA%\com.astercosm.acme\config`）。不做自动迁移：Linux 用户自行 `mv ~/.config/acme ~/.config/com.astercosm.acme`（或显式 `--data-dir`/`ASTER_ACME_DATA_DIR` 指回旧路径）；macOS 路径不变。
+- **默认 data-dir 统一为反向域名路径** — 修复 Linux 默认目录回落为 `~/.config/acme` 的缺陷：三平台统一使用 `com.astercosm.acme`（macOS `~/Library/Application Support/com.astercosm.acme`，Linux `~/.config/com.astercosm.acme`，Windows `%APPDATA%\com.astercosm.acme\config`）。不做自动迁移，迁移注意：目标目录已存在时 `mv` 会把旧目录嵌套进去，先确认目标为空；设置了 `XDG_CONFIG_HOME` 的用户，旧/新目录都在该变量之下（如 `/srv/config/acme` → `/srv/config/com.astercosm.acme`），`~/.config` 只是不设该变量的回退；或显式 `--data-dir`/`ASTER_ACME_DATA_DIR` 指回旧路径。macOS 路径不变。
 
 
 ### 新增

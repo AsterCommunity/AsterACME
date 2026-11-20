@@ -371,6 +371,16 @@ mod tests {
             directories::ProjectDirs::from_path(std::path::PathBuf::from("com.astercosm.acme"))
                 .unwrap();
         assert_eq!(default_data_dir().unwrap(), expected.config_dir());
+        // Guard against the directories crate changing its layout: the path
+        // must keep the uniform reverse-DNS suffix on every platform.
+        #[cfg(target_os = "windows")]
+        assert!(
+            default_data_dir()
+                .unwrap()
+                .ends_with(std::path::Path::new("com.astercosm.acme").join("config"))
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert!(default_data_dir().unwrap().ends_with("com.astercosm.acme"));
     }
 
     #[test]

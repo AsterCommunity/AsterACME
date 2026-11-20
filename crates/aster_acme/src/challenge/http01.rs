@@ -38,7 +38,7 @@ impl Http01Response {
     }
 
     /// Host authority for the HTTP-01 URL and request Host header. IPv6 uses
-    /// the bracketed form required by [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986) and [RFC 8738 §5.](https://datatracker.ietf.org/doc/html/rfc8738#section-5.)
+    /// the bracketed form required by [RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986) and [RFC 8738 §5](https://datatracker.ietf.org/doc/html/rfc8738#section-5).
     #[must_use]
     pub fn host(&self) -> String {
         match &self.identifier {

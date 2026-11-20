@@ -9,7 +9,7 @@ use aster_acme_core::{
 use aster_acme_protocol::account::{AccountObject, AccountStatusRequest, AccountUpdateRequest};
 
 impl AccountService {
-    /// Replace the complete account contact list under [RFC 8555 §7.3.2.](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.2.)
+    /// Replace the complete account contact list under [RFC 8555 §7.3.2](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.2).
     /// An empty list clears remote contacts. Local intent is saved before HTTP and
     /// remains distinct from the last CA response if the update fails.
     ///

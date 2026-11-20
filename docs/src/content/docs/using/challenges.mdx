@@ -75,8 +75,10 @@ CLI 默认构建包含建议性预检:CAA 记录核对(newOrder 前)、DNS TXT �
 DNS 方法(dns_provider、manual_dns、dns_persist)不验证 IP 地址;HTTP-01 与 TLS-ALPN-01 同时支持 IPv4/IPv6 标识符:
 
 ```sh
-aster-acme cert issue --ip 203.0.113.10 --ip 2001:db8:0:f00::1 -c standalone
-aster-acme cert issue -d example.com --ip 203.0.113.10 -c webroot -w /var/www/html
+# IPv4:默认 0.0.0.0:80 监听即可
+aster-acme cert issue --ip 203.0.113.10 -c standalone
+# IPv6:必须显式指定双栈监听地址,否则 CA 无法回连
+aster-acme cert issue --ip 2001:db8:0:f00::1 -c standalone --listen-address '[::]:80'
 ```
 
 - IP 标识符跳过 DNS 解析:HTTP-01 的 Host 为 IP 字面量(IPv6 带括号),TLS-ALPN-01 按反向解析名(IN-ADDR.ARPA/IP6.ARPA)响应并提供 iPAddress SAN 证书。

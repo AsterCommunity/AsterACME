@@ -190,3 +190,40 @@ fn requested_ipv6_never_accepts_a_four_byte_address_san() {
         Err(IssueError::InvalidInput(_))
     ));
 }
+
+#[test]
+fn parse_san_address_decodes_ipv4_ipv6_and_rejects_other_lengths() {
+    // Private to certificate.rs but visible to this child module; reached by
+    // the owner's crate:: path, never through super.
+    use crate::issuance::certificate::parse_san_address;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let ipv4 = parse_san_address(&[192, 0, 2, 1]).unwrap();
+    assert_eq!(ipv4, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)));
+    assert_eq!(ipv4.to_string(), "192.0.2.1");
+    let ipv6 = parse_san_address(&[
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01,
+    ])
+    .unwrap();
+    assert_eq!(
+        ipv6,
+        IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))
+    );
+    // Sixteen bytes decode by value; the text is canonical RFC 5952 output.
+    assert_eq!(ipv6.to_string(), "2001:db8::1");
+    let malformed: &[&[u8]] = &[
+        &[],
+        &[0x20, 0x01],
+        &[192, 0, 2],
+        &[192, 0, 2, 1, 1],
+        &[0; 15],
+        &[0; 17],
+    ];
+    for bytes in malformed {
+        assert!(
+            matches!(parse_san_address(bytes), Err(IssueError::InvalidInput(_))),
+            "accepted {} bytes",
+            bytes.len()
+        );
+    }
+}

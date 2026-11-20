@@ -144,10 +144,10 @@ impl IssueRequest {
             ));
         }
         if let Some(profile) = &self.profile
-            && (profile.is_empty() || profile.len() > 64 || profile.chars().any(char::is_control))
+            && (profile.is_empty() || profile.chars().any(char::is_control))
         {
             return Err(IssueError::InvalidInput(
-                "certificate profile must be a nonempty name of at most 64 bytes without control characters",
+                "certificate profile must be a nonempty name without control characters",
             ));
         }
         Ok(())

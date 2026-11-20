@@ -141,12 +141,10 @@ pub(crate) async fn execute(
     }
     match operation {
         Operation::Show { verify, profiles } => {
+            let transport = context.transport_options(&options)?;
             let client = Arc::new(
                 cli.http
-                    .discover(
-                        context.directory.clone(),
-                        context.transport_options(&options)?,
-                    )
+                    .discover(context.directory.clone(), transport.clone())
                     .await?,
             );
             if verify {
@@ -156,7 +154,7 @@ pub(crate) async fn execute(
             }
             if profiles {
                 return Ok(AccountReport::Profiles {
-                    directory: context.directory,
+                    directory: context.directory.clone(),
                     profiles: client.directory().meta.profiles.clone(),
                 });
             }
@@ -341,7 +339,7 @@ async fn deactivate(
     }
     crate::common::terminal::confirm_action(
         &format!(
-            "Permanently deactivate account\n  Name: {}\n  CA: {}\n  Account URL: {}\n\nThis cannot be undone.\nThe account key will no longer authorize ACME requests.\nLocal key and metadata will be retained.",
+            "Permanently deactivate account\n  Name: {}\n  CA: {}\n  Account URL: {}\n\nThis cannot be undone.\nThe account key will no longer authorize ACME requests.\nAfter the CA confirms deactivation, the local key and metadata are deleted as part of this command.",
             crate::common::output::safe(&context.name),
             crate::common::output::safe(context.directory.as_str()),
             crate::common::output::safe(account_url.as_str()),
@@ -544,7 +542,7 @@ async fn remote(
             match &advertised {
                 None => {
                     return Err(format!(
-                        "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved. Register without --profile, then set it with account set-profile once the CA advertises profiles."
+                        "CA directory does not advertise certificate profiles; profile {profile:?} cannot be saved. Register without --profile, then set it with account update --profile once the CA advertises profiles."
                     )
                     .into());
                 }

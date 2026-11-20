@@ -15,7 +15,7 @@ aster-acme cert issue -n example-cert -a default \
 - `-a/--account`: the issuing account
 - `-d/--domain`: DNS names, repeatable; wildcards are written `*.example.com` and require DNS validation
 - `--ip`: IP addresses (RFC 8738), repeatable; requires HTTP-01/TLS-ALPN-01, the primary identifier is the first `-d`, else the first `--ip`
-- `--profile`: CA certificate profile (draft-ietf-acme-profiles); `account profiles` lists the advertisement, `account set-profile` sets an account default, explicit flags win. Let's Encrypt IP issuance requires `shortlived`
+- `--profile`: CA certificate profile (draft-ietf-acme-profiles); `account show --profiles` lists the advertisement, `account update --profile` sets an account default, explicit flags win. Let's Encrypt IP issuance requires `shortlived`
 - `-c/--challenge`: the validation implementation — see [Validation Methods](/en/using/challenges/)
 - `-k/--key-type`: certificate public key algorithm, ecdsa-p256 by default; also ecdsa-p384/p521, ed25519, rsa-2048/3072/4096/8192. If the CA rejects the choice, the actual error is preserved — AsterACME never retries with a different algorithm
 

@@ -232,7 +232,7 @@ fn encode_certificate(der: &[u8]) -> String {
     pem
 }
 
-/// Extract the first PEM certificate as DER for [RFC 8555 §7.6.](https://datatracker.ietf.org/doc/html/rfc8555#section-7.6.)
+/// Extract the first PEM certificate as DER for [RFC 8555 §7.6](https://datatracker.ietf.org/doc/html/rfc8555#section-7.6).
 ///
 /// # Errors
 /// Rejects missing, non-certificate or malformed leaf data.

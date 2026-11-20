@@ -81,7 +81,7 @@ pub(crate) fn sign_request(
     })
 }
 
-/// Sign the nonce-free inner JWS required by [RFC 8555 §7.3.5.](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5.)
+/// Sign the nonce-free inner JWS required by [RFC 8555 §7.3.5](https://datatracker.ietf.org/doc/html/rfc8555#section-7.3.5).
 pub(crate) fn sign_key_change(
     new_signer: &dyn JwsSigner,
     old_key: &Jwk,

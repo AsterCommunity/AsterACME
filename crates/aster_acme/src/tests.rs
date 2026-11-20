@@ -574,6 +574,16 @@ fn parsed_identifiers_route_ip_literals_first_and_keep_dns_semantics() {
     // split (-d versus --ip) so neither channel silently reinterprets it.
     assert!(Identifier::new("01.2.3.4").is_err());
     assert!(DnsIdentifier::new("01.2.3.4").is_err());
+    // 08.08.08.08 is rejected by the strict IP parser (url 2.5.8 refuses the
+    // leading-zero octet) yet the dotted-quad heuristic still routes it to
+    // the canonical-form guidance instead of storing it as a DNS name.
+    // DnsIdentifier itself keeps accepting numeric labels, so only the
+    // combined parse gains the guidance.
+    let error = Identifier::new("08.08.08.08").unwrap_err();
+    assert!(
+        matches!(error, IdentifierError::InvalidIpAddress(_)),
+        "got {error:?}"
+    );
     // A five-label numeric name has no IPv4 form at all and stays a DNS name.
     let five_labels = Identifier::new("1.2.3.4.5").unwrap();
     assert!(matches!(five_labels, Identifier::Dns(_)));
@@ -654,4 +664,41 @@ fn ip_authorizations_reject_wildcard_flags_and_dns_keep_base_semantics() {
             "accepted {value:?}"
         );
     }
+}
+
+#[test]
+fn ip_identifier_from_conversions_agree_with_parsing_and_set_semantics() {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let ipv4 = IpIdentifier::from(Ipv4Addr::new(192, 0, 2, 1));
+    assert_eq!(ipv4.address(), IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)));
+    assert_eq!(ipv4.value(), "192.0.2.1");
+    let ipv6 = IpIdentifier::from(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+    assert_eq!(
+        ipv6.address(),
+        IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))
+    );
+    assert_eq!(ipv6.value(), "2001:db8::1");
+    // Converting a concrete address and parsing its canonical text are the
+    // same mapping; non-canonical spellings never create a second identifier.
+    assert_eq!(ipv4, IpIdentifier::new("192.0.2.1").unwrap());
+    assert_eq!(ipv6, IpIdentifier::new("2001:DB8::1").unwrap());
+    assert_eq!(
+        Identifier::new("2001:DB8::1").unwrap(),
+        Identifier::Ip(ipv6.clone())
+    );
+    // Hash and Ord containers hold one entry per address, never per spelling.
+    let hashed: std::collections::HashSet<Identifier> = [
+        Identifier::Ip(ipv4.clone()),
+        Identifier::Ip(IpIdentifier::new("192.0.2.1").unwrap()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(hashed.len(), 1);
+    let mut ordered = std::collections::BTreeSet::new();
+    ordered.insert(Identifier::Ip(ipv6.clone()));
+    ordered.insert(Identifier::Ip(
+        IpIdentifier::new("2001:0db8:0000:0000:0000:0000:0000:0001").unwrap(),
+    ));
+    assert_eq!(ordered.len(), 1);
+    assert_eq!(ordered.iter().next().unwrap().value(), "2001:db8::1");
 }

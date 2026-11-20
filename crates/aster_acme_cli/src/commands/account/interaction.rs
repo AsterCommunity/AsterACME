@@ -112,12 +112,18 @@ pub(super) fn profile_choice(
         return Ok(None);
     };
     let names = advertised.keys().cloned().collect::<Vec<_>>();
+    // CA-provided names/descriptions are untrusted terminal text: escape the
+    // display labels, while selection still indexes the original names.
     let mut choices = names
         .iter()
         .map(
             |name| match advertised.get(name).filter(|text| !text.is_empty()) {
-                Some(description) => format!("{name} — {description}"),
-                None => name.clone(),
+                Some(description) => format!(
+                    "{} — {}",
+                    crate::common::output::safe(name),
+                    crate::common::output::safe(description)
+                ),
+                None => crate::common::output::safe(name),
             },
         )
         .collect::<Vec<_>>();
@@ -464,7 +470,8 @@ mod tests {
 
 #[cfg(test)]
 mod profile_choice_tests {
-    use super::*;
+    use crate::commands::account::interaction::*;
+
     use std::collections::VecDeque;
 
     struct FakePrompts {

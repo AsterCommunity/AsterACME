@@ -75,8 +75,10 @@ CLI builds with default features include advisory prechecks: CAA record inspecti
 DNS methods (`dns_provider`, `manual_dns`, `dns_persist`) never validate IP addresses. HTTP-01 and TLS-ALPN-01 accept both IPv4 and IPv6 identifiers:
 
 ```sh
-aster-acme cert issue --ip 203.0.113.10 --ip 2001:db8:0:f00::1 -c standalone
-aster-acme cert issue -d example.com --ip 203.0.113.10 -c webroot -w /var/www/html
+# IPv4: the default 0.0.0.0:80 listener is fine
+aster-acme cert issue --ip 203.0.113.10 -c standalone
+# IPv6: pass the dual-stack listen address explicitly or the CA cannot connect
+aster-acme cert issue --ip 2001:db8:0:f00::1 -c standalone --listen-address '[::]:80'
 ```
 
 - IP identifiers skip DNS resolution: HTTP-01 uses the IP literal as the Host header (IPv6 bracketed), and TLS-ALPN-01 answers the reverse mapping name (IN-ADDR.ARPA/IP6.ARPA) with an iPAddress SAN certificate.

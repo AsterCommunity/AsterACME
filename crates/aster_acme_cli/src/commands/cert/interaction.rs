@@ -257,6 +257,19 @@ fn validate_identifiers(args: &IssueArgs, method: ValidationMethod) -> CliResult
     Ok(())
 }
 
+/// Listener default by validation port and identifier mix. Any IPv6
+/// identifier in the request makes the CA dial over IPv6, so an IPv4
+/// wildcard bind would be unreachable for it: those default to the
+/// dual-stack `[::]` address; pure IPv4 or DNS-only keeps `0.0.0.0`.
+fn listen_default(port: u16, addresses: &[aster_acme::identifier::IpIdentifier]) -> String {
+    let any_ipv6 = addresses.iter().any(|ip| ip.address().is_ipv6());
+    if any_ipv6 {
+        format!("[::]:{port}")
+    } else {
+        format!("0.0.0.0:{port}")
+    }
+}
+
 fn complete_method(
     args: &mut IssueArgs,
     method: ValidationMethod,
@@ -285,16 +298,7 @@ fn complete_method(
             } else {
                 443
             };
-            // IPv6-only identifier sets cannot be served by an IPv4 wildcard
-            // bind; default to the dual-stack IPv6 address for those.
-            let default = if !args.ip.is_empty()
-                && args.domain.is_empty()
-                && args.ip.iter().all(|ip| ip.address().is_ipv6())
-            {
-                format!("[::]:{port}")
-            } else {
-                format!("0.0.0.0:{port}")
-            };
+            let default = listen_default(port, &args.ip);
             args.listen_address = Some(loop {
                 let value = prompts.text(
                     "Validation listen address (IP:PORT):",
@@ -319,3 +323,6 @@ fn complete_method(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod listen_default_tests;

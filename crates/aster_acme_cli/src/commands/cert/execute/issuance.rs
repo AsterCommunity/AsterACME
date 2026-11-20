@@ -118,11 +118,19 @@ async fn prompt_profile(
         return Ok(());
     };
     let names = advertised.keys().cloned().collect::<Vec<_>>();
+    // CA-provided names/descriptions are untrusted terminal text: escape the
+    // display labels, while selection still indexes the original names.
     let mut choices = names
         .iter()
         .map(|name| match advertised.get(name).map(String::as_str) {
-            None | Some("") => name.clone(),
-            Some(description) => format!("{name} — {description}"),
+            None | Some("") => crate::common::output::safe(name),
+            Some(description) => {
+                format!(
+                    "{} — {}",
+                    crate::common::output::safe(name),
+                    crate::common::output::safe(description)
+                )
+            }
         })
         .collect::<Vec<_>>();
     choices.push("(no default; the CA default applies)".to_owned());

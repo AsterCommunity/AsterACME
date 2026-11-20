@@ -155,18 +155,16 @@ fn certificate_profile_names_are_bounded_and_become_resume_identity() {
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
         profile: profile.map(str::to_owned),
     };
-    for invalid in [
-        Some(""),
-        Some(&"x".repeat(65)[..]),
-        Some("short\nlived"),
-        Some("short\u{0}lived"),
-    ] {
+    for invalid in [Some(""), Some("short\nlived"), Some("short\u{0}lived")] {
         assert!(
             definition(invalid).validate().is_err(),
             "accepted {invalid:?}"
         );
     }
     definition(Some("shortlived")).validate().unwrap();
+    // The draft caps nothing about profile name length or encoding: a CA may
+    // advertise multibyte names (22 chars of \u{578b} = 66 bytes) and pass.
+    definition(Some(&"\u{578b}".repeat(22))).validate().unwrap();
     definition(None).validate().unwrap();
     // The selection is part of the resume identity: a changed profile is a
     // different certificate definition and never silently reuses an order.

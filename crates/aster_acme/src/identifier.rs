@@ -274,6 +274,14 @@ pub enum Identifier {
     Ip(IpIdentifier),
 }
 
+/// Four all-digit labels — an address attempt, not an ordinary name.
+fn looks_like_dotted_quad(value: &str) -> bool {
+    let mut labels = value.split('.');
+    value.contains('.')
+        && labels.clone().count() == 4
+        && labels.all(|label| !label.is_empty() && label.bytes().all(|b| b.is_ascii_digit()))
+}
+
 impl Identifier {
     /// Parse a caller-supplied identifier: a bare IP literal becomes an IP
     /// identifier, anything else a DNS identifier. Only IP identifiers that
@@ -286,6 +294,13 @@ impl Identifier {
     pub fn new(value: &str) -> Result<Self, IdentifierError> {
         if let Ok(address) = IpIdentifier::new(value) {
             return Ok(Self::Ip(address));
+        }
+        // A dotted quad of digits that failed strict IP parsing (leading
+        // zeros, out-of-range octets) reads as an IP attempt: guide the
+        // caller to the canonical form instead of silently storing a DNS
+        // name they never meant.
+        if looks_like_dotted_quad(value) {
+            return Err(IdentifierError::InvalidIpAddress(value.to_owned()));
         }
         DnsIdentifier::new(value).map(Self::Dns)
     }

@@ -116,7 +116,7 @@ fn profiles_text(
             text.push_str(&safe(description));
         }
     }
-    text.push_str("\nSet an account default with account set-profile, or select per issue with cert issue --profile.");
+    text.push_str("\nSet an account default with account update --profile, or select per issue with cert issue --profile.");
     text
 }
 
@@ -701,7 +701,7 @@ fn profiles_listing_reports_advertised_names_and_descriptions() {
     .unwrap();
     assert!(text.contains("classic — https://ca.example/docs#classic"));
     assert!(text.contains("shortlived"));
-    assert!(text.contains("account set-profile") && text.contains("cert issue --profile"));
+    assert!(text.contains("account update --profile") && text.contains("cert issue --profile"));
     // No advertisement: the CA default is stated explicitly, not assumed.
     let text = render(
         &AccountReport::Profiles {
