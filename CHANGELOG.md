@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Breaking
+
+- **Default data-dir unified to the reverse-DNS path** — Fix the Linux fallback to a bare `~/.config/acme`: all platforms now use `com.astercosm.acme` (macOS `~/Library/Application Support/com.astercosm.acme`, Linux `~/.config/com.astercosm.acme`, Windows `%APPDATA%\com.astercosm.acme\config`). No automatic migration: Linux users move the directory themselves (`mv ~/.config/acme ~/.config/com.astercosm.acme`) or keep pointing at the old location with `--data-dir`/`ASTER_ACME_DATA_DIR`; the macOS path is unchanged.
+
+
 ### Added
 
 - **RFC 8738 IP identifier certificates** — Issue for IPv4/IPv6 addresses with HTTP-01 and TLS-ALPN-01: typed `Identifier` across orders, authorizations, CSRs (mixed DNS/IP SAN sets), issued-leaf checks, resume, renewal and revocation. `-d/--domain` stays DNS-only and new repeatable `--ip ADDRESS` takes IP literals (the first `-d`, else the first `--ip`, is primary; interactive prompts accept both). DNS-01/DNS-PERSIST-01 reject IP identifiers before any side effect with zero acknowledgements. TLS-ALPN-01 serves iPAddress SAN certificates routed by the RFC 8738 reverse-name SNI; HTTP-01 material uses the bracketed IPv6 Host form and skips DNS resolution; CAA precheck reports IP identifiers as not applicable (RFC 8659 covers DNS names). Default certificate names prefix IP primaries with `ip-` (colons become dashes, e.g. `ip-2001-db8--1`). Issued reports and JSON now say "Identifiers". Real-CA IP issuance acceptance is recorded separately from the loopback evidence.

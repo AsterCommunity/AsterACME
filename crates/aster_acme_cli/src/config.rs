@@ -256,7 +256,11 @@ pub(crate) struct Config {
 
 /// Resolve platform paths like gcop-rs, keeping config and private state under one root.
 pub(crate) fn default_data_dir() -> CliResult<PathBuf> {
-    directories::ProjectDirs::from("com", "astercosm", "acme")
+    // A uniform reverse-DNS project path on every platform: the directories
+    // crate derives Linux/XDG paths from the application name alone and would
+    // otherwise produce a bare `acme` directory there, diverging from the
+    // macOS/Windows identifier `com.astercosm.acme`.
+    directories::ProjectDirs::from_path(std::path::PathBuf::from("com.astercosm.acme"))
         .map(|dirs| dirs.config_dir().to_path_buf())
         .ok_or_else(|| {
             "Cannot determine the default state directory; pass --data-dir <PATH>.".into()

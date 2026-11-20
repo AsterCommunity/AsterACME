@@ -25,15 +25,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: crate::commands::cert::args::CertCommand,
     },
-    /// Run noninteractive certificate maintenance for an external scheduler.
-    Daemon {
-        #[command(subcommand)]
-        command: crate::commands::daemon::DaemonCommand,
-    },
     /// Manage DNS provider profiles.
     Provider {
         #[command(subcommand)]
         command: crate::commands::provider::args::ProviderCommand,
+    },
+    /// Run noninteractive certificate maintenance for an external scheduler.
+    Daemon {
+        #[command(subcommand)]
+        command: crate::commands::daemon::DaemonCommand,
     },
     /// Show version, revision, target, profile, enabled features and build time.
     Version {

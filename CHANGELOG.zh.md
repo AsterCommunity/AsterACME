@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 破坏性
+
+- **默认 data-dir 统一为反向域名路径** — 修复 Linux 默认目录回落为 `~/.config/acme` 的缺陷：三平台统一使用 `com.astercosm.acme`（macOS `~/Library/Application Support/com.astercosm.acme`，Linux `~/.config/com.astercosm.acme`，Windows `%APPDATA%\com.astercosm.acme\config`）。不做自动迁移：Linux 用户自行 `mv ~/.config/acme ~/.config/com.astercosm.acme`（或显式 `--data-dir`/`ASTER_ACME_DATA_DIR` 指回旧路径）；macOS 路径不变。
+
+
 ### 新增
 
 - **RFC 8738 IP 标识符证书** — 以 HTTP-01 和 TLS-ALPN-01 为 IPv4/IPv6 地址签发证书：类型化 `Identifier` 贯穿订单、授权、CSR（DNS/IP 混合 SAN）、返回证书校验、恢复、续期与吊销。`-d/--domain` 仅收 DNS 名，新增可重复的 `--ip ADDRESS` 收 IP 字面量（首个 `-d`，否则首个 `--ip` 为主标识符；交互提示同时接受两种）。DNS-01/DNS-PERSIST-01 在任何副作用之前拒绝 IP 标识符且零 ack。TLS-ALPN-01 按 RFC 8738 反向名 SNI 路由 iPAddress SAN 证书；HTTP-01 材料使用 IPv6 括号 Host 形式并跳过 DNS 解析；CAA 预检将 IP 标识符报告为不适用（RFC 8659 只覆盖 DNS 名）。IP 主标识符的默认证书名加 `ip-` 前缀（冒号替换为连字符，如 `ip-2001-db8--1`）。签发报告与 JSON 改用 "Identifiers"。真实 CA 的 IP 签发验收与 loopback 证据分开记录。

@@ -10,8 +10,8 @@ State lives in the platform directory for `com.astercosm.acme` by default:
 | Platform | Path |
 | --- | --- |
 | macOS | `~/Library/Application Support/com.astercosm.acme` |
-| Linux | `~/.local/share/com.astercosm.acme` |
-| Windows | `%APPDATA%\AsterCosm\acme` |
+| Linux | `~/.config/com.astercosm.acme` |
+| Windows | `%APPDATA%\com.astercosm.acme\config` |
 
 `--data-dir PATH` or the `ASTER_ACME_DATA_DIR` environment variable selects another root, with the CLI flag taking precedence. Container images pin `/data`. `version` and `help` never load the state directory.
 
