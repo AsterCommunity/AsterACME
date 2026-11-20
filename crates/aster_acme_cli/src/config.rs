@@ -26,7 +26,7 @@ fn template() -> DocumentMut {
         (
             "default_account",
             value("default"),
-            "\n# Default local account; changed by account switch.\n",
+            "\n# Default local account; changed by account default.\n",
         ),
         (
             "request_timeout",

@@ -702,3 +702,23 @@ fn ip_identifier_from_conversions_agree_with_parsing_and_set_semantics() {
     assert_eq!(ordered.len(), 1);
     assert_eq!(ordered.iter().next().unwrap().value(), "2001:db8::1");
 }
+
+#[test]
+fn dns_identifier_construction_and_deserialization_share_one_rule_set() {
+    // Four-part all-digit names read as IP attempts (including spellings the
+    // strict IP parser rejects, and trailing-dot forms) and are refused by
+    // construction and deserialization alike.
+    for value in ["08.08.08.08", "08.08.08.08."] {
+        assert!(DnsIdentifier::new(value).is_err(), "accepted {value:?}");
+        assert!(
+            serde_json::from_value::<DnsIdentifier>(json!(value)).is_err(),
+            "deserialized {value:?}"
+        );
+    }
+    // Plain DNS and five-part numeric names stay ordinary DNS names.
+    for value in ["example.com", "1.2.3.4.5"] {
+        let parsed = DnsIdentifier::new(value).unwrap();
+        let from_json = serde_json::from_value::<DnsIdentifier>(json!(parsed.value())).unwrap();
+        assert_eq!(from_json, parsed);
+    }
+}

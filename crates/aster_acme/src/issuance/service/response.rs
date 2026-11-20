@@ -117,3 +117,66 @@ pub(super) fn completed(record: IssueRecord) -> IssueOutcome {
         cleanup,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::issuance::service::response::parse_order;
+    use crate::transport::AcmeResponse;
+    use serde_json::json;
+
+    fn record_with_profile(profile: Option<&str>) -> crate::issuance::IssueRecord {
+        serde_json::from_value(json!({
+            "challenge": "http-01",
+            "solver_config": {},
+            "solver_id": "standalone",
+            "operation_id": "a".repeat(43),
+            "name": "web",
+            "created_at": "2026-01-01T00:00:00Z",
+            "account_name": "default",
+            "account_id": "stable",
+            "account_thumbprint": "key",
+            "directory": "https://ca.example/directory",
+            "account_url": "https://ca.example/account",
+            "key_algorithm": "ecdsa-p256",
+            "identifiers": ["example.com"],
+            "profile": profile,
+            "phase": "authorizing",
+            "new_order_intent_saved": true,
+            "finalize_submitted": "not_submitted",
+            "authorizations": []
+        }))
+        .unwrap()
+    }
+
+    fn order_body(profile: Option<&str>) -> AcmeResponse {
+        let mut body = json!({
+            "status": "pending",
+            "expires": "2099-01-01T00:00:00Z",
+            "identifiers": [{"type": "dns", "value": "example.com"}],
+            "authorizations": ["https://ca.example/authz"],
+            "finalize": "https://ca.example/finalize"
+        });
+        if let Some(profile) = profile {
+            body["profile"] = json!(profile);
+        }
+        AcmeResponse {
+            status: reqwest::StatusCode::OK,
+            headers: reqwest::header::HeaderMap::new(),
+            body: serde_json::to_vec(&body).unwrap(),
+        }
+    }
+
+    #[test]
+    fn explicit_profile_requires_an_echoing_order() {
+        let record = record_with_profile(Some("shortlived"));
+        parse_order(&order_body(Some("shortlived")), &record).unwrap();
+        // Omitted echo or a different profile both change certificate content.
+        for observed in [None, Some("classic")] {
+            assert!(parse_order(&order_body(observed), &record).is_err());
+        }
+        // Without an explicit request, absence stays informational.
+        let record = record_with_profile(None);
+        parse_order(&order_body(Some("classic")), &record).unwrap();
+        parse_order(&order_body(None), &record).unwrap();
+    }
+}

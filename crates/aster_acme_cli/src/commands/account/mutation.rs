@@ -249,11 +249,17 @@ async fn interactive_profile_selection(
             "CA directory does not advertise certificate profiles; nothing to select. Remove the profile preference with --clear-profile.".into(),
         );
     };
-    let mut choices = advertised.keys().cloned().collect::<Vec<_>>();
+    // CA-provided names are untrusted terminal text: escape the display
+    // labels, while selection indexes the original names unchanged.
+    let names = advertised.keys().cloned().collect::<Vec<_>>();
+    let mut choices = names
+        .iter()
+        .map(|name| output::safe(name))
+        .collect::<Vec<_>>();
     choices.push("(no default; the CA default applies)".to_owned());
     // Preselect the account's current default so plain confirmation keeps it.
-    let default = advertised
-        .keys()
+    let default = names
+        .iter()
         .position(|name| Some(name.as_str()) == current_default)
         .unwrap_or(0);
     let selection = terminal::select_index_or_back(
@@ -263,8 +269,8 @@ async fn interactive_profile_selection(
         &cli.output,
     )?
     .ok_or(crate::common::terminal::Canceled)?;
-    Ok(if selection < advertised.len() {
-        Some(choices[selection].clone())
+    Ok(if selection < names.len() {
+        Some(names[selection].clone())
     } else {
         None
     })

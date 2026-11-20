@@ -677,6 +677,42 @@ pub(super) mod tests {
         }
         assert_eq!(labels[0], labels[1]);
     }
+    #[test]
+    fn profiles_and_preference_reports_serialize_with_explicit_fields() {
+        use aster_acme_protocol::url::AcmeUrl;
+        let directory = AcmeUrl::new("https://ca.example/directory").unwrap();
+        let profiles = std::collections::BTreeMap::from([
+            ("classic".to_owned(), String::new()),
+            (
+                "shortlived".to_owned(),
+                "https://ca.example/shortlived".to_owned(),
+            ),
+        ]);
+        let json = json_value(&AccountReport::Profiles {
+            directory: directory.clone(),
+            profiles: Some(profiles),
+        });
+        assert_eq!(json["directory"], "https://ca.example/directory");
+        assert_eq!(json["profiles"]["classic"], "");
+        assert_eq!(
+            json["profiles"]["shortlived"],
+            "https://ca.example/shortlived"
+        );
+        let json = json_value(&AccountReport::Profiles {
+            directory: directory.clone(),
+            profiles: None,
+        });
+        assert_eq!(json["profiles"], serde_json::Value::Null);
+
+        let json = json_value(&AccountReport::ProfilePreference {
+            name: "work".to_owned(),
+            previous: Some("classic".to_owned()),
+            current: None,
+        });
+        assert_eq!(json["name"], "work");
+        assert_eq!(json["previous"], "classic");
+        assert_eq!(json["current"], serde_json::Value::Null);
+    }
 }
 
 #[test]

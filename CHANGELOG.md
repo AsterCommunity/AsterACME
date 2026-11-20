@@ -6,7 +6,7 @@
 
 ### Breaking
 
-- **Default data-dir unified to the reverse-DNS path** — Fix the Linux fallback to a bare `~/.config/acme`: all platforms now use `com.astercosm.acme` (macOS `~/Library/Application Support/com.astercosm.acme`, Linux `~/.config/com.astercosm.acme`, Windows `%APPDATA%\com.astercosm.acme\config`). No automatic migration. Migration notes: if the target already exists, `mv` would nest the old directory inside it — verify the target is empty first; users with `XDG_CONFIG_HOME` set have both old and new directories under that root (e.g. `/srv/config/acme` → `/srv/config/com.astercosm.acme`) — `~/.config` is only the fallback when unset; alternatively keep pointing at the old location with `--data-dir`/`ASTER_ACME_DATA_DIR`. The macOS path is unchanged.
+- **Default data-dir unified to the reverse-DNS path** — Fix the Linux fallback to a bare `~/.config/acme`: all platforms now use `com.astercosm.acme` (macOS `~/Library/Application Support/com.astercosm.acme`, Linux `~/.config/com.astercosm.acme`, Windows `%APPDATA%\com.astercosm.acme\config`). No automatic migration. Linux migration steps: if the target does not exist, move directly (`mv ~/.config/acme ~/.config/com.astercosm.acme`); if the target exists but is empty, `rmdir` it first and then move; if the target is non-empty, never overwrite — switch to `--data-dir`/`ASTER_ACME_DATA_DIR` or merge file-by-file by hand. Users with `XDG_CONFIG_HOME` set have both old and new directories under that root (e.g. `/srv/config/acme` → `/srv/config/com.astercosm.acme`) — `~/.config` is only the fallback when unset. The macOS path is unchanged.
 
 
 ### Added

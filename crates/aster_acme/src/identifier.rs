@@ -107,8 +107,19 @@ impl DnsIdentifier {
             .strip_prefix("*.")
             .map_or((value, false), |v| (v, true));
         let name = DnsName::new(base)?;
+        // WHATWG parsing (what `url` implements) recognizes most dotted quads
+        // of digits as IPv4 — including spellings the strict IP parser
+        // rejects, like leading-zero octets. Such input is an address
+        // attempt: reject it here so `--dns` and `--ip` stay unambiguous and
+        // string round-trips keep their kind.
+        let dotted_quad_of_digits = name.as_str().split('.').count() == 4
+            && name
+                .as_str()
+                .split('.')
+                .all(|label| !label.is_empty() && label.bytes().all(|b| b.is_ascii_digit()));
         if name.as_str().contains('_')
             || name.as_str().parse::<IpAddr>().is_ok()
+            || dotted_quad_of_digits
             || matches!(
                 url::Host::parse(name.as_str()),
                 Ok(url::Host::Ipv4(_) | url::Host::Ipv6(_))
