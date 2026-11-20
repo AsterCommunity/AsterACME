@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-11-20
+
 ### Breaking
 
 - **Default data-dir unified to the reverse-DNS path** — Fix the Linux fallback to a bare `~/.config/acme`: all platforms now use `com.astercosm.acme` (macOS `~/Library/Application Support/com.astercosm.acme`, Linux `~/.config/com.astercosm.acme`, Windows `%APPDATA%\com.astercosm.acme\config`). No automatic migration; on Linux the default moves from `~/.config/acme` to `~/.config/com.astercosm.acme` — see the [data directory documentation](docs/src/content/docs/en/admin/data-dir.mdx) for migration steps (existing target, `XDG_CONFIG_HOME`, non-empty targets). The macOS path is unchanged.
@@ -11,8 +13,12 @@
 
 ### Added
 
+- **Bilingual documentation site** — Launch a Starlight documentation site in Chinese and English at [acme.docs.astercosm.com](https://acme.docs.astercosm.com/) covering installation, quick start, accounts, challenges, issuance and renewal, deployment, DNS providers, the daemon and the CLI reference, deployed automatically with CI link checking; developer contract documents move to `developer-docs/`. Add `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md` and `SECURITY.md`.
+
+- **Container image shims and revision metadata** — Release images report the tag commit as the CLI build revision, and the top-level subcommands (`account`, `cert`, `daemon`, `provider`, `version`, `help`) run directly under `docker exec` without the entrypoint prefix. Ship a compose example with bind-mounted `data/` and `ssl/` volumes and move the Dockerfile, entrypoint and compose file under `docker/`.
+
 - **RFC 8738 IP identifier certificates** — Issue for IPv4/IPv6 addresses with HTTP-01 and TLS-ALPN-01: typed `Identifier` across orders, authorizations, CSRs (mixed DNS/IP SAN sets), issued-leaf checks, resume, renewal and revocation. `-d/--domain` stays DNS-only and new repeatable `--ip ADDRESS` takes IP literals (the first `-d`, else the first `--ip`, is primary; interactive prompts accept both). DNS-01/DNS-PERSIST-01 reject IP identifiers before any side effect with zero acknowledgements. TLS-ALPN-01 serves iPAddress SAN certificates routed by the RFC 8738 reverse-name SNI; HTTP-01 material uses the bracketed IPv6 Host form and skips DNS resolution; CAA precheck reports IP identifiers as not applicable (RFC 8659 covers DNS names). Default certificate names prefix IP primaries with `ip-` (colons become dashes, e.g. `ip-2001-db8--1`). Issued reports and JSON now say "Identifiers". Real-CA IP issuance acceptance is recorded separately from the loopback evidence.
-- **ACME certificate profiles (draft-ietf-acme-profiles)** — Discover CA-advertised profiles from directory metadata, select one per order with cert issue --profile (validated against the advertisement before any newOrder; unadvertised names fail with the available list and zero side effects), and fix the selection for resume/renewal as part of the certificate identity — metadata drift never swaps it implicitly. Accounts carry an operator default: account register --profile, account update --profile/--clear-profile (advisory against the live directory), and account show --profiles; cert issue --profile wins over the account default and existing certificates never migrate implicitly. Order objects echo the CA's selection and a mismatch with the request is rejected as an identity change. Spec: draft-ietf-acme-profiles (https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles).
+- **ACME certificate profiles (draft-ietf-acme-profiles)** — Discover CA-advertised profiles from directory metadata, select one per order with cert issue --profile (validated against the advertisement before any newOrder; unadvertised names fail with the available list and zero side effects), and fix the selection for resume/renewal as part of the certificate identity — metadata drift never swaps it implicitly. Accounts carry an operator default: account register --profile, account update --profile/--clear-profile (advisory against the live directory), and account show --profiles; cert issue --profile wins over the account default and existing certificates never migrate implicitly. Order objects echo the CA's selection and a mismatch with the request is rejected as an identity change. Interactive `cert issue` on a terminal lists the advertised profiles with the account default preselected (Esc cancels). Spec: draft-ietf-acme-profiles (https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles).
 - **Huawei Cloud DNS** — Include the backend in the default CLI build; embedded hosts opt in with `huawei_cloud`. `project_id` is optional and is discovered through IAM for the selected region; `region` is optional and defaults to `cn-north-4`. Public-zone discovery, HWS signatures and durable RRset recovery use best-effort ownership: concurrent external changes between read and PUT/DELETE may be overwritten or deleted; atomic isolation is not guaranteed (#41).
 
 - **Alibaba Cloud DNS and Tencent Cloud DNSPod** — Included in default CLI builds, with individual features `dns-aliyun` and `dns-tencent-cloud` for smaller builds. Both save the final target’s zone, the observed TXT TTL and verify the exact record before cleanup. Built-in providers use a shared marker contract with provider overrides; Alibaba Cloud uses the 50-character-safe `acme-<publication_id>` form while the default remains `asteracme-<publication_id>`. Alibaba Cloud writes its marker with `UpdateDomainRecordRemark` after creation and retries that checkpoint without repeating TXT creation. DNSPod reconciles lost creates using publication remarks. Alibaba Cloud DNS requests detailed domain attributes to discover its minimum TTL, recognizes documented record statuses, requires the saved create-response record ID and refuses to borrow existing values. (#40, #39)
@@ -22,7 +28,7 @@
 - **Automatic CA terms updates** — `account register --auto-accept-new-terms` accepts the current directory terms and durably delegates future terms URL changes for unattended account ensure and renewal. The exact accepted URL remains visible in `account show`; `--yes`, JSON mode and implicit ensure never enable the delegation.
 
 ### Changed
-- **Account subcommand redesign (8 commands)** — `switch` → `default`, `update-contact` + `set-profile` merged into `update` (contacts and default profile in one place), `profiles` folded into `show --profiles`, `deactivate` folded into `remove --deactivate` (CA deactivation first, then local removal).
+- **Account subcommand redesign (8 commands)** — `switch` → `default`, `update-contact` + `set-profile` merged into `update` (contacts and default profile in one place), `profiles` folded into `show --profiles`, `deactivate` folded into `remove --deactivate` (CA deactivation first, then local removal). On a terminal, `account update` without flags opens a scope menu with an arrow-key picker over CA-advertised profiles.
 
 - **ACME wire and inspection contracts** — Preserve unknown extension members across account, identifier, order, authorization, directory metadata and ARI resources while retaining optional directory capability URLs such as `keyChange`, `newOrder` and `revokeCert`. Journal JSON snapshots retain null-valued order and authorization extensions. `IssueService::inspect` now receives the caller's cancellation/deadline context, and issuance reports cancellation separately from an expired operation budget, including provider and host-process timeouts.
 
@@ -42,6 +48,7 @@
 - **Saved request selection** — Accept valid operation IDs beginning with `-` in issue recovery, show, remove and revoke commands instead of interpreting them as options.
 - **ACME mutation recovery** — Retain revocation Pending and challenge/finalize Submitted evidence after 408/429 instead of treating these transient responses as definitive rejection. Preserve acknowledgement/finalize retry deadlines, prior uncertain revocations and the existing explicit-retry boundaries.
 - **Maintenance diagnostics** — Preserve both the refresh failure and subsequent durable-read failure for one certificate, report its latest schedule as unavailable, and continue processing the remaining certificates.
+- **Release symbol archives** — Windows symbol archives keep the linker's crate-stem PDB name (`aster_acme.pdb`) so debuggers match the basename recorded in the executable, and macOS archives resolve v0-mangled backtraces through `lldb` instead of `atos`.
 
 ## [0.1.0-alpha.2] - 2026-11-18
 
@@ -94,6 +101,7 @@ Initial pre-release. Rust APIs and local formats may change without compatibilit
 
 Cross-compilation and local mocks do not constitute native-platform or public-CA acceptance.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

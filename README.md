@@ -30,7 +30,7 @@ AsterACME manages the certificate lifecycle with saved request state, fixed keys
 
 CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Huawei Cloud DNS by default. Huawei Cloud RRset updates cannot guarantee atomic isolation from external writers. Embedded applications select provider features explicitly. [DNS provider setup](developer-docs/dns-providers.md)
 
-**Available now:** AsterACME `0.1.0-alpha.2` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. It includes native Cloudflare and ADPP backends behind a unified DNS solver. Live DNS/public-CA acceptance is separate.
+**Available now:** AsterACME `0.1.0-alpha.3` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. It includes native Cloudflare and ADPP backends behind a unified DNS solver. Live DNS/public-CA acceptance is separate.
 
 ## Capabilities
 
@@ -58,16 +58,16 @@ Install the CLI from Homebrew:
 brew install astercommunity/tap/aster-acme
 ```
 
-Install the published `0.1.0-alpha.2` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
+Install the published `0.1.0-alpha.3` CLI from crates.io. `cargo-binstall` uses a matching prebuilt binary when available and otherwise falls back to a Cargo source build:
 
 ```sh
-cargo binstall aster_acme_cli@0.1.0-alpha.2
+cargo binstall aster_acme_cli@0.1.0-alpha.3
 ```
 
 Without `cargo-binstall`, install the same CLI through Cargo:
 
 ```sh
-cargo install aster_acme_cli --version 0.1.0-alpha.2
+cargo install aster_acme_cli --version 0.1.0-alpha.3
 ```
 
 Build from the checkout with **Rust 1.99+**:

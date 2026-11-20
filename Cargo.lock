@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_cli_storage",
  "aster_acme_core",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_cli"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme",
  "aster_acme_cli_storage",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_cli_storage"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme",
  "aster_acme_core",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_core"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_macros",
  "serde",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_dns"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "async-trait",
  "linkme",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_dns_adpp"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_dns",
  "aster_forge_process",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_dns_builtin"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_dns",
  "aws-lc-rs",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_dns_http"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_dns",
  "aster_forge_http",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_dns_resolver"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_dns",
  "async-trait",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_protocol"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_core",
  "aster_forge_macros",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "aster_acme_validation"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme",
  "aster_acme_core",

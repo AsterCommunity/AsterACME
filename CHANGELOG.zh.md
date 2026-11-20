@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-11-20
+
 ### 破坏性
 
 - **默认 data-dir 统一为反向域名路径** — 修复 Linux 默认目录回落为 `~/.config/acme` 的缺陷：三平台统一使用 `com.astercosm.acme`（macOS `~/Library/Application Support/com.astercosm.acme`，Linux `~/.config/com.astercosm.acme`，Windows `%APPDATA%\com.astercosm.acme\config`）。不做自动迁移；Linux 默认路径从 `~/.config/acme` 变为 `~/.config/com.astercosm.acme`，迁移步骤（含目标已存在、`XDG_CONFIG_HOME` 与非空目录的处理）见[数据目录文档](docs/src/content/docs/admin/data-dir.mdx)。macOS 路径不变。
@@ -11,9 +13,13 @@
 
 ### 新增
 
+- **双语文档站点** — 发布中英文双语 Starlight 文档站点 [acme.docs.astercosm.com](https://acme.docs.astercosm.com/)，覆盖安装、快速开始、账户、challenge 方法、签发与续期、部署、DNS provider、守护进程和 CLI 参考，由 CI 链接检查并自动部署；开发者契约文档迁移至 `developer-docs/`。新增 `CODE_OF_CONDUCT.md`、`CONTRIBUTING.md` 与 `SECURITY.md`。
+
+- **容器镜像 shim 与构建元数据** — Release 镜像以 tag commit 作为 CLI 构建修订号，六个顶层子命令（`account`、`cert`、`daemon`、`provider`、`version`、`help`）可在 `docker exec` 下直接执行，不再需要 entrypoint 前缀。附带挂载 `data/` 与 `ssl/` 卷的 compose 示例，Dockerfile、entrypoint 和 compose 文件迁移至 `docker/`。
+
 - **RFC 8738 IP 标识符证书** — 以 HTTP-01 和 TLS-ALPN-01 为 IPv4/IPv6 地址签发证书：类型化 `Identifier` 贯穿订单、授权、CSR（DNS/IP 混合 SAN）、返回证书校验、恢复、续期与吊销。`-d/--domain` 仅收 DNS 名，新增可重复的 `--ip ADDRESS` 收 IP 字面量（首个 `-d`，否则首个 `--ip` 为主标识符；交互提示同时接受两种）。DNS-01/DNS-PERSIST-01 在任何副作用之前拒绝 IP 标识符且零 ack。TLS-ALPN-01 按 RFC 8738 反向名 SNI 路由 iPAddress SAN 证书；HTTP-01 材料使用 IPv6 括号 Host 形式并跳过 DNS 解析；CAA 预检将 IP 标识符报告为不适用（RFC 8659 只覆盖 DNS 名）。IP 主标识符的默认证书名加 `ip-` 前缀（冒号替换为连字符，如 `ip-2001-db8--1`）。签发报告与 JSON 改用 "Identifiers"。真实 CA 的 IP 签发验收与 loopback 证据分开记录。
 
-- **ACME 证书 profile（draft-ietf-acme-profiles）** — 从 directory metadata 发现 CA 广告的 profiles，`cert issue --profile` 按单选择（newOrder 前按广告校验；未广告名称直接失败并列出可用项，零副作用），选择作为证书身份的一部分在恢复/续期中固定——元数据漂移不会隐式替换。账户支持默认 profile：`account register --profile`、`account set-profile`/`--clear`（对照在线 directory 建议性校验），以及只读的 `account profiles` 列表；`cert issue --profile` 优先于账户默认，已保存证书不隐式迁移。订单对象回显 CA 选择，与请求不一致按身份变化拒绝。规范：draft-ietf-acme-profiles（https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles）。
+- **ACME 证书 profile（draft-ietf-acme-profiles）** — 从 directory metadata 发现 CA 广告的 profiles，`cert issue --profile` 按单选择（newOrder 前按广告校验；未广告名称直接失败并列出可用项，零副作用），选择作为证书身份的一部分在恢复/续期中固定——元数据漂移不会隐式替换。账户支持默认 profile：`account register --profile`、`account update --profile/--clear-profile`（对照在线 directory 建议性校验）以及 `account show --profiles`；`cert issue --profile` 优先于账户默认，已保存证书不隐式迁移。订单对象回显 CA 选择，与请求不一致按身份变化拒绝。终端上的交互式 `cert issue` 列出广告 profiles 并预选账户默认（Esc 取消）。规范：draft-ietf-acme-profiles（https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles）。
 - **华为云 DNS** — CLI 默认构建包含该后端，嵌入式宿主使用 `huawei_cloud` 显式启用。`project_id` 可省略并按所选 region 通过 IAM 自动发现；`region` 可省略，默认 `cn-north-4`。公网 zone 发现、HWS 签名和持久 RRset 恢复采用尽力所有权：读取与 PUT/DELETE 之间的外部并发修改可能被覆盖或误删，不保证原子隔离（#41）。
 
 - **阿里云云解析 DNS 与腾讯云 DNSPod** — CLI 默认包含这两个后端，精简构建可分别选择 `dns-aliyun` 和 `dns-tencent-cloud`。四家内置 provider 共用备注契约但允许 provider 覆盖格式；默认使用 `asteracme-<publication_id>`，阿里云因 50 字符上限使用 `acme-<publication_id>`。阿里云在创建成功后通过 `UpdateDomainRecordRemark` 写入，并在备注失败时只重试备注阶段，不重复创建 TXT。两者发现并保存最终发布目标的 zone，在回执中记录实际 TXT TTL，并在清理前核验记录。DNSPod 用发布备注对账丢失的创建响应。阿里云显式请求域名详细属性以发现最小 TTL，识别文档定义的记录状态，须保存创建响应中的 `RecordId`，并拒绝借用已有同值记录。（#40、#39）
@@ -24,7 +30,7 @@
 
 ### 变更
 
-- **账户子命令重构（8 个）** — `switch`→`default`，`update-contact` 与 `set-profile` 合并为 `update`（联系人 + 默认 profile 一处），`profiles` 并入 `show --profiles`，`deactivate` 并入 `remove --deactivate`（先 CA 停用、后本地删除）。Unreleased 内破坏性重命名，无迁移承诺。
+- **账户子命令重构（8 个）** — `switch`→`default`，`update-contact` 与 `set-profile` 合并为 `update`（联系人 + 默认 profile 一处），`profiles` 并入 `show --profiles`，`deactivate` 并入 `remove --deactivate`（先 CA 停用、后本地删除）。终端上无参数的 `account update` 打开 scope 菜单，用方向键在 CA 广告 profiles 中选择。
 
 - **ACME wire 与检查契约** — 账户、标识符、订单、授权、directory metadata 和 ARI 资源保留未知扩展成员，同时保留 `keyChange`、`newOrder`、`revokeCert` 等 directory 能力 URL 的可选语义。日志使用 JSON 快照保留订单与授权扩展中的 null 值。`IssueService::inspect` 改为接收调用方的取消/截止时间上下文，签发结果区分调用方取消与操作预算耗尽，包括 provider 和宿主进程超时。
 
@@ -44,6 +50,7 @@
 - **已保存请求选择** — issue 恢复、show、remove 和 revoke 接受以 `-` 开头的合法 operation ID，不再误作命令行选项。
 - **ACME mutation 恢复** — 408/429 保留吊销 Pending、challenge/finalize Submitted 证据，不作为明确拒绝；保留 ack/finalize 等待下限、已有不确定吊销状态和显式重试边界。
 - **维护诊断** — 单证书 refresh 失败后持久状态读回也失败时，同时保留两个错误，将最新调度时间标为不可用，并继续处理其余证书。
+- **Release 符号归档** — Windows 符号归档保留链接器输出的 crate 词干 PDB 名（`aster_acme.pdb`），使调试器与可执行文件中记录的 basename 匹配；macOS 归档改用 `lldb` 反推 v0 mangled 回溯，替代无法解析 Rust 符号的 `atos`。
 
 ## [0.1.0-alpha.2] - 2026-11-18
 
@@ -96,6 +103,7 @@
 
 交叉编译及本地 mock 不代表原生平台或公网 CA 验收。
 
-[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/AsterCommunity/AsterACME/compare/v0.1.0-alpha.2...v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/AsterCommunity/AsterACME/compare/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterACME/tree/375db2cc0a355a706a33e0b9aec1f9aa5cfbbd71

@@ -16,8 +16,8 @@ publish = true
 # Members must inherit dependencies with `workspace = true`.
 [workspace.dependencies]
 linkme = "0.3"
-aster_acme_dns_builtin = { version = "0.1.0-alpha.2", path = "crates/aster_acme_dns_builtin", default-features = false }
-aster_acme_dns_http = { version = "0.1.0-alpha.2", path = "crates/aster_acme_dns_http" }
+aster_acme_dns_builtin = { version = "0.1.0-alpha.3", path = "crates/aster_acme_dns_builtin", default-features = false }
+aster_acme_dns_http = { version = "0.1.0-alpha.3", path = "crates/aster_acme_dns_http" }
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
 x509-parser = { version = "0.18.1", features = ["verify-aws"] }
 aster_forge_http = { version = "=0.1.0-alpha.2", default-features = false, features = ["json", "rustls-aws-lc-rs", "system-proxy"] }
@@ -25,14 +25,14 @@ aster_forge_http = { version = "=0.1.0-alpha.2", default-features = false, featu
 aster_forge_utils = { version = "=0.1.0-alpha.2" }
 aster_forge_panic = { version = "=0.1.0-alpha.2", default-features = false }
 aster_forge_macros = { version = "=0.1.0-alpha.1" }
-aster_acme_protocol = { version = "0.1.0-alpha.2", path = "crates/aster_acme_protocol" }
-aster_acme_core = { version = "0.1.0-alpha.2", path = "crates/aster_acme_core" }
-aster_acme = { version = "0.1.0-alpha.2", path = "crates/aster_acme", default-features = false }
-aster_acme_validation = { version = "0.1.0-alpha.2", path = "crates/aster_acme_validation", default-features = false }
-aster_acme_cli_storage = { version = "0.1.0-alpha.2", path = "crates/aster_acme_cli_storage" }
-aster_acme_dns = { version = "0.1.0-alpha.2", path = "crates/aster_acme_dns" }
-aster_acme_dns_adpp = { version = "0.1.0-alpha.2", path = "crates/aster_acme_dns_adpp" }
-aster_acme_dns_resolver = { version = "0.1.0-alpha.2", path = "crates/aster_acme_dns_resolver" }
+aster_acme_protocol = { version = "0.1.0-alpha.3", path = "crates/aster_acme_protocol" }
+aster_acme_core = { version = "0.1.0-alpha.3", path = "crates/aster_acme_core" }
+aster_acme = { version = "0.1.0-alpha.3", path = "crates/aster_acme", default-features = false }
+aster_acme_validation = { version = "0.1.0-alpha.3", path = "crates/aster_acme_validation", default-features = false }
+aster_acme_cli_storage = { version = "0.1.0-alpha.3", path = "crates/aster_acme_cli_storage" }
+aster_acme_dns = { version = "0.1.0-alpha.3", path = "crates/aster_acme_dns" }
+aster_acme_dns_adpp = { version = "0.1.0-alpha.3", path = "crates/aster_acme_dns_adpp" }
+aster_acme_dns_resolver = { version = "0.1.0-alpha.3", path = "crates/aster_acme_dns_resolver" }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util", "signal", "process"] }
 # Forge HTTP selects transport features; this entry supplies shared public types only.
 reqwest = { version = "0.13.5", default-features = false }
