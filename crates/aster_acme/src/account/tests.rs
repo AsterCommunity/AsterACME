@@ -373,8 +373,7 @@ async fn auto_acceptance_updates_terms_url_and_survives_implicit_ensure() {
 #[tokio::test]
 async fn enabling_delegation_on_existing_records_is_durable_and_failed_saves_never_post() {
     let (server, mut client) = server(local_options()).await;
-    client.directory.meta.terms_of_service =
-        Some("https://ca.example/terms".to_owned());
+    client.directory.meta.terms_of_service = Some("https://ca.example/terms".to_owned());
     let store = Arc::new(MemoryStore::default());
     let service = AccountService::new(Arc::new(client), store.clone());
     let key = SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap();

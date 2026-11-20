@@ -151,10 +151,7 @@ pub(super) fn terms(
     if !interactive {
         return Err(AccountError::TermsRequired(current.clone()).into());
     }
-    let message = format!(
-        "CA terms: {}\nDo you agree to these terms?",
-        safe(current)
-    );
+    let message = format!("CA terms: {}\nDo you agree to these terms?", safe(current));
     if !prompts.confirm(&message)? {
         return Err(Box::new(Canceled));
     }

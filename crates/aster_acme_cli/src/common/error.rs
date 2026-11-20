@@ -63,7 +63,7 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
                 "The CA requires your agreement to its current terms.".into(),
                 Some(format!(
                     "Review {} and rerun account register with --accept-terms.",
-                    url.as_str()
+                    safe(url)
                 )),
             ),
             AccountError::ExternalAccountRequired => (
