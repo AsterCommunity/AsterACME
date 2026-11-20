@@ -366,8 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn default_directory_uses_the_platform_reverse_domain_identity() {
-        let expected = directories::ProjectDirs::from("com", "astercosm", "acme").unwrap();
+    fn default_directory_is_the_uniform_reverse_domain_path() {
+        let expected =
+            directories::ProjectDirs::from_path(std::path::PathBuf::from("com.astercosm.acme"))
+                .unwrap();
         assert_eq!(default_data_dir().unwrap(), expected.config_dir());
     }
 

@@ -23,16 +23,14 @@ pub(super) fn parse_order(
             return Err(IssueError::InvalidInput("duplicate order identifiers"));
         }
     }
-    // A CA-selected profile is informational; an explicit selection that the
-    // CA overrode would change certificate content and is rejected instead.
-    if let Some(selected) = &order.profile
-        && record
-            .profile
-            .as_ref()
-            .is_some_and(|requested| requested != selected)
-    {
+    // The order identity is fixed at request time. When the request carries
+    // an explicit profile, the CA must echo it (draft-ietf-acme-profiles §4):
+    // a missing field means the CA ignored the selection and would issue
+    // under its default — rejected instead of silently downgraded. A profile
+    // on a request that asked for none is informational.
+    if record.profile.is_some() && order.profile.as_ref() != record.profile.as_ref() {
         return Err(IssueError::InvalidInput(
-            "CA order selected a different certificate profile than requested",
+            "CA order omitted or selected a different certificate profile than requested",
         ));
     }
     if expected != actual

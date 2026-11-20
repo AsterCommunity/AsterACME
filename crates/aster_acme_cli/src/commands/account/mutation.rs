@@ -128,7 +128,7 @@ pub(super) async fn update(
             &cli.output,
         )?;
         let transport = context.transport_options(&options)?;
-        let report = submit_contacts(&context, signer, contacts, transport, cli).await?;
+        let report = submit_contacts(&context, signer.clone(), contacts, transport, cli).await?;
         if !wants_profile {
             return Ok(report);
         }
@@ -138,9 +138,16 @@ pub(super) async fn update(
         if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
             profile_target = interactive_profile_selection(&context, &options, cli).await?;
         }
-        let previous = record.preferred_profile.clone();
+        // Reload after a contact submission: the CA may have returned fresh
+        // server state that this profile save must preserve, never clobber.
+        let fresh = context
+            .store
+            .load(&context.directory, &signer.jwk()?.thumbprint()?)
+            .await?
+            .ok_or(AccountError::AccountDoesNotExist)?;
+        let previous = fresh.preferred_profile.clone();
         let target = profile_target;
-        save_profile_preference(&context, &record, target.clone(), &options, cli).await?;
+        save_profile_preference(&context, &fresh, target.clone(), &options, cli).await?;
         return Ok(AccountReport::ProfilePreference {
             name: context.name,
             previous,

@@ -224,12 +224,17 @@ impl Fixture {
         let base = self.server.uri();
         let generation = self.generation.clone();
         let identifier_json = self.identifier_json.clone();
+        let finalize_profile = self.profile.clone();
         Mock::given(method("POST")).and(path("/finalize")).respond_with(move |request: &wiremock::Request| {
             let jws: FlattenedJws = serde_json::from_slice(&request.body).unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(jws.payload).unwrap()).unwrap();
             assert_eq!(URL_SAFE_NO_PAD.decode(payload["csr"].as_str().unwrap()).unwrap(), std::fs::read(generation.lock().unwrap().join("request.der")).unwrap());
             current.store(3,Ordering::SeqCst);
-            ResponseTemplate::new(200).insert_header("Replay-Nonce","finalized").insert_header("Retry-After","0").set_body_json(serde_json::json!({"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
+            let mut body = serde_json::json!({"status":"valid","expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
+            if let Some(profile) = &finalize_profile {
+                body["profile"] = serde_json::json!(profile);
+            }
+            ResponseTemplate::new(200).insert_header("Replay-Nonce","finalized").insert_header("Retry-After","0").set_body_json(body)
         }).mount(&self.server).await;
         self.mount_certificate().await;
     }
@@ -330,10 +335,15 @@ impl Fixture {
             }).with_priority(2).mount(&self.server).await;
         let remote = state.clone();
         let base = self.server.uri();
+        let order_profile = self.profile.clone();
         Mock::given(method("POST")).and(path("/order/1"))
             .respond_with(move |_: &wiremock::Request| {
                 let status = match remote.load(Ordering::SeqCst) { 0 => "pending", 1 => "ready", _ => "valid" };
-                ResponseTemplate::new(200).insert_header("Replay-Nonce", "poll").insert_header("Retry-After", "0").set_body_json(serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")}))
+                let mut body = serde_json::json!({"status":status,"expires":"2099-01-01T00:00:00Z","identifiers":[identifier_json],"authorizations":[format!("{base}/authorize")],"finalize":format!("{base}/finalize"),"certificate":format!("{base}/certificate")});
+                if let Some(profile) = &order_profile {
+                    body["profile"] = serde_json::json!(profile);
+                }
+                ResponseTemplate::new(200).insert_header("Replay-Nonce", "poll").insert_header("Retry-After", "0").set_body_json(body)
             }).with_priority(2).mount(&self.server).await;
 
         (state, acknowledged)

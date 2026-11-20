@@ -10,13 +10,12 @@ aster-acme
 ├── account
 │   ├── list [--verify]
 │   ├── show [NAME] [--verify]
-│   ├── switch [NAME]
+│   ├── default [NAME]
 │   ├── register [NAME] [-m CONTACT] [-k KEY_TYPE] [--ca|--ca-directory] [--accept-terms] [--eab-*]
 │   ├── recover [NAME]
-│   ├── update-contact [NAME] (-m CONTACT|--clear-contacts)
+│   ├── update [NAME] (-m CONTACT|--clear-contacts|--profile PROFILE|--clear-profile)
 │   ├── rotate-key [NAME] [-k KEY_TYPE]
-│   ├── deactivate [NAME]
-│   └── remove [NAME]
+│   └── remove [NAME] [--deactivate]
 ├── cert
 │   ├── issue (-n NAME | --resume NAME [--operation ID]) -d DOMAIN... -a ACCOUNT
 │   │          -c CHALLENGE [-w WEBROOT | --listen-address ADDR] [--provider PROFILE] [-k KEY_TYPE]
@@ -69,16 +68,16 @@ aster-acme
 | 命令 | `--yes` 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已存在的本地身份 |
-| `account update-contact` | 替换或显式清空联系人 |
+| `account update` | 替换或显式清空联系人;设置/清除默认 profile |
 | `account rotate-key` | 轮换或对账换钥事务 |
-| `account deactivate` | 停用 CA 账户(不可逆) |
+| `account remove --deactivate` | 停用 CA 账户(不可逆)+ 删除本地资料 |
 | `account remove` | 删除本地账户资料及私钥 |
 | `cert revoke` | 永久吊销所选版本 |
 | `cert remove` | 确认所选清理范围(不吊销 CA 证书) |
 | `cert issue --resume` | 跳过"已发布 TXT?"确认 |
 | `cert deploy remove` | 删除部署绑定 |
 
-`list`/`show`/`switch`/`recover`/`version` 没有危险确认,不使用 `--yes`。
+`list`/`show`/`default`/`recover`/`version` 没有危险确认,不使用 `--yes`。
 
 ## 全局与 HTTP 参数
 

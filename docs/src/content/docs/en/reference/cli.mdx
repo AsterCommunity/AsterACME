@@ -10,13 +10,12 @@ aster-acme
 ├── account
 │   ├── list [--verify]
 │   ├── show [NAME] [--verify]
-│   ├── switch [NAME]
+│   ├── default [NAME]
 │   ├── register [NAME] [-m CONTACT] [-k KEY_TYPE] [--ca|--ca-directory] [--accept-terms] [--eab-*]
 │   ├── recover [NAME]
-│   ├── update-contact [NAME] (-m CONTACT|--clear-contacts)
+│   ├── update [NAME] (-m CONTACT|--clear-contacts|--profile PROFILE|--clear-profile)
 │   ├── rotate-key [NAME] [-k KEY_TYPE]
-│   ├── deactivate [NAME]
-│   └── remove [NAME]
+│   └── remove [NAME] [--deactivate]
 ├── cert
 │   ├── issue (-n NAME | --resume NAME [--operation ID]) -d DOMAIN... -a ACCOUNT
 │   │          -c CHALLENGE [-w WEBROOT | --listen-address ADDR] [--provider PROFILE] [-k KEY_TYPE]
@@ -69,16 +68,16 @@ Every business command takes at most one positional argument — `cert deploy sh
 | Command | What `--yes` confirms |
 | --- | --- |
 | `account register` | Reusing/continuing an existing local identity |
-| `account update-contact` | Replacing or explicitly clearing contacts |
+| `account update` | Replacing or explicitly clearing contacts; setting/clearing the default profile |
 | `account rotate-key` | Rotating or reconciling the rotation transaction |
-| `account deactivate` | Deactivating the CA account (irreversible) |
+| `account remove --deactivate` | Deactivating the CA account (irreversible) and deleting the local profile |
 | `account remove` | Deleting the local profile and key |
 | `cert revoke` | Permanently revoking the selected generation |
 | `cert remove` | The selected cleanup scope (never revokes at the CA) |
 | `cert issue --resume` | Skipping the "have you published the TXT values?" confirmation |
 | `cert deploy remove` | Removing the deployment binding |
 
-`list`/`show`/`switch`/`recover`/`version` have no dangerous confirmations and do not use `--yes`.
+`list`/`show`/`default`/`recover`/`version` have no dangerous confirmations and do not use `--yes`.
 
 ## Global and HTTP flags
 

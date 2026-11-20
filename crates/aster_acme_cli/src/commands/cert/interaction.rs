@@ -280,13 +280,26 @@ fn complete_method(
         ValidationMethod::Standalone | ValidationMethod::TlsAlpn
             if args.listen_address.is_none() =>
         {
-            let default = if method == ValidationMethod::Standalone {
-                "0.0.0.0:80"
+            let port = if method == ValidationMethod::Standalone {
+                80
             } else {
-                "0.0.0.0:443"
+                443
+            };
+            // IPv6-only identifier sets cannot be served by an IPv4 wildcard
+            // bind; default to the dual-stack IPv6 address for those.
+            let default = if !args.ip.is_empty()
+                && args.domain.is_empty()
+                && args.ip.iter().all(|ip| ip.address().is_ipv6())
+            {
+                format!("[::]:{port}")
+            } else {
+                format!("0.0.0.0:{port}")
             };
             args.listen_address = Some(loop {
-                let value = prompts.text("Validation listen address (IP:PORT):", Some(default))?;
+                let value = prompts.text(
+                    "Validation listen address (IP:PORT):",
+                    Some(default.as_str()),
+                )?;
                 match value.parse::<SocketAddr>() {
                     Ok(address) if address.port() != 0 => break address,
                     _ => prompts.invalid("Enter an IPv4/IPv6 socket address with a nonzero port."),
