@@ -126,7 +126,7 @@ pub struct TransportOptions {
     pub request_timeout: Duration,
     /// Retries only for protocol badNonce responses, with fresh signatures.
     pub bad_nonce_retries: u8,
-    /// Permit numeric loopback HTTP (mock/Pebble testing only).
+    /// Permit numeric loopback HTTP (plain-HTTP mock CA testing only).
     pub allow_loopback_http: bool,
     /// Optional [RFC 9110](https://datatracker.ietf.org/doc/html/rfc9110) product token/comment string. Defaults to this crate's name/version.
     pub user_agent: Option<String>,

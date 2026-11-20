@@ -8,10 +8,11 @@
 //! `aster_acme`; this file shows a minimal volatile adapter, not durable recovery.
 //!
 //! Defaults are deliberately safe for a first run: Let's Encrypt **staging**
-//! and a temporary data directory that is removed on exit. Passing
-//! `--directory http://localhost:14000/dir` targets a local Pebble or other
-//! test CA listening without TLS; plain loopback HTTP is then allowed
-//! explicitly through the transport options. An embedding application must
+//! and a temporary data directory that is removed on exit. `--directory`
+//! accepts another ACME CA; plain `http://` loopback URLs are allowed through
+//! the transport options for non-TLS test CAs. TLS-only test CAs such as
+//! Pebble additionally require trusting their test root in the platform trust
+//! store, which this example does not set up. An embedding application must
 //! replace the in-memory stores with durable, concurrency-safe adapters for
 //! restart recovery.
 //!
@@ -561,7 +562,7 @@ struct Args {
     /// Optional contact mailbox, for example admin@example.com (mailto: is also accepted).
     #[arg(short, long)]
     contact: Vec<String>,
-    /// CA directory URL; staging by default, override for Pebble or another test CA.
+    /// CA directory URL; staging by default, override for another ACME CA.
     #[arg(long, default_value = LETSENCRYPT_STAGING_DIRECTORY)]
     directory: String,
     /// Managed certificate name for this run.
