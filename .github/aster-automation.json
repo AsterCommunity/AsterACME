@@ -361,7 +361,7 @@
     "marker": "<!-- asteracme-milestone-dashboard -->",
     "title": "Release readiness dashboard",
     "milestones": [
-      "Not arranged"
+      "Not arranged", "v0.1.0"
     ]
   },
   "diagnosticHints": [
