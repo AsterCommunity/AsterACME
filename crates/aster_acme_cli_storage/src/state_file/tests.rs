@@ -95,3 +95,32 @@ fn managed_hard_links_are_rejected_without_modifying_the_target() {
     assert!(directory.open_private("linked").is_err());
     assert_eq!(fs::read(temp.path().join("key")).unwrap(), b"original");
 }
+
+#[test]
+fn path_identity_observes_aliases_without_reading_contents() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("file");
+    let alias = temp.path().join("alias");
+    fs::write(&path, b"sentinel").unwrap();
+    fs::hard_link(&path, &alias).unwrap();
+    let expected = path_identity(&path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
+        assert_eq!(path_identity(&path).unwrap(), expected);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(path_identity(&path).unwrap(), expected);
+        let link = temp.path().join("symlink");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(path_identity(&link).is_err());
+    }
+    assert_eq!(path_identity(&alias).unwrap(), expected);
+    assert!(path_identity(temp.path()).is_err());
+    assert_eq!(
+        path_identity(&temp.path().join("missing"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+}

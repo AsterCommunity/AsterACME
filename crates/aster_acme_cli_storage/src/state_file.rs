@@ -187,6 +187,12 @@ pub fn same_file(left: &File, right: &File) -> io::Result<bool> {
     Ok(platform::identity(left)? == platform::identity(right)?)
 }
 
+/// Observe a regular file's identity without requiring access to its contents.
+/// Ancestors remain caller-controlled; final links/reparse points are rejected.
+pub(crate) fn path_identity(path: &Path) -> io::Result<(u64, u64)> {
+    platform::path_identity(path)
+}
+
 /// Unix publishes a relative symlink; platforms without unprivileged symlinks use copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewKind {

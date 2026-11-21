@@ -104,14 +104,13 @@ fn overlaps(left: &Path, right: &Path) -> Result<bool, IssueError> {
     if left == right {
         return Ok(true);
     }
-    let open = |path: &Path| match crate::state_file::open_regular(path) {
-        Ok(file) => Ok(Some(file)),
+    let identify = |path: &Path| match crate::state_file::path_identity(path) {
+        Ok(identity) => Ok(Some(identity)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err(failure("cannot inspect deployment/password file identity")),
     };
-    match (open(left)?, open(right)?) {
-        (Some(left), Some(right)) => crate::state_file::same_file(&left, &right)
-            .map_err(|_| failure("cannot compare deployment/password file identity")),
+    match (identify(left)?, identify(right)?) {
+        (Some(left), Some(right)) => Ok(left == right),
         _ => Ok(false),
     }
 }

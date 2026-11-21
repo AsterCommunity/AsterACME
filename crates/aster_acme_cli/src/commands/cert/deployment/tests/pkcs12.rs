@@ -507,6 +507,57 @@ async fn password_file_identity_conflicts_cover_same_binding_and_reverse_cross_b
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn password_file_conflict_checks_allow_unreadable_existing_bundle_targets() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for mode in ["0200", "0000"] {
+        let fixture = Fixture::new().await;
+        let password = fixture.temp.path().join("password");
+        let bundle = fixture.temp.path().join("bundle.p12");
+        std::fs::write(&password, b"test-password").unwrap();
+        std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let added = manage_binding(
+            &fixture,
+            &[
+                "add",
+                "-n",
+                "bundle",
+                "--p12-path",
+                bundle.to_str().unwrap(),
+                "--p12-password-file",
+                password.to_str().unwrap(),
+                "--key-mode",
+                mode,
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(matches!(added.exit_status(), ExitStatus::Success));
+        let first = std::fs::symlink_metadata(&bundle).unwrap();
+        assert_eq!(
+            first.permissions().mode() & 0o777,
+            u32::from_str_radix(mode, 8).unwrap()
+        );
+        let rerun = manage_binding(&fixture, &["run", "-n", "bundle"])
+            .await
+            .unwrap();
+        assert!(
+            matches!(rerun.exit_status(), ExitStatus::Success),
+            "{}",
+            json(&rerun)
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(&bundle)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            u32::from_str_radix(mode, 8).unwrap()
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore = "Native PTY fixture invoked by test-deployment-terminal.py"]
 #[expect(

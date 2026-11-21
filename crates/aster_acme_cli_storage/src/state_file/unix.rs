@@ -52,6 +52,15 @@ pub(super) fn identity(file: &File) -> io::Result<(u64, u64)> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
+pub(super) fn path_identity(path: &Path) -> io::Result<(u64, u64)> {
+    // lstat observes the final entry without following it or opening its contents.
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() {
+        return Err(io::Error::other("published file is not regular"));
+    }
+    Ok((metadata.dev(), metadata.ino()))
+}
+
 pub(super) fn open_regular(path: &Path) -> io::Result<File> {
     let file = File::from(rustix::fs::open(
         path,
