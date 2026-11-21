@@ -104,7 +104,7 @@ fn overlaps(left: &Path, right: &Path) -> Result<bool, IssueError> {
     if left == right {
         return Ok(true);
     }
-    let identify = |path: &Path| match crate::state_file::path_identity(path) {
+    let identify = |path: &Path| match crate::state_file::entry_identity(path) {
         Ok(identity) => Ok(Some(identity)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err(failure("cannot inspect deployment/password file identity")),

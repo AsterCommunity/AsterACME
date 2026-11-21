@@ -30,6 +30,118 @@ fn check_pfx(path: &std::path::Path) {
 }
 
 #[test]
+fn invalid_destination_combinations_report_all_supported_formats() {
+    for certificate in [None, Some(std::path::PathBuf::from("leaf.pem"))] {
+        let directory = certificate
+            .as_ref()
+            .map(|_| std::path::PathBuf::from("directory"));
+        let error = crate::commands::cert::deployment::configuration::destination(
+            directory,
+            certificate,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--p12-path"));
+        assert!(error.to_string().contains("mutually exclusive"));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsafe_password_ancestors_fail_before_configuration() {
+    let fixture = Fixture::new().await;
+    let root = fixture.temp.path();
+    let dangling = root.join("dangling");
+    std::os::unix::fs::symlink(root.join("absent"), &dangling).unwrap();
+    let blocker = root.join("not-a-directory");
+    std::fs::write(&blocker, b"sentinel").unwrap();
+    let password = root.join("password");
+    std::fs::write(&password, b"dummy-password").unwrap();
+    for (source, expected) in [
+        (
+            dangling.join("password"),
+            "cannot resolve PKCS#12 password file ownership",
+        ),
+        (
+            blocker.join("password"),
+            "cannot resolve PKCS#12 password file ownership",
+        ),
+    ] {
+        let error = fixture
+            .store
+            .add_deployment(
+                &fixture.name,
+                aster_acme_cli_storage::issuance::DeploymentDefinition {
+                    name: Some("unsafe".into()),
+                    target: DeploymentTarget::Files {
+                        certificate: None,
+                        private_key: None,
+                        ca_chain: None,
+                        fullchain: None,
+                        pkcs12: Some(root.join("bundle.p12")),
+                        pkcs12_password_env: None,
+                        pkcs12_password_file: Some(source),
+                    },
+                    permissions: aster_acme_cli_storage::issuance::DeploymentPermissions::default(),
+                    reload_command: vec![],
+                    timeout_seconds: 1,
+                    max_retries: 0,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(
+            fixture.store.deployments(&fixture.name).await.unwrap(),
+            Vec::<aster_acme_cli_storage::issuance::DeploymentBinding>::new()
+        );
+        assert!(!root.join("bundle.p12").exists());
+    }
+    assert_eq!(std::fs::read(&blocker).unwrap(), b"sentinel");
+    assert_eq!(std::fs::read(&password).unwrap(), b"dummy-password");
+}
+
+#[tokio::test]
+async fn uninspectable_destination_identity_is_not_treated_as_an_unrelated_file() {
+    let fixture = Fixture::new().await;
+    let password = fixture.temp.path().join("password");
+    std::fs::write(&password, b"dummy-password").unwrap();
+    let target = fixture.temp.path().join("x".repeat(300));
+    let before = std::fs::read(fixture.temp.path().join("certs/web/cert.toml")).unwrap();
+    let error = manage_binding(
+        &fixture,
+        &[
+            "add",
+            "-n",
+            "uninspectable",
+            "--p12-path",
+            target.to_str().unwrap(),
+            "--p12-password-file",
+            password.to_str().unwrap(),
+        ],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot inspect deployment/password file identity"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(fixture.temp.path().join("certs/web/cert.toml")).unwrap(),
+        before
+    );
+    assert_eq!(std::fs::read(&password).unwrap(), b"dummy-password");
+}
+
+#[test]
 fn env_password_is_set_in_a_child_without_mutating_the_test_process() {
     for secret in ["dummy-p12-export-password", ""] {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -46,6 +158,78 @@ fn env_password_is_set_in_a_child_without_mutating_the_test_process() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn another_bindings_nonregular_target_does_not_block_a_safe_password_deployment() {
+    for symbolic_link in [true, false] {
+        let fixture = Fixture::new().await;
+        let directory = fixture.add("broken", vec![], 0).await;
+        let target = directory.join("cert.pem");
+        let password = fixture.temp.path().join("p12 password 密码.txt");
+        std::fs::write(&password, b"dummy-password").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&password, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let _listener = if symbolic_link {
+            std::os::unix::fs::symlink(&password, &target).unwrap();
+            None
+        } else {
+            Some(std::os::unix::net::UnixListener::bind(&target).unwrap())
+        };
+        let bundle = fixture.temp.path().join("safe.p12");
+        let added = manage_binding(
+            &fixture,
+            &[
+                "add",
+                "-n",
+                "safe",
+                "--p12-path",
+                bundle.to_str().unwrap(),
+                "--p12-password-file",
+                password.to_str().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(added.exit_status(), ExitStatus::Success),
+            "{}",
+            json(&added)
+        );
+        check_pfx(&bundle);
+        let before = std::fs::read(&bundle).unwrap();
+        let batch = manage_binding(&fixture, &["run"]).await.unwrap();
+        assert!(matches!(batch.exit_status(), ExitStatus::Failed));
+        let status: serde_json::Value = serde_json::from_str(&json(&batch)).unwrap();
+        assert!(
+            status["deployments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["id"] == "safe"
+                    && entry["phase"] == "deployed"
+                    && entry["execution_error"].is_null())
+        );
+        assert!(
+            status["deployments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["id"] == "broken" && entry["execution_error"].is_string())
+        );
+        assert_ne!(std::fs::read(&bundle).unwrap(), before);
+        assert_eq!(std::fs::read(&password).unwrap(), b"dummy-password");
+        let metadata = std::fs::symlink_metadata(&target).unwrap();
+        if symbolic_link {
+            assert!(metadata.is_symlink());
+        } else {
+            use std::os::unix::fs::FileTypeExt as _;
+            assert!(metadata.file_type().is_socket());
+        }
     }
 }
 
@@ -597,7 +781,13 @@ async fn password_terminal_child() {
         panic!("expected add")
     };
     if mode != "add" {
-        let definition = crate::commands::cert::deployment::configuration::definition(add).unwrap();
+        let mut definition =
+            crate::commands::cert::deployment::configuration::definition(add).unwrap();
+        if mode == "pem" {
+            let directory = fixture.temp.path().join("pem");
+            std::fs::create_dir(&directory).unwrap();
+            definition.target = DeploymentTarget::Directory { path: directory };
+        }
         fixture
             .store
             .add_deployment(&fixture.name, definition)
@@ -644,6 +834,12 @@ async fn password_terminal_child() {
     if mode == "success" {
         assert!(matches!(report.exit_status(), ExitStatus::Success));
         check_pfx(&path);
+    } else if mode == "pem" {
+        assert!(matches!(report.exit_status(), ExitStatus::Success));
+        assert!(!path.exists());
+        for name in ["cert.pem", "ca.pem", "fullchain.pem", "private-key.pem"] {
+            assert!(fixture.temp.path().join("pem").join(name).is_file());
+        }
     } else {
         if mode == "cancel" {
             assert!(matches!(report.exit_status(), ExitStatus::Cancelled));

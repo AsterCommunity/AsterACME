@@ -12,7 +12,7 @@
 //! <https://github.com/AsterCommunity/AsterFs/issues/4>
 use std::{
     fs::{self, File},
-    io,
+    io::{self, Read as _},
     path::Path,
 };
 
@@ -123,6 +123,34 @@ pub fn read_private(path: &Path, maximum: usize) -> io::Result<Vec<u8>> {
     directory.read(name, maximum)
 }
 
+/// Read a user-managed secret using its opened handle, without managed-name or parent-owner rules.
+/// Final links and insecure files are rejected; callers must trust ancestor resolution.
+pub(crate) fn read_external_private(
+    path: &Path,
+    maximum: usize,
+) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
+    let file = platform::open_external_private(path)?;
+    let limit = u64::try_from(maximum).unwrap_or(u64::MAX);
+    if file.metadata()?.len() > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "secret file exceeds byte limit",
+        ));
+    }
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    (&file)
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "secret file exceeds byte limit",
+        ));
+    }
+    platform::check_private(&file.metadata()?)?;
+    Ok(bytes)
+}
+
 /// Locate a single component inside its verified parent.
 ///
 /// # Errors
@@ -187,10 +215,10 @@ pub fn same_file(left: &File, right: &File) -> io::Result<bool> {
     Ok(platform::identity(left)? == platform::identity(right)?)
 }
 
-/// Observe a regular file's identity without requiring access to its contents.
-/// Ancestors remain caller-controlled; final links/reparse points are rejected.
-pub(crate) fn path_identity(path: &Path) -> io::Result<(u64, u64)> {
-    platform::path_identity(path)
+/// Observe an entry's own identity without reading contents or following its final link.
+/// Ancestors remain caller-controlled; publishability is validated by the publication adapter.
+pub(crate) fn entry_identity(path: &Path) -> io::Result<(u64, u64)> {
+    platform::entry_identity(path)
 }
 
 /// Unix publishes a relative symlink; platforms without unprivileged symlinks use copies.

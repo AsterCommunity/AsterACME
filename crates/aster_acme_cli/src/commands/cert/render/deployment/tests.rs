@@ -112,3 +112,48 @@ fn exact_files_report_only_configured_destinations_and_optional_reload() {
         assert_eq!(json["deployment"]["reload_command"], serde_json::json!([]));
     }
 }
+
+#[test]
+fn pkcs12_details_expose_only_password_references_in_text_and_json() {
+    let root = std::path::PathBuf::from("/configured/bundle");
+    let bundle = root.join("certificate.p12");
+    let password = root.join("password-file");
+    for (env, file, expected) in [
+        (
+            Some("ASTER_P12_PASSWORD".into()),
+            None,
+            "environment variable: ASTER_P12_PASSWORD".to_owned(),
+        ),
+        (
+            None,
+            Some(password.clone()),
+            format!("password file: {}", password.display()),
+        ),
+        (
+            None,
+            None,
+            "prompted at run time (nothing stored)".to_owned(),
+        ),
+    ] {
+        let entry = binding(DeploymentTarget::Files {
+            certificate: None,
+            private_key: None,
+            ca_chain: None,
+            fullchain: None,
+            pkcs12: Some(bundle.clone()),
+            pkcs12_password_env: env,
+            pkcs12_password_file: file,
+        });
+        for color in [false, true] {
+            let text = details("web", &entry, Format { json: false, color }).unwrap();
+            assert!(text.contains("PKCS#12 bundle:"));
+            assert!(text.contains(&bundle.display().to_string()));
+            assert!(text.contains("PKCS#12 password:"));
+            assert!(text.contains(&expected));
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&details("web", &entry, Format::plain(true)).unwrap()).unwrap();
+        assert_eq!(json["deployment"], serde_json::to_value(entry).unwrap());
+        assert_eq!(json["observation"], "saved local state");
+    }
+}

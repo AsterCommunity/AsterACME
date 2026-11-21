@@ -82,6 +82,20 @@ fn cbc_handles_empty_partial_and_block_aligned_plaintext() {
 }
 
 #[test]
+fn cbc_rejects_invalid_key_and_iv_sizes_without_returning_ciphertext() {
+    for key_len in [0, 16, 24, 31, 33] {
+        let error = aes256_cbc_encrypt(&vec![7; key_len], &[8; 16], b"private-key").unwrap_err();
+        assert!(error.to_string().contains("encryption key length"));
+        assert!(!error.to_string().contains("private-key"));
+    }
+    for iv_len in [0, 15, 17, 32] {
+        let error = aes256_cbc_encrypt(&[7; 32], &vec![8; iv_len], b"private-key").unwrap_err();
+        assert!(error.to_string().contains("IV length"));
+        assert!(!error.to_string().contains("private-key"));
+    }
+}
+
+#[test]
 #[should_panic(expected = "ciphertext must contain complete AES blocks")]
 fn key_recovery_rejects_a_partial_trailing_block() {
     let mut encrypted = aes256_cbc_encrypt(&[7; 32], &[8; 16], b"key").unwrap();
@@ -236,6 +250,29 @@ fn password_sources_fail_closed_without_disclosing_values() {
         bmp_password("päss").unwrap().as_slice(),
         b"\0p\0\xe4\0s\0s\0\0"
     );
+}
+
+#[test]
+fn external_password_filenames_and_exact_size_boundary_are_supported() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["p12 password.txt", "密码.txt"] {
+        let path = temp.path().join(name);
+        std::fs::write(&path, b"secret with spaces\r\nignored").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(
+            resolve_password(None, Some(&path)).unwrap().as_str(),
+            "secret with spaces"
+        );
+        std::fs::write(&path, vec![b'x'; 4096]).unwrap();
+        assert_eq!(resolve_password(None, Some(&path)).unwrap().len(), 4096);
+        std::fs::write(&path, vec![b'x'; 4097]).unwrap();
+        let error = resolve_password(None, Some(&path)).unwrap_err();
+        assert!(!error.to_string().contains("xxxxx"));
+    }
 }
 
 #[test]

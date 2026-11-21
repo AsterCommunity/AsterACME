@@ -1,5 +1,7 @@
 //! Portable state file contracts shared by native CI targets.
 use crate::state_file::*;
+#[cfg(unix)]
+use std::io::Write as _;
 #[test]
 fn private_read_atomic_replace_and_nontruncating_lock() {
     let temp = tempfile::tempdir().unwrap();
@@ -97,30 +99,94 @@ fn managed_hard_links_are_rejected_without_modifying_the_target() {
 }
 
 #[test]
-fn path_identity_observes_aliases_without_reading_contents() {
+fn entry_identity_observes_aliases_without_reading_contents() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("file");
     let alias = temp.path().join("alias");
     fs::write(&path, b"sentinel").unwrap();
     fs::hard_link(&path, &alias).unwrap();
-    let expected = path_identity(&path).unwrap();
+    let expected = entry_identity(&path).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
-        assert_eq!(path_identity(&path).unwrap(), expected);
+        assert_eq!(entry_identity(&path).unwrap(), expected);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
-        assert_eq!(path_identity(&path).unwrap(), expected);
+        assert_eq!(entry_identity(&path).unwrap(), expected);
         let link = temp.path().join("symlink");
         std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert!(path_identity(&link).is_err());
+        assert_ne!(entry_identity(&link).unwrap(), expected);
+        assert!(open_regular(&link).is_err());
     }
-    assert_eq!(path_identity(&alias).unwrap(), expected);
-    assert!(path_identity(temp.path()).is_err());
+    assert_eq!(entry_identity(&alias).unwrap(), expected);
+    assert_ne!(entry_identity(temp.path()).unwrap(), expected);
     assert_eq!(
-        path_identity(&temp.path().join("missing"))
+        entry_identity(&temp.path().join("missing"))
             .unwrap_err()
             .kind(),
         io::ErrorKind::NotFound
     );
+}
+
+#[test]
+fn external_secret_reads_accept_user_filenames_and_enforce_file_safety_and_limits() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["p12 password.txt", "密码.txt"] {
+        let path = temp.path().join(name);
+        fs::write(&path, b"secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(
+            read_external_private(&path, 6).unwrap().as_slice(),
+            b"secret"
+        );
+        assert_eq!(
+            read_external_private(&path, 5).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let alias = temp.path().join("alias");
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(read_external_private(&path, 6).is_err());
+        assert!(read_external_private(&alias, 6).is_err());
+        fs::remove_file(&alias).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let link = temp.path().join("link");
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(read_external_private(&link, 6).is_err());
+            fs::remove_file(link).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(read_external_private(&path, 6).is_err());
+        }
+    }
+    assert!(read_external_private(temp.path(), 6).is_err());
+    assert!(read_external_private(&temp.path().join("missing"), 6).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn external_secrets_can_live_in_root_owned_parents_and_special_files_never_block() {
+    use std::os::unix::fs::MetadataExt as _;
+    let mut file = tempfile::Builder::new()
+        .prefix("p12 密码 ")
+        .tempfile_in("/tmp")
+        .unwrap();
+    file.write_all(b"secret").unwrap();
+    let parent = file.path().parent().unwrap();
+    assert_eq!(fs::metadata(parent).unwrap().uid(), 0);
+    assert_eq!(
+        read_external_private(file.path(), 6).unwrap().as_slice(),
+        b"secret"
+    );
+    if rustix::process::geteuid().as_raw() != 0 {
+        assert!(StateDirectory::open(parent).is_err());
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let socket = temp.path().join("password.socket");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    assert!(read_external_private(&socket, 4096).is_err());
 }

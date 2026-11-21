@@ -29,7 +29,7 @@ const PBES2_KEY_LEN: usize = 32;
 const SALT_LEN: usize = 16;
 const IV_LEN: usize = 16;
 const LOCAL_KEY_ID_LEN: usize = 20;
-const MAX_PASSWORD_FILE: u64 = 4096;
+const MAX_PASSWORD_FILE: usize = 4096;
 pub(super) const MAX_PASSWORD_ENV: usize = 512;
 
 const OID_PKCS7_DATA: &str = "1.2.840.113549.1.7.1";
@@ -117,10 +117,8 @@ fn read_env_password(name: &str) -> Result<Zeroizing<String>, IssueError> {
 }
 
 fn read_file_password(path: &Path) -> Result<Zeroizing<String>, IssueError> {
-    let bytes = Zeroizing::new(
-        crate::toml_file::read_private(path, MAX_PASSWORD_FILE)
-            .map_err(|_| failure("PKCS#12 password file is missing or unreadable"))?,
-    );
+    let bytes = crate::state_file::read_external_private(path, MAX_PASSWORD_FILE)
+        .map_err(|_| failure("PKCS#12 password file is missing or unreadable"))?;
     let line = match bytes.iter().position(|byte| *byte == b'\n') {
         Some(end) => bytes[..end].strip_suffix(b"\r").unwrap_or(&bytes[..end]),
         None => bytes.as_slice(),
