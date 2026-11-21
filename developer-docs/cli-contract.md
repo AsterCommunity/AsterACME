@@ -116,9 +116,26 @@ aster-acme cert renew example-cert
 
 `cert deploy add [CERT_NAME] [-n DEPLOY_NAME]` 保存一个证书部署绑定并立即执行首次发布。部署名称的命令行输入只通过 `-n/--name` 指定；交互终端省略时提示名称，首个默认建议 default，已有同名时建议未占用的 deploy-N，Enter 接受或编辑，重名/非法输入原地重试。非TTY/JSON省略时在 storage 的证书租约内生成 deploy-<随机后缀> 并有限处理碰撞。接受的交互名称和显式 -n 都在 storage 保存前重新检查唯一性，不静默更改。证书始终是已有托管证书，不生成新的证书身份。
 
-交互终端执行裸 add 时先选择证书、确认或修改默认部署名称，再输入已存在的目标目录，最后询问可选 reload 命令；留空则只发布文件，不启动进程。交互引导只支持目录，精确文件地址需要显式传参。目标使用 `--target DIR`（写入 fullchain.pem、cert.pem、ca.pem、private-key.pem），或独立提供 `--cert-path`、`--key-path`、`--ca-path`、`--fullchain-path` 的任意非空组合，只发布指定的产物，不强制配对或依赖。目录模式与精确路径互斥，所有精确目标必须互不相同，父目录必须预先存在且由部署操作者控制；Unix在准备时固定父目录句柄，之后相对该句柄创建、替换、清理和同步；已发现父目录身份变化时拒绝提交。初始路径解析及Windows路径发布仍要求受信任祖先目录，不能把路径检查当作恶意目录替换的安全边界。无效输入会留在提示内重试，取消不保存绑定。脚本/JSON 必须提供 CERT_NAME 与完整目标路径，部署名和 reload 均可省略（脚本不询问部署名），不弹提示。
+交互终端执行裸 add 时先选择证书、确认或修改默认部署名称，再输入已存在的目标目录，最后询问可选 reload 命令；留空则只发布文件，不启动进程。交互引导只支持目录，精确文件地址需要显式传参。目标使用 `--target DIR`（写入 fullchain.pem、cert.pem、ca.pem、private-key.pem），或独立提供 `--cert-path`、`--key-path`、`--ca-path`、`--fullchain-path`、`--p12-path` 的任意非空组合，只发布指定的产物，不强制配对或依赖。目录模式与精确路径互斥，所有精确目标必须互不相同，父目录必须预先存在且由部署操作者控制；Unix在准备时固定父目录句柄，之后相对该句柄创建、替换、清理和同步；已发现父目录身份变化时拒绝提交。初始路径解析及Windows路径发布仍要求受信任祖先目录，不能把路径检查当作恶意目录替换的安全边界。无效输入会留在提示内重试，取消不保存绑定。脚本/JSON 必须提供 CERT_NAME 与完整目标路径，部署名和 reload 均可省略（脚本不询问部署名），不弹提示。
 
-全部选定文件先在各自父目录完成暂存、写入、设权和同步，再逐文件原子替换并同步父目录；准备阶段任何失败都不改变现有目标，正常错误返回时清理已准备临时文件。提交前重新检查整组目标，拒绝准备期间变成目录或链接的路径。部署直接发布普通文件并保持目录路径，不使用部署链接或目录交换，不保证整组切换。整组提交后有界核验内容、身份与适用权限，失败诊断包含已完成替换路径。提交中途失败可能留下部分更新，核验也不提供整组原子性或后续外部修改隔离；失败记录PublishFailed且不执行reload；显式run重新发布完整选定集合，全部成功后才reload。手动add/run与自动部署均传播取消，等待已启动的文件发布结束并保存结果后才返回；若成功发布但取消阻止reload，保存PublicationComplete；发布失败保存PublishFailed。执行中的reload取消保存ReloadUncertain，不自动重放；reload意图保存后但进程未启动就取消时恢复尝试前的状态，不计为已启动。显式重试在取得新reload确定结果前保留原不确定状态，发布前取消或发布失败不能解除自动执行屏障。手动取消保留本次及已完成的多绑定部署报告和events（JSON亦然），后续绑定不启动，不由命令出口丢弃。进程崩溃可能遗留临时文件，不按前缀擅自清理。Unix 默认0600；add/update 的 `--file-mode 0644` 设置证书、CA链和fullchain，`--key-mode 0640` 单独设置私钥。输入为3–4位八进制且仅接受000–777普通权限位，在临时文件发布前设置，不修改父目录。权限随绑定保存并用于后续续期；Windows 使用继承权限，显式 Unix mode 明确报不支持，不静默忽略。服务必须能读取配置后的私钥。
+`add`/`update` 的 `--p12-path PATH` 发布包含叶证书、CA 链和私钥的 PKCS#12 bundle（PFX version 3）。目录模式保持 PEM 四件套；p12 仅通过显式精确路径启用，可与 PEM 路径组合，权限使用 `key_mode`（Unix 默认 0600）。全部材料和密码在 storage 的阻塞准备阶段读取、构建，再复用同一暂存/发布管线；准备失败不改目标、不启动 reload。
+
+绑定**只保存密码来源引用，绝不保存密码值**。`--p12-password-env ENV_VAR` 与 `--p12-password-file PATH` 互斥，且都要求同一次传入 `--p12-path`。`update` 的目标参数整体替换路径集合，切换来源时重传全部需要保留的目标路径。env 来源在每次部署时读取当前进程环境，缺失、空值或非法值使本次部署失败，报告执行错误，不覆盖已有产物或历史成功状态；daemon 必须在启动环境中获得该变量。推荐 daemon 使用 `--p12-password-file`：用户管理的 UTF-8 文件，读取第一行（去除 LF/CRLF，保留其他空白），最多 4096 字节；Unix 使用 0600、当前用户所有、单硬链接的普通文件，拒绝符号链接及组/其他用户访问权限；Windows 继承文件权限，操作者负责限制 ACL。部署目标不得覆盖本绑定或其他绑定的密码文件。密码不可为空、含 NUL 或含 Unicode BMP 之外字符；错误不包含密码值。
+
+只设置 `--p12-path` 而不设置来源是合法绑定。只有交互终端上的显式 `cert deploy run` 会隐藏输入密码，仅本次使用，绝不落盘；`add` 不询问密码，其首次发布会失败并保留绑定，可随后显式 run。JSON、非TTY、续期后部署和 daemon 均不提示；无来源时返回结构化部署错误，且该绑定不进入 daemon 自动重试，必须显式 run 或 update 配置来源。`show`/JSON 只展示 p12 路径与 env 名称或文件路径，无来源时提示运行时输入；不读取密码文件，也不输出密码或私钥。
+
+成功发布的 event 带 `pkcs12_path`，即本次确认发布的路径；准备或发布失败不声明该事实。密码提示取消的 event 带 `cancelled=true`，保留已完成目标报告并停止后续目标，退出码为 130。其他 events 省略这两个可选字段。
+
+```sh
+aster-acme cert deploy add example-cert -n java \
+  --p12-path /etc/myservice/certificate.p12 \
+  --p12-password-file /etc/myservice/p12-password
+aster-acme cert deploy update example-cert -n java \
+  --p12-path /etc/myservice/certificate.p12 \
+  --p12-password-env MY_P12_PASSWORD
+```
+
+全部选定文件先在各自父目录完成暂存、写入、设权和同步，再逐文件原子替换并同步父目录；准备阶段任何失败都不改变现有目标，正常错误返回时清理已准备临时文件。提交前重新检查整组目标，拒绝准备期间变成目录或链接的路径。部署直接发布普通文件并保持目录路径，不使用部署链接或目录交换，不保证整组切换。整组提交后有界核验内容、身份与适用权限，失败诊断包含已完成替换路径。提交中途失败可能留下部分更新，核验也不提供整组原子性或后续外部修改隔离；失败记录PublishFailed且不执行reload；显式run重新发布完整选定集合，全部成功后才reload。手动add/run与自动部署均传播取消，等待已启动的文件发布结束并保存结果后才返回；若成功发布但取消阻止reload，保存PublicationComplete；发布失败保存PublishFailed。执行中的reload取消保存ReloadUncertain，不自动重放；reload意图保存后但进程未启动就取消时恢复尝试前的状态，不计为已启动。显式重试在取得新reload确定结果前保留原不确定状态，发布前取消或发布失败不能解除自动执行屏障。手动取消保留本次及已完成的多绑定部署报告和events（JSON亦然），后续绑定不启动，不由命令出口丢弃。进程崩溃可能遗留临时文件，不按前缀擅自清理。Unix 默认0600；add/update 的 `--file-mode 0644` 设置证书、CA链和fullchain，`--key-mode 0640` 设置私钥和 PKCS#12 bundle。输入为3–4位八进制且仅接受000–777普通权限位，在临时文件发布前设置，不修改父目录。权限随绑定保存并用于后续续期；Windows 使用继承权限，显式 Unix mode 明确报不支持，不静默忽略。服务必须能读取配置后的私钥。
 
 可选 `--reload-cmd "systemctl restart nginx"` 按引用规则拆成程序与 argv，不启动 shell。未配置命令时发布完成即 deployed，attempts=0；不会声称 reload 成功。`--reload-timeout` 仅在配置 reload 时限制每次进程及输出收集，默认30秒（1–3600）；`--max-retries` 为额外尝试次数，默认3（0–10）。续期后仍默认自动部署，只有配置了 reload 才执行进程。
 
@@ -258,7 +275,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
 | cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
 | cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |
-| cert deploy add | 选证书、名称建议可确认/修改、输入现有目录、可选 reload；脚本缺省部署名自动生成 | 四种精确文件路径只能显式传入 |
+| cert deploy add | 选证书、名称建议可确认/修改、输入现有目录、可选 reload；脚本缺省部署名自动生成 | 五种精确文件路径只能显式传入 |
 | cert deploy run/list/remove | 选证书；remove 缺名可选绑定；run 缺名默认全部 | 部署名仅通过 -n/--name 或既定交互/默认行为 |
 | account list、cert list、version、help、cert renew --all | 直接输出/按既定范围执行，无需选择 | 不添加无意义的输入流程 |
 

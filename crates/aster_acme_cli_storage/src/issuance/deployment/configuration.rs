@@ -164,11 +164,15 @@ pub(super) fn validate_binding(binding: &DeploymentBinding) -> Result<(), IssueE
             fullchain,
             ca_chain,
             private_key,
+            pkcs12,
+            pkcs12_password_env,
+            pkcs12_password_file,
         } => {
             if certificate.is_none()
                 && fullchain.is_none()
                 && ca_chain.is_none()
                 && private_key.is_none()
+                && pkcs12.is_none()
             {
                 return Err(failure(
                     "exact deployment needs at least one file destination",
@@ -180,12 +184,45 @@ pub(super) fn validate_binding(binding: &DeploymentBinding) -> Result<(), IssueE
                 .chain(certificate.iter())
                 .chain(fullchain.iter())
                 .chain(ca_chain.iter())
+                .chain(pkcs12.iter())
             {
                 if !path.is_absolute() || !seen.insert(path) {
                     return Err(failure(
                         "deployment destinations must be distinct absolute paths",
                     ));
                 }
+            }
+            if pkcs12.is_none() && (pkcs12_password_env.is_some() || pkcs12_password_file.is_some())
+            {
+                return Err(failure(
+                    "PKCS#12 password sources require a PKCS#12 destination",
+                ));
+            }
+            match (pkcs12_password_env, pkcs12_password_file) {
+                (Some(name), None) => {
+                    if name.is_empty()
+                        || name.len() > super::pkcs12::MAX_PASSWORD_ENV
+                        || !name.is_ascii()
+                        || name
+                            .bytes()
+                            .any(|byte| byte.is_ascii_control() || byte == b'=')
+                    {
+                        return Err(failure(
+                            "invalid PKCS#12 password environment variable name",
+                        ));
+                    }
+                }
+                (None, Some(path)) => {
+                    if !path.is_absolute() {
+                        return Err(failure("PKCS#12 password file must be absolute"));
+                    }
+                }
+                (Some(_), Some(_)) => {
+                    return Err(failure(
+                        "choose one PKCS#12 password source, not both env and file",
+                    ));
+                }
+                (None, None) => {}
             }
         }
         DeploymentTarget::Directory { .. } => {}

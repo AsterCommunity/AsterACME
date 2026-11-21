@@ -41,4 +41,10 @@ ARI维护使用`IssueQuery::ari_due_at`和`IssueStore::open_observation`：先�
 
 `aster_acme::renewal::admission` 拥有续期时间、失败退避资格和历史子请求的提交证据判断；generation 适配器仅在租约内加载 catalog／journal、核验 `in_use` 与材料后调用它。准备失败的写入先比较原 operation 和 retry 快照，避免同一失败重复计数或覆盖并发成功；准入不读取私钥。CA Retry-After 与未知结果屏障由库统一解释。
 
-部署文件 schema 保持原字段；`DeploymentBinding::checkpoint` 显式转换为库的 `DeploymentCheckpoint`，库负责 pending-generation、重试和阶段转换。配置、材料会话和条件写入分别归 `deployment/{configuration,session,checkpoint}`，实际逐文件发布仍归 `deployment/publication`。所有检查点写入共用完整绑定快照及实际所选 operation 的比较，重试记账还要求 attempted generation 匹配会话材料；不把旧世代的失败归到新证书。阻塞写任务持续持有租约，取消等待不提前解锁。
+部署检查点 schema 保持原字段；`DeploymentBinding::checkpoint` 显式转换为库的 `DeploymentCheckpoint`，库负责 pending-generation、重试和阶段转换。配置、材料会话和条件写入分别归 `deployment/{configuration,session,checkpoint}`，实际逐文件发布仍归 `deployment/publication`。所有检查点写入共用完整绑定快照及实际所选 operation 的比较，重试记账还要求 attempted generation 匹配会话材料；不把旧世代的失败归到新证书。阻塞写任务持续持有租约，取消等待不提前解锁。
+
+## PKCS#12 部署材料
+
+`DeploymentTarget::Files` 的可选 `pkcs12`、`pkcs12_password_env`、`pkcs12_password_file` 是扁平字段。binding 只保存密码来源引用，目录目标仍展开四个 PEM 文件；库的部署状态机不感知文件集合。storage 的 `open_deployment` 在 `spawn_blocking` 内读取来源或接收本次交互 override，构建零化持有的 bundle 后作为 `DeploymentArtifacts.pkcs12` 交给已有 `PreparedPublication`；其权限使用 key_mode。未准备 bundle 的 p12 目标拒绝发布，不用空文件代替。来源读取和加密失败发生在任何目标替换之前，不能改写历史成功状态。
+
+`issuance/deployment/pkcs12` 拥有 RFC 7292 DER 模型、Appendix B SHA-256 MAC KDF、PBKDF2-HMAC-SHA256 与 AES-256-CBC。PBES2 使用 UTF-8 密码字节，MAC 使用带终止 NUL 的 BMP 编码，friendlyName 使用不带终止 NUL 的 BMPString；叶证书与私钥共享 localKeyId，CA bags 不带该 ID。可见字段和密码来源语义以 [CLI 契约](../cli-contract.md#证书部署) 为准，互通证据见 [签发测试](../issuance-testing.md)。

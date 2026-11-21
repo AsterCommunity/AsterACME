@@ -79,6 +79,10 @@ fn exact_files_report_only_configured_destinations_and_optional_reload() {
     for mask in 1_u32..16 {
         let paths = ["cert", "key", "ca", "chain"].map(|name| root.join(name));
         let mut entry = binding(DeploymentTarget::Files {
+            pkcs12: None,
+            pkcs12_password_env: None,
+            pkcs12_password_file: None,
+
             certificate: (mask & 1 != 0).then(|| paths[0].clone()),
             private_key: (mask & 2 != 0).then(|| paths[1].clone()),
             ca_chain: (mask & 4 != 0).then(|| paths[2].clone()),
@@ -101,7 +105,7 @@ fn exact_files_report_only_configured_destinations_and_optional_reload() {
         }
         assert_eq!(
             plain.matches("not configured").count(),
-            5 - usize::try_from(mask.count_ones()).unwrap()
+            6 - usize::try_from(mask.count_ones()).unwrap()
         );
         let json: serde_json::Value =
             serde_json::from_str(&details("web", &entry, Format::plain(true)).unwrap()).unwrap();

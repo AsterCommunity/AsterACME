@@ -61,6 +61,12 @@ impl DeploymentReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct DeploymentEvent {
+    /// Present only after the PKCS#12 destination was published successfully.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pkcs12_path: Option<std::path::PathBuf>,
+    /// This event records an explicit terminal cancellation.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) cancelled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) deployment: Option<String>,
     #[serde(rename = "level")]
@@ -89,6 +95,9 @@ impl CertificateReport {
                     ExitStatus::Success
                 }
             },
+            Self::Deployment(report) if report.events.iter().any(|event| event.cancelled) => {
+                ExitStatus::Cancelled
+            }
             Self::Deployment(report)
                 if report.attempted
                     && (report

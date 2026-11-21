@@ -14,13 +14,18 @@ use zeroize::Zeroizing;
 impl CliIssueStore {
     /// Open the current `in_use` generation and hold its certificate lease through reload.
     ///
+    /// `pkcs12_password_override` supplies an interactive password for this
+    /// run only; it is never persisted. Automatic callers pass `None` and rely
+    /// on the binding's configured password source.
+    ///
     /// # Errors
-    /// Returns an error if the binding, selected generation or required certificate material
-    /// is unavailable or unsafe.
+    /// Returns an error if the binding, selected generation, required certificate
+    /// material or a requested PKCS#12 password source is unavailable or unsafe.
     pub async fn open_deployment(
         &self,
         name: &CertificateName,
         id: &str,
+        pkcs12_password_override: Option<Zeroizing<String>>,
     ) -> Result<DeploymentSession, IssueError> {
         validate_id(id)?;
         let id = id.to_owned();
@@ -57,6 +62,13 @@ impl CliIssueStore {
             );
             certificate::validate(&fullchain, &der, &record.identifiers)?;
             let artifacts = certificate::artifacts(&fullchain, &der)?;
+            let pkcs12 = pkcs12_bundle(
+                &definition,
+                &artifacts,
+                &der,
+                &record.name.to_string(),
+                pkcs12_password_override.as_ref(),
+            )?;
             Ok(DeploymentSession {
                 slot,
                 name,
@@ -68,6 +80,7 @@ impl CliIssueStore {
                     certificate: artifacts.certificate.into_bytes(),
                     ca_chain: artifacts.ca_chain.into_bytes(),
                     private_key: Zeroizing::new(artifacts.private_key.as_bytes().to_vec()),
+                    pkcs12,
                 }),
                 lease,
             })
@@ -75,6 +88,44 @@ impl CliIssueStore {
         .await
         .map_err(|_| failure("deployment open worker failed"))?
     }
+}
+
+/// Build the PKCS#12 bundle when the binding publishes one. An explicit
+/// override wins over the binding's stored password source.
+fn pkcs12_bundle(
+    definition: &DeploymentBinding,
+    artifacts: &certificate::CertificateArtifacts,
+    key_pk8: &[u8],
+    friendly_name: &str,
+    override_password: Option<&Zeroizing<String>>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, IssueError> {
+    let crate::issuance::deployment::DeploymentTarget::Files {
+        pkcs12,
+        pkcs12_password_env,
+        pkcs12_password_file,
+        ..
+    } = &definition.target
+    else {
+        return Ok(None);
+    };
+    if pkcs12.is_none() {
+        return Ok(None);
+    }
+    let password = match override_password {
+        Some(password) => password.clone(),
+        None => super::pkcs12::resolve_password(
+            pkcs12_password_env.as_deref(),
+            pkcs12_password_file.as_deref(),
+        )?,
+    };
+    let leaf = certificate::leaf_der(artifacts.certificate.as_bytes())?;
+    Ok(Some(super::pkcs12::build_pkcs12(
+        &leaf,
+        artifacts.ca_chain.as_bytes(),
+        key_pk8,
+        friendly_name,
+        &password,
+    )?))
 }
 
 impl DeploymentSession {

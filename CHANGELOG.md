@@ -6,7 +6,13 @@
 
 ### Added
 
+- **PKCS#12 deployment (#55)** — Publish chain and private-key bundles with `cert deploy add/update --p12-path`, using key permissions and the existing prepare-before-publish pipeline. Bindings store exclusive environment/file password references only; use a 0600 password file for the daemon or a transient password during interactive explicit run. Automatic execution without a source fails without retries, JSON excludes password values, and directory targets retain the four PEM files.
+
 - **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests.
+
+### Changed
+
+- **AsterForge dependencies** — Update the shared HTTP, process, panic hook, and utility crates. The panic hook now uses `time` for its default timestamp, removing `chrono` from AsterACME's dependency tree. `aster_forge_utils` now handles the single retry for transient `ENOENT` during concurrent lock file creation on macOS.
 
 ## [0.1.0-alpha.3] - 2026-11-20
 

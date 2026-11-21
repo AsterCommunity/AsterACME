@@ -23,6 +23,7 @@ use std::{
 };
 
 mod hardening;
+mod pkcs12;
 mod retry;
 
 struct Fixture {
@@ -207,6 +208,7 @@ impl Fixture {
                 cancellation: tokio_util::sync::CancellationToken::new(),
                 deadline: std::time::Instant::now() + Duration::from_secs(30),
             },
+            &crate::common::session::OutputSession::new(true),
         )
         .await
         .0
@@ -288,7 +290,7 @@ async fn daemon_retries_only_due_known_deployment_failures_and_reschedules_them(
     let binding = fixture.status("scheduled-failure").await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, &binding.id)
+        .open_deployment(&fixture.name, &binding.id, None)
         .await
         .unwrap();
     session
@@ -324,7 +326,7 @@ async fn daemon_retries_only_due_known_deployment_failures_and_reschedules_them(
 
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, &binding.id)
+        .open_deployment(&fixture.name, &binding.id, None)
         .await
         .unwrap();
     session
@@ -370,7 +372,7 @@ async fn daemon_never_replays_uncertain_reload_and_recovers_interrupted_publicat
     let binding = fixture.status("uncertain").await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, &binding.id)
+        .open_deployment(&fixture.name, &binding.id, None)
         .await
         .unwrap();
     session
@@ -393,7 +395,7 @@ async fn daemon_never_replays_uncertain_reload_and_recovers_interrupted_publicat
     let binding = fixture.status("publication-crash").await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, &binding.id)
+        .open_deployment(&fixture.name, &binding.id, None)
         .await
         .unwrap();
     session
@@ -438,6 +440,7 @@ async fn list_and_remove_bindings_work_after_revocation_or_loss_of_current_versi
             aster_acme::deployment::DeploymentIntent::Explicit,
             None,
             None,
+            Some(&crate::common::session::OutputSession::new(true)),
         )
         .await
         .unwrap()
@@ -770,7 +773,8 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
                 generation: &generation
             },
             Some(&fixture.progress),
-            None
+            None,
+            Some(&crate::common::session::OutputSession::new(true))
         )
         .await
         .unwrap()
@@ -786,6 +790,7 @@ async fn explicit_retry_recovers_failed_publication_and_binding_validation_is_du
         aster_acme::deployment::DeploymentIntent::Explicit,
         Some(&fixture.progress),
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await
     .unwrap();
@@ -821,6 +826,7 @@ async fn deploy_and_renewal_publish_current_generation_skip_completed_and_keep_b
         },
         Some(&fixture.progress),
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await
     .unwrap();
@@ -891,7 +897,8 @@ async fn timeout_is_uncertain_survives_reopen_and_is_not_automatically_replayed(
                 generation: &generation
             },
             Some(&fixture.progress),
-            None
+            None,
+            Some(&crate::common::session::OutputSession::new(true))
         )
         .await
         .unwrap()
@@ -919,6 +926,7 @@ async fn cancelling_reload_preserves_intent_releases_lease_and_prevents_automati
     fixture.add("slow", child_command("timeout"), 0).await;
     let catalog = fixture.temp.path().join("certs/web/cert.toml");
     {
+        let output = crate::common::session::OutputSession::new(true);
         let execution = run_one(
             &fixture.store,
             &fixture.name,
@@ -928,6 +936,7 @@ async fn cancelling_reload_preserves_intent_releases_lease_and_prevents_automati
             },
             Some(&fixture.progress),
             None,
+            Some(&output),
         );
         tokio::pin!(execution);
         tokio::select! {
@@ -961,7 +970,8 @@ async fn publication_failure_does_not_run_reload_and_missing_program_is_saved() 
             "badpath",
             aster_acme::deployment::DeploymentIntent::Explicit,
             Some(&fixture.progress),
-            None
+            None,
+            Some(&crate::common::session::OutputSession::new(true))
         )
         .await
         .unwrap()
@@ -993,7 +1003,8 @@ async fn publication_failure_does_not_run_reload_and_missing_program_is_saved() 
             "missing",
             aster_acme::deployment::DeploymentIntent::Explicit,
             Some(&fixture.progress),
-            None
+            None,
+            Some(&crate::common::session::OutputSession::new(true))
         )
         .await
         .unwrap()
@@ -1012,7 +1023,7 @@ async fn deployment_lease_excludes_removal_and_binding_changes_and_releases_afte
     fixture.add("nginx", child_command("success"), 0).await;
     let session = fixture
         .store
-        .open_deployment(&fixture.name, "nginx")
+        .open_deployment(&fixture.name, "nginx", None)
         .await
         .unwrap();
     assert!(
@@ -1113,7 +1124,7 @@ async fn storage_rechecks_revocation_before_opening_or_adding_deployment() {
     assert!(
         fixture
             .store
-            .open_deployment(&fixture.name, "nginx")
+            .open_deployment(&fixture.name, "nginx", None)
             .await
             .is_err()
     );
@@ -1401,6 +1412,7 @@ async fn optional_reload_publishes_and_renews_without_any_process_attempt() {
             cancellation: tokio_util::sync::CancellationToken::new(),
             deadline: std::time::Instant::now() + Duration::from_secs(30),
         },
+        &crate::common::session::OutputSession::new(true),
     )
     .await;
     assert_eq!(bindings[0].phase, DeploymentPhase::Deployed);

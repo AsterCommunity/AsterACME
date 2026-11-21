@@ -40,6 +40,7 @@ jobs:
           python3 scripts/test-confirmation-terminal.py
           python3 scripts/test-provider-terminal.py
           python3 scripts/test-account-terminal.py
+          python3 scripts/test-deployment-terminal.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   precheck-features:

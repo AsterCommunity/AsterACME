@@ -21,9 +21,14 @@ pub(super) async fn run_target(
     intent: DeploymentIntent<'_, DeploymentBinding>,
     progress: Option<&Progress>,
     execution: Option<&Execution>,
+    output: Option<&crate::common::session::OutputSession>,
 ) -> DeploymentExecution {
     let id = definition.id.as_str();
-    match Box::pin(run_one(store, name, id, intent, progress, execution)).await {
+    match Box::pin(run_one(
+        store, name, id, intent, progress, execution, output,
+    ))
+    .await
+    {
         Ok(mut execution) => {
             if execution.attempted && execution.binding.phase != DeploymentPhase::Deployed {
                 record_event(
@@ -46,6 +51,10 @@ pub(super) async fn run_target(
             execution
         }
         Err(error) => {
+            let cancelled = error.is::<crate::common::terminal::Canceled>();
+            if cancelled && let Some(execution) = execution {
+                execution.cancellation.cancel();
+            }
             let mut events = Vec::new();
             record_event(
                 &mut events,
@@ -54,6 +63,7 @@ pub(super) async fn run_target(
                 progress,
             );
             for event in &mut events {
+                event.cancelled = cancelled;
                 event.deployment = Some(id.to_owned());
             }
             DeploymentExecution {
@@ -72,6 +82,7 @@ pub(super) async fn run_one(
     intent: DeploymentIntent<'_, DeploymentBinding>,
     progress: Option<&Progress>,
     execution: Option<&Execution>,
+    output: Option<&crate::common::session::OutputSession>,
 ) -> CliResult<DeploymentExecution> {
     if execution.is_some_and(|execution| execution.check().is_err())
         && matches!(intent, DeploymentIntent::Explicit)
@@ -80,7 +91,8 @@ pub(super) async fn run_one(
             "deployment was cancelled or its execution deadline expired before startup".into(),
         );
     }
-    let mut session = store.open_deployment(name, id).await?;
+    let pkcs12_password = interactive_pkcs12_password(store, name, id, &intent, output).await?;
+    let mut session = store.open_deployment(name, id, pkcs12_password).await?;
     let mut events = Vec::new();
     if !session.admits(intent, time::OffsetDateTime::now_utc()) {
         return Ok(DeploymentExecution {
@@ -131,6 +143,41 @@ pub(super) async fn run_one(
 
 pub(super) fn uncertain(binding: &DeploymentBinding) -> bool {
     binding.phase.reload_uncertain()
+}
+
+/// Prompt for the PKCS#12 password when an explicit interactive run needs one:
+/// the binding publishes a bundle but stores no password source. Automatic
+/// paths (retry, daemon, JSON) never prompt and defer to the stored source.
+async fn interactive_pkcs12_password(
+    store: &CliIssueStore,
+    name: &CertificateName,
+    id: &str,
+    intent: &DeploymentIntent<'_, DeploymentBinding>,
+    output: Option<&crate::common::session::OutputSession>,
+) -> CliResult<Option<zeroize::Zeroizing<String>>> {
+    let Some(output) = output else {
+        return Ok(None);
+    };
+    if !matches!(intent, DeploymentIntent::Explicit)
+        || !crate::common::terminal::interactive(output.is_json())
+    {
+        return Ok(None);
+    }
+    let binding = store.deployment(name, id).await?;
+    let aster_acme_cli_storage::issuance::DeploymentTarget::Files {
+        pkcs12: Some(_),
+        pkcs12_password_env: None,
+        pkcs12_password_file: None,
+        ..
+    } = &binding.target
+    else {
+        return Ok(None);
+    };
+    let password = crate::common::terminal::password_prompt(
+        &format!("PKCS#12 password for deployment '{id}':"),
+        output,
+    )?;
+    Ok(Some(password))
 }
 
 pub(super) async fn prepare_publication(
@@ -225,6 +272,12 @@ pub(super) async fn finish_publication(
         ),
         progress,
     );
+    if let aster_acme_cli_storage::issuance::DeploymentTarget::Files { pkcs12, .. } =
+        &session.definition().target
+        && let Some(event) = events.last_mut()
+    {
+        event.pkcs12_path.clone_from(pkcs12);
+    }
     if session.definition().reload_command.is_empty() {
         session
             .save_state(DeploymentPhase::Deployed, 0, None)

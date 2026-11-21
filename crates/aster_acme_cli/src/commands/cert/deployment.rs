@@ -19,6 +19,8 @@ pub(crate) mod publication;
 pub(crate) mod reload_state;
 fn event(kind: MessageKind, message: impl Into<String>) -> DeploymentEvent {
     DeploymentEvent {
+        pkcs12_path: None,
+        cancelled: false,
         deployment: None,
         kind,
         message: message.into(),

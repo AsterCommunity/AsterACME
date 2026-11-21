@@ -145,6 +145,16 @@ aster-acme cert deploy show example-cert nginx
 
 添加绑定会立即部署，之后续期成功会自动使用它。全部文件准备完成后逐一替换，仅全部发布成功才执行 reload；部署直接使用普通文件，目录路径保持稳定。绑定管理、文件权限、精确路径和重试见 [`cert deploy`](developer-docs/cli-contract.md#证书部署)。
 
+PKCS#12（`.p12`）使用精确路径发布，包含证书链和私钥，Unix 权限沿用 `--key-mode`（默认 0600）。daemon 推荐使用用户管理的 0600 密码文件：
+
+```sh
+aster-acme cert deploy add example-cert -n java \
+  --p12-path /etc/myservice/certificate.p12 \
+  --p12-password-file /etc/myservice/p12-password
+```
+
+也可用 `--p12-password-env ENV_VAR`（daemon 依赖启动环境）。绑定只存来源引用，不存密码。无来源时只有交互式 `cert deploy run` 隐藏询问一次；add、JSON 和自动部署不提示，缺少密码时发布失败。目录模式仍只发布 PEM 四件套。
+
 ## 文档
 
 用户与运维文档使用 Astro Starlight 发布在 [acme.docs.astercosm.com](https://acme.docs.astercosm.com/)。

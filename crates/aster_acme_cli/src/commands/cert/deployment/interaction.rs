@@ -69,10 +69,11 @@ pub(super) fn complete(
         && args.key_path.is_none()
         && args.fullchain_path.is_none()
         && args.ca_path.is_none()
+        && args.p12_path.is_none()
     {
         if !interactive {
             return Err(
-                "Specify --target DIR or at least one exact file destination (--cert-path, --key-path, --ca-path, --fullchain-path).".into(),
+                "Specify --target DIR or at least one exact file destination (--cert-path, --key-path, --ca-path, --fullchain-path, --p12-path).".into(),
             );
         }
         args.target = Some(loop {

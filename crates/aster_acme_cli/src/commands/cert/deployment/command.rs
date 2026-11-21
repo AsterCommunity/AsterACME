@@ -32,6 +32,10 @@ pub(in crate::commands::cert) async fn execute(
     execute_inner(args, cli, &execution).await
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep deployment subcommand dispatch together"
+)]
 pub(super) async fn execute_inner(
     args: DeployArgs,
     cli: &crate::common::context::CommandContext,
@@ -100,6 +104,7 @@ pub(super) async fn execute_inner(
                 DeploymentIntent::Explicit,
                 Some(&progress),
                 Some(execution),
+                None,
             )
             .await;
             execution_events.extend(execution.events);

@@ -85,6 +85,25 @@ pub(crate) struct DeployAddArgs {
     /// Publish the private key to this exact path.
     #[arg(long, value_name = "PATH", conflicts_with = "target")]
     pub(crate) key_path: Option<PathBuf>,
+    /// Publish a PKCS#12 bundle (leaf, chain and private key) to this exact path.
+    #[arg(long, value_name = "PATH", conflicts_with = "target")]
+    pub(crate) p12_path: Option<PathBuf>,
+    /// Environment variable holding the PKCS#12 export password; the value is never stored.
+    #[arg(
+        long,
+        value_name = "ENV_VAR",
+        conflicts_with = "p12_password_file",
+        requires = "p12_path"
+    )]
+    pub(crate) p12_password_env: Option<String>,
+    /// File whose first line holds the PKCS#12 export password (0600, user-managed).
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "p12_password_env",
+        requires = "p12_path"
+    )]
+    pub(crate) p12_password_file: Option<PathBuf>,
     /// Optional reload program and arguments; omit for file publication only.
     #[arg(long, value_name = "COMMAND")]
     pub(crate) reload_cmd: Option<String>,
@@ -105,12 +124,12 @@ pub(crate) struct DeployAddArgs {
 }
 
 #[derive(Args)]
-#[command(group(clap::ArgGroup::new("changes").args(["target", "cert_path", "fullchain_path", "ca_path", "key_path", "reload_cmd", "clear_reload", "reload_timeout", "max_retries", "file_mode", "key_mode"]).multiple(true).required(true)))]
+#[command(group(clap::ArgGroup::new("changes").args(["target", "cert_path", "fullchain_path", "ca_path", "key_path", "p12_path", "p12_password_env", "p12_password_file", "reload_cmd", "clear_reload", "reload_timeout", "max_retries", "file_mode", "key_mode"]).multiple(true).required(true)))]
 pub(crate) struct DeployUpdateArgs {
     #[command(flatten)]
     pub(crate) identity: DeployTargetArgs,
     /// Replace the target with a standard PEM directory.
-    #[arg(long, value_name = "DIR", conflicts_with_all = ["cert_path", "fullchain_path", "ca_path", "key_path"])]
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["cert_path", "fullchain_path", "ca_path", "key_path", "p12_path"])]
     pub(crate) target: Option<PathBuf>,
     /// Replace destinations with exactly the supplied file paths (unspecified files are omitted).
     #[arg(long, value_name = "PATH", conflicts_with = "target")]
@@ -124,6 +143,25 @@ pub(crate) struct DeployUpdateArgs {
     /// Publish the private key at this path in the replacement destination set.
     #[arg(long, value_name = "PATH", conflicts_with = "target")]
     pub(crate) key_path: Option<PathBuf>,
+    /// Publish the PKCS#12 bundle at this path in the replacement destination set.
+    #[arg(long, value_name = "PATH", conflicts_with = "target")]
+    pub(crate) p12_path: Option<PathBuf>,
+    /// Replace the PKCS#12 password environment variable in that destination set.
+    #[arg(
+        long,
+        value_name = "ENV_VAR",
+        conflicts_with = "p12_password_file",
+        requires = "p12_path"
+    )]
+    pub(crate) p12_password_env: Option<String>,
+    /// Replace the PKCS#12 password file in that destination set.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "p12_password_env",
+        requires = "p12_path"
+    )]
+    pub(crate) p12_password_file: Option<PathBuf>,
     /// Replace the reload executable and arguments.
     #[arg(long, value_name = "COMMAND", conflicts_with = "clear_reload")]
     pub(crate) reload_cmd: Option<String>,

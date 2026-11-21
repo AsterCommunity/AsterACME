@@ -127,7 +127,7 @@ pub(in crate::commands::cert) async fn transact(
         }
     };
     drop(session);
-    Ok(attach_deployment_results(outcome, store, &execution).await)
+    Ok(attach_deployment_results(outcome, store, &execution, &progress.output).await)
 }
 
 pub(in crate::commands::cert) async fn validate_new_provider_binding(
@@ -152,6 +152,7 @@ pub(super) async fn attach_deployment_results(
     outcome: IssueOutcome,
     store: &CliIssueStore,
     execution: &ExecutionContext,
+    output: &crate::common::session::OutputSession,
 ) -> crate::commands::cert::report::CertificateResult {
     let deployment_results = match &outcome {
         IssueOutcome::Completed { record, .. } => {
@@ -162,6 +163,7 @@ pub(super) async fn attach_deployment_results(
                 &name,
                 &generation,
                 execution,
+                output,
             )
             .await
         }

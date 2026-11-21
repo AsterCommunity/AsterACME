@@ -26,7 +26,7 @@ async fn started_reload_wait_failure_is_uncertain_and_never_authorizes_automatic
     fixture.add("unobserved", child_command("success"), 3).await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "unobserved")
+        .open_deployment(&fixture.name, "unobserved", None)
         .await
         .unwrap();
     session.publish().await.unwrap();
@@ -71,6 +71,7 @@ async fn started_reload_wait_failure_is_uncertain_and_never_authorizes_automatic
         aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await
     .unwrap();
@@ -85,7 +86,7 @@ async fn reload_start_failure_remains_retryable_and_successful_exit_is_confirmed
         .await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "start-failed")
+        .open_deployment(&fixture.name, "start-failed", None)
         .await
         .unwrap();
     let binding = session.definition().clone();
@@ -116,7 +117,7 @@ async fn manual_cancellation_after_publication_retains_files_and_skips_reload() 
     let target = fixture.add("cancelled", child_command("success"), 0).await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "cancelled")
+        .open_deployment(&fixture.name, "cancelled", None)
         .await
         .unwrap();
     session
@@ -166,7 +167,8 @@ async fn manual_cancel_before_start_does_not_publish_or_reload() {
             "cancel-before",
             aster_acme::deployment::DeploymentIntent::Explicit,
             None,
-            Some(&execution)
+            Some(&execution),
+            Some(&crate::common::session::OutputSession::new(true))
         )
         .await
         .is_err()
@@ -189,7 +191,7 @@ async fn cancelled_publication_intent_restores_old_generation_and_complete_retry
         let target = fixture.add("rollback", Vec::new(), 0).await;
         let mut session = fixture
             .store
-            .open_deployment(&fixture.name, "rollback")
+            .open_deployment(&fixture.name, "rollback", None)
             .await
             .unwrap();
         if phase != DeploymentPhase::Configured {
@@ -213,7 +215,7 @@ async fn cancelled_publication_intent_restores_old_generation_and_complete_retry
         let renewed = fixture.complete(true).await;
         let mut session = fixture
             .store
-            .open_deployment(&fixture.name, "rollback")
+            .open_deployment(&fixture.name, "rollback", None)
             .await
             .unwrap();
         assert_ne!(
@@ -275,6 +277,7 @@ async fn cancelled_new_generation_is_queued_for_daemon_deployment() {
             cancellation: cancellation.clone(),
             deadline: std::time::Instant::now() + Duration::from_secs(30),
         },
+        &crate::common::session::OutputSession::new(true),
     )
     .await;
     assert_eq!(
@@ -302,7 +305,7 @@ async fn cancelled_new_generation_is_queued_for_daemon_deployment() {
     let previous = entries[0].clone();
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "queued")
+        .open_deployment(&fixture.name, "queued", None)
         .await
         .unwrap();
     let publication_execution = Execution {
@@ -353,7 +356,7 @@ async fn checkpoint_restore_rejects_changed_binding_configuration() {
     fixture.add("checkpoint", Vec::new(), 0).await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "checkpoint")
+        .open_deployment(&fixture.name, "checkpoint", None)
         .await
         .unwrap();
     let pending_generation = session.artifacts().generation.clone();
@@ -386,7 +389,7 @@ async fn manual_cancellation_during_publication_waits_for_completion_and_saves_o
         let target = fixture.add("publishing", child_command("success"), 0).await;
         let mut session = fixture
             .store
-            .open_deployment(&fixture.name, "publishing")
+            .open_deployment(&fixture.name, "publishing", None)
             .await
             .unwrap();
         session
@@ -594,7 +597,7 @@ async fn cancellation_after_reload_intent_does_not_invent_a_process_or_erase_pri
             .await;
         let mut session = fixture
             .store
-            .open_deployment(&fixture.name, "intent")
+            .open_deployment(&fixture.name, "intent", None)
             .await
             .unwrap();
         session.publish().await.unwrap();
@@ -664,7 +667,7 @@ async fn explicit_retry_retains_uncertainty_through_publication_and_cancellation
             fixture.add("retry", child_command("success"), 3).await;
             let mut session = fixture
                 .store
-                .open_deployment(&fixture.name, "retry")
+                .open_deployment(&fixture.name, "retry", None)
                 .await
                 .unwrap();
             session
@@ -727,6 +730,7 @@ async fn explicit_retry_retains_uncertainty_through_publication_and_cancellation
                 aster_acme::deployment::DeploymentIntent::Explicit,
                 None,
                 None,
+                Some(&crate::common::session::OutputSession::new(true)),
             )
             .await
             .unwrap();
@@ -741,7 +745,7 @@ async fn reload_failure_during_backoff_is_checkpointed_before_deadline_return() 
     fixture.add("backoff", child_command("failure"), 3).await;
     let mut failed = fixture
         .store
-        .open_deployment(&fixture.name, "backoff")
+        .open_deployment(&fixture.name, "backoff", None)
         .await
         .unwrap();
     failed
@@ -765,7 +769,7 @@ async fn reload_failure_during_backoff_is_checkpointed_before_deadline_return() 
     drop(failed);
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "backoff")
+        .open_deployment(&fixture.name, "backoff", None)
         .await
         .unwrap();
     let mut events = Vec::new();

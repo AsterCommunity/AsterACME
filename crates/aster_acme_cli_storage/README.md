@@ -15,3 +15,5 @@ cargo test -p aster_acme_cli_storage --locked
 ```
 
 License: MIT OR Apache-2.0.
+
+Exact-file deployment targets can publish a PKCS#12 bundle alongside PEM artifacts. Storage resolves environment/file password references or a transient interactive override inside the blocking preparation worker; it persists no password values. Bundle bytes use the existing publication pipeline and private-key permissions. Directory targets keep the standard four PEM files. See the [deployment contract](../../developer-docs/cli-contract.md#证书部署).

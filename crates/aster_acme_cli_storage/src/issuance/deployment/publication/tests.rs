@@ -5,6 +5,8 @@ const FILES: [&str; 4] = ["fullchain.pem", "cert.pem", "ca.pem", "private-key.pe
 
 fn artifacts() -> DeploymentArtifacts {
     DeploymentArtifacts {
+        pkcs12: None,
+
         generation: "test".into(),
         fullchain: b"new-chain".to_vec(),
         certificate: b"new-leaf".to_vec(),

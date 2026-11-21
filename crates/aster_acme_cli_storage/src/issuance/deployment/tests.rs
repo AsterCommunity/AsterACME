@@ -117,6 +117,10 @@ fn binding_validation_rejects_invalid_ids_paths_commands_and_limits() {
     );
     assert!(
         validate_binding(&binding(DeploymentTarget::Files {
+            pkcs12: None,
+            pkcs12_password_env: None,
+            pkcs12_password_file: None,
+
             fullchain: None,
             ca_chain: None,
             certificate: Some(absolute.clone()),
@@ -132,6 +136,8 @@ fn directory_publication_writes_exact_pem_set() {
     let target = temp.path().join("target");
     fs::create_dir(&target).unwrap();
     let bytes = DeploymentArtifacts {
+        pkcs12: None,
+
         generation: "test".into(),
         fullchain: b"chain".to_vec(),
         certificate: b"leaf".to_vec(),
@@ -165,12 +171,18 @@ fn single_file_publication_replaces_regular_files_but_never_follows_symlinks() {
     fs::write(&private_key, b"old-key").unwrap();
     publication::PreparedPublication::prepare(
         &DeploymentTarget::Files {
+            pkcs12: None,
+            pkcs12_password_env: None,
+            pkcs12_password_file: None,
+
             fullchain: None,
             ca_chain: None,
             certificate: Some(certificate.clone()),
             private_key: Some(private_key.clone()),
         },
         &DeploymentArtifacts {
+            pkcs12: None,
+
             generation: "test".into(),
             fullchain: Vec::new(),
             certificate: b"new".to_vec(),
@@ -195,12 +207,18 @@ fn publication_refuses_symlink_destinations_without_modifying_the_link_target() 
     std::os::unix::fs::symlink(&target, &link).unwrap();
     let result = publication::PreparedPublication::prepare(
         &DeploymentTarget::Files {
+            pkcs12: None,
+            pkcs12_password_env: None,
+            pkcs12_password_file: None,
+
             fullchain: None,
             ca_chain: None,
             certificate: Some(link.clone()),
             private_key: Some(temp.path().join("key.pem")),
         },
         &DeploymentArtifacts {
+            pkcs12: None,
+
             generation: "test".into(),
             fullchain: Vec::new(),
             certificate: b"replacement".to_vec(),
@@ -223,12 +241,18 @@ fn all_destinations_are_preflighted_before_any_existing_file_is_replaced() {
     fs::create_dir(&bad_key).unwrap();
     let result = publication::PreparedPublication::prepare(
         &DeploymentTarget::Files {
+            pkcs12: None,
+            pkcs12_password_env: None,
+            pkcs12_password_file: None,
+
             fullchain: None,
             ca_chain: None,
             certificate: Some(certificate.clone()),
             private_key: Some(bad_key),
         },
         &DeploymentArtifacts {
+            pkcs12: None,
+
             generation: "test".into(),
             fullchain: Vec::new(),
             certificate: b"replacement".to_vec(),
@@ -304,6 +328,10 @@ fn exact_paths_allow_every_artifact_alone_but_reject_empty_relative_and_duplicat
     let target = |paths: [Option<PathBuf>; 4]| {
         let [certificate, private_key, ca_chain, fullchain] = paths;
         DeploymentTarget::Files {
+            pkcs12: None,
+            pkcs12_password_env: None,
+            pkcs12_password_file: None,
+
             certificate,
             private_key,
             ca_chain,
@@ -327,3 +355,98 @@ fn exact_paths_allow_every_artifact_alone_but_reject_empty_relative_and_duplicat
 }
 
 use crate::issuance::deployment::configuration::{allocate_name, validate_binding};
+
+#[test]
+fn pkcs12_binding_sources_and_serialization_preserve_reference_only_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let target = |p12, env, file| DeploymentTarget::Files {
+        certificate: Some(root.path().join("leaf.pem")),
+        fullchain: None,
+        ca_chain: None,
+        private_key: None,
+        pkcs12: p12,
+        pkcs12_password_env: env,
+        pkcs12_password_file: file,
+    };
+    let p12 = Some(root.path().join("bundle.p12"));
+    for (env, file) in [
+        (None, None),
+        (Some("PASSWORD".into()), None),
+        (None, Some(root.path().join("secret"))),
+    ] {
+        let value = binding(target(p12.clone(), env.clone(), file.clone()));
+        validate_binding(&value).unwrap();
+        let text = toml::to_string(&value).unwrap();
+        assert_eq!(toml::from_str::<DeploymentBinding>(&text).unwrap(), value);
+        if let Some(name) = env {
+            assert!(text.contains(&name));
+        }
+    }
+    for (p12, env, file) in [
+        (None, Some("PASSWORD".into()), None),
+        (None, None, Some(root.path().join("secret"))),
+        (
+            p12.clone(),
+            Some("PASSWORD".into()),
+            Some(root.path().join("secret")),
+        ),
+        (p12.clone(), Some("BAD=ENV".into()), None),
+        (p12.clone(), Some(String::new()), None),
+        (p12.clone(), Some("x".repeat(513)), None),
+        (p12.clone(), Some("BAD\nENV".into()), None),
+        (p12.clone(), None, Some("relative".into())),
+        (Some(root.path().join("leaf.pem")), None, None),
+    ] {
+        assert!(validate_binding(&binding(target(p12, env, file))).is_err());
+    }
+    // Old PEM-only serialized bindings omit all optional p12 fields.
+    let pem = binding(target(None, None, None));
+    validate_binding(&pem).unwrap();
+    let text = toml::to_string(&pem).unwrap();
+    assert!(!text.contains("pkcs12"));
+    assert_eq!(toml::from_str::<DeploymentBinding>(&text).unwrap(), pem);
+}
+
+#[test]
+fn pkcs12_publication_requires_preparation_and_uses_key_permissions() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("bundle.p12");
+    fs::write(&path, b"old").unwrap();
+    let target = DeploymentTarget::Files {
+        certificate: None,
+        fullchain: None,
+        ca_chain: None,
+        private_key: None,
+        pkcs12: Some(path.clone()),
+        pkcs12_password_env: None,
+        pkcs12_password_file: None,
+    };
+    let mut artifacts = DeploymentArtifacts {
+        generation: "g".into(),
+        certificate: vec![],
+        fullchain: vec![],
+        ca_chain: vec![],
+        private_key: Zeroizing::new(vec![]),
+        pkcs12: None,
+    };
+    let permissions = DeploymentPermissions {
+        file_mode: cfg!(unix).then_some(0o644),
+        key_mode: cfg!(unix).then_some(0o600),
+    };
+    assert!(publication::PreparedPublication::prepare(&target, &artifacts, &permissions).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"old");
+    artifacts.pkcs12 = Some(Zeroizing::new(b"bundle".to_vec()));
+    publication::PreparedPublication::prepare(&target, &artifacts, &permissions)
+        .unwrap()
+        .commit()
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"bundle");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}

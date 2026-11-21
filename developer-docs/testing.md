@@ -4,7 +4,7 @@
 
 ## 常用命令
 
-进程生命周期机制的完整平台边界测试位于 AsterForge：`cargo test --locked -p aster_forge_process --all-targets`，Linux/macOS/Windows CI 原生执行。ACME 侧运行 `cargo test --locked -p aster_acme_dns_adpp --all-targets` 验证协议错误、清理失败优先级、启动前/后取消与副作用分类；CLI 的 `commands::cert::deployment::reload::tests` 验证清理不确定不会变成成功或自动超时重试。macOS alpha.3 的保守清理失败边界见[运行时设计](design/runtime.md#reload进程)。
+进程生命周期机制的完整平台边界测试位于 AsterForge：`cargo test --locked -p aster_forge_process --all-targets`，Linux/macOS/Windows CI 原生执行。ACME 侧运行 `cargo test --locked -p aster_acme_dns_adpp --all-targets` 验证协议错误、清理失败优先级、启动前/后取消与副作用分类；CLI 的 `commands::cert::deployment::reload::tests` 验证清理不确定不会变成成功或自动超时重试。macOS 的保守清理失败边界见[运行时设计](design/runtime.md#reload进程)。
 
 ```sh
 cargo test -p aster_acme_cli_storage --locked issuance::deployment
@@ -48,6 +48,8 @@ python3 scripts/check-precheck-features.py
 预检feature矩阵独立按包构建，避免workspace feature合并隐藏缺失依赖：库默认关闭、仅runner、HTTP、DNS solver、CAA、TXT，以及CLI关闭预检均检查。脚本还独立运行 validation 各 feature 的库测试，并验证关闭预检的库生产依赖图不包含Hickory、空 validation 不包含 Tokio/tokio-util；CLI的external DNS发布仍通过独立resolver crate使用Hickory，不受建议性precheck开关影响；Linux专用CI执行该矩阵，其他平台仍运行默认完整产品测试。
 
 Unix原生确认终端回归：`python3 scripts/test-confirmation-terminal.py` 在PTY中验证提示/输入同一行、可见答案、光标/删除/退格、大小写、非法输入与长度上限、默认否，以及不发送任何按键时的deadline/外部取消/shutdown和完整termios恢复。Linux/macOS CI执行；Windows保留原生编译和普通测试。
+
+PKCS#12 原生终端回归：`python3 scripts/test-deployment-terminal.py` 验证隐藏密码与确认输入、取消零发布/零配置修改、JSON 不提示和 termios 恢复；Linux/macOS CI 执行。密码来源、编码、解密、权限与自动部署的普通测试分别归 cli_storage 和 CLI deployment 模块。OpenSSL 互通使用手动验收，不引入自动测试依赖。
 
 Provider 原生终端回归：`python3 scripts/test-provider-terminal.py` 在 PTY 中验证 add/show/cleanup/remove/update 和签发 Profile 选择、搜索、颜色与 NO_COLOR、默认否/取消、update 保存/丢弃草稿、子菜单返回并保留草稿及 termios 恢复，不执行真实 Provider 或访问 CA；Linux/macOS CI 同步执行。
 
