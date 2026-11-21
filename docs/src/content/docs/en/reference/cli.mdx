@@ -13,7 +13,8 @@ aster-acme
 │   ├── default [NAME]
 │   ├── register [NAME] [-m CONTACT] [-k KEY_TYPE] [--ca|--ca-directory] [--accept-terms] [--eab-*]
 │   ├── recover [NAME]
-│   ├── update [NAME] (-m CONTACT|--clear-contacts|--profile PROFILE|--clear-profile)
+│   ├── update [NAME] (-m CONTACT|--clear-contacts|--profile PROFILE|--clear-profile
+│   │               |--auto-accept-new-terms|--clear-auto-accept-new-terms)
 │   ├── rotate-key [NAME] [-k KEY_TYPE]
 │   └── remove [NAME] [--deactivate]
 ├── cert
@@ -68,7 +69,7 @@ Every business command takes at most one positional argument — `cert deploy sh
 | Command | What `--yes` confirms |
 | --- | --- |
 | `account register` | Reusing/continuing an existing local identity |
-| `account update` | Replacing or explicitly clearing contacts; setting/clearing the default profile |
+| `account update` | Replacing or explicitly clearing contacts; setting/clearing the default profile; enabling/revoking terms delegation (explicit flag required) |
 | `account rotate-key` | Rotating or reconciling the rotation transaction |
 | `account remove --deactivate` | Deactivating the CA account (irreversible) and deleting the local profile |
 | `account remove` | Deleting the local profile and key |

@@ -13,7 +13,8 @@ aster-acme
 │   ├── default [NAME]
 │   ├── register [NAME] [-m CONTACT] [-k KEY_TYPE] [--ca|--ca-directory] [--accept-terms] [--eab-*]
 │   ├── recover [NAME]
-│   ├── update [NAME] (-m CONTACT|--clear-contacts|--profile PROFILE|--clear-profile)
+│   ├── update [NAME] (-m CONTACT|--clear-contacts|--profile PROFILE|--clear-profile
+│   │               |--auto-accept-new-terms|--clear-auto-accept-new-terms)
 │   ├── rotate-key [NAME] [-k KEY_TYPE]
 │   └── remove [NAME] [--deactivate]
 ├── cert
@@ -68,7 +69,7 @@ aster-acme
 | 命令 | `--yes` 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已存在的本地身份 |
-| `account update` | 替换或显式清空联系人;设置/清除默认 profile |
+| `account update` | 替换或显式清空联系人;设置/清除默认 profile;开启/撤销条款授权(需显式 flag) |
 | `account rotate-key` | 轮换或对账换钥事务 |
 | `account remove --deactivate` | 停用 CA 账户(不可逆)+ 删除本地资料 |
 | `account remove` | 删除本地账户资料及私钥 |
