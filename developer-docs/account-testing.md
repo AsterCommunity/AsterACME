@@ -108,3 +108,13 @@ User-Agent 验证显式注册值写账户 TOML、缺省不写、配置无全局�
 - 适配：上游 #54 将 directory 条款值改为原样 `String`；本入口按 `String` 读写，报告的 `accepted_terms_url`/`advertised_terms_url` 同步为字符串，显示前经 `safe()` 转义。
 
 命令：`cargo test -p aster_acme_cli --locked commands::account`（66 项通过）、`cargo test --workspace --locked`（1040 项通过、0 失败）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户；交互式 scope 菜单仅在单测层覆盖（索引映射），未在原生终端执行，也未扩展 PTY 脚本。
+
+## 交互 scope 菜单注入覆盖与冲突声明去重（2026-11-21）
+
+Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同一工作树追加提交：
+
+- 菜单边界：`account update` 的交互 scope 选择迁入 `interaction::update_scope_choice`，经既有 `RegistrationPrompts` 注入边界驱动（与注册 contact/profile 选择同构）。注入式单测固定菜单标签与展示顺序（防标签改动与索引映射脱节）、三个 scope 的索引映射、`Cancel` 项返回空 scope、prompt 取消传播为 `Canceled`；菜单永不触发确认或邮箱提问。
+- 编排映射：`scope_intent` 纯函数覆盖菜单结果到 contact/profile/terms 意图位的映射及空 scope 取消；`update_with_transport` 中真实终端的交互分支编排行仍仅在 PTY 层验收，本轮未扩展 PTY 脚本（菜单无新增终端行为，仅消除裸 `terminal` 依赖）。
+- 渲染：委托报告四态文案改为 `DelegationTransition` 派生，替代 `(previous, current)` 布尔对，删除 `clippy::fn_params_excessive_bools` 抑制；`UpdateArgs` 的 `struct_excessive_bools` 保留（五个独立 CLI 开关是参数面现实）。渲染行为不变，既有渲染测试通过。
+- 解析：terms 的 9 对互斥冲突改为每对声明一次（clap `conflicts_with` 为单向生效，原先 terms 两 flag 互为对方声明属冗余）；互斥组合解析测试维持两 terms flag 与 contact/profile 四开关的全组合覆盖。
+- 命令：`cargo test -p aster_acme_cli --locked commands::account`（69 项通过）、`cargo test --workspace --locked`（1078 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。
