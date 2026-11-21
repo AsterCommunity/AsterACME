@@ -109,14 +109,14 @@ aster-acme account register default --auto-accept-new-terms
 
 This also accepts the currently advertised terms. The exact accepted URL remains in the account record; `account show` reports whether the future-update delegation is enabled. `--yes`, JSON mode, and implicit issuance account checks never enable it. A normal `account register` without the flag keeps an existing delegation so routine recovery cannot revoke unattended renewal trust.
 
-Change the delegation later with `account update` (the delegation is exclusive with contacts/profile):
+Change the delegation later with `account update` (combinable with contacts/profile changes in one invocation; the report lists every applied scope):
 
 ```sh
 aster-acme account update default --auto-accept-new-terms --yes   # accept current terms and delegate
 aster-acme account update default --clear-auto-accept-new-terms --yes  # revoke; keep the accepted URL
 ```
 
-Enabling reads the live directory to record the exact current terms URL; if the directory cannot be read it fails instead of delegating silently, and a CA that publishes no terms still records the delegation with an explicit notice. Revoking is local, sends nothing, and keeps the saved accepted URL. Neither change sends a CA account request.
+Enabling reads the live directory to record the exact current terms URL; if the directory cannot be read it fails instead of delegating silently, and a CA that publishes no terms still records the delegation with an explicit notice. Revoking is local, sends nothing, and keeps the saved accepted URL. Neither change sends a CA account request. The terms confirmation always needs an explicit flag plus `--yes`, whatever else the same invocation confirms.
 
 Publish the requested TXT values and confirm. If interrupted, continue the saved request; renewal keeps the saved validation method:
 

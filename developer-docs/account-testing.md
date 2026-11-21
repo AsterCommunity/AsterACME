@@ -118,3 +118,14 @@ Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同
 - 渲染：委托报告四态文案改为 `DelegationTransition` 派生，替代 `(previous, current)` 布尔对，删除 `clippy::fn_params_excessive_bools` 抑制；`UpdateArgs` 的 `struct_excessive_bools` 保留（五个独立 CLI 开关是参数面现实）。渲染行为不变，既有渲染测试通过。
 - 解析：terms 的 9 对互斥冲突改为每对声明一次（clap `conflicts_with` 为单向生效，原先 terms 两 flag 互为对方声明属冗余）；互斥组合解析测试维持两 terms flag 与 contact/profile 四开关的全组合覆盖。
 - 命令：`cargo test -p aster_acme_cli --locked commands::account`（69 项通过）、`cargo test --workspace --locked`（1078 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。
+
+## update 组合 scope 报告模型（2026-11-21，issue #58）
+
+工作树基于 main（`db8bc24`，含 #56/#57）。`account update` 报告模型重构与 scope 组合放开的验证：
+
+- 模型：单一 `Updated(UpdateOutcome)` 承载一次调用全部 scope（contacts/profile/terms 各自独立 outcome），删除仅被 update 使用的 `ProfilePreference`/`TermsDelegation` variant 与 `RemoteAction::UpdateContact`（contacts 走 `ContactsUpdate` outcome）。组合调用不再丢弃前序 scope 的 report：contacts+profile、contacts+terms、三 scope 全组合的报告同时含全部已生效段，human 文本逐段渲染、JSON 为单个 `{name, contacts, profile, terms}` 对象（未发布格式允许形状变更，CHANGELOG 注明）。
+- 编排：profile 广告校验与条款开启的 directory 读取合并为前置 preflight，先于第一个副作用（联系人提交）；未广告 profile + 条款开启的组合在 preflight 失败时整调用零副作用（记录不变、零账户 POST）。contacts（唯一 CA mutation）→ profile（reload 后保存）→ terms（租约内保存）顺序执行；本地保存失败时错误列明已生效 scope（`partial_update_error`），不再只映射 profile 一个前缀。
+- 确认语义不变：条款确认仍仅对显式条款 flag + `--yes` 生效，同次调用确认的联系人替换不能代替；无 flag 的交互菜单保持单选引导。
+- 解析：terms 两 flag 与 contacts/profile 的组合全部被接受；`--auto-accept-new-terms` 与 `--clear-auto-accept-new-terms` 彼此互斥且两个参数序均断言冲突。
+- 端到端：loopback CA 覆盖 contacts+terms 组合恰好一个账户 POST（条款部分零 POST）、三 scope 组合后记录三字段全部生效、enable 后 ensure 静默接受变更条款、撤销后 ensure 以 `TermsRequired` 阻断且零 POST（沿用）。
+- 命令：`cargo test -p aster_acme_cli --locked commands::account`（72 项通过）、`cargo test --workspace --locked`（1111 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。

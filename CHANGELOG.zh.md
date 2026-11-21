@@ -9,9 +9,11 @@
 - **PKCS#12 部署（#55）** — `cert deploy add/update --p12-path` 发布证书链与私钥 bundle，沿用密钥权限与完整准备后发布管线。绑定只存互斥的 env/密码文件引用；daemon 推荐 0600 密码文件，只有交互式显式 run 可使用不落盘的密码。无来源的自动执行失败、不自动重试，JSON 不包含密码值，目录仍保持 PEM 四件套。
 
 - **库嵌入签发适配器（#48）** — `aster_acme` 示例使用库内自带的账户与签发适配器，并增加针对内存存储边界的测试。
-- **注册后修改未来条款授权** — `account update --auto-accept-new-terms` 接受 CA 当前条款并持久化自动接受未来条款 URL 更新；`--clear-auto-accept-new-terms` 在本地撤销授权并保留已接受 URL。开启前读取在线 directory，无法确认当前条款时失败关闭（CA 未公布条款时仍保存授权并在报告中明确说明）；撤销不发送任何请求。两者都不向 CA 发送账户更新，`--yes`/JSON 不会隐含同意，且与联系人/profile 修改在同一次命令中互斥。`account show` 继续展示授权状态与精确已接受 URL。
+- **注册后修改未来条款授权** — `account update --auto-accept-new-terms` 接受 CA 当前条款并持久化自动接受未来条款 URL 更新；`--clear-auto-accept-new-terms` 在本地撤销授权并保留已接受 URL。开启前读取在线 directory，无法确认当前条款时失败关闭（CA 未公布条款时仍保存授权并在报告中明确说明）；撤销不发送任何请求。两者都不向 CA 发送账户更新，`--yes`/JSON 不会隐含同意。`account show` 继续展示授权状态与精确已接受 URL。
 
 ### 变更
+
+- **`account update` 组合 scope 报告（#58）** — `account update` 逐 scope 报告结果：CA 已提交的联系人证据与 profile、条款变更保留在同一次结果里，本地保存失败时错误列明已生效的 scope。条款授权可与联系人/profile 同次组合；全部 directory 校验（profile 广告、当前条款值）仍先于第一个 mutation，CA 不一致时整个调用零副作用。update 的 JSON 输出形状随之调整：单个 `{name, contacts, profile, terms}` 对象按已应用 scope 分段，替代原先的扁平单 scope 对象。`--auto-accept-new-terms` 与 `--clear-auto-accept-new-terms` 彼此仍互斥，条款同意始终需要显式 flag 加 `--yes`。
 
 - **AsterForge 依赖** — 升级共享的 HTTP、进程、panic hook 和工具库。panic hook 的默认时间戳改用 `time`，AsterACME 的依赖树移除了 `chrono`。macOS 并发创建锁文件遇到瞬态 `ENOENT` 时，改由 `aster_forge_utils` 重试一次。
 

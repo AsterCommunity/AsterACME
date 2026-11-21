@@ -2,7 +2,7 @@
 use crate::commands::account::{
     args::{AccountArgs, RotateKeyArgs},
     interaction::update_scope_choice,
-    report::{AccountReport, RemoteAction},
+    report::AccountReport,
 };
 use crate::common::output;
 use crate::common::{
@@ -136,37 +136,24 @@ pub(super) async fn update_with_transport(
     record
         .action(aster_acme_core::account::AccountOperation::Update)
         .map_err(AccountError::from)?;
-    if terms_scope {
-        // Flags are mutually exclusive with contacts/profile, so delegation is
-        // the only scope applied here; the menu also selects a single scope.
-        let target = terms_flag.unwrap_or(!record.auto_accept_terms_updates);
-        return terms_delegation(
-            context,
-            &signer,
-            &record,
-            target,
-            args.yes && terms_flag.is_some(),
-            transport,
-            cli,
-        )
-        .await;
-    }
-    // Draft-ietf-acme-profiles: validate the requested profile against the
-    // advertisement BEFORE the contact mutation, so an invalid profile never
-    // half-applies. The advertised map then feeds the save without a second
-    // directory request.
-    let advertised = if wants_profile {
-        let client = cli
-            .http
-            .discover(context.directory.clone(), transport.clone())
-            .await?;
-        let advertised = client.directory().meta.profiles.clone();
-        if let Some(target) = &profile_target {
-            validate_profile_advertisement(advertised.as_ref(), target)?;
-        }
-        advertised
-    } else {
-        None
+    let terms_target = terms_flag.unwrap_or(!record.auto_accept_terms_updates);
+    // Every directory-backed validation happens BEFORE the first side effect
+    // (the contact mutation), so an unreachable or disagreeing CA leaves the
+    // account untouched instead of half-applying the update.
+    let preflight = update_preflight(
+        context,
+        transport.clone(),
+        wants_profile,
+        terms_scope && terms_target,
+        profile_target.as_deref(),
+        cli,
+    )
+    .await?;
+    let mut outcome = crate::commands::account::report::UpdateOutcome {
+        name: context.name.clone(),
+        contacts: None,
+        profile: None,
+        terms: None,
     };
     if wants_contacts {
         let contacts = replacement_contacts(&args, &cli.output)?;
@@ -185,61 +172,155 @@ pub(super) async fn update_with_transport(
             args.yes,
             &cli.output,
         )?;
-        let report =
-            submit_contacts(context, signer.clone(), contacts, transport.clone(), cli).await?;
-        if !wants_profile {
-            return Ok(report);
-        }
+        outcome.contacts =
+            Some(submit_contacts(context, signer.clone(), contacts, transport.clone(), cli).await?);
     }
-    if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
-        profile_target = interactive_profile_selection(
+    if wants_profile {
+        if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
+            profile_target = interactive_profile_selection(
+                context,
+                record.preferred_profile.as_deref(),
+                transport.clone(),
+                cli,
+            )
+            .await?;
+        }
+        match finish_profile_save(
             context,
-            record.preferred_profile.as_deref(),
-            transport.clone(),
+            signer.clone(),
+            profile_target,
+            preflight.advertised_profiles.as_ref(),
+            args.yes || wants_contacts,
             cli,
         )
-        .await?;
+        .await
+        {
+            Ok(change) => outcome.profile = Some(change),
+            Err(error) => {
+                return Err(partial_update_error(
+                    &outcome,
+                    "the profile preference was not saved",
+                    error.as_ref(),
+                ));
+            }
+        }
     }
-    finish_profile_save(
-        context,
-        signer,
-        profile_target,
-        advertised.as_ref(),
-        args.yes || wants_contacts,
-        wants_contacts,
-        cli,
-    )
-    .await
+    if terms_scope {
+        match apply_terms_change(
+            context,
+            &signer,
+            &record,
+            terms_target,
+            args.yes && terms_flag.is_some(),
+            &preflight,
+            cli,
+        )
+        .await
+        {
+            Ok(change) => outcome.terms = Some(change),
+            Err(error) => {
+                return Err(partial_update_error(
+                    &outcome,
+                    "the terms delegation was not saved",
+                    error.as_ref(),
+                ));
+            }
+        }
+    }
+    Ok(AccountReport::Updated(outcome))
 }
 
-/// Toggle the durable future-terms delegation. Enabling reads the live
-/// directory so the exact current URL is accepted; disabling is pure local
-/// metadata. Neither path sends a CA account update, so this never claims the
-/// CA accepted anything.
-async fn terms_delegation(
+/// Directory-backed inputs for one update: the advertised profile map and the
+/// CA's current terms value, read once before any mutation.
+struct UpdatePreflight {
+    advertised_profiles: Option<std::collections::BTreeMap<String, String>>,
+    advertised_terms: Option<String>,
+    terms_directory_checked: bool,
+}
+
+/// Validate what the CA must confirm before anything changes. Profile names are
+/// checked against the advertisement; enabling the terms delegation requires the
+/// live directory's current terms value and fails closed without one.
+async fn update_preflight(
+    context: &CliContext,
+    transport: aster_acme::transport::TransportOptions,
+    profiles: bool,
+    terms_enable: bool,
+    profile_target: Option<&str>,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<UpdatePreflight> {
+    if !profiles && !terms_enable {
+        return Ok(UpdatePreflight {
+            advertised_profiles: None,
+            advertised_terms: None,
+            terms_directory_checked: false,
+        });
+    }
+    let client = cli
+        .http
+        .discover(context.directory.clone(), transport)
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> {
+            if terms_enable {
+                format!(
+                    "Cannot enable automatic terms updates: the CA directory could not be read to confirm its current terms: {error}"
+                )
+                .into()
+            } else {
+                error.into()
+            }
+        })?;
+    let advertised_profiles = if profiles {
+        let advertised = client.directory().meta.profiles.clone();
+        // Draft-ietf-acme-profiles: an invalid name is rejected before any
+        // mutation, so the update never half-applies.
+        if let Some(target) = profile_target {
+            validate_profile_advertisement(advertised.as_ref(), target)?;
+        }
+        advertised
+    } else {
+        None
+    };
+    Ok(UpdatePreflight {
+        advertised_profiles,
+        advertised_terms: client.directory().meta.terms_of_service.clone(),
+        terms_directory_checked: true,
+    })
+}
+
+/// Late-failure context: name the scopes that already took effect before the
+/// failed one, so a committed CA mutation keeps its evidence in the error.
+fn partial_update_error(
+    applied: &crate::commands::account::report::UpdateOutcome,
+    failed: &str,
+    error: &(dyn std::error::Error + 'static),
+) -> Box<dyn std::error::Error> {
+    let mut context = String::new();
+    if applied.contacts.is_some() {
+        context.push_str("Contacts were updated at the CA; ");
+    }
+    if applied.profile.is_some() {
+        context.push_str("the default profile was saved; ");
+    }
+    context.push_str(failed);
+    format!("{context}: {error}").into()
+}
+
+/// Toggle the durable future-terms delegation under a lease. Enabling accepts
+/// the preflight-read directory terms value; disabling is pure local metadata.
+/// Neither path sends a CA account update, so this never claims the CA accepted
+/// anything.
+async fn apply_terms_change(
     context: &CliContext,
     signer: &Arc<dyn JwsSigner>,
     snapshot: &aster_acme::account::AccountRecord,
     target: bool,
     confirmed: bool,
-    transport: aster_acme::transport::TransportOptions,
+    preflight: &UpdatePreflight,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<AccountReport> {
-    // Granting consent needs the directory's current URL; revoking is local.
-    let (directory_checked, advertised_terms) = if target {
-        let client = cli
-            .http
-            .discover(context.directory.clone(), transport)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Cannot enable automatic terms updates: the CA directory could not be read to confirm its current terms: {error}"
-                )
-            })?;
-        (true, client.directory().meta.terms_of_service.clone())
-    } else {
-        (false, None)
-    };
+) -> CliResult<crate::commands::account::report::TermsChange> {
+    let directory_checked = preflight.terms_directory_checked;
+    let advertised_terms = preflight.advertised_terms.clone();
     let accepted = snapshot
         .accepted_terms_url
         .as_ref()
@@ -305,8 +386,7 @@ async fn terms_delegation(
         record.accepted_terms_url = Some(url.clone());
     }
     AccountStore::save(context.store.as_ref(), &record, &lease).await?;
-    Ok(AccountReport::TermsDelegation {
-        name: context.name.clone(),
+    Ok(crate::commands::account::report::TermsChange {
         previous,
         current: record.auto_accept_terms_updates,
         accepted_terms_url: record.accepted_terms_url,
@@ -315,18 +395,16 @@ async fn terms_delegation(
     })
 }
 
-/// Reload past any contact mutation and persist the profile preference,
-/// mapping a late failure onto the fact that contacts may already be
-/// committed at the CA.
+/// Reload past any contact mutation and persist the profile preference; the
+/// caller maps a late failure onto the scopes that already took effect.
 async fn finish_profile_save(
     context: &CliContext,
     signer: Arc<dyn aster_acme::crypto::JwsSigner>,
     target: Option<String>,
     advertised: Option<&std::collections::BTreeMap<String, String>>,
     confirmed: bool,
-    contacts_updated: bool,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<AccountReport> {
+) -> CliResult<crate::commands::account::report::ProfileChange> {
     // Reload after a contact submission: the CA may have returned fresh
     // server state that this profile save must preserve, never clobber.
     let fresh = context
@@ -335,18 +413,8 @@ async fn finish_profile_save(
         .await?
         .ok_or(AccountError::AccountDoesNotExist)?;
     let previous = fresh.preferred_profile.clone();
-    if let Err(error) =
-        save_profile_preference(context, &fresh, target.clone(), advertised, confirmed, cli).await
-    {
-        let prefix = if contacts_updated {
-            "Contacts were updated at the CA; "
-        } else {
-            ""
-        };
-        return Err(format!("{prefix}the profile preference was not saved: {error}").into());
-    }
-    Ok(AccountReport::ProfilePreference {
-        name: context.name.clone(),
+    save_profile_preference(context, &fresh, target.clone(), advertised, confirmed, cli).await?;
+    Ok(crate::commands::account::report::ProfileChange {
         previous,
         current: target,
     })
@@ -479,7 +547,7 @@ pub(super) async fn submit_contacts(
     contacts: Vec<String>,
     transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<AccountReport> {
+) -> CliResult<crate::commands::account::report::ContactsUpdate> {
     let client = Arc::new(
         cli.http
             .discover(context.directory.clone(), transport)
@@ -488,13 +556,7 @@ pub(super) async fn submit_contacts(
     let account = AccountService::new(client, context.store.clone())
         .update_contacts(signer.as_ref(), contacts)
         .await?;
-    Ok(AccountReport::Remote {
-        name: context.name.clone(),
-        account,
-        action: RemoteAction::UpdateContact,
-        auto_accepted_terms: false,
-        reused: false,
-    })
+    Ok(crate::commands::account::report::ContactsUpdate { account })
 }
 
 pub(super) async fn rotate_key(
@@ -972,12 +1034,19 @@ mod tests {
         let report = update_with_transport(args, &context, transport, &CommandContext::new(true))
             .await
             .unwrap();
-        let crate::commands::account::report::AccountReport::ProfilePreference { current, .. } =
-            &report
-        else {
-            panic!("expected ProfilePreference report");
-        };
-        assert_eq!(current.as_deref(), Some("shortlived"));
+        // The combined invocation reports both scopes: the CA-committed contact
+        // evidence and the local profile preference.
+        let json = report_json(&report);
+        assert_eq!(json["name"], "work");
+        assert!(json["contacts"].is_object(), "{json}");
+        assert_eq!(
+            json["contacts"]["contacts"],
+            serde_json::json!(["mailto:new@example.com"])
+        );
+        assert_eq!(json["profile"]["current"], "shortlived");
+        assert_eq!(json["terms"], serde_json::Value::Null);
+        assert!(report_text(&report).contains("Updated contacts for"));
+        assert!(report_text(&report).contains("default profile"));
         let record = stored(&context, &signer).await;
         assert_eq!(record.preferred_profile.as_deref(), Some("shortlived"));
         // Contacts: the local intent is kept and the CA-observed value stored.
@@ -990,6 +1059,28 @@ mod tests {
 
     fn report_json(report: &AccountReport) -> serde_json::Value {
         crate::commands::account::render::tests::json_value(report)
+    }
+
+    /// Update args bound to the harness account, JSON mode, no scopes selected.
+    fn update_args(context: &CliContext) -> crate::commands::account::args::UpdateArgs {
+        crate::commands::account::args::UpdateArgs {
+            network: crate::commands::account::args::NetworkArgs {
+                identity: crate::commands::account::args::NameArgs {
+                    name: Some("work".into()),
+                    ..Default::default()
+                },
+                ca: crate::commands::account::args::CaArgs {
+                    ca_directory: Some(context.directory.as_str().to_owned()),
+                    ..Default::default()
+                },
+                http: HttpArgs::default(),
+                local: crate::common::args::LocalArgs {
+                    data_dir: Some(context.config_path.parent().unwrap().to_path_buf()),
+                    json: true,
+                },
+            },
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1057,25 +1148,34 @@ mod tests {
         let (server, context, signer, transport, _directory, _handles) =
             harness_with_terms(Some("https://ca.example/terms/v2")).await;
         let before = server.received_requests().await.unwrap().len();
-        let snapshot = stored(&context, &signer).await;
-        let report = terms_delegation(
+        let args = crate::commands::account::args::UpdateArgs {
+            auto_accept_new_terms: true,
+            yes: true,
+            ..update_args(&context)
+        };
+        let report = update_with_transport(
+            args,
             &context,
-            &signer,
-            &snapshot,
-            true,
-            true,
             transport.clone(),
             &CommandContext::new(true),
         )
         .await
         .unwrap();
         let json = report_json(&report);
-        assert_eq!(json["auto_accept_terms_updates"], true);
-        assert_eq!(json["previous_auto_accept_terms_updates"], false);
-        assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/v2");
-        assert_eq!(json["advertised_terms_url"], "https://ca.example/terms/v2");
-        assert_eq!(json["directory_checked"], true);
-        assert_eq!(json["ca_account_update_sent"], false);
+        assert_eq!(json["name"], "work");
+        assert_eq!(json["contacts"], serde_json::Value::Null);
+        assert_eq!(json["terms"]["auto_accept_terms_updates"], true);
+        assert_eq!(json["terms"]["previous_auto_accept_terms_updates"], false);
+        assert_eq!(
+            json["terms"]["accepted_terms_url"],
+            "https://ca.example/terms/v2"
+        );
+        assert_eq!(
+            json["terms"]["advertised_terms_url"],
+            "https://ca.example/terms/v2"
+        );
+        assert_eq!(json["terms"]["directory_checked"], true);
+        assert_eq!(json["terms"]["ca_account_update_sent"], false);
         let text = report_text(&report);
         assert!(
             text.contains("now accepts") && text.contains("no CA account request was sent"),
@@ -1095,20 +1195,21 @@ mod tests {
             "enabling only reads the directory; no CA account request"
         );
 
-        let report = terms_delegation(
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &record,
-            true,
-            true,
             transport,
             &CommandContext::new(true),
         )
         .await
         .unwrap();
         let json = report_json(&report);
-        assert_eq!(json["previous_auto_accept_terms_updates"], true);
-        assert_eq!(json["auto_accept_terms_updates"], true);
+        assert_eq!(json["terms"]["previous_auto_accept_terms_updates"], true);
+        assert_eq!(json["terms"]["auto_accept_terms_updates"], true);
         assert!(report_text(&report).contains("already accepts"));
     }
 
@@ -1119,12 +1220,13 @@ mod tests {
         let mut saved = stored(&context, &signer).await;
         saved.accepted_terms_url = Some("https://ca.example/terms/v1".to_owned());
         context.store.save(&saved).await.unwrap();
-        let report = terms_delegation(
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &saved,
-            true,
-            true,
             transport,
             &CommandContext::new(true),
         )
@@ -1136,7 +1238,7 @@ mod tests {
             "https://ca.example/terms/v2"
         );
         assert_eq!(
-            report_json(&report)["accepted_terms_url"],
+            report_json(&report)["terms"]["accepted_terms_url"],
             "https://ca.example/terms/v2"
         );
     }
@@ -1145,13 +1247,13 @@ mod tests {
     async fn enabling_without_advertised_terms_reports_no_url_accepted() {
         let (server, context, signer, transport, _directory, _handles) =
             harness_with_terms(None).await;
-        let snapshot = stored(&context, &signer).await;
-        let report = terms_delegation(
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &snapshot,
-            true,
-            true,
             transport,
             &CommandContext::new(true),
         )
@@ -1161,9 +1263,12 @@ mod tests {
         assert!(record.auto_accept_terms_updates);
         assert_eq!(record.accepted_terms_url, None);
         let json = report_json(&report);
-        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
-        assert_eq!(json["directory_checked"], true);
-        assert_eq!(json["auto_accept_terms_updates"], true);
+        assert_eq!(
+            json["terms"]["advertised_terms_url"],
+            serde_json::Value::Null
+        );
+        assert_eq!(json["terms"]["directory_checked"], true);
+        assert_eq!(json["terms"]["auto_accept_terms_updates"], true);
         let text = report_text(&report);
         assert!(text.contains("publishes no terms today"), "{text}");
         assert!(
@@ -1183,12 +1288,13 @@ mod tests {
         let mut saved = stored(&context, &signer).await;
         saved.accepted_terms_url = Some("https://ca.example/terms/old".to_owned());
         context.store.save(&saved).await.unwrap();
-        let report = terms_delegation(
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &saved,
-            true,
-            true,
             transport,
             &CommandContext::new(true),
         )
@@ -1201,9 +1307,15 @@ mod tests {
             "https://ca.example/terms/old"
         );
         let json = report_json(&report);
-        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
-        assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/old");
-        assert_eq!(json["directory_checked"], true);
+        assert_eq!(
+            json["terms"]["advertised_terms_url"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json["terms"]["accepted_terms_url"],
+            "https://ca.example/terms/old"
+        );
+        assert_eq!(json["terms"]["directory_checked"], true);
         let text = report_text(&report);
         assert!(text.contains("any saved URL is retained"), "{text}");
     }
@@ -1213,12 +1325,13 @@ mod tests {
         let server = MockServer::start().await;
         let (context, signer, transport, _handles) = account_fixture(&server).await;
         let before = stored(&context, &signer).await;
-        let error = terms_delegation(
+        let error = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &before,
-            true,
-            true,
             transport,
             &CommandContext::new(true),
         )
@@ -1242,12 +1355,13 @@ mod tests {
         saved.accepted_terms_url = Some("https://ca.example/terms/v1".to_owned());
         context.store.save(&saved).await.unwrap();
         let before = server.received_requests().await.unwrap().len();
-        let report = terms_delegation(
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                clear_auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &saved,
-            false,
-            true,
             transport.clone(),
             &CommandContext::new(true),
         )
@@ -1265,23 +1379,27 @@ mod tests {
             "disabling never contacts the CA"
         );
         let json = report_json(&report);
-        assert_eq!(json["auto_accept_terms_updates"], false);
-        assert_eq!(json["previous_auto_accept_terms_updates"], true);
-        assert_eq!(json["directory_checked"], false);
-        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
-        assert_eq!(json["ca_account_update_sent"], false);
+        assert_eq!(json["terms"]["auto_accept_terms_updates"], false);
+        assert_eq!(json["terms"]["previous_auto_accept_terms_updates"], true);
+        assert_eq!(json["terms"]["directory_checked"], false);
+        assert_eq!(
+            json["terms"]["advertised_terms_url"],
+            serde_json::Value::Null
+        );
+        assert_eq!(json["terms"]["ca_account_update_sent"], false);
         let text = report_text(&report);
         assert!(
             text.contains("no longer accepts") && text.contains("retained"),
             "{text}"
         );
 
-        let report = terms_delegation(
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                clear_auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &record,
-            false,
-            true,
             transport,
             &CommandContext::new(true),
         )
@@ -1295,12 +1413,13 @@ mod tests {
         let (_server, context, signer, transport, _directory, _handles) =
             harness_with_terms(Some("https://ca.example/terms/v1")).await;
         let before = stored(&context, &signer).await;
-        let error = terms_delegation(
+        let error = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: false,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &before,
-            true,
-            false,
             transport,
             &CommandContext::new(true),
         )
@@ -1324,12 +1443,13 @@ mod tests {
         fresh.preferred_profile = Some("shortlived".into());
         fresh.server_contacts = Some(vec!["mailto:new@example.com".into()]);
         context.store.save(&fresh).await.unwrap();
-        terms_delegation(
+        update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
             &context,
-            &signer,
-            &stale,
-            true,
-            true,
             transport,
             &CommandContext::new(true),
         )
@@ -1341,6 +1461,145 @@ mod tests {
         assert_eq!(
             record.server_contacts.as_deref(),
             Some(["mailto:new@example.com".to_owned()].as_slice())
+        );
+    }
+
+    /// Contacts + terms in one invocation: the CA-committed contact evidence
+    /// and the local delegation both stay in the report, with exactly one
+    /// account POST for the contact update.
+    #[tokio::test]
+    async fn combined_contacts_and_terms_report_both_outcomes() {
+        let (server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        Mock::given(method("POST"))
+            .and(path("/acct/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "valid",
+                "contact": ["mailto:new@example.com"]
+            })))
+            .mount(&server)
+            .await;
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                contact: vec!["mailto:new@example.com".into()],
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
+            &context,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let json = report_json(&report);
+        assert!(json["contacts"].is_object(), "{json}");
+        assert_eq!(
+            json["contacts"]["contacts"],
+            serde_json::json!(["mailto:new@example.com"])
+        );
+        assert_eq!(json["terms"]["auto_accept_terms_updates"], true);
+        assert_eq!(
+            json["terms"]["accepted_terms_url"],
+            "https://ca.example/terms/v2"
+        );
+        assert_eq!(json["terms"]["ca_account_update_sent"], false);
+        let text = report_text(&report);
+        assert!(
+            text.contains("Updated contacts for") && text.contains("now accepts"),
+            "{text}"
+        );
+        let record = stored(&context, &signer).await;
+        assert_eq!(record.contacts, ["mailto:new@example.com"]);
+        assert!(record.auto_accept_terms_updates);
+        let posts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method == "POST")
+            .count();
+        assert_eq!(posts, 1, "the contact update is the only CA account POST");
+    }
+
+    #[tokio::test]
+    async fn all_three_scopes_apply_and_report_together() {
+        let (server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v3")).await;
+        Mock::given(method("POST"))
+            .and(path("/acct/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "valid",
+                "contact": ["mailto:new@example.com"]
+            })))
+            .mount(&server)
+            .await;
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                contact: vec!["mailto:new@example.com".into()],
+                profile: Some("shortlived".into()),
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
+            &context,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let json = report_json(&report);
+        assert!(json["contacts"].is_object(), "{json}");
+        assert_eq!(json["profile"]["current"], "shortlived");
+        assert_eq!(json["terms"]["auto_accept_terms_updates"], true);
+        assert_eq!(
+            json["terms"]["accepted_terms_url"],
+            "https://ca.example/terms/v3"
+        );
+        let record = stored(&context, &signer).await;
+        assert_eq!(record.contacts, ["mailto:new@example.com"]);
+        assert_eq!(record.preferred_profile.as_deref(), Some("shortlived"));
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/v3"
+        );
+    }
+
+    /// The directory-backed preflight runs before every mutation: an
+    /// unadvertised profile fails the whole invocation, leaving the terms
+    /// delegation and the CA account untouched.
+    #[tokio::test]
+    async fn an_unadvertised_profile_blocks_the_entire_update_before_any_mutation() {
+        let (server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let before = stored(&context, &signer).await;
+        let error = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                contact: vec!["mailto:new@example.com".into()],
+                profile: Some("premium".into()),
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
+            &context,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("premium"), "{error}");
+        assert_eq!(stored(&context, &signer).await, before);
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.method == "GET"),
+            "only directory reads happened; no account POST reached the CA"
         );
     }
 

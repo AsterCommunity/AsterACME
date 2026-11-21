@@ -58,7 +58,7 @@ aster-acme account update default --profile shortlived --yes
 ```sh
 # 注册时委托:接受当前条款,并自动接受未来的条款 URL 更新
 aster-acme account register default --auto-accept-new-terms
-# 注册后开启或撤销该委托(与联系人/profile 互斥)
+# 注册后开启或撤销该委托(可与联系人/profile 修改同次组合)
 aster-acme account update default --auto-accept-new-terms --yes
 aster-acme account update default --clear-auto-accept-new-terms --yes
 ```
@@ -91,7 +91,7 @@ aster-acme account remove default --yes
 | --- | --- | --- |
 | `account register` | 创建或继续本地账户身份 | 复用/继续已存在的本地身份 |
 | `account recover` | 用保存的密钥重建账户观察 | (无危险确认) |
-| `account update` | 替换/清空联系人;设置/清除默认 profile;开启/撤销未来条款授权(与联系人/profile 互斥) | 替换或显式清空;或确认条款授权变更 |
+| `account update` | 替换/清空联系人;设置/清除默认 profile;开启/撤销未来条款授权(三者可组合) | 替换或显式清空;条款授权变更始终需要显式 flag 加 --yes |
 | `account rotate-key` | ACME keyChange 换钥 | 轮换或对账事务 |
 | `account remove --deactivate` | 停用 CA 账户(不可逆)+ 删除本地资料 | 停用+删除 |
 | `account remove` | 删除本地账户资料及私钥 | 本地删除 |

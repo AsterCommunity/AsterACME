@@ -602,7 +602,7 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
 }
 
 #[test]
-fn terms_delegation_flags_are_update_only_conflicting_and_explicit() {
+fn terms_delegation_flags_are_update_only_explicit_and_combinable() {
     for flag in ["--auto-accept-new-terms", "--clear-auto-accept-new-terms"] {
         let parsed =
             Args::try_parse_from(["aster-acme", "account", "update", "work", flag, "--json"])
@@ -638,28 +638,47 @@ fn terms_delegation_flags_are_update_only_conflicting_and_explicit() {
         .is_err(),
         "only update can revoke the delegation"
     );
-    let conflict = Args::try_parse_from([
-        "aster-acme",
-        "account",
-        "update",
-        "work",
-        "--auto-accept-new-terms",
-        "--clear-auto-accept-new-terms",
-    ])
-    .err()
-    .unwrap();
-    assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
-    for other in [
-        vec!["-m", "you@example.com"],
-        vec!["--clear-contacts"],
-        vec!["--profile", "classic"],
-        vec!["--clear-profile"],
+    // Granting and revoking the delegation stay mutually exclusive, in both
+    // argument orders.
+    for argv in [
+        vec![
+            "aster-acme",
+            "account",
+            "update",
+            "work",
+            "--auto-accept-new-terms",
+            "--clear-auto-accept-new-terms",
+        ],
+        vec![
+            "aster-acme",
+            "account",
+            "update",
+            "work",
+            "--clear-auto-accept-new-terms",
+            "--auto-accept-new-terms",
+        ],
     ] {
-        for flag in ["--auto-accept-new-terms", "--clear-auto-accept-new-terms"] {
-            let mut argv = vec!["aster-acme", "account", "update", "work", flag];
+        let conflict = Args::try_parse_from(argv).err().unwrap();
+        assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+    // Scopes combine freely: every terms flag pairs with every contact and
+    // profile switch in a single invocation.
+    for terms in [
+        vec![],
+        vec!["--auto-accept-new-terms"],
+        vec!["--clear-auto-accept-new-terms"],
+    ] {
+        for other in [
+            vec!["-m", "you@example.com"],
+            vec!["--clear-contacts"],
+            vec!["--profile", "classic"],
+            vec!["--clear-profile"],
+        ] {
+            let mut argv = vec!["aster-acme", "account", "update", "work", "--yes"];
+            argv.extend(terms.clone());
             argv.extend(other.clone());
-            let error = Args::try_parse_from(argv).err().unwrap();
-            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+            Args::try_parse_from(argv.clone())
+                .unwrap_or_else(|error| panic!("scopes must combine: {argv:?}: {error}"));
         }
     }
     assert!(

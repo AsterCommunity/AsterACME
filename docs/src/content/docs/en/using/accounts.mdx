@@ -58,7 +58,7 @@ aster-acme account update default --profile shortlived --yes
 ```sh
 # Delegate during registration: accept the current terms and future URL changes
 aster-acme account register default --auto-accept-new-terms
-# Change the delegation later (the delegation is exclusive with contacts/profile)
+# Change the delegation later (combinable with contacts/profile changes in one call)
 aster-acme account update default --auto-accept-new-terms --yes
 aster-acme account update default --clear-auto-accept-new-terms --yes
 ```
@@ -91,7 +91,7 @@ aster-acme account remove default --yes
 | --- | --- | --- |
 | `account register` | Create or continue a local account identity | Reusing/continuing an existing local identity |
 | `account recover` | Rebuild the account observation with the saved key | (no dangerous confirmation) |
-| `account update` | Replace/clear contacts; set/clear the default profile; enable/revoke future terms delegation (exclusive with contacts/profile) | Replacing/explicitly clearing; or the terms delegation change |
+| `account update` | Replace/clear contacts; set/clear the default profile; enable/revoke future terms delegation (all three scopes combine) | Replacing/explicitly clearing; the terms change always needs an explicit flag plus `--yes` |
 | `account rotate-key` | ACME keyChange rotation | Rotating or reconciling the transaction |
 | `account remove --deactivate` | Deactivate the CA account (irreversible) + delete local profile | Deactivation + removal |
 | `account remove` | Delete the local profile and key | Local removal |
