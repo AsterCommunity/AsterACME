@@ -32,7 +32,8 @@ pub(crate) enum AccountCommand {
     Register(RegisterArgs),
     /// Find an existing CA account using its saved key; never create one.
     Recover(NetworkArgs),
-    /// Update account preferences: CA contacts and/or the default profile.
+    /// Update one account preference: CA contacts, the default certificate
+    /// profile, or the future terms delegation.
     Update(UpdateArgs),
     /// Rotate the account signing key, or resume its saved rollover transaction.
     RotateKey(RotateKeyArgs),
@@ -41,9 +42,14 @@ pub(crate) enum AccountCommand {
     Remove(RemoveArgs),
 }
 
-/// Replace contacts and/or set or clear the default certificate profile.
-/// Contact changes update the CA account; profile preferences are local
-/// metadata validated against the advertised list when the CA is reachable.
+/// Replace contacts, set or clear the default certificate profile, or change
+/// the future terms delegation. Contact changes update the CA account; profile
+/// and delegation preferences are local metadata (the delegation is validated
+/// against the live directory before it is enabled). One scope per invocation.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent contact, profile, delegation and confirmation switches"
+)]
 #[derive(clap::Args, Default)]
 pub(crate) struct UpdateArgs {
     #[command(flatten)]
@@ -65,6 +71,32 @@ pub(crate) struct UpdateArgs {
     /// Remove the saved default profile so new issues use the CA default.
     #[arg(long)]
     pub(crate) clear_profile: bool,
+    /// Accept the CA's current terms and automatically accept future terms URL
+    /// updates; stored locally without a CA account request.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "contact",
+            "clear_contacts",
+            "profile",
+            "clear_profile",
+            "clear_auto_accept_new_terms"
+        ]
+    )]
+    pub(crate) auto_accept_new_terms: bool,
+    /// Stop automatically accepting future terms URL updates; the saved
+    /// accepted terms URL is retained (local metadata only).
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "contact",
+            "clear_contacts",
+            "profile",
+            "clear_profile",
+            "auto_accept_new_terms"
+        ]
+    )]
+    pub(crate) clear_auto_accept_new_terms: bool,
     /// Confirm this update without prompting.
     #[arg(short = 'y', long)]
     pub(crate) yes: bool,
