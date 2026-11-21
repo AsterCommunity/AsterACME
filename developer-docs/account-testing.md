@@ -139,9 +139,23 @@ Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同
 - 部分失败：用在线 directory 广告的超限 profile 名称和条款字符串触发真实文件保存失败，验证联系人成功后 profile 失败，以及 contacts/profile 任意组合成功后 terms 失败；失败返回非零，错误列明此前全部已生效 scope，文件保留已提交字段，后续 scope 不执行。
 - 错误与取消：操作上下文保留原始错误链，统一诊断保留 typed recovery hint，根命令沿错误链识别取消。嵌套上下文的取消仍为 130，普通保存错误仍为 1；JSON 诊断同时保留上下文和底层可操作提示。
 - 快照：原元数据保留测试改为先取得旧 record 与 preflight，再写入新 profile/server_contacts，最后用旧快照执行条款变更；锁内 reload 保留后来保存的字段。另验证 preflight 后账户停用进入 pending/confirmed 时拒绝授权变更且记录不变，以及组合请求遇到 directory 故障时只读 GET、零账户 POST、记录不变。
-- 原生 PTY：扩展 `scripts/test-account-terminal.py`，原 5 个注册场景与新增 14 个 update 场景全部通过。覆盖显式条款 flag 的人工同意/默认否/拒绝/Ctrl-C、撤销确认的同意/拒绝/Ctrl-C（零 HTTP）、无 scope 菜单带 `--yes` 后仍独立确认、三 scope 手动/免提示成功、组合后拒绝/取消保留 contacts/profile 证据，以及 profile 确认拒绝；实际执行根命令出口并断言 130，检查账户落盘、POST 数量与 termios 恢复。
+- 原生 PTY：扩展 `scripts/test-account-terminal.py`，原 5 个注册场景与新增 14 个 update 场景全部通过。覆盖显式条款 flag 的人工同意/默认否/拒绝/Ctrl-C、撤销确认的同意/拒绝/Ctrl-C（零 HTTP）、无 scope 菜单带 `--yes` 后仍独立确认、三 scope 手动/免提示成功、组合后拒绝/取消保留 contacts/profile 证据，以及 profile 确认拒绝；实际调用 `crate::finish` 并断言其返回退出码 130（测试驱动断言 Rust 测试子进程退出 0，未将其当作真实 CLI 进程退出码验收），检查账户落盘、POST 数量与 termios 恢复。
 - 文档：CLI 契约、账户设计、README/CHANGELOG 双语和文档站双语同步撤销与确认边界；CHANGELOG 基线为 `v0.1.0-alpha.3`，修订现有 Unreleased #58 条目，不单独记录同版本自修复；比较链接保持正确。
 
 本轮命令：`cargo test -p aster_acme_cli --locked commands::account`（76 passed、2 ignored，忽略的 PTY fixture 由脚本单独驱动）、`python3 scripts/test-account-terminal.py`（19 场景通过）、`cargo test --workspace --locked`（含 doctest，全部通过）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、workspace 依赖/import/features/doc-links 检查及 `python3 -m unittest discover -s scripts/tests`（14 项通过）。未访问公网 CA，未执行 Linux/Windows 原生验收；推送前在 `9fcf401` 补跑其余原生 PTY：确认输入 18、Provider 32、PKCS#12 部署 5 个场景均通过。以上为提交前本地验收；推送和远端 CI 状态另行核对。
 
 CodeRabbit CLI 首轮以 `9fcf401` 相对 `origin/main` 审查 22 个文件，返回 `review_completed`、0 条 verified finding、1 条 unverified finding（review card `4dd51d19-a14f-40ef-a4ae-9478c468944a`）。人工核实该文案问题成立：组合调用的条款段不得笼统声称整次调用未发送账户请求；改为明确仅条款授权本身未发送账户请求，并在真实联系人 POST 的组合测试中断言该范围。后续 CLI 复审结果与最终 revision 单独核对。
+
+
+## CodeRabbit CLI 第二轮边界复核（2026-11-22，issue #58）
+
+第二轮审查 `86cb693`，review card `82fe3015-4734-4411-858d-12cab1c2799d`，返回 5 条 `minor`。对照当前调用链与依赖源码核实后处理：
+
+- profile 菜单直接使用 preflight 广告，选择与保存校验保持同一快照；PTY 断言整个菜单流程只有一次 directory GET。
+- `--clear-profile --clear-auto-accept-new-terms --yes` 在没有 directory 服务的真实文件 fixture 上成功，零 HTTP，原已接受条款保持不变。
+- profile 保存移除锁外快照写回，确认后持锁 reload、复核身份和准入，再记录真实 previous/current。竞争租约测试验证随后保存的其他字段及准确的 previous 值得到保留；停用 pending/confirmed 时 profile 与 terms 均拒绝修改。
+- terms 在持锁后检测 accepted_terms_url 快照冲突，保留并发值并返回错误。矩阵覆盖不同新值、同一目标值、并发清空和未公布条款；PTY 在真实组合调用停留于条款确认时写入新值，确认后验证联系人/profile 已生效、条款新值未被覆盖、`crate::finish` 返回 1。
+- 核对 Forge utils alpha.3 `StateDirectory::atomic_write` 的 rename → directory sync 顺序，确认错误可能晚于文件替换。因此 profile/terms 错误报告 update 未完整完成，保存错误另说明结果未确认并提示 `account show`，不再断言“未保存”。真实文件上限失败测试覆盖诊断和前序结果保留；本轮未向内核注入 rename 后目录同步故障。
+- 明确 PTY 证据边界：脚本运行 Rust 测试程序并要求子进程退出 0；fixture 断言 `crate::finish` 对拒绝/取消返回 130，不能称为 CLI 可执行文件进程退出码验收。
+
+第一次默认并发账户复测 78 passed、1 failed：未修改的 `registration_saves_explicit_contact_before_discovery_failure` 在 loopback accept 的 2 秒期限处报 `Elapsed`。该用例单独复测通过；按测试指南以 `--test-threads=2` 复测账户测试 79 passed、2 ignored。账户 PTY 扩展为 5 个注册与 16 个 update，共 21 场景通过。原失败日志保留，不修改注册测试预算。

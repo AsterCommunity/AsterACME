@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import subprocess
 import termios
@@ -42,6 +43,14 @@ def run_case(binary, mode, answers, fixture=FIXTURE, done_prefix="ACCOUNT_TERMS_
                     break
                 output.extend(chunk)
             if sent < len(answers) and answers[sent][0] in output[consumed:]:
+                if mode == "update-combined-conflict" and answers[sent][0] == b"Enable automatic terms updates?":
+                    record_match = re.search(rb"ACCOUNT_UPDATE_RECORD=([^\r\n]+)", output)
+                    assert record_match is not None, repr(bytes(output))
+                    record = Path(record_match[1].decode())
+                    content = record.read_text(encoding="utf-8")
+                    old = 'accepted_terms_url = "https://ca.example/terms/v1"'
+                    assert content.count(old) == 1, content
+                    record.write_text(content.replace(old, 'accepted_terms_url = "https://ca.example/terms/v3"'), encoding="utf-8")
                 consumed = len(output)
                 os.write(master, answers[sent][1])
                 sent += 1
@@ -97,15 +106,18 @@ def main():
         ("update-revoke-cancel", [(b"Disable automatic terms updates?", b"\x03")]),
         ("update-menu-grant", [menu, (enable, b"y\r")]),
         ("update-menu-deny", [menu, (enable, b"n\r")]),
+        ("update-menu-profile", [(b"Update which account preference?", b"\x1b[B\r"),
+                                 (b"Default certificate profile:", b"\x1b[B\r")]),
         ("update-combined-grant", [contacts, (enable, b"y\r")]),
         ("update-combined-deny", [contacts, (enable, b"n\r")]),
         ("update-combined-cancel", [contacts, (enable, b"\x03")]),
         ("update-combined-yes", []),
+        ("update-combined-conflict", [contacts, (enable, b"y\r")]),
         ("update-profile-deny", [(b"Save this profile preference?", b"n\r")]),
     ]
     for mode, answers in update_cases:
         run_case(binary, mode, answers, UPDATE_FIXTURE, "ACCOUNT_UPDATE_DONE")
-    print("Account terms PTY: 5 registration and 14 update scenarios passed (consent, revocation, default no, menu --yes boundary, combined scopes, partial cancellation, exit 130, terminal restoration)")
+    print("Account terms PTY: 5 registration and 16 update scenarios passed (consent, revocation, default no, menu snapshot, combined scopes, concurrent consent conflict, partial cancellation, finish exit 130, terminal restoration)")
 
 
 if __name__ == "__main__":

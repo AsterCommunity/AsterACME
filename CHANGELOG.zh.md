@@ -13,7 +13,7 @@
 
 ### 变更
 
-- **`account update` 组合 scope 报告（#58）** — `account update` 逐 scope 报告结果：CA 已提交的联系人证据与 profile、条款变更保留在同一次结果里，本地保存失败时错误列明已生效的 scope。条款授权可与联系人/profile 同次组合；全部 directory 校验（profile 广告、当前条款值）仍先于第一个 mutation，CA 不一致时整个调用零副作用。update 的 JSON 输出形状随之调整：单个 `{name, contacts, profile, terms}` 对象按已应用 scope 分段，替代原先的扁平单 scope 对象。`--auto-accept-new-terms` 与 `--clear-auto-accept-new-terms` 彼此仍互斥，只有显式条款 flag 与 `--yes` 同时给出才跳过独立条款确认。组合撤销仍保留原已接受 URL；拒绝或取消确认退出 130，并保留此前已生效 scope 的说明。
+- **`account update` 组合 scope 报告（#58）** — `account update` 逐 scope 报告结果：CA 已提交的联系人证据与 profile、条款变更保留在同一次结果里，本地保存失败时错误列明已生效的 scope。条款授权可与联系人/profile 同次组合；全部 directory 校验（profile 广告、当前条款值）仍先于第一个 mutation，CA 不一致时整个调用零副作用。update 的 JSON 输出形状随之调整：单个 `{name, contacts, profile, terms}` 对象按已应用 scope 分段，替代原先的扁平单 scope 对象。`--auto-accept-new-terms` 与 `--clear-auto-accept-new-terms` 彼此仍互斥，只有显式条款 flag 与 `--yes` 同时给出才跳过独立条款确认。组合撤销仍保留原已接受 URL，清除 profile 与撤销授权可纯离线完成；profile 菜单复用预检广告，并发条款同意冲突时停止覆盖，持久化失败明确报告保存结果未确认；拒绝或取消确认退出 130，并保留此前已生效 scope 的说明。
 
 - **AsterForge 依赖** — 升级共享的 HTTP、进程、panic hook 和工具库。panic hook 的默认时间戳改用 `time`，AsterACME 的依赖树移除了 `chrono`。macOS 并发创建锁文件遇到瞬态 `ENOENT` 时，改由 `aster_forge_utils` 重试一次。
 

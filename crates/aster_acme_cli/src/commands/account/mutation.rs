@@ -143,7 +143,7 @@ pub(super) async fn update_with_transport(
     let preflight = update_preflight(
         context,
         transport.clone(),
-        wants_profile,
+        wants_profile && !args.clear_profile,
         terms_scope && terms_target,
         profile_target.as_deref(),
         cli,
@@ -178,16 +178,14 @@ pub(super) async fn update_with_transport(
     if wants_profile {
         if interactive && profile_target.is_none() && !explicit_profile_set && !args.clear_profile {
             profile_target = interactive_profile_selection(
-                context,
                 record.preferred_profile.as_deref(),
-                transport.clone(),
+                preflight.advertised_profiles.as_ref(),
                 cli,
-            )
-            .await?;
+            )?;
         }
-        match finish_profile_save(
+        match save_profile_preference(
             context,
-            signer.clone(),
+            signer.as_ref(),
             profile_target,
             preflight.advertised_profiles.as_ref(),
             args.yes || wants_contacts,
@@ -199,7 +197,7 @@ pub(super) async fn update_with_transport(
             Err(error) => {
                 return Err(partial_update_error(
                     &outcome,
-                    "the profile preference was not saved",
+                    "the profile preference update did not complete",
                     error,
                 ));
             }
@@ -221,7 +219,7 @@ pub(super) async fn update_with_transport(
             Err(error) => {
                 return Err(partial_update_error(
                     &outcome,
-                    "the terms delegation was not saved",
+                    "the terms delegation update did not complete",
                     error,
                 ));
             }
@@ -391,9 +389,19 @@ async fn apply_terms_change(
     let previous = record.auto_accept_terms_updates;
     record.auto_accept_terms_updates = target;
     if target && let Some(url) = &advertised_terms {
+        if record.accepted_terms_url != snapshot.accepted_terms_url
+            && record.accepted_terms_url.as_ref() != Some(url)
+        {
+            return Err("Accepted CA terms changed while this update was awaiting confirmation; the concurrently saved value was preserved. Rerun account update to review the current terms.".into());
+        }
         record.accepted_terms_url = Some(url.clone());
     }
-    AccountStore::save(context.store.as_ref(), &record, &lease).await?;
+    AccountStore::save(context.store.as_ref(), &record, &lease)
+        .await
+        .map_err(|error| crate::common::error::ContextError {
+            context: "Could not confirm that the terms delegation was saved; inspect account show before retrying".into(),
+            source: Box::new(error),
+        })?;
     Ok(crate::commands::account::report::TermsChange {
         previous,
         current: record.auto_accept_terms_updates,
@@ -403,48 +411,14 @@ async fn apply_terms_change(
     })
 }
 
-/// Reload past any contact mutation and persist the profile preference; the
-/// caller maps a late failure onto the scopes that already took effect.
-async fn finish_profile_save(
-    context: &CliContext,
-    signer: Arc<dyn aster_acme::crypto::JwsSigner>,
-    target: Option<String>,
-    advertised: Option<&std::collections::BTreeMap<String, String>>,
-    confirmed: bool,
-    cli: &crate::common::context::CommandContext,
-) -> CliResult<crate::commands::account::report::ProfileChange> {
-    // Reload after a contact submission: the CA may have returned fresh
-    // server state that this profile save must preserve, never clobber.
-    let fresh = context
-        .store
-        .load(&context.directory, &signer.jwk()?.thumbprint()?)
-        .await?
-        .ok_or(AccountError::AccountDoesNotExist)?;
-    let previous = fresh.preferred_profile.clone();
-    save_profile_preference(context, &fresh, target.clone(), advertised, confirmed, cli).await?;
-    Ok(crate::commands::account::report::ProfileChange {
-        previous,
-        current: target,
-    })
-}
-
 /// Draft-ietf-acme-profiles interactive default-profile selection: the
 /// advertised names plus an explicit clear, or cancellation without a change.
-async fn interactive_profile_selection(
-    context: &crate::common::context::CliContext,
+fn interactive_profile_selection(
     current_default: Option<&str>,
-    transport: aster_acme::transport::TransportOptions,
+    advertised: Option<&std::collections::BTreeMap<String, String>>,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<Option<String>> {
-    let advertised = cli
-        .http
-        .discover(context.directory.clone(), transport)
-        .await?
-        .directory()
-        .meta
-        .profiles
-        .clone();
-    let Some(advertised) = advertised.as_ref().filter(|map| !map.is_empty()) else {
+    let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
         return Err(
             "CA directory does not advertise certificate profiles; nothing to select. Remove the profile preference with --clear-profile.".into(),
         );
@@ -476,16 +450,16 @@ async fn interactive_profile_selection(
     })
 }
 
-/// Validate and persist a profile preference; an unreachable directory never
-/// silently accepts a change, and unadvertised names are rejected with the list.
+/// Validate a named preference against preflight, or clear it without HTTP.
+/// Reload under the lease after confirmation so concurrent metadata is retained.
 async fn save_profile_preference(
     context: &CliContext,
-    record: &aster_acme::account::AccountRecord,
+    signer: &dyn JwsSigner,
     target: Option<String>,
     advertised: Option<&std::collections::BTreeMap<String, String>>,
     confirmed: bool,
     cli: &crate::common::context::CommandContext,
-) -> CliResult<()> {
+) -> CliResult<crate::commands::account::report::ProfileChange> {
     if let Some(profile) = &target {
         // The advertisement was validated before the contact mutation ran;
         // reaching here means the CA was reachable and the name checked out.
@@ -504,15 +478,34 @@ async fn save_profile_preference(
         confirmed,
         &cli.output,
     )?;
-    let mut record = record.clone();
-    record.preferred_profile = target;
+    let thumbprint = signer.jwk()?.thumbprint()?;
     let lease = context
         .store
-        .lock_account(&context.directory, &record.key_thumbprint)
+        .lock_account(&context.directory, &thumbprint)
         .await?;
-    aster_acme::storage::account::AccountStore::save(context.store.as_ref(), &record, &lease)
-        .await?;
-    Ok(())
+    let mut record = context
+        .store
+        .load(&context.directory, &thumbprint)
+        .await?
+        .ok_or(AccountError::AccountDoesNotExist)?;
+    if record.key_algorithm != signer.algorithm() {
+        return Err(AccountError::IdentityMismatch.into());
+    }
+    record
+        .action(aster_acme_core::account::AccountOperation::Update)
+        .map_err(AccountError::from)?;
+    let previous = record.preferred_profile.clone();
+    record.preferred_profile.clone_from(&target);
+    AccountStore::save(context.store.as_ref(), &record, &lease)
+        .await
+        .map_err(|error| crate::common::error::ContextError {
+            context: "Could not confirm that the profile preference was saved; inspect account show before retrying".into(),
+            source: Box::new(error),
+        })?;
+    Ok(crate::commands::account::report::ProfileChange {
+        previous,
+        current: target,
+    })
 }
 
 /// Validate an explicit registration profile against a directory response:
@@ -778,7 +771,7 @@ mod tests {
         let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         save_profile_preference(
             &context,
-            &stored(&context, &signer).await,
+            signer.as_ref(),
             Some("shortlived".into()),
             Some(&std::collections::BTreeMap::from([
                 (
@@ -806,7 +799,7 @@ mod tests {
         let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         let error = save_profile_preference(
             &context,
-            &stored(&context, &signer).await,
+            signer.as_ref(),
             Some("premium".into()),
             Some(&std::collections::BTreeMap::from([
                 (
@@ -822,7 +815,8 @@ mod tests {
             &CommandContext::new(true),
         )
         .await
-        .unwrap_err();
+        .err()
+        .unwrap();
         let text = error.to_string();
         assert!(text.contains("premium"), "{text}");
         assert!(
@@ -841,7 +835,7 @@ mod tests {
         let (_server, context, signer, _transport, _directory, _handles) = harness().await;
         save_profile_preference(
             &context,
-            &stored(&context, &signer).await,
+            signer.as_ref(),
             Some("classic".into()),
             Some(&std::collections::BTreeMap::from([
                 (
@@ -860,7 +854,7 @@ mod tests {
         .unwrap();
         save_profile_preference(
             &context,
-            &stored(&context, &signer).await,
+            signer.as_ref(),
             None,
             Some(&std::collections::BTreeMap::from([
                 (
@@ -963,7 +957,7 @@ mod tests {
 
         save_profile_preference(
             &context,
-            &stored(&context, &signer).await,
+            signer.as_ref(),
             Some("shortlived".into()),
             Some(&std::collections::BTreeMap::from([
                 (
@@ -1481,7 +1475,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terms_change_rechecks_account_state_after_preflight() {
+    async fn local_preferences_recheck_account_state_after_preflight() {
         use aster_acme_core::account::DeactivationState;
         for state in [DeactivationState::Pending, DeactivationState::Confirmed] {
             let (_server, context, signer, transport, _directory, _handles) =
@@ -1499,6 +1493,15 @@ mod tests {
                     .await
                     .err()
                     .unwrap();
+            assert!(matches!(
+                error.downcast_ref::<AccountError>(),
+                Some(AccountError::DeactivationUncertain | AccountError::AccountNotActive)
+            ));
+            assert_eq!(stored(&context, &signer).await, changed);
+            let error = save_profile_preference(&context, signer.as_ref(), None, None, true, &cli)
+                .await
+                .err()
+                .unwrap();
             assert!(matches!(
                 error.downcast_ref::<AccountError>(),
                 Some(AccountError::DeactivationUncertain | AccountError::AccountNotActive)
@@ -1574,6 +1577,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clearing_profile_and_revoking_terms_work_offline() {
+        let server = MockServer::start().await;
+        let (context, signer, transport, _handles) = account_fixture(&server).await;
+        let mut before = stored(&context, &signer).await;
+        before.preferred_profile = Some("classic".into());
+        before.auto_accept_terms_updates = true;
+        before.accepted_terms_url = Some("https://ca.example/terms/v1".into());
+        context.store.save(&before).await.unwrap();
+        let report = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                clear_profile: true,
+                clear_auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
+            &context,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let saved = stored(&context, &signer).await;
+        assert_eq!(saved.preferred_profile, None);
+        assert!(!saved.auto_accept_terms_updates);
+        assert_eq!(saved.accepted_terms_url, before.accepted_terms_url);
+        assert!(server.received_requests().await.unwrap().is_empty());
+        let json = report_json(&report);
+        assert_eq!(json["profile"]["previous"], "classic");
+        assert_eq!(json["terms"]["directory_checked"], false);
+    }
+
+    #[tokio::test]
+    async fn terms_change_preserves_conflicting_consent_saved_after_preflight() {
+        for (snapshot_url, saved_url, advertised, conflict) in [
+            (Some("old"), Some("newer"), Some("advertised"), true),
+            (None, Some("newer"), Some("advertised"), true),
+            (Some("old"), None, Some("advertised"), true),
+            (Some("old"), Some("advertised"), Some("advertised"), false),
+            (Some("old"), Some("old"), Some("advertised"), false),
+            (Some("old"), Some("newer"), None, false),
+        ] {
+            let (_server, context, signer, transport, _directory, _handles) =
+                harness_with_terms(advertised).await;
+            let mut snapshot = stored(&context, &signer).await;
+            snapshot.accepted_terms_url = snapshot_url.map(str::to_owned);
+            context.store.save(&snapshot).await.unwrap();
+            let cli = CommandContext::new(true);
+            let preflight = update_preflight(&context, transport, false, true, None, &cli)
+                .await
+                .unwrap();
+            let mut fresh = snapshot.clone();
+            fresh.accepted_terms_url = saved_url.map(str::to_owned);
+            fresh.preferred_profile = Some("classic".into());
+            context.store.save(&fresh).await.unwrap();
+            let result =
+                apply_terms_change(&context, &signer, &snapshot, true, true, &preflight, &cli)
+                    .await;
+            if conflict {
+                let error = result.err().unwrap();
+                assert!(error.to_string().contains("Accepted CA terms changed"));
+                assert_eq!(stored(&context, &signer).await, fresh);
+            } else {
+                result.unwrap();
+                let saved = stored(&context, &signer).await;
+                assert!(saved.auto_accept_terms_updates);
+                assert_eq!(
+                    saved.accepted_terms_url.as_deref(),
+                    advertised.or(saved_url)
+                );
+                assert_eq!(saved.preferred_profile, fresh.preferred_profile);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_save_reloads_metadata_after_acquiring_its_lease() {
+        let (_server, context, signer, _transport, _directory, _handles) = harness().await;
+        let mut fresh = stored(&context, &signer).await;
+        fresh.preferred_profile = Some("classic".into());
+        fresh.accepted_terms_url = Some("newer consent".into());
+        let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
+        let lease = context
+            .store
+            .lock_account(&context.directory, &thumbprint)
+            .await
+            .unwrap();
+        let cli = CommandContext::new(true);
+        let (change, ()) = tokio::join!(
+            save_profile_preference(&context, signer.as_ref(), None, None, true, &cli),
+            async {
+                AccountStore::save(context.store.as_ref(), &fresh, &lease)
+                    .await
+                    .unwrap();
+                drop(lease);
+            }
+        );
+        let change = change.unwrap();
+        assert_eq!(change.previous.as_deref(), Some("classic"));
+        assert_eq!(change.current, None);
+        let saved = stored(&context, &signer).await;
+        assert_eq!(saved.preferred_profile, None);
+        assert_eq!(saved.accepted_terms_url, fresh.accepted_terms_url);
+    }
+
+    #[tokio::test]
     async fn terms_save_failure_preserves_every_preceding_scope() {
         // The directory may advertise arbitrary terms strings. A value larger
         // than the account-file limit deterministically fails the final save.
@@ -1621,10 +1729,15 @@ mod tests {
                     "{message}"
                 );
                 assert!(
-                    message.contains("the terms delegation was not saved"),
+                    message.contains("the terms delegation update did not complete"),
                     "{message}"
                 );
                 assert!(message.contains("size limit"), "{message}");
+                assert!(
+                    message.contains("Could not confirm that the terms delegation was saved"),
+                    "{message}"
+                );
+                assert!(!message.contains("was not saved"), "{message}");
                 assert_eq!(
                     crate::common::error::exit_status(error.as_ref()),
                     crate::common::session::ExitStatus::Failed
@@ -1696,10 +1809,15 @@ mod tests {
                 "{message}"
             );
             assert!(
-                message.contains("the profile preference was not saved"),
+                message.contains("the profile preference update did not complete"),
                 "{message}"
             );
             assert!(message.contains("size limit"), "{message}");
+            assert!(
+                message.contains("Could not confirm that the profile preference was saved"),
+                "{message}"
+            );
+            assert!(!message.contains("was not saved"), "{message}");
             let after = stored(&context, &signer).await;
             assert_eq!(after.contacts.is_empty(), !contacts);
             assert_eq!(after.preferred_profile, None);
@@ -1711,6 +1829,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "native PTY account-update fixture"]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "PTY fixture keeps setup, prompts, finish result and durable state assertions together"
+    )]
     async fn terminal_update_consent_child() {
         let mode = std::env::var("ASTER_ACCOUNT_TERMS_TEST_MODE").unwrap();
         let (server, context, signer, transport, _directory, _handles) =
@@ -1718,15 +1840,28 @@ mod tests {
         let combined = mode.starts_with("update-combined-");
         let menu = mode.starts_with("update-menu-");
         let profile_only = mode == "update-profile-deny";
+        let profile_menu = mode == "update-menu-profile";
+        let conflict = mode == "update-combined-conflict";
         let revoke = mode.starts_with("update-revoke-");
         let cancelled = mode.ends_with("-deny") || mode.ends_with("-cancel");
-        if revoke {
+        if revoke || conflict {
             let mut saved = stored(&context, &signer).await;
-            saved.auto_accept_terms_updates = true;
+            saved.auto_accept_terms_updates = revoke;
             saved.accepted_terms_url = Some("https://ca.example/terms/v1".into());
             context.store.save(&saved).await.unwrap();
         }
         let before = stored(&context, &signer).await;
+        if conflict {
+            println!(
+                "ACCOUNT_UPDATE_RECORD={}",
+                context
+                    .config_path
+                    .parent()
+                    .unwrap()
+                    .join("accounts/work/account.toml")
+                    .display()
+            );
+        }
         Mock::given(method("POST"))
             .and(path("/acct/1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(
@@ -1750,8 +1885,11 @@ mod tests {
         let result = update_with_transport(args, &context, transport, &cli).await;
         let status = match result {
             Err(error) => {
-                assert!(cancelled);
+                assert!(cancelled || conflict);
                 let (message, _) = crate::common::error::diagnostic(error.as_ref());
+                if conflict {
+                    assert!(message.contains("Accepted CA terms changed"), "{message}");
+                }
                 assert_eq!(
                     message.contains("Contacts were updated at the CA"),
                     combined
@@ -1760,18 +1898,22 @@ mod tests {
                 crate::finish(Err(error), &cli)
             }
             Ok(report) => {
-                assert!(!cancelled);
+                assert!(!cancelled && !conflict);
                 let json = report_json(&report);
                 assert_eq!(json["contacts"].is_object(), combined);
-                assert_eq!(json["profile"].is_object(), combined);
-                assert_eq!(
-                    json["terms"]["accepted_terms_url"],
-                    if revoke {
-                        "https://ca.example/terms/v1"
-                    } else {
-                        "https://ca.example/terms/v2"
-                    }
-                );
+                assert_eq!(json["profile"].is_object(), combined || profile_menu);
+                if profile_menu {
+                    assert!(json["terms"].is_null());
+                } else {
+                    assert_eq!(
+                        json["terms"]["accepted_terms_url"],
+                        if revoke {
+                            "https://ca.example/terms/v1"
+                        } else {
+                            "https://ca.example/terms/v2"
+                        }
+                    );
+                }
                 crate::finish(
                     Ok(crate::dispatch::CommandReport::Account(Box::new(report))),
                     &cli,
@@ -1780,7 +1922,9 @@ mod tests {
         };
         assert_eq!(
             status,
-            if cancelled {
+            if conflict {
+                std::process::ExitCode::FAILURE
+            } else if cancelled {
                 std::process::ExitCode::from(130)
             } else {
                 std::process::ExitCode::SUCCESS
@@ -1790,18 +1934,24 @@ mod tests {
         assert_eq!(saved.contacts.is_empty(), !combined);
         assert_eq!(
             saved.preferred_profile.as_deref(),
-            combined.then_some("shortlived")
+            (combined || profile_menu).then_some("shortlived")
         );
         assert_eq!(
             saved.auto_accept_terms_updates,
-            if revoke { cancelled } else { !cancelled }
+            if revoke {
+                cancelled
+            } else {
+                !cancelled && !conflict && !profile_menu
+            }
         );
         assert_eq!(
             saved.accepted_terms_url.as_deref(),
-            if revoke {
+            if conflict {
+                Some("https://ca.example/terms/v3")
+            } else if revoke {
                 Some("https://ca.example/terms/v1")
             } else {
-                (!cancelled).then_some("https://ca.example/terms/v2")
+                (!cancelled && !profile_menu).then_some("https://ca.example/terms/v2")
             }
         );
         if cancelled && !combined {
@@ -1809,6 +1959,11 @@ mod tests {
         }
         if revoke {
             assert!(server.received_requests().await.unwrap().is_empty());
+        }
+        if profile_menu {
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].url.path(), "/directory");
         }
         println!("ACCOUNT_UPDATE_DONE {mode}");
     }

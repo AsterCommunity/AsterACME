@@ -65,7 +65,7 @@ aster-acme account update default --clear-auto-accept-new-terms --yes
 
 开启表示"同意 CA 当前公布的条款,并信任 directory 之后返回的新条款 URL"。开启前会读取在线 directory 记录精确 URL;读不到 directory 时直接失败,不会静默开启。CA 目前没有公布条款时仍可开启,报告会明确说明本次未接受任何 URL。单独撤销只改本地记录、不访问网络;即使与联系人/profile 修改组合,也保留原已接受 URL。
 
-两种修改都不向 CA 发送账户更新,和联系人修改(会同步 CA)是不同操作;`--yes`、JSON 模式和隐式账户检查不会自行开启。授权状态与精确 URL 可在 `account show` 中查看。
+清除 profile 与撤销授权组合可离线执行;若已接受条款值被并发改成不同值,条款更新会停止并保留前序已生效结果。两种修改都不向 CA 发送账户更新,和联系人修改(会同步 CA)是不同操作;`--yes`、JSON 模式和隐式账户检查不会自行开启。授权状态与精确 URL 可在 `account show` 中查看。
 
 ## 换钥
 
