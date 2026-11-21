@@ -270,10 +270,10 @@ async fn terms_delegation(
     } else {
         (false, None)
     };
-    let accepted = snapshot.accepted_terms_url.as_ref().map_or_else(
-        || "(none saved)".to_owned(),
-        |url| output::safe(url.as_str()),
-    );
+    let accepted = snapshot
+        .accepted_terms_url
+        .as_ref()
+        .map_or_else(|| "(none saved)".to_owned(), |url| output::safe(url));
     let advertised = advertised_terms.as_ref().map_or_else(
         || {
             if directory_checked {
@@ -282,7 +282,7 @@ async fn terms_delegation(
                 "not checked".to_owned()
             }
         },
-        |url| output::safe(url.as_str()),
+        |url| output::safe(url),
     );
     let details = if target {
         format!(
@@ -1137,7 +1137,7 @@ mod tests {
         let (_server, context, signer, transport, _directory, _handles) =
             harness_with_terms(Some("https://ca.example/terms/v2")).await;
         let mut saved = stored(&context, &signer).await;
-        saved.accepted_terms_url = Some(AcmeUrl::new("https://ca.example/terms/v1").unwrap());
+        saved.accepted_terms_url = Some("https://ca.example/terms/v1".to_owned());
         context.store.save(&saved).await.unwrap();
         let report = terms_delegation(
             &context,
@@ -1201,7 +1201,7 @@ mod tests {
         let (_server, context, signer, transport, _directory, _handles) =
             harness_with_terms(None).await;
         let mut saved = stored(&context, &signer).await;
-        saved.accepted_terms_url = Some(AcmeUrl::new("https://ca.example/terms/old").unwrap());
+        saved.accepted_terms_url = Some("https://ca.example/terms/old".to_owned());
         context.store.save(&saved).await.unwrap();
         let report = terms_delegation(
             &context,
@@ -1259,7 +1259,7 @@ mod tests {
             harness_with_terms(Some("https://ca.example/terms/v1")).await;
         let mut saved = stored(&context, &signer).await;
         saved.auto_accept_terms_updates = true;
-        saved.accepted_terms_url = Some(AcmeUrl::new("https://ca.example/terms/v1").unwrap());
+        saved.accepted_terms_url = Some("https://ca.example/terms/v1".to_owned());
         context.store.save(&saved).await.unwrap();
         let before = server.received_requests().await.unwrap().len();
         let report = terms_delegation(

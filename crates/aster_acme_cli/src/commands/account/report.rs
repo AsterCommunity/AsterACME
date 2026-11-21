@@ -57,10 +57,10 @@ pub(crate) enum AccountReport {
         name: String,
         previous: bool,
         current: bool,
-        /// Accepted terms URL after the change; retained when disabling.
-        accepted_terms_url: Option<AcmeUrl>,
-        /// Terms URL read from the live directory; None when not checked or absent.
-        advertised_terms_url: Option<AcmeUrl>,
+        /// Accepted terms value after the change, kept verbatim; retained when disabling.
+        accepted_terms_url: Option<String>,
+        /// Terms value read from the live directory; None when not checked or absent.
+        advertised_terms_url: Option<String>,
         /// Whether this command read the live directory (enabling) or stayed local.
         directory_checked: bool,
     },

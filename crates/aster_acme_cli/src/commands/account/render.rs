@@ -178,12 +178,12 @@ fn terms_delegation_text(
     name: &str,
     previous: bool,
     current: bool,
-    accepted: Option<&aster_acme_protocol::url::AcmeUrl>,
-    advertised: Option<&aster_acme_protocol::url::AcmeUrl>,
+    accepted: Option<&String>,
+    advertised: Option<&String>,
     directory_checked: bool,
     color: bool,
 ) -> String {
-    let accepted = accepted.map_or_else(|| "(none saved)".to_owned(), |url| safe(url.as_str()));
+    let accepted = accepted.map_or_else(|| "(none saved)".to_owned(), |url| safe(url));
     let notice = if directory_checked && advertised.is_none() {
         " The CA publishes no terms today; no new URL was accepted and any saved URL is retained."
     } else {
@@ -830,16 +830,14 @@ fn profile_preference_text_distinguishes_set_and_clear() {
 
 #[test]
 fn terms_delegation_reports_local_consent_without_a_ca_sync() {
-    use aster_acme_protocol::url::AcmeUrl;
-    let url = |value: &str| AcmeUrl::new(value).unwrap();
     let report =
         |previous, current, accepted: Option<&str>, advertised: Option<&str>, directory_checked| {
             AccountReport::TermsDelegation {
                 name: "work".to_owned(),
                 previous,
                 current,
-                accepted_terms_url: accepted.map(url),
-                advertised_terms_url: advertised.map(url),
+                accepted_terms_url: accepted.map(str::to_owned),
+                advertised_terms_url: advertised.map(str::to_owned),
                 directory_checked,
             }
         };
