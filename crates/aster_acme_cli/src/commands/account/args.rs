@@ -89,13 +89,7 @@ pub(crate) struct UpdateArgs {
     /// accepted terms URL is retained (local metadata only).
     #[arg(
         long,
-        conflicts_with_all = [
-            "contact",
-            "clear_contacts",
-            "profile",
-            "clear_profile",
-            "auto_accept_new_terms"
-        ]
+        conflicts_with_all = ["contact", "clear_contacts", "profile", "clear_profile"]
     )]
     pub(crate) clear_auto_accept_new_terms: bool,
     /// Confirm this update without prompting.

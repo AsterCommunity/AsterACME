@@ -159,6 +159,40 @@ pub(super) fn terms(
     Ok(())
 }
 
+/// Preference scope chosen by the interactive `account update` menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UpdateScope {
+    Contacts,
+    Profile,
+    TermsDelegation,
+}
+
+/// One arrow-key menu over the three preference scopes plus an explicit cancel
+/// entry; Esc shares the cancellation path with the Cancel entry.
+pub(super) fn update_scope_choice(
+    prompts: &mut impl RegistrationPrompts,
+) -> CliResult<Option<UpdateScope>> {
+    let choices = [
+        "Contact addresses",
+        "Default certificate profile",
+        "Automatic terms updates",
+        "Cancel",
+    ]
+    .map(str::to_owned);
+    let selection = prompts.select("Update which account preference?", &choices, 0)?;
+    Ok(update_scope_for_index(selection))
+}
+
+/// Pure index mapping keeps the menu labels and their scopes aligned without a terminal.
+fn update_scope_for_index(index: usize) -> Option<UpdateScope> {
+    match index {
+        0 => Some(UpdateScope::Contacts),
+        1 => Some(UpdateScope::Profile),
+        2 => Some(UpdateScope::TermsDelegation),
+        _ => None,
+    }
+}
+
 /// Ask for the separate durable trust delegation after current terms consent.
 /// `--yes` and non-interactive output never reach this prompt.
 pub(super) fn auto_accept_terms_updates(
@@ -530,6 +564,94 @@ mod profile_choice_tests {
         assert!(
             prompts.messages.is_empty(),
             "no prompt without advertisement"
+        );
+    }
+}
+
+#[cfg(test)]
+mod update_scope_tests {
+    use crate::commands::account::interaction::*;
+    use std::collections::VecDeque;
+
+    /// Records the presented choices so the displayed order stays pinned to
+    /// the index-to-scope mapping.
+    struct RecordingPrompts {
+        selections: VecDeque<usize>,
+        menus: Vec<Vec<String>>,
+    }
+
+    impl RegistrationPrompts for RecordingPrompts {
+        fn confirm(&mut self, message: &str) -> CliResult<bool> {
+            panic!("the scope menu must not confirm: {message}");
+        }
+        fn email(&mut self) -> CliResult<String> {
+            panic!("the scope menu must not ask for an email");
+        }
+        fn select(
+            &mut self,
+            message: &str,
+            choices: &[String],
+            default: usize,
+        ) -> CliResult<usize> {
+            assert_eq!(message, "Update which account preference?");
+            assert_eq!(default, 0, "contacts stay the preselected default");
+            self.menus.push(choices.to_vec());
+            self.selections
+                .pop_front()
+                .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
+        }
+    }
+
+    fn prompts(selections: &[usize]) -> RecordingPrompts {
+        RecordingPrompts {
+            selections: selections.iter().copied().collect(),
+            menus: vec![],
+        }
+    }
+
+    #[test]
+    fn update_scope_menu_maps_entries_and_cancel_in_display_order() {
+        let mut prompts = prompts(&[0, 1, 2, 3]);
+        assert_eq!(
+            update_scope_choice(&mut prompts).unwrap(),
+            Some(UpdateScope::Contacts)
+        );
+        assert_eq!(
+            update_scope_choice(&mut prompts).unwrap(),
+            Some(UpdateScope::Profile)
+        );
+        assert_eq!(
+            update_scope_choice(&mut prompts).unwrap(),
+            Some(UpdateScope::TermsDelegation)
+        );
+        assert_eq!(update_scope_choice(&mut prompts).unwrap(), None);
+        for menu in &prompts.menus {
+            assert_eq!(
+                menu,
+                &[
+                    "Contact addresses",
+                    "Default certificate profile",
+                    "Automatic terms updates",
+                    "Cancel"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn update_scope_menu_maps_only_the_three_scopes() {
+        let mut prompts = prompts(&[4, usize::MAX]);
+        assert_eq!(update_scope_choice(&mut prompts).unwrap(), None);
+        assert_eq!(update_scope_choice(&mut prompts).unwrap(), None);
+    }
+
+    #[test]
+    fn update_scope_menu_cancels_when_the_prompt_does() {
+        let mut prompts = prompts(&[]);
+        assert!(
+            update_scope_choice(&mut prompts)
+                .unwrap_err()
+                .is::<Canceled>()
         );
     }
 }

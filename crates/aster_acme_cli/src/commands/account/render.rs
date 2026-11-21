@@ -99,8 +99,7 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
             directory_checked,
         } => terms_delegation_text(
             name,
-            *previous,
-            *current,
+            DelegationTransition::from_states(*previous, *current),
             accepted_terms_url.as_ref(),
             advertised_terms_url.as_ref(),
             *directory_checked,
@@ -169,15 +168,30 @@ fn profile_preference_text(
     }
 }
 
+/// Delegation state transition being reported; each state has its own wording.
+#[derive(Clone, Copy)]
+enum DelegationTransition {
+    Enabled,
+    AlreadyEnabled,
+    Disabled,
+    AlreadyDisabled,
+}
+
+impl DelegationTransition {
+    fn from_states(previous: bool, current: bool) -> Self {
+        match (previous, current) {
+            (false, true) => Self::Enabled,
+            (true, true) => Self::AlreadyEnabled,
+            (true, false) => Self::Disabled,
+            (false, false) => Self::AlreadyDisabled,
+        }
+    }
+}
+
 /// Terms delegation text: consent is stored locally, so it never claims a CA sync.
-#[expect(
-    clippy::fn_params_excessive_bools,
-    reason = "Independent before/after states, directory evidence and styling"
-)]
 fn terms_delegation_text(
     name: &str,
-    previous: bool,
-    current: bool,
+    transition: DelegationTransition,
     accepted: Option<&String>,
     advertised: Option<&String>,
     directory_checked: bool,
@@ -189,23 +203,23 @@ fn terms_delegation_text(
     } else {
         ""
     };
-    let message = match (previous, current) {
-        (false, true) => format!(
+    let message = match transition {
+        DelegationTransition::Enabled => format!(
             "Account {} now accepts future CA terms updates automatically; accepted terms URL: {}. This is local consent only; no CA account request was sent.{notice}",
             safe(name),
             accepted
         ),
-        (true, true) => format!(
+        DelegationTransition::AlreadyEnabled => format!(
             "Account {} already accepts future CA terms updates automatically; accepted terms URL: {}.{notice}",
             safe(name),
             accepted
         ),
-        (true, false) => format!(
+        DelegationTransition::Disabled => format!(
             "Account {} no longer accepts future CA terms updates automatically. The saved accepted terms URL ({}) is retained; future changes require explicit consent.",
             safe(name),
             accepted
         ),
-        (false, false) => format!(
+        DelegationTransition::AlreadyDisabled => format!(
             "Account {} was already set to not accept future CA terms updates automatically.",
             safe(name)
         ),

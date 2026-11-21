@@ -1,6 +1,7 @@
 //! Confirmed account mutations share selection, normalization, and service boundaries.
 use crate::commands::account::{
     args::{AccountArgs, RotateKeyArgs},
+    interaction::update_scope_choice,
     report::{AccountReport, RemoteAction},
 };
 use crate::common::output;
@@ -32,47 +33,18 @@ async fn context(
     Ok(context)
 }
 
-/// Account preference scope chosen by the interactive menu.
-#[derive(Clone, Copy)]
-enum UpdateScope {
-    Contacts,
-    Profile,
-    TermsDelegation,
-}
-
-/// Pure index mapping keeps menu behavior testable without a terminal.
-fn update_scope(index: usize) -> Option<UpdateScope> {
-    match index {
-        0 => Some(UpdateScope::Contacts),
-        1 => Some(UpdateScope::Profile),
-        2 => Some(UpdateScope::TermsDelegation),
-        _ => None,
+/// Translate the menu outcome into the update intent flags; leaving the menu
+/// without a scope (the Cancel entry or Esc) cancels the whole update.
+fn scope_intent(
+    scope: Option<crate::commands::account::interaction::UpdateScope>,
+) -> CliResult<(bool, bool, bool)> {
+    use crate::commands::account::interaction::UpdateScope;
+    match scope {
+        Some(UpdateScope::Contacts) => Ok((true, false, false)),
+        Some(UpdateScope::Profile) => Ok((false, true, false)),
+        Some(UpdateScope::TermsDelegation) => Ok((false, false, true)),
+        None => Err(crate::common::terminal::Canceled.into()),
     }
-}
-
-/// Update one account preference: CA contacts, the default certificate profile,
-/// or the future terms delegation. Contact changes mutate the CA account;
-/// profile preferences are local metadata validated against the advertised list
-/// when reachable; delegation is local metadata validated against the live
-/// directory before it is enabled. Interactive updates pick their scope from a
-/// menu, mirroring the provider editor; scripts never reach this path.
-fn interactive_update_scope(
-    cli: &crate::common::context::CommandContext,
-) -> CliResult<Option<UpdateScope>> {
-    let choices = [
-        "Contact addresses",
-        "Default certificate profile",
-        "Automatic terms updates",
-        "Cancel",
-    ]
-    .map(str::to_owned);
-    let selection = terminal::select_index_or_back(
-        "Update which account preference?",
-        &choices,
-        0,
-        &cli.output,
-    )?;
-    Ok(selection.and_then(update_scope))
 }
 
 pub(super) async fn update(
@@ -141,14 +113,12 @@ pub(super) async fn update_with_transport(
                 "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or future terms delegation with --auto-accept-new-terms/--clear-auto-accept-new-terms.".into(),
             );
         }
-        let Some(scope) = interactive_update_scope(cli)? else {
-            return Err(crate::common::terminal::Canceled.into());
-        };
-        match scope {
-            UpdateScope::Contacts => wants_contacts = true,
-            UpdateScope::Profile => wants_profile = true,
-            UpdateScope::TermsDelegation => terms_scope = true,
-        }
+        let (scope_contacts, scope_profile, scope_terms) = scope_intent(update_scope_choice(
+            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
+        )?)?;
+        wants_contacts = scope_contacts;
+        wants_profile = scope_profile;
+        terms_scope = scope_terms;
     }
     let signer = context
         .store
@@ -1023,15 +993,25 @@ mod tests {
     }
 
     #[test]
-    fn interactive_scope_menu_maps_every_entry_and_cancels() {
-        assert!(matches!(update_scope(0), Some(UpdateScope::Contacts)));
-        assert!(matches!(update_scope(1), Some(UpdateScope::Profile)));
-        assert!(matches!(
-            update_scope(2),
-            Some(UpdateScope::TermsDelegation)
-        ));
-        assert!(update_scope(3).is_none());
-        assert!(update_scope(usize::MAX).is_none());
+    fn scope_intent_maps_each_menu_scope_and_cancels_without_one() {
+        use crate::commands::account::interaction::UpdateScope;
+        assert_eq!(
+            scope_intent(Some(UpdateScope::Contacts)).unwrap(),
+            (true, false, false)
+        );
+        assert_eq!(
+            scope_intent(Some(UpdateScope::Profile)).unwrap(),
+            (false, true, false)
+        );
+        assert_eq!(
+            scope_intent(Some(UpdateScope::TermsDelegation)).unwrap(),
+            (false, false, true)
+        );
+        assert!(
+            scope_intent(None)
+                .unwrap_err()
+                .is::<crate::common::terminal::Canceled>()
+        );
     }
 
     #[tokio::test]
