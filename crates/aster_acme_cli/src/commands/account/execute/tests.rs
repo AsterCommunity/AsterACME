@@ -490,6 +490,8 @@ async fn enabled_delegation_unblocks_ensure_after_a_terms_change() {
 
     let context = fixture.context().await;
     let before = fixture.posts().await;
+    let cli = CommandContext::new(true);
+    let mut prompts = crate::commands::account::interaction::TerminalPrompts(&cli.output);
     let report = update_with_transport(
         fixture.update_args(true, false),
         &context,
@@ -497,7 +499,9 @@ async fn enabled_delegation_unblocks_ensure_after_a_terms_change() {
             allow_loopback_http: true,
             ..TransportOptions::default()
         },
-        &CommandContext::new(true),
+        &cli,
+        false,
+        &mut prompts,
     )
     .await
     .unwrap();
@@ -567,11 +571,15 @@ async fn disabled_delegation_blocks_ensure_until_explicit_consent() {
         allow_loopback_http: true,
         ..TransportOptions::default()
     };
+    let cli = CommandContext::new(true);
+    let mut prompts = crate::commands::account::interaction::TerminalPrompts(&cli.output);
     update_with_transport(
         fixture.update_args(true, false),
         &context,
         transport.clone(),
-        &CommandContext::new(true),
+        &cli,
+        false,
+        &mut prompts,
     )
     .await
     .unwrap();
@@ -579,7 +587,9 @@ async fn disabled_delegation_blocks_ensure_until_explicit_consent() {
         fixture.update_args(false, true),
         &context,
         transport,
-        &CommandContext::new(true),
+        &cli,
+        false,
+        &mut prompts,
     )
     .await
     .unwrap();

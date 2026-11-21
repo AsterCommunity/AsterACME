@@ -638,17 +638,20 @@ fn terms_delegation_flags_are_update_only_conflicting_and_explicit() {
         .is_err(),
         "only update can revoke the delegation"
     );
-    let conflict = Args::try_parse_from([
-        "aster-acme",
-        "account",
-        "update",
-        "work",
-        "--auto-accept-new-terms",
-        "--clear-auto-accept-new-terms",
-    ])
-    .err()
-    .unwrap();
-    assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
+    for (first, second) in [
+        ("--auto-accept-new-terms", "--clear-auto-accept-new-terms"),
+        ("--clear-auto-accept-new-terms", "--auto-accept-new-terms"),
+    ] {
+        let conflict =
+            Args::try_parse_from(["aster-acme", "account", "update", "work", first, second])
+                .err()
+                .unwrap();
+        assert_eq!(
+            conflict.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{first} {second}"
+        );
+    }
     for other in [
         vec!["-m", "you@example.com"],
         vec!["--clear-contacts"],

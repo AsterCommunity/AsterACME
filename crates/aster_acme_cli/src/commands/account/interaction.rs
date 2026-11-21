@@ -13,6 +13,9 @@ pub(super) trait RegistrationPrompts {
     fn email(&mut self) -> CliResult<String>;
     /// Arrow-key single choice; the default index is preselected.
     fn select(&mut self, message: &str, choices: &[String], default: usize) -> CliResult<usize>;
+    /// Reviewable confirmation; `confirmed` is an explicit automation opt-in,
+    /// never a substitute for interactive consent.
+    fn confirm_action(&mut self, details: &str, question: &str, confirmed: bool) -> CliResult<()>;
 }
 
 pub(super) struct TerminalPrompts<'a>(pub(super) &'a crate::common::session::OutputSession);
@@ -75,6 +78,10 @@ impl RegistrationPrompts for TerminalPrompts<'_> {
 
     fn select(&mut self, message: &str, choices: &[String], default: usize) -> CliResult<usize> {
         terminal::select_index(message, choices, default, self.0)
+    }
+
+    fn confirm_action(&mut self, details: &str, question: &str, confirmed: bool) -> CliResult<()> {
+        terminal::confirm_action(details, question, confirmed, self.0)
     }
 }
 
@@ -251,6 +258,18 @@ mod tests {
             self.selections
                 .pop_front()
                 .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
+        }
+        fn confirm_action(
+            &mut self,
+            _details: &str,
+            question: &str,
+            confirmed: bool,
+        ) -> CliResult<()> {
+            if confirmed || self.confirm(question)? {
+                Ok(())
+            } else {
+                Err(Box::new(Canceled))
+            }
         }
     }
 
@@ -527,6 +546,15 @@ mod profile_choice_tests {
                 Box::new(crate::common::terminal::Canceled) as Box<dyn std::error::Error>
             })
         }
+        fn confirm_action(
+            &mut self,
+            _details: &str,
+            question: &str,
+            _confirmed: bool,
+        ) -> CliResult<()> {
+            self.messages.push(question.to_owned());
+            Ok(())
+        }
     }
 
     #[test]
@@ -599,6 +627,14 @@ mod update_scope_tests {
             self.selections
                 .pop_front()
                 .ok_or_else(|| Box::new(Canceled) as Box<dyn std::error::Error>)
+        }
+        fn confirm_action(
+            &mut self,
+            _details: &str,
+            _question: &str,
+            _confirmed: bool,
+        ) -> CliResult<()> {
+            panic!("the scope menu must not confirm");
         }
     }
 

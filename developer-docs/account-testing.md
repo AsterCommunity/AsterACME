@@ -118,3 +118,13 @@ Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同
 - 渲染：委托报告四态文案改为 `DelegationTransition` 派生，替代 `(previous, current)` 布尔对，删除 `clippy::fn_params_excessive_bools` 抑制；`UpdateArgs` 的 `struct_excessive_bools` 保留（五个独立 CLI 开关是参数面现实）。渲染行为不变，既有渲染测试通过。
 - 解析：terms 的 9 对互斥冲突改为每对声明一次（clap `conflicts_with` 为单向生效，原先 terms 两 flag 互为对方声明属冗余）；互斥组合解析测试维持两 terms flag 与 contact/profile 四开关的全组合覆盖。
 - 命令：`cargo test -p aster_acme_cli --locked commands::account`（69 项通过）、`cargo test --workspace --locked`（1078 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。
+
+## 交互确认链注入覆盖（2026-11-21，补测）
+
+在 `6ce4f94` 之上，把 `account update` 的条款确认也纳入同一注入边界，消除条款路径的裸 `terminal` 调用：
+
+- `RegistrationPrompts` 新增 `confirm_action(details, question, confirmed)`；`TerminalPrompts` 委托既有 `terminal::confirm_action`，fake 可脚本化接受/拒绝并记录展示的 details。
+- `update_with_transport` 的 `interactive` 与 prompts 改为参数；`terms_delegation` 接收 `TermsChange { target, confirmed }` 与 prompts，不再直接调用 `terminal`。
+- 流程级单测：菜单选 terms 时 `--yes` 仍必须单独确认（fake 收到 `confirmed=false`）、接受后写入、Cancel/拒绝零写入、显式 flag+`--yes` 收到 `confirmed=true` 且不进入菜单。
+- 解析补测：terms 两 flag 在两种参数顺序下都返回 `ArgumentConflict`；互斥对保留任一方向声明即可（校验对声明方向对称），两侧同时删除会失去互斥。
+- 命令（Windows 原生）：`cargo test -p aster_acme_cli --locked commands::account`（74 项通过）、`cargo test --workspace --locked`（1048 项通过、0 失败）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`python scripts/check-doc-links.py`。macOS 全量 1078 包含 Unix-only 用例；本机未扩展 PTY，交互决策链由 fake prompts 覆盖。

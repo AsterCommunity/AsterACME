@@ -1,7 +1,7 @@
 //! Confirmed account mutations share selection, normalization, and service boundaries.
 use crate::commands::account::{
     args::{AccountArgs, RotateKeyArgs},
-    interaction::update_scope_choice,
+    interaction::{RegistrationPrompts, TerminalPrompts, UpdateScope, update_scope_choice},
     report::{AccountReport, RemoteAction},
 };
 use crate::common::output;
@@ -35,10 +35,7 @@ async fn context(
 
 /// Translate the menu outcome into the update intent flags; leaving the menu
 /// without a scope (the Cancel entry or Esc) cancels the whole update.
-fn scope_intent(
-    scope: Option<crate::commands::account::interaction::UpdateScope>,
-) -> CliResult<(bool, bool, bool)> {
-    use crate::commands::account::interaction::UpdateScope;
+fn scope_intent(scope: Option<UpdateScope>) -> CliResult<(bool, bool, bool)> {
     match scope {
         Some(UpdateScope::Contacts) => Ok((true, false, false)),
         Some(UpdateScope::Profile) => Ok((false, true, false)),
@@ -59,7 +56,9 @@ pub(super) async fn update(
     )
     .await?;
     let transport = context.transport_options(&options)?;
-    update_with_transport(args, &context, transport, cli).await
+    let interactive = terminal::interactive(args.network.local.json);
+    let mut prompts = TerminalPrompts(&cli.output);
+    update_with_transport(args, &context, transport, cli, interactive, &mut prompts).await
 }
 
 /// Command body after account selection; `transport` is injected so the
@@ -67,13 +66,14 @@ pub(super) async fn update(
 /// Resolve the replacement contact list from flags or the interactive prompt.
 fn replacement_contacts(
     args: &crate::commands::account::args::UpdateArgs,
-    output: &crate::common::session::OutputSession,
+    interactive: bool,
+    prompts: &mut impl RegistrationPrompts,
 ) -> CliResult<Vec<String>> {
     crate::commands::account::interaction::replacement_contacts(
         args.contact.clone(),
         args.clear_contacts,
-        terminal::interactive(args.network.local.json),
-        &mut crate::commands::account::interaction::TerminalPrompts(output),
+        interactive,
+        prompts,
     )
 }
 
@@ -86,6 +86,8 @@ pub(super) async fn update_with_transport(
     context: &CliContext,
     transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
+    interactive: bool,
+    prompts: &mut impl RegistrationPrompts,
 ) -> CliResult<AccountReport> {
     // Terms flags conflict with contact/profile flags; a terminal menu may pick
     // exactly one of the three scopes when no flag is given.
@@ -102,7 +104,6 @@ pub(super) async fn update_with_transport(
     } else {
         args.profile.clone()
     };
-    let interactive = terminal::interactive(args.network.local.json);
     let mut wants_contacts = args.contact_set() || args.clear_contacts;
     let mut wants_profile = args.profile_set() || args.clear_profile;
     let mut terms_scope = terms_flag.is_some();
@@ -113,9 +114,8 @@ pub(super) async fn update_with_transport(
                 "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or future terms delegation with --auto-accept-new-terms/--clear-auto-accept-new-terms.".into(),
             );
         }
-        let (scope_contacts, scope_profile, scope_terms) = scope_intent(update_scope_choice(
-            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
-        )?)?;
+        let (scope_contacts, scope_profile, scope_terms) =
+            scope_intent(update_scope_choice(&mut *prompts)?)?;
         wants_contacts = scope_contacts;
         wants_profile = scope_profile;
         terms_scope = scope_terms;
@@ -144,10 +144,10 @@ pub(super) async fn update_with_transport(
             context,
             &signer,
             &record,
-            target,
-            args.yes && terms_flag.is_some(),
+            TermsChange::new(target, args.yes && terms_flag.is_some()),
             transport,
             cli,
+            &mut *prompts,
         )
         .await;
     }
@@ -169,8 +169,8 @@ pub(super) async fn update_with_transport(
         None
     };
     if wants_contacts {
-        let contacts = replacement_contacts(&args, &cli.output)?;
-        terminal::confirm_action(
+        let contacts = replacement_contacts(&args, interactive, &mut *prompts)?;
+        prompts.confirm_action(
             &format!(
                 "Update account contacts\n  Name: {}\n  CA: {}\n  Contacts: {}",
                 output::safe(&context.name),
@@ -183,7 +183,6 @@ pub(super) async fn update_with_transport(
             ),
             "Replace these contacts?",
             args.yes,
-            &cli.output,
         )?;
         let report =
             submit_contacts(context, signer.clone(), contacts, transport.clone(), cli).await?;
@@ -216,15 +215,28 @@ pub(super) async fn update_with_transport(
 /// directory so the exact current URL is accepted; disabling is pure local
 /// metadata. Neither path sends a CA account update, so this never claims the
 /// CA accepted anything.
+/// Requested delegation direction plus the explicit automation consent, if any.
+struct TermsChange {
+    target: bool,
+    confirmed: bool,
+}
+
+impl TermsChange {
+    fn new(target: bool, confirmed: bool) -> Self {
+        Self { target, confirmed }
+    }
+}
+
 async fn terms_delegation(
     context: &CliContext,
     signer: &Arc<dyn JwsSigner>,
     snapshot: &aster_acme::account::AccountRecord,
-    target: bool,
-    confirmed: bool,
+    change: TermsChange,
     transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
+    prompts: &mut impl RegistrationPrompts,
 ) -> CliResult<AccountReport> {
+    let TermsChange { target, confirmed } = change;
     // Granting consent needs the directory's current URL; revoking is local.
     let (directory_checked, advertised_terms) = if target {
         let client = cli
@@ -270,7 +282,7 @@ async fn terms_delegation(
             accepted,
         )
     };
-    terminal::confirm_action(
+    prompts.confirm_action(
         &details,
         if target {
             "Enable automatic terms updates?"
@@ -278,7 +290,6 @@ async fn terms_delegation(
             "Disable automatic terms updates?"
         },
         confirmed,
-        &cli.output,
     )?;
     let thumbprint = signer.jwk()?.thumbprint()?;
     let lease = context
@@ -595,6 +606,71 @@ mod tests {
         }
     }
 
+    /// Scripted update prompt boundary; no terminal is involved.
+    struct TestPrompts {
+        scope: Option<usize>,
+        accept: bool,
+        selections: usize,
+        confirmations: Vec<(bool, String, String)>,
+    }
+
+    impl TestPrompts {
+        fn accepting() -> Self {
+            Self {
+                scope: None,
+                accept: true,
+                selections: 0,
+                confirmations: vec![],
+            }
+        }
+
+        fn menu(scope: usize, accept: bool) -> Self {
+            Self {
+                scope: Some(scope),
+                accept,
+                selections: 0,
+                confirmations: vec![],
+            }
+        }
+    }
+
+    impl RegistrationPrompts for TestPrompts {
+        fn confirm(&mut self, _message: &str) -> CliResult<bool> {
+            Ok(self.accept)
+        }
+
+        fn email(&mut self) -> CliResult<String> {
+            Ok("person@example.com".to_owned())
+        }
+
+        fn select(
+            &mut self,
+            _message: &str,
+            _choices: &[String],
+            _default: usize,
+        ) -> CliResult<usize> {
+            self.selections += 1;
+            self.scope.ok_or_else(|| {
+                Box::new(crate::common::terminal::Canceled) as Box<dyn std::error::Error>
+            })
+        }
+
+        fn confirm_action(
+            &mut self,
+            details: &str,
+            question: &str,
+            confirmed: bool,
+        ) -> CliResult<()> {
+            self.confirmations
+                .push((confirmed, question.to_owned(), details.to_owned()));
+            if confirmed || self.accept {
+                Ok(())
+            } else {
+                Err(Box::new(crate::common::terminal::Canceled))
+            }
+        }
+    }
+
     /// Registered loopback account bound to a wiremock directory. `terms`
     /// controls the advertised `meta.termsOfService`.
     struct HarnessHandles {
@@ -870,6 +946,8 @@ mod tests {
                 ..aster_acme::transport::TransportOptions::default()
             },
             &CommandContext::new(true),
+            false,
+            &mut TestPrompts::accepting(),
         )
         .await
         {
@@ -969,9 +1047,16 @@ mod tests {
         };
         // Loopback CA: inject the loopback-permitting transport through the
         // same seam the production path uses for its resolved transport.
-        let report = update_with_transport(args, &context, transport, &CommandContext::new(true))
-            .await
-            .unwrap();
+        let report = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            false,
+            &mut TestPrompts::accepting(),
+        )
+        .await
+        .unwrap();
         let crate::commands::account::report::AccountReport::ProfilePreference { current, .. } =
             &report
         else {
@@ -1030,11 +1115,18 @@ mod tests {
             },
             ..Default::default()
         };
-        let error = update_with_transport(args, &context, transport, &CommandContext::new(true))
-            .await
-            .err()
-            .unwrap()
-            .to_string();
+        let error = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            false,
+            &mut TestPrompts::accepting(),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
         assert!(
             error.contains("--contact/--clear-contacts")
                 && error.contains("--profile/--clear-profile")
@@ -1042,6 +1134,158 @@ mod tests {
                 && error.contains("--clear-auto-accept-new-terms"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn menu_terms_scope_requires_confirmation_even_with_yes() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let before = stored(&context, &signer).await;
+        let mut prompts = TestPrompts::menu(2, false);
+        let args = crate::commands::account::args::UpdateArgs {
+            yes: true,
+            ..Default::default()
+        };
+        let error = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            true,
+            &mut prompts,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.is::<crate::common::terminal::Canceled>());
+        assert_eq!(prompts.selections, 1);
+        assert_eq!(prompts.confirmations.len(), 1);
+        assert!(
+            !prompts.confirmations[0].0,
+            "--yes must not answer the menu's terms confirmation"
+        );
+        assert!(
+            prompts.confirmations[0]
+                .2
+                .contains("https://ca.example/terms/v2"),
+            "{}",
+            prompts.confirmations[0].2
+        );
+        assert_eq!(stored(&context, &signer).await, before);
+    }
+
+    #[tokio::test]
+    async fn menu_terms_scope_accepts_and_enables_after_confirmation() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let mut prompts = TestPrompts::menu(2, true);
+        let args = crate::commands::account::args::UpdateArgs {
+            yes: true,
+            ..Default::default()
+        };
+        let report = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            true,
+            &mut prompts,
+        )
+        .await
+        .unwrap();
+        assert_eq!(prompts.selections, 1);
+        assert_eq!(prompts.confirmations.len(), 1);
+        assert!(!prompts.confirmations[0].0);
+        let record = stored(&context, &signer).await;
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/v2"
+        );
+        assert_eq!(report_json(&report)["auto_accept_terms_updates"], true);
+    }
+
+    #[tokio::test]
+    async fn menu_cancel_writes_nothing() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let before = stored(&context, &signer).await;
+        let mut prompts = TestPrompts::menu(3, true);
+        let args = crate::commands::account::args::UpdateArgs {
+            yes: true,
+            ..Default::default()
+        };
+        let error = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            true,
+            &mut prompts,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.is::<crate::common::terminal::Canceled>());
+        assert_eq!(prompts.selections, 1);
+        assert_eq!(prompts.confirmations, Vec::new());
+        assert_eq!(stored(&context, &signer).await, before);
+    }
+
+    #[tokio::test]
+    async fn declining_the_terms_confirmation_writes_nothing() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let before = stored(&context, &signer).await;
+        let mut prompts = TestPrompts::accepting();
+        prompts.accept = false;
+        let args = crate::commands::account::args::UpdateArgs {
+            auto_accept_new_terms: true,
+            ..Default::default()
+        };
+        let error = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            true,
+            &mut prompts,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.is::<crate::common::terminal::Canceled>());
+        assert_eq!(prompts.selections, 0);
+        assert_eq!(prompts.confirmations.len(), 1);
+        assert!(!prompts.confirmations[0].0);
+        assert_eq!(stored(&context, &signer).await, before);
+    }
+
+    #[tokio::test]
+    async fn explicit_terms_flag_with_yes_skips_the_menu_and_reports_automation_consent() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let mut prompts = TestPrompts::accepting();
+        let args = crate::commands::account::args::UpdateArgs {
+            auto_accept_new_terms: true,
+            yes: true,
+            ..Default::default()
+        };
+        let report = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            false,
+            &mut prompts,
+        )
+        .await
+        .unwrap();
+        assert_eq!(prompts.selections, 0);
+        assert_eq!(prompts.confirmations.len(), 1);
+        assert!(prompts.confirmations[0].0);
+        assert!(stored(&context, &signer).await.auto_accept_terms_updates);
+        assert_eq!(report_json(&report)["ca_account_update_sent"], false);
     }
 
     fn report_text(report: &AccountReport) -> String {
@@ -1062,10 +1306,10 @@ mod tests {
             &context,
             &signer,
             &snapshot,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport.clone(),
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1099,10 +1343,10 @@ mod tests {
             &context,
             &signer,
             &record,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1123,10 +1367,10 @@ mod tests {
             &context,
             &signer,
             &saved,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1150,10 +1394,10 @@ mod tests {
             &context,
             &signer,
             &snapshot,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1187,10 +1431,10 @@ mod tests {
             &context,
             &signer,
             &saved,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1217,10 +1461,10 @@ mod tests {
             &context,
             &signer,
             &before,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .err()
@@ -1246,10 +1490,10 @@ mod tests {
             &context,
             &signer,
             &saved,
-            false,
-            true,
+            TermsChange::new(false, true),
             transport.clone(),
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1280,10 +1524,10 @@ mod tests {
             &context,
             &signer,
             &record,
-            false,
-            true,
+            TermsChange::new(false, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1295,14 +1539,16 @@ mod tests {
         let (_server, context, signer, transport, _directory, _handles) =
             harness_with_terms(Some("https://ca.example/terms/v1")).await;
         let before = stored(&context, &signer).await;
+        let cli = CommandContext::new(true);
+        let mut prompts = crate::commands::account::interaction::TerminalPrompts(&cli.output);
         let error = terms_delegation(
             &context,
             &signer,
             &before,
-            true,
-            false,
+            TermsChange::new(true, false),
             transport,
-            &CommandContext::new(true),
+            &cli,
+            &mut prompts,
         )
         .await
         .err()
@@ -1328,10 +1574,10 @@ mod tests {
             &context,
             &signer,
             &stale,
-            true,
-            true,
+            TermsChange::new(true, true),
             transport,
             &CommandContext::new(true),
+            &mut TestPrompts::accepting(),
         )
         .await
         .unwrap();
@@ -1365,11 +1611,18 @@ mod tests {
             yes: true,
             ..Default::default()
         };
-        let error = update_with_transport(args, &context, transport, &CommandContext::new(true))
-            .await
-            .err()
-            .unwrap()
-            .to_string();
+        let error = update_with_transport(
+            args,
+            &context,
+            transport,
+            &CommandContext::new(true),
+            false,
+            &mut TestPrompts::accepting(),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
         assert!(error.contains("no registered account exists"), "{error}");
         assert!(
             server.received_requests().await.unwrap().is_empty(),
