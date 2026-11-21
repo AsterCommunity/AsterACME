@@ -309,9 +309,11 @@ Let's Encrypt 生产环境（acme-v02），单一公网 IPv4 标识符（地址�
 本轮为 `a129569` 上的未提交工作树，环境 macOS arm64。库 `aster_acme` 无修改，PKCS#12 只扩展 CLI/storage 的材料与发布 adapter；目录模式仍是 PEM 四件套。
 
 - `cargo build --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check` 通过。
-- `cargo test --workspace --locked`：主套件 **1071 passed、0 failed、13 ignored**，不重复统计主套件启动的两个 storage 子 fixture。PKCS#12 覆盖 OpenSSL 固定 MAC KDF 向量、Python hashlib PBKDF2 向量、多块派生、空/整块 CBC padding、独立逆 CBC 解密与输入 PKCS#8 相等、DER bags 和 friendlyName/localKeyId、正确/错误密码 MAC、随机 salt/IV、env/file 来源和权限拒绝。CLI 覆盖 add/update/run、env 子进程与空值、密码文件、续期后自动发布、无来源非交互错误和禁止自动重试、瞬时 override、JSON 发布路径事实、配置/报告不含密码、准备失败不改 PEM/p12，以及密码文件与所有部署目标的冲突。
+- 最终 `cargo test --workspace --locked -- --test-threads=1`：主套件 **1076 passed、0 failed、13 ignored**，不重复统计主套件启动的两个 storage 子 fixture。PKCS#12 覆盖 OpenSSL 固定 MAC KDF 向量、Python hashlib PBKDF2 向量、多块派生、空/整块 CBC padding、独立逆 CBC 解密与输入 PKCS#8 相等、DER bags 和 friendlyName/localKeyId、正确/错误密码 MAC、随机 salt/IV、env/file 来源和权限拒绝。CLI 覆盖 add/update/run、env 子进程与空值、密码文件、续期后自动发布、无来源非交互错误和禁止自动重试、瞬时 override、JSON 发布路径事实、配置/报告不含密码、准备失败不改 PEM/p12，以及密码文件与所有部署目标的冲突。
 - `python3 scripts/test-deployment-terminal.py`：4 场景通过，确认密码隐藏输入/二次确认、Ctrl-C 后终端恢复和取消状态、JSON 在 TTY 上不提示、add 不提示密码。该 fixture 在普通套件中 ignored，由 Linux/macOS CI 单独执行。
 - workspace 依赖、Rust import、TLS backend、production features、文档本地链接及 `git diff HEAD --check` 通过。`bun --bun run docs:build` 构建 41 页并通过站内链接检查；直接 `bun run docs:build` 使用的本机 Node 22.17.1 低于 Astro 要求，改用现有 Bun runtime 完成构建。
+
+本地 CodeRabbit 审查后的补充回归覆盖：密码文件无 LF 时保留末尾 CR、非整块密文拒绝、密码不可读时先保存新世代待办并在来源恢复后由 daemon 补部署、失效密码目录不阻断可证明无关的 PEM 目标、同绑定及跨绑定两个方向的文件身份冲突，以及过时世代/缺失绑定/不确定 reload 的零写入拒绝。依赖采用已发布的 Forge HTTP/utils/panic alpha.3 和 process alpha.4；严格 audit 在最新 RustSec 数据库下通过。默认并发曾触发既有吊销 100ms 计时测试，之后一次复跑触发未修改的账户零 POST 断言；账户测试单独复跑及上述最终单线程全量通过，不将首次失败记作通过。
 
 OpenSSL 4.1.0 手动互通（不加入自动化依赖）：通过临时测试 fixture 调用实际 bundle builder，使用 rcgen 测试证书、PKCS#8 与 ASCII/中文 BMP 两种虚拟密码生成 p12，随后删除临时 fixture。两种密码均通过 `openssl pkcs12 -info -noout` 的 MAC 检查；解出的叶证书 DER 与原 DER、解出的私钥 PKCS#8 与原 pk8 均逐字节一致；错误密码返回非零及 `Mac verify error`。重复验收可用 CLI 已发布 bundle，在私有临时目录中执行：
 
