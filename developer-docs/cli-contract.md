@@ -14,7 +14,7 @@
 
 未来条款更新授权在终端默认否；`--yes` 跳过这项可选授权询问并保持原授权状态，不代替当前条款同意。首次接受条款不报告为自动接受“更新”；只有先前已保存的条款 URL 改变才报告更新。
 
-`account update` 的条款授权与联系人/profile 是互斥 scope，一次只改一类。开启必须能读取在线 directory：读不到当前条款就失败关闭，不静默开启；CA 未公布条款时仍可开启，报告明确说明本次未接受任何 URL、之后公布的条款自动接受。开启只保存本地委托与精确 URL，不向 CA 发送账户更新；撤销纯本地、不访问网络并保留已接受 URL。交互菜单选中该 scope 时，条款同意仍需显式回答，`--yes` 不代替。
+`account update` 的条款授权与联系人/profile 互斥；联系人和 profile 仍可同时修改。开启必须能读取在线 directory：读不到当前条款就失败关闭，不静默开启；CA 未公布条款时仍可开启，报告明确说明本次未接受任何 URL、之后公布的条款自动接受。开启只保存本地委托与精确 URL，不向 CA 发送账户更新；撤销纯本地、不访问网络并保留已接受 URL。交互菜单选中该 scope 时，条款同意仍需显式回答，`--yes` 不代替。
 
 没有通用的 `--skip-*` 同义参数。--yes 不等于“完全非交互”：终端里的名称选择、输入、独立条款同意仍有自己的条件；脚本应提供完整参数，JSON 或非 TTY 从不弹问题。没有 --yes 的危险操作在交互终端默认否，在脚本中立即给出确认要求。取消交互退出 130。
 
@@ -23,7 +23,7 @@
 | 命令 | --yes 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已经存在的本地身份；不代替 --accept-terms |
-| `account update` | 替换/清空联系人、设置/清除默认证书 profile，或开启/关闭未来条款授权（三类 scope 互斥） |
+| `account update` | 替换/清空联系人、设置/清除默认证书 profile，或开启/关闭未来条款授权（条款授权与联系人/profile 互斥） |
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
 | `account remove --deactivate` | 删除本地账户并不可逆停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
@@ -74,7 +74,7 @@
 | account default | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
 | account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、--auto-accept-new-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
-| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、--auto-accept-new-terms 或 --clear-auto-accept-new-terms（三组互斥）、已有账户 CA 选择、HTTP、-y |
+| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、--auto-accept-new-terms 或 --clear-auto-accept-new-terms（条款组与联系人/profile 互斥）、已有账户 CA 选择、HTTP、-y |
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
 | account remove --deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y；纯本地删除时无 CA/HTTP |
 | account remove | [NAME] / -n、-y；仅本地操作 |

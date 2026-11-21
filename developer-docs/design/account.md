@@ -50,7 +50,7 @@ CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），regis
 
 ## 账户联系人与密钥轮换
 
-RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `account update` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；同命令亦可设置/清除默认证书 profile（`--profile`/`--clear-profile`，draft-ietf-acme-profiles），或开启/关闭未来条款授权（`--auto-accept-new-terms`/`--clear-auto-accept-new-terms`）；三类 scope 互斥，一条命令只改一类，脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
+RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `account update` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；同命令亦可设置/清除默认证书 profile（`--profile`/`--clear-profile`，draft-ietf-acme-profiles），或开启/关闭未来条款授权（`--auto-accept-new-terms`/`--clear-auto-accept-new-terms`）；条款授权与联系人/profile 互斥，联系人和 profile 仍可同时提供，脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
 
 RFC 8555 §7.3.5 的端点从 directory.keyChange 发现。`KeyChangePayload` 绑定原 Location 的精确账户 URL 和旧 JWK。内层由新钥签名，header 含 jwk、与外层一致的 url，省略 nonce/kid；外层由旧钥签名，使用原账户 kid 和新 nonce。成功 HTTP 200 可以没有 JSON body；不更改 account_id、account_url、contacts、订单或授权。只有 last_used_at 因成功轮换推进；没有账户对象不能伪造新的状态观察时间。
 

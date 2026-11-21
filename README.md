@@ -109,7 +109,7 @@ aster-acme account register default --auto-accept-new-terms
 
 This also accepts the currently advertised terms. The exact accepted URL remains in the account record; `account show` reports whether the future-update delegation is enabled. `--yes`, JSON mode, and implicit issuance account checks never enable it. A normal `account register` without the flag keeps an existing delegation so routine recovery cannot revoke unattended renewal trust.
 
-Change the delegation later with `account update` (one preference per invocation):
+Change the delegation later with `account update` (the delegation is exclusive with contacts/profile):
 
 ```sh
 aster-acme account update default --auto-accept-new-terms --yes   # accept current terms and delegate

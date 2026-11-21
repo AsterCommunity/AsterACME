@@ -109,7 +109,7 @@ aster-acme account register default --auto-accept-new-terms
 
 该参数同时同意当前公布的条款。账户记录仍保存精确的已接受 URL，`account show` 会显示未来更新授权是否启用。`--yes`、JSON 模式和签发时的隐式账户检查都不会开启授权；不带该参数的普通 `account register` 会保留已有授权，避免日常恢复操作意外撤销无人值守续期信任。
 
-注册后可用 `account update` 修改该授权（一条命令只改一类偏好）：
+注册后可用 `account update` 修改该授权（条款授权与联系人/profile 互斥）：
 
 ```sh
 aster-acme account update default --auto-accept-new-terms --yes      # 接受当前条款并开启委托

@@ -32,7 +32,7 @@ pub(crate) enum AccountCommand {
     Register(RegisterArgs),
     /// Find an existing CA account using its saved key; never create one.
     Recover(NetworkArgs),
-    /// Update one account preference: CA contacts, the default certificate
+    /// Update account preferences: CA contacts, the default certificate
     /// profile, or the future terms delegation.
     Update(UpdateArgs),
     /// Rotate the account signing key, or resume its saved rollover transaction.
@@ -45,7 +45,8 @@ pub(crate) enum AccountCommand {
 /// Replace contacts, set or clear the default certificate profile, or change
 /// the future terms delegation. Contact changes update the CA account; profile
 /// and delegation preferences are local metadata (the delegation is validated
-/// against the live directory before it is enabled). One scope per invocation.
+/// against the live directory before it is enabled). Contacts and profile may
+/// still be combined; the terms delegation is exclusive with both.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Independent contact, profile, delegation and confirmation switches"
