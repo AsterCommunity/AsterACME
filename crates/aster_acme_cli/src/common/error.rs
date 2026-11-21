@@ -13,6 +13,40 @@ pub(crate) mod problem;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
+/// Operation context retains the source for diagnostics and process disposition.
+#[derive(Debug)]
+pub(crate) struct ContextError {
+    pub(crate) context: String,
+    pub(crate) source: Box<dyn std::error::Error>,
+}
+
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.context)
+    }
+}
+
+impl std::error::Error for ContextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// Cancellation remains cancellation when an operation adds partial-result context.
+pub(crate) fn exit_status(
+    mut error: &(dyn std::error::Error + 'static),
+) -> crate::common::session::ExitStatus {
+    loop {
+        if error.is::<crate::common::terminal::Canceled>() {
+            return crate::common::session::ExitStatus::Cancelled;
+        }
+        match error.source() {
+            Some(source) => error = source,
+            None => return crate::common::session::ExitStatus::Failed,
+        }
+    }
+}
+
 /// Missing local identity, distinct from a CA rejecting an existing signing key.
 #[derive(Debug)]
 pub(crate) struct MissingLocalAccount {
@@ -28,6 +62,10 @@ impl std::error::Error for MissingLocalAccount {}
 /// Convert structured library failures at the CLI boundary; embedded callers retain
 /// the original problem document and retry metadata for their own policy decisions.
 pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, Option<String>) {
+    if let Some(context) = error.downcast_ref::<ContextError>() {
+        let (message, hint) = diagnostic(context.source.as_ref());
+        return (format!("{context}: {message}"), hint);
+    }
     if let Some(missing) = error.downcast_ref::<MissingLocalAccount>() {
         return (
             missing.to_string(),
@@ -242,6 +280,49 @@ pub(crate) fn render(
 mod tests {
     use crate::common::error::*;
     use aster_acme_protocol::problem::ProblemKind;
+
+    #[test]
+    fn contextual_errors_retain_cancellation_and_typed_recovery_hints() {
+        let cancelled = ContextError {
+            context: "the terms delegation was not saved".into(),
+            source: Box::new(crate::common::terminal::Canceled),
+        };
+        let nested = ContextError {
+            context: "Contacts were updated at the CA".into(),
+            source: Box::new(cancelled),
+        };
+        assert_eq!(
+            exit_status(&nested),
+            crate::common::session::ExitStatus::Cancelled
+        );
+        let (message, _) = diagnostic(&nested);
+        assert!(message.contains("Contacts were updated at the CA"));
+        assert_eq!(message.matches("Canceled;").count(), 1);
+
+        let failed = ContextError {
+            context: "the terms delegation was not saved".into(),
+            source: Box::new(AccountError::IdentityMismatch),
+        };
+        assert_eq!(
+            exit_status(&failed),
+            crate::common::session::ExitStatus::Failed
+        );
+        let json = render(&failed, crate::common::session::Format::plain(true)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not match")
+        );
+        assert!(
+            json["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("original account key")
+        );
+    }
+
     #[test]
     fn missing_account_is_actionable_and_not_a_debug_dump() {
         let error = TransportError::Problem {

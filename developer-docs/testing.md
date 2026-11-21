@@ -53,7 +53,7 @@ PKCS#12 原生终端回归：`python3 scripts/test-deployment-terminal.py` 验�
 
 Provider 原生终端回归：`python3 scripts/test-provider-terminal.py` 在 PTY 中验证 add/show/cleanup/remove/update 和签发 Profile 选择、搜索、颜色与 NO_COLOR、默认否/取消、update 保存/丢弃草稿、子菜单返回并保留草稿及 termios 恢复，不执行真实 Provider 或访问 CA；Linux/macOS CI 同步执行。
 
-账户条款原生终端回归：`python3 scripts/test-account-terminal.py` 使用 loopback CA、真实账户文件和 inquire 提示，验证 `--yes --accept-terms` 不等待未来授权询问、显式同意、默认否、拒绝及取消；核对授权落盘、取消零 POST 和 termios 恢复。Linux/macOS CI 同步执行，不访问公网 CA。
+账户条款原生终端回归：`python3 scripts/test-account-terminal.py` 使用 loopback CA、真实账户文件和 inquire 提示，覆盖 5 个注册与 14 个 update 场景。注册验证 `--yes --accept-terms` 不等待未来授权询问、显式同意、默认否、拒绝及取消；update 验证显式条款 flag 的人工确认与默认否、撤销确认同意/拒绝/取消时零 HTTP、菜单中的 `--yes` 不替代条款同意、三 scope 组合、后续确认拒绝/取消时保留已提交 contacts/profile 的说明，以及根命令退出码 130。核对授权落盘、账户 POST 数量和 termios 恢复。Linux/macOS CI 同步执行，不访问公网 CA。
 
 DNS 后端测试包括：registry 重复/未知 ID、编译 feature 集合、写请求前 checkpoint 确认、失败与部分结果、HTTP 精确字节/禁重试/禁重定向/收发上限/取消期限、Cloudflare 分页/同值所有权/错误脱敏/丢响应恢复/精确删除，以及条件 RRset 冲突重读、metadata 保留和不确定所有权。CLI loopback 测试使用真实 Cloudflare 状态机、实际文件恢复存储和 ACME 服务；PTY 额外核对后端选择及敏感输入不回显。真实 DNS/CA 验收不由这些 mock 代替。
 

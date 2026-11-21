@@ -93,11 +93,7 @@ fn finish(
     match result {
         Ok(status) => status.code(),
         Err(error) => {
-            let status = if error.is::<common::terminal::Canceled>() {
-                common::session::ExitStatus::Cancelled
-            } else {
-                common::session::ExitStatus::Failed
-            };
+            let status = common::error::exit_status(error.as_ref());
             if let Ok(text) = common::error::render(error.as_ref(), cli.output.diagnostic_format())
             {
                 let _ = cli

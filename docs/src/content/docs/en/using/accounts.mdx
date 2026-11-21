@@ -63,7 +63,7 @@ aster-acme account update default --auto-accept-new-terms --yes
 aster-acme account update default --clear-auto-accept-new-terms --yes
 ```
 
-Enabling means "accept the CA's currently advertised terms and trust the directory's future terms URL changes". It reads the live directory first and records the exact URL; if the directory cannot be read the command fails instead of delegating silently. A CA that publishes no terms can still be delegated, and the report states that no URL was accepted. Revoking is local, sends nothing, and keeps the saved accepted URL.
+Enabling means "accept the CA's currently advertised terms and trust the directory's future terms URL changes". It reads the live directory first and records the exact URL; if the directory cannot be read the command fails instead of delegating silently. A CA that publishes no terms can still be delegated, and the report states that no URL was accepted. Revoking alone is local and sends nothing; the saved accepted URL is retained even when combined with contact/profile changes.
 
 Neither change sends a CA account update — unlike contact changes, which synchronize with the CA. `--yes`, JSON mode, and implicit account checks never enable it. `account show` keeps reporting the delegation and the exact accepted URL.
 
@@ -91,7 +91,7 @@ aster-acme account remove default --yes
 | --- | --- | --- |
 | `account register` | Create or continue a local account identity | Reusing/continuing an existing local identity |
 | `account recover` | Rebuild the account observation with the saved key | (no dangerous confirmation) |
-| `account update` | Replace/clear contacts; set/clear the default profile; enable/revoke future terms delegation (all three scopes combine) | Replacing/explicitly clearing; the terms change always needs an explicit flag plus `--yes` |
+| `account update` | Replace/clear contacts; set/clear the default profile; enable/revoke future terms delegation (all three scopes combine) | Replacing/explicitly clearing; only an explicit terms flag together with `--yes` skips the separate terms confirmation |
 | `account rotate-key` | ACME keyChange rotation | Rotating or reconciling the transaction |
 | `account remove --deactivate` | Deactivate the CA account (irreversible) + delete local profile | Deactivation + removal |
 | `account remove` | Delete the local profile and key | Local removal |

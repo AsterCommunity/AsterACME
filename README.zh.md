@@ -116,7 +116,7 @@ aster-acme account update default --auto-accept-new-terms --yes      # 接受当
 aster-acme account update default --clear-auto-accept-new-terms --yes  # 撤销，保留已接受 URL
 ```
 
-开启会读取在线 directory 并记录精确的当前条款 URL；读不到 directory 时直接失败，不会静默开启；CA 未公布条款时仍会保存授权并在报告中明确说明。撤销是纯本地操作、不发送任何请求，并保留已接受 URL。两种修改都不会向 CA 发送账户更新。条款同意始终需要显式 flag 加 `--yes`，同次调用确认的其他内容不能代替。
+开启会读取在线 directory 并记录精确的当前条款 URL；读不到 directory 时直接失败，不会静默开启；CA 未公布条款时仍会保存授权并在报告中明确说明。单独撤销是纯本地操作、不发送任何请求；即使与需要访问 CA 的联系人/profile 修改组合，也保留原已接受 URL。两种修改都不会向 CA 发送账户更新。交互终端会单独询问条款确认；只有显式条款 flag 与 `--yes` 同时给出才跳过确认。菜单选中条款 scope 时即使带 `--yes` 也仍需回答，确认联系人不会隐含条款同意。
 
 按提示发布 TXT 并确认。中途退出后可以继续原申请，续期沿用保存的验证方式：
 

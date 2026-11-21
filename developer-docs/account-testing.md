@@ -129,3 +129,17 @@ Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同
 - 解析：terms 两 flag 与 contacts/profile 的组合全部被接受；`--auto-accept-new-terms` 与 `--clear-auto-accept-new-terms` 彼此互斥且两个参数序均断言冲突。
 - 端到端：loopback CA 覆盖 contacts+terms 组合恰好一个账户 POST（条款部分零 POST）、三 scope 组合后记录三字段全部生效、enable 后 ensure 静默接受变更条款、撤销后 ensure 以 `TermsRequired` 阻断且零 POST（沿用）。
 - 命令：`cargo test -p aster_acme_cli --locked commands::account`（72 项通过）、`cargo test --workspace --locked`（1111 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。
+
+
+## update 组合 scope 的撤销与取消边界（2026-11-22，issue #58）
+
+基于 `732c221` 的未提交修复，macOS Apple Silicon，rustc/cargo 1.100.0。保留三 scope 组合与单个 `{name, contacts, profile, terms}` 报告：
+
+- 撤销隔离：preflight 仅在开启授权时携带条款值；profile 所需的 directory 读取不构成条款同意。32 种组合覆盖 CA 有/无条款、原授权开/关、原已接受 URL 有/无、profile 设置/清除、联系人 scope 有/无。撤销后原 URL 保持不变，terms 段不声称检查或接受本次条款，联系人 POST 数量与请求 scope 一致。
+- 部分失败：用在线 directory 广告的超限 profile 名称和条款字符串触发真实文件保存失败，验证联系人成功后 profile 失败，以及 contacts/profile 任意组合成功后 terms 失败；失败返回非零，错误列明此前全部已生效 scope，文件保留已提交字段，后续 scope 不执行。
+- 错误与取消：操作上下文保留原始错误链，统一诊断保留 typed recovery hint，根命令沿错误链识别取消。嵌套上下文的取消仍为 130，普通保存错误仍为 1；JSON 诊断同时保留上下文和底层可操作提示。
+- 快照：原元数据保留测试改为先取得旧 record 与 preflight，再写入新 profile/server_contacts，最后用旧快照执行条款变更；锁内 reload 保留后来保存的字段。另验证 preflight 后账户停用进入 pending/confirmed 时拒绝授权变更且记录不变，以及组合请求遇到 directory 故障时只读 GET、零账户 POST、记录不变。
+- 原生 PTY：扩展 `scripts/test-account-terminal.py`，原 5 个注册场景与新增 14 个 update 场景全部通过。覆盖显式条款 flag 的人工同意/默认否/拒绝/Ctrl-C、撤销确认的同意/拒绝/Ctrl-C（零 HTTP）、无 scope 菜单带 `--yes` 后仍独立确认、三 scope 手动/免提示成功、组合后拒绝/取消保留 contacts/profile 证据，以及 profile 确认拒绝；实际执行根命令出口并断言 130，检查账户落盘、POST 数量与 termios 恢复。
+- 文档：CLI 契约、账户设计、README/CHANGELOG 双语和文档站双语同步撤销与确认边界；CHANGELOG 基线为 `v0.1.0-alpha.3`，修订现有 Unreleased #58 条目，不单独记录同版本自修复；比较链接保持正确。
+
+本轮命令：`cargo test -p aster_acme_cli --locked commands::account`（76 passed、2 ignored，忽略的 PTY fixture 由脚本单独驱动）、`python3 scripts/test-account-terminal.py`（19 场景通过）、`cargo test --workspace --locked`（含 doctest，全部通过）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、workspace 依赖/import/features/doc-links 检查及 `python3 -m unittest discover -s scripts/tests`（14 项通过）。未访问公网 CA，未执行 Linux/Windows 原生验收；其余 PTY 脚本本轮未运行。以上为提交前本地验收；推送和远端 CI 状态另行核对。

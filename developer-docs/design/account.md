@@ -24,7 +24,7 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 `--auto-accept-new-terms` 是显式的信任委托：接受当前 directory 条款，并保存 `auto_accept_terms_updates` 供后续 ensure 使用；未授权账户仍要求精确 URL 同意。此授权信任 directory 返回的任何条款 URL，ToS 比较不是 directory 被篡改时的安全边界。条款 URL 仍精确持久化；普通 register/隐式 ensure 保留已有授权。终端的未来授权询问默认否，`--yes` 跳过该可选询问且不隐含授权；首次接受与后续 URL 更新的报告分开。
 
-`account update` 是注册后的授权修改入口：`--auto-accept-new-terms` 先读取在线 directory，接受其当前条款（若有）并写入授权，读不到 directory 时失败关闭、不静默开启；CA 未公布条款时仍可开启，报告明确说明本次没有可接受的 URL。`--clear-auto-accept-new-terms` 只改本地元数据并保留 `accepted_terms_url`，不访问网络。两者都不发送 CA 账户更新（RFC 8555 没有条款更新请求），且可与联系人/profile 同次组合；组合调用逐 scope 报告结果，directory 校验先于全部 mutation，本地保存失败时错误保留已提交 CA mutation 的证据。交互菜单选中该 scope 时条款同意仍需显式回答。
+`account update` 是注册后的授权修改入口：`--auto-accept-new-terms` 先读取在线 directory，接受其当前条款（若有）并写入授权，读不到 directory 时失败关闭、不静默开启；CA 未公布条款时仍可开启，报告明确说明本次没有可接受的 URL。`--clear-auto-accept-new-terms` 只改本地元数据并保留 `accepted_terms_url`，单独撤销不访问网络，与联系人/profile 组合也不接受本次 directory 中的新条款。两者都不发送 CA 账户更新（RFC 8555 没有条款更新请求），且可与联系人/profile 同次组合；组合调用逐 scope 报告结果，directory 校验先于全部 mutation，本地保存失败时错误保留已提交 CA mutation 的证据；错误上下文保留原始错误链和取消分类，拒绝或取消后续确认仍退出 130。交互菜单选中该 scope 时条款同意仍需显式回答。
 
 参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。default 支持位置 NAME 或 -n/--name，无注册、网络选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
 

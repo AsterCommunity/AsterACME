@@ -11,15 +11,16 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = "commands::account::execute::tests::terminal_terms_consent_child"
+UPDATE_FIXTURE = "commands::account::mutation::tests::terminal_update_consent_child"
 CURRENT = b"Do you agree to these terms?"
 FUTURE = b"Automatically accept future CA terms updates?"
 
 
-def run_case(binary, mode, answers):
+def run_case(binary, mode, answers, fixture=FIXTURE, done_prefix="ACCOUNT_TERMS_DONE"):
     master, slave = pty.openpty()
     before = termios.tcgetattr(slave)
     process = subprocess.Popen(
-        [binary, "--exact", FIXTURE, "--ignored", "--nocapture"],
+        [binary, "--exact", fixture, "--ignored", "--nocapture"],
         stdin=slave, stdout=slave, stderr=slave, cwd=ROOT,
         env={**os.environ, "ASTER_ACCOUNT_TERMS_TEST_MODE": mode,
              "NO_COLOR": "1", "TERM": "xterm-256color"},
@@ -51,9 +52,12 @@ def run_case(binary, mode, answers):
         assert process.poll() is not None, bytes(output).decode(errors="replace")
         assert process.wait(timeout=1) == 0, bytes(output).decode(errors="replace")
         assert sent == len(answers), repr(bytes(output))
-        assert f"ACCOUNT_TERMS_DONE {mode}".encode() in output, repr(bytes(output))
+        assert f"{done_prefix} {mode}".encode() in output, repr(bytes(output))
         if mode == "yes":
             assert CURRENT not in output and FUTURE not in output, repr(bytes(output))
+        if mode == "update-combined-yes":
+            assert b"Replace these contacts?" not in output, repr(bytes(output))
+            assert b"Enable automatic terms updates?" not in output, repr(bytes(output))
         assert termios.tcgetattr(slave) == before, "terminal state was not restored"
     finally:
         if process.poll() is None:
@@ -80,7 +84,28 @@ def main():
         ("cancel", [(CURRENT, b"y\r"), (FUTURE, b"\x03")]),
     ]:
         run_case(binary, mode, answers)
-    print("Account terms PTY: 5 scenarios passed (yes skips delegation, explicit consent, default no, decline, cancel)")
+    enable = b"Enable automatic terms updates?"
+    contacts = (b"Replace these contacts?", b"y\r")
+    menu = (b"Update which account preference?", b"\x1b[B\x1b[B\r")
+    update_cases = [
+        ("update-grant", [(enable, b"y\r")]),
+        ("update-deny", [(enable, b"n\r")]),
+        ("update-default-deny", [(enable, b"\r")]),
+        ("update-cancel", [(enable, b"\x03")]),
+        ("update-revoke-grant", [(b"Disable automatic terms updates?", b"y\r")]),
+        ("update-revoke-deny", [(b"Disable automatic terms updates?", b"n\r")]),
+        ("update-revoke-cancel", [(b"Disable automatic terms updates?", b"\x03")]),
+        ("update-menu-grant", [menu, (enable, b"y\r")]),
+        ("update-menu-deny", [menu, (enable, b"n\r")]),
+        ("update-combined-grant", [contacts, (enable, b"y\r")]),
+        ("update-combined-deny", [contacts, (enable, b"n\r")]),
+        ("update-combined-cancel", [contacts, (enable, b"\x03")]),
+        ("update-combined-yes", []),
+        ("update-profile-deny", [(b"Save this profile preference?", b"n\r")]),
+    ]
+    for mode, answers in update_cases:
+        run_case(binary, mode, answers, UPDATE_FIXTURE, "ACCOUNT_UPDATE_DONE")
+    print("Account terms PTY: 5 registration and 14 update scenarios passed (consent, revocation, default no, menu --yes boundary, combined scopes, partial cancellation, exit 130, terminal restoration)")
 
 
 if __name__ == "__main__":
