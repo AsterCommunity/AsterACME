@@ -221,7 +221,7 @@ fn terms_delegation_text(
     };
     let message = match transition {
         DelegationTransition::Enabled => format!(
-            "Account {} now accepts future CA terms updates automatically; accepted terms URL: {}. This is local consent only; no CA account request was sent.{notice}",
+            "Account {} now accepts future CA terms updates automatically; accepted terms URL: {}. This is local consent only; the terms delegation itself sent no CA account request.{notice}",
             safe(name),
             accepted
         ),
@@ -915,7 +915,7 @@ fn terms_delegation_reports_local_consent_without_a_ca_sync() {
     let enabled_text = text(&enabled);
     assert!(
         enabled_text.contains("now accepts")
-            && enabled_text.contains("no CA account request was sent"),
+            && enabled_text.contains("the terms delegation itself sent no CA account request"),
         "{enabled_text}"
     );
 

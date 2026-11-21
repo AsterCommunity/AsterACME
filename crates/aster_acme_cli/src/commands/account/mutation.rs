@@ -1186,7 +1186,8 @@ mod tests {
         assert_eq!(json["terms"]["ca_account_update_sent"], false);
         let text = report_text(&report);
         assert!(
-            text.contains("now accepts") && text.contains("no CA account request was sent"),
+            text.contains("now accepts")
+                && text.contains("the terms delegation itself sent no CA account request"),
             "{text}"
         );
         let record = stored(&context, &signer).await;
@@ -1857,6 +1858,11 @@ mod tests {
             text.contains("Updated contacts for") && text.contains("now accepts"),
             "{text}"
         );
+        assert!(
+            text.contains("the terms delegation itself sent no CA account request"),
+            "{text}"
+        );
+        assert!(!text.contains("no CA account request was sent"), "{text}");
         let record = stored(&context, &signer).await;
         assert_eq!(record.contacts, ["mailto:new@example.com"]);
         assert!(record.auto_accept_terms_updates);
