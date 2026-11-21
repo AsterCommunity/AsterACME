@@ -20,7 +20,7 @@ python3 scripts/check-workspace-deps.py
 - PKCS#8 往返、错误密钥、JWK thumbprint、原始 ES256 签名及篡改拒绝。
 - jwk/kid 互斥、精确签名 URL、POST-as-GET 空 payload、HS256 EAB 签名与响应确认。
 - 显式条款、EAB 必需、联系人 URI 边界及输入上限。
-- 自动接受条款更新的授权边界：精确 URL 变化、已授权隐式 ensure、未授权 `TermsRequired`、无 ToS、旧 TOML 缺字段默认关闭，以及 CLI 交互默认拒绝/显式同意和 JSON/`--yes` 不隐含授权。
+- 自动接受条款更新的授权边界：精确 URL 变化、已授权隐式 ensure、未授权 `TermsRequired`、无 ToS、旧 TOML 缺字段默认关闭，以及 CLI 交互默认拒绝/显式同意和 JSON/`--yes` 不隐含授权。`account update` 入口另行覆盖：互斥解析、开启/撤销、不可达失败关闭、无条款开启、零 CA 账户请求与 ensure 放行/阻塞。
 - 新账户先持久化 intent、只读找回、CA 明确 not-found 才注册、注册响应丢失后的恢复。
 - 请求超时、任务取消保留 pending；坏 nonce 使用错误响应的新值重签且有次数上限。
 - 8 个并发请求的 nonce 唯一性、签名有效性；非法/重复 nonce 拒绝。
@@ -95,3 +95,15 @@ User-Agent 验证显式注册值写账户 TOML、缺省不写、配置无全局�
 真实文件租约与 loopback CA 测试覆盖跨算法连续轮换、缺省沿用原类型、暂存钥重启恢复、显式冲突不写文件、取消后新算法对账且不重发 keyChange、主钥已换而元数据尚未提交的跨算法崩溃恢复。普通 save 不得改变算法，提交后主钥/指纹/算法一致，账户 ID 保持不变。双层 JWS 单独验证外层旧算法及内层新算法、同 URL、内层无 nonce/kid。
 
 工作区 315 项测试通过；后续帮助/呈现调整的 125 项 CLI 测试及跨算法部分提交恢复专项通过，严格 Clippy 零 warning。实际二进制在临时目录检查四种算法注册后的持久化/离线详情/列表、显式不匹配保留原钥，以及各级标准帮助入口。`rotate-key help` 保持位置账户名，不增加参数改写。未访问公网 CA，未验证各公开 CA 对所有算法的接受范围。
+
+## 条款授权修改入口（2026-11-21）
+
+工作树基于 `f29acf7`，Windows 原生（rustc/cargo 1.100.0）。`account update --auto-accept-new-terms` / `--clear-auto-accept-new-terms` 的验证：
+
+- 解析：仅 `account update` 接受两个 flag；彼此及与 `-m/--clear-contacts/--profile/--clear-profile` 冲突；contact+profile 组合保持可用。
+- 开启：读取在线 directory 的当前 URL 并写入授权；重复开启幂等；URL 变化记录新值；CA 无条款时仍开启并在报告中说明未接受 URL；directory 不可达时失败关闭、记录不变；非交互缺 `--yes` 拒绝且零写入；并发写入的其他字段保留；未注册账户在 discovery 前拒绝。
+- 关闭：零 HTTP、保留已接受 URL、重复关闭幂等。
+- 编排：开启后复跑 ensure 接受变更 URL（`auto_accepted_terms=true`）；撤销后 ensure 以 `TermsRequired` 阻断且零 POST；`account show`/JSON 反映授权与 URL；授权变更不发送 CA 账户 POST（`ca_account_update_sent=false`）。
+- 报告：开启/已开启/无条款/关闭/已关闭文案与 JSON 字段；`TermsRequired` 提示补充 update 入口。
+
+命令：`cargo test -p aster_acme_cli --locked commands::account`（65 项通过）、`cargo test --workspace --locked`（1038 项通过、0 失败）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户；交互式 scope 菜单仅在单测层覆盖（索引映射），未在原生终端执行，也未扩展 PTY 脚本。
