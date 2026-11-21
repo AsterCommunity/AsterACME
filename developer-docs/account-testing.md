@@ -100,10 +100,10 @@ User-Agent 验证显式注册值写账户 TOML、缺省不写、配置无全局�
 
 工作树基于 `f29acf7`，Windows 原生（rustc/cargo 1.100.0）。`account update --auto-accept-new-terms` / `--clear-auto-accept-new-terms` 的验证：
 
-- 解析：仅 `account update` 接受两个 flag；彼此及与 `-m/--clear-contacts/--profile/--clear-profile` 冲突；contact+profile 组合保持可用。
-- 开启：读取在线 directory 的当前 URL 并写入授权；重复开启幂等；URL 变化记录新值；CA 无条款时仍开启并在报告中说明未接受 URL；directory 不可达时失败关闭、记录不变；非交互缺 `--yes` 拒绝且零写入；并发写入的其他字段保留；未注册账户在 discovery 前拒绝。
+- 解析：`--clear-auto-accept-new-terms` 仅在 `account update` 上可用；`--auto-accept-new-terms` 在 register（既有）与 update 上可用。两个 update flag 彼此互斥且与 `-m/--clear-contacts/--profile/--clear-profile` 冲突；contact+profile 组合保持可用；其他账户子命令拒绝这些选项。
+- 开启：读取在线 directory 的当前 URL 并写入授权；重复开启幂等；URL 变化记录新值；CA 无条款时仍开启、报告中说明未接受新 URL 且保留旧 URL；directory 不可达时失败关闭、记录不变；非交互缺 `--yes` 拒绝且零写入；并发写入的其他字段保留；未注册账户在 discovery 前拒绝。
 - 关闭：零 HTTP、保留已接受 URL、重复关闭幂等。
 - 编排：开启后复跑 ensure 接受变更 URL（`auto_accepted_terms=true`）；撤销后 ensure 以 `TermsRequired` 阻断且零 POST；`account show`/JSON 反映授权与 URL；授权变更不发送 CA 账户 POST（`ca_account_update_sent=false`）。
 - 报告：开启/已开启/无条款/关闭/已关闭文案与 JSON 字段；`TermsRequired` 提示补充 update 入口。
 
-命令：`cargo test -p aster_acme_cli --locked commands::account`（65 项通过）、`cargo test --workspace --locked`（1038 项通过、0 失败）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户；交互式 scope 菜单仅在单测层覆盖（索引映射），未在原生终端执行，也未扩展 PTY 脚本。
+命令：`cargo test -p aster_acme_cli --locked commands::account`（66 项通过）、`cargo test --workspace --locked`（1039 项通过、0 失败）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户；交互式 scope 菜单仅在单测层覆盖（索引映射），未在原生终端执行，也未扩展 PTY 脚本。

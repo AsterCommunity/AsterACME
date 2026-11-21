@@ -1197,6 +1197,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enabling_without_terms_retains_the_previously_accepted_url() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(None).await;
+        let mut saved = stored(&context, &signer).await;
+        saved.accepted_terms_url = Some(AcmeUrl::new("https://ca.example/terms/old").unwrap());
+        context.store.save(&saved).await.unwrap();
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &saved,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let record = stored(&context, &signer).await;
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/old"
+        );
+        let json = report_json(&report);
+        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
+        assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/old");
+        assert_eq!(json["directory_checked"], true);
+        let text = report_text(&report);
+        assert!(text.contains("any saved URL is retained"), "{text}");
+    }
+
+    #[tokio::test]
     async fn enabling_fails_closed_when_the_directory_cannot_confirm_terms() {
         let server = MockServer::start().await;
         let (context, signer, transport, _handles) = account_fixture(&server).await;
