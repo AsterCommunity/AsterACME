@@ -1,7 +1,61 @@
 //! Deployment checkpoint: leased file operations, not business policy.
 use crate::issuance::deployment::{DeploymentBinding, DeploymentSession};
-use crate::issuance::{IssueError, failure, selection, write_selection};
+use crate::issuance::{
+    CertificateName, CliIssueStore, IssueError, failure, selection, write_selection,
+};
 use aster_acme::deployment::DeploymentPhase;
+
+impl CliIssueStore {
+    /// Retain the current issued generation for later deployment without loading secrets.
+    /// Password or artifact preparation failures therefore cannot erase pending work.
+    ///
+    /// # Errors
+    /// Rejects stale/ineligible generations, uncertain reloads, missing bindings and IO failures.
+    pub async fn queue_deployment(
+        &self,
+        name: &CertificateName,
+        id: &str,
+        generation: &str,
+    ) -> Result<DeploymentBinding, IssueError> {
+        crate::issuance::deployment::validate_id(id)?;
+        let slot = self.slot(name);
+        let lease = self.lease(name).await?;
+        let name = name.clone();
+        let id = id.to_owned();
+        let generation = generation.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            let mut config = selection(&slot)?;
+            let record = crate::issuance::deployment::session::selected_record(&slot, &name)?;
+            if config.cert.name != name
+                || !record.deployment_eligible()
+                || record.generation_name() != generation
+            {
+                return Err(failure(
+                    "in_use changed before deployment intent could be saved",
+                ));
+            }
+            let binding = config
+                .cert
+                .deployments
+                .iter_mut()
+                .find(|item| item.id == id)
+                .ok_or_else(|| {
+                    failure("deployment binding removed before intent could be saved")
+                })?;
+            crate::issuance::deployment::configuration::validate_binding(binding)?;
+            let mut updated = binding.clone();
+            updated.apply_checkpoint(binding.checkpoint().pending(&generation)?);
+            if updated != *binding {
+                *binding = updated.clone();
+                write_selection(&slot, &config)?;
+            }
+            Ok(updated)
+        })
+        .await
+        .map_err(|_| failure("deployment intent worker failed"))?
+    }
+}
 
 impl DeploymentSession {
     /// Persist the phase before/after each side effect while still holding the lease.

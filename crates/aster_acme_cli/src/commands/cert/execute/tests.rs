@@ -99,6 +99,7 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
                     cancellation: CancellationToken::new(),
                     deadline: Instant::now() + Duration::from_secs(10),
                 },
+                &crate::common::session::OutputSession::new(true),
             )
             .await;
             let crate::commands::cert::report::CertificateResult::Issued { deployments, .. } =

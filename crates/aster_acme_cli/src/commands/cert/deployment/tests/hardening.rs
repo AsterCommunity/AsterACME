@@ -20,6 +20,10 @@ use aster_acme_cli_storage::issuance::{
 use std::time::Duration;
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Exercise complete publication and reload ordering in one lifecycle"
+)]
 async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
     let fixture = Fixture::new().await;
     let target = fixture.temp.path().join("verify");
@@ -50,6 +54,7 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
         aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await
     .unwrap();
@@ -75,8 +80,14 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
         cancellation: tokio_util::sync::CancellationToken::new(),
         deadline: std::time::Instant::now() + Duration::from_secs(10),
     };
-    let (failed, events) =
-        after_issuance(&fixture.store, &fixture.name, &next_generation, &context).await;
+    let (failed, events) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        &next_generation,
+        &context,
+        &crate::common::session::OutputSession::new(true),
+    )
+    .await;
     assert_eq!(failed[0].phase, DeploymentPhase::PublishFailed);
     assert_eq!(failed[0].attempts, 0);
     assert!(!observed.exists());
@@ -100,8 +111,14 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
         DeploymentPhase::PublishFailed
     );
     std::fs::remove_dir(target.join("private-key.pem")).unwrap();
-    let (recovered, _) =
-        after_issuance(&fixture.store, &fixture.name, &next_generation, &context).await;
+    let (recovered, _) = after_issuance(
+        &fixture.store,
+        &fixture.name,
+        &next_generation,
+        &context,
+        &crate::common::session::OutputSession::new(true),
+    )
+    .await;
     assert_eq!(recovered[0].phase, DeploymentPhase::PublishFailed);
     assert!(
         !observed.exists(),
@@ -114,6 +131,7 @@ async fn reload_observes_complete_files_and_failed_publication_never_reloads() {
         aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await
     .unwrap();
@@ -210,6 +228,10 @@ async fn destination_ownership_resolves_ancestor_aliases_and_managed_state_paths
                 DeploymentDefinition {
                     name: Some("collision".into()),
                     target: DeploymentTarget::Files {
+                        pkcs12: None,
+                        pkcs12_password_env: None,
+                        pkcs12_password_file: None,
+
                         certificate: Some(path),
                         private_key: None,
                         ca_chain: None,
@@ -379,6 +401,7 @@ async fn inventory_errors_and_old_deployed_states_make_single_and_batch_reports_
         aster_acme::deployment::DeploymentIntent::Explicit,
         None,
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await;
     assert_eq!(execution.binding.phase, DeploymentPhase::Deployed);
@@ -398,6 +421,7 @@ async fn inventory_errors_and_old_deployed_states_make_single_and_batch_reports_
             cancellation: tokio_util::sync::CancellationToken::new(),
             deadline: std::time::Instant::now() + Duration::from_secs(30),
         },
+        &crate::common::session::OutputSession::new(true),
     )
     .await;
     assert_eq!(deployments, []);
@@ -745,8 +769,14 @@ async fn automatic_deployment_inherits_cancellation_and_deadline_without_publica
         if cancelled {
             context.cancellation.cancel();
         }
-        let (_, events) =
-            after_issuance(&fixture.store, &fixture.name, "generation", &context).await;
+        let (_, events) = after_issuance(
+            &fixture.store,
+            &fixture.name,
+            "generation",
+            &context,
+            &crate::common::session::OutputSession::new(true),
+        )
+        .await;
         assert!(events.iter().any(|event| event.kind == MessageKind::Error));
         assert!(!target.join("private-key.pem").exists());
         assert_eq!(
@@ -784,11 +814,13 @@ async fn automatic_cancellation_after_child_start_reaps_descendants_and_saves_un
         cancellation: tokio_util::sync::CancellationToken::new(),
         deadline: std::time::Instant::now() + Duration::from_secs(30),
     };
+    let output = crate::common::session::OutputSession::new(true);
     let mut running = Box::pin(after_issuance(
         &fixture.store,
         &fixture.name,
         &generation,
         &context,
+        &output,
     ));
     tokio::select! {
         _ = &mut running => panic!("deployment ended before descendant started"),

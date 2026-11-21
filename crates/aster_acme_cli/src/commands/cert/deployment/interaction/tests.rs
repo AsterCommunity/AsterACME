@@ -242,3 +242,20 @@ fn suggested_name_avoids_existing_default_and_can_be_changed_or_retried() {
         );
     }
 }
+
+#[test]
+fn p12_only_destination_does_not_prompt_for_a_pem_directory_or_password() {
+    let root = tempfile::tempdir().unwrap();
+    let mut args = args();
+    args.id = Some("bundle".into());
+    args.p12_path = Some(root.path().join("bundle.p12"));
+    let mut prompts = Inputs {
+        answers: [String::new()].into(),
+        ..Inputs::default()
+    };
+    complete(&mut args, &[], true, &mut prompts).unwrap();
+    assert_eq!(args.target, None);
+    assert_eq!(prompts.asked.len(), 1);
+    assert!(prompts.asked[0].contains("Reload"));
+    complete(&mut args, &[], false, &mut Inputs::default()).unwrap();
+}

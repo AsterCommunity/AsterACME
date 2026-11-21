@@ -33,7 +33,7 @@ async fn wrong_certificate_is_rejected_and_private_pem_is_derived_from_the_verif
         .unwrap();
     let session = fixture
         .store
-        .open_deployment(&fixture.name, "checked")
+        .open_deployment(&fixture.name, "checked", None)
         .await
         .unwrap();
     assert_eq!(session.artifacts().private_key.as_slice(), expected);
@@ -58,7 +58,7 @@ async fn wrong_certificate_is_rejected_and_private_pem_is_derived_from_the_verif
         assert!(
             fixture
                 .store
-                .open_deployment(&fixture.name, "checked")
+                .open_deployment(&fixture.name, "checked", None)
                 .await
                 .is_err(),
             "{domain}"
@@ -73,7 +73,7 @@ async fn uncertain_reload_survives_configuration_update_and_a_new_generation() {
         fixture.add("barrier", child_command("success"), 0).await;
         let mut session = fixture
             .store
-            .open_deployment(&fixture.name, "barrier")
+            .open_deployment(&fixture.name, "barrier", None)
             .await
             .unwrap();
         session
@@ -106,6 +106,7 @@ async fn uncertain_reload_survives_configuration_update_and_a_new_generation() {
             aster_acme::deployment::DeploymentIntent::Explicit,
             None,
             None,
+            Some(&crate::common::session::OutputSession::new(true)),
         )
         .await
         .unwrap();

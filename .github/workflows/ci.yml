@@ -40,6 +40,7 @@ jobs:
           python3 scripts/test-confirmation-terminal.py
           python3 scripts/test-provider-terminal.py
           python3 scripts/test-account-terminal.py
+          python3 scripts/test-deployment-terminal.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   precheck-features:
@@ -56,6 +57,8 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     env:
+      # show-env and report must use the same directory as the initial collection.
+      CARGO_LLVM_COV_TARGET_DIR: ${{ github.workspace }}/target/llvm-cov-target
       # CI 每个任务只做一次干净构建，增量产物只占磁盘不提供本地反馈
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_TEST_CODEGEN_UNITS: "16"
@@ -73,7 +76,15 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - run: mkdir -p coverage/rust
-      - run: cargo llvm-cov --workspace --all-features --locked --no-fail-fast --lcov --output-path coverage/rust/lcov.info
+      - name: Collect Rust coverage
+        run: cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report
+      - name: Collect deployment terminal coverage
+        run: |
+          eval "$(cargo llvm-cov show-env --sh)"
+          python3 scripts/test-deployment-terminal.py
+      - name: Export Rust coverage
+        if: always()
+        run: cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info
       - name: Publish coverage summary
         if: always() && hashFiles('coverage/rust/lcov.info') != ''
         run: node scripts/coverage-summary.mjs "Rust" coverage/rust/lcov.info

@@ -38,6 +38,8 @@ fn certificate_reports_match_pre_split_bytes_and_exit_statuses() {
         last_error: None,
     };
     let event = DeploymentEvent {
+        pkcs12_path: None,
+        cancelled: false,
         deployment: Some("nginx".into()),
         kind: MessageKind::Success,
         message: "Reload succeeded\nservice is ready".into(),

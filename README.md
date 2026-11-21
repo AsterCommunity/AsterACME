@@ -154,6 +154,16 @@ aster-acme cert deploy show example-cert nginx
 
 Adding a binding deploys immediately; later successful renewals use it automatically. Files are fully prepared before individual replacements, and reload runs only after publication succeeds. Deployment uses regular files at stable directory paths. Manage bindings, file permissions, exact paths, and retries through [`cert deploy`](developer-docs/cli-contract.md#证书部署).
 
+Publish a PKCS#12 (`.p12`) bundle containing the chain and private key with an exact path. Unix permissions follow `--key-mode` (0600 by default). For the daemon, use a user-managed 0600 password file:
+
+```sh
+aster-acme cert deploy add example-cert -n java \
+  --p12-path /etc/myservice/certificate.p12 \
+  --p12-password-file /etc/myservice/p12-password
+```
+
+Alternatively, use `--p12-password-env ENV_VAR` (the daemon needs it in its startup environment). Bindings store source references only. Without a source, only an interactive `cert deploy run` prompts for a hidden, one-time password; add, JSON and automatic deployment fail without prompting. Directory mode still publishes the four PEM files only.
+
 ## Documentation
 
 The user and operations documentation is published with Astro Starlight at [acme.docs.astercosm.com](https://acme.docs.astercosm.com/).

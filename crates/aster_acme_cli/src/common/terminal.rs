@@ -102,6 +102,21 @@ impl fmt::Display for SelectionItem {
     }
 }
 
+/// Prompt for a secret without echo. The value stays in `Zeroizing` memory and
+/// is used for this run only; it is never persisted or logged.
+///
+/// # Errors
+/// Reports prompt failures; Ctrl-C is a user cancellation.
+pub(crate) fn password_prompt(
+    message: &str,
+    output: &crate::common::session::OutputSession,
+) -> CliResult<zeroize::Zeroizing<String>> {
+    output.interaction_started();
+    let password = inquire::Password::new(message)
+        .with_render_config(prompt_style(output.diagnostic_format().color, false));
+    prompt_result(password.prompt()).map(zeroize::Zeroizing::new)
+}
+
 /// Follow the Drive confirmation policy: default no, explicit opt-in for automation.
 /// JSON mode never prompts, even when attached to a terminal.
 pub(crate) fn confirm_write(

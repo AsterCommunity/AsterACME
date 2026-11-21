@@ -303,3 +303,53 @@ Let's Encrypt 生产环境（acme-v02），单一公网 IPv4 标识符（地址�
 - 信任链人工核验：leaf → LE YE1 → Root YE（cross-signed）→ ISRG Root X2，对 macOS 系统信任库（含 ISRG Root X2 锚）`openssl verify` 通过。
 - ARI 续期窗口已生成（约 3 天后）。本地 loopback 验收（签发/恢复/续期/取消/跨进程租约）与本记录分开：本地证据在 flow 测试与 profiles 流程测试。
 - 环境注意：`openssl verify` 默认 CApath 不含 macOS 钥匙串锚，需显式 `-CAfile` 导出的系统锚；浏览器/curl 使用系统锚时正常信任。
+
+## PKCS#12 部署验收（2026-11-21，#55）
+
+本轮为 `a129569` 上的未提交工作树，环境 macOS arm64。库 `aster_acme` 无修改，PKCS#12 只扩展 CLI/storage 的材料与发布 adapter；目录模式仍是 PEM 四件套。
+
+- `cargo build --workspace --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check` 通过。
+- 最终 `cargo test --workspace --locked -- --test-threads=1`：主套件 **1078 passed、0 failed、13 ignored**，不重复统计主套件启动的两个 storage 子 fixture。PKCS#12 覆盖 OpenSSL 固定 MAC KDF 向量、Python hashlib PBKDF2 向量、多块派生、空/整块 CBC padding、独立逆 CBC 解密与输入 PKCS#8 相等、DER bags 和 friendlyName/localKeyId、正确/错误密码 MAC、随机 salt/IV、env/file 来源和权限拒绝。CLI 覆盖 add/update/run、env 子进程与空值、密码文件、续期后自动发布、无来源非交互错误和禁止自动重试、瞬时 override、JSON 发布路径事实、配置/报告不含密码、准备失败不改 PEM/p12，以及密码文件与所有部署目标的冲突。
+- `python3 scripts/test-deployment-terminal.py`：4 场景通过，确认密码隐藏输入/二次确认、Ctrl-C 后终端恢复和取消状态、JSON 在 TTY 上不提示、add 不提示密码。该子 fixture 在普通套件中仍标记 ignored，由 Linux/macOS CI 的 Python PTY 驱动启动；coverage 任务额外在 LLVM 插桩环境中执行同一驱动，再导出合并报告。
+- workspace 依赖、Rust import、TLS backend、production features、文档本地链接及 `git diff HEAD --check` 通过。`bun --bun run docs:build` 构建 41 页并通过站内链接检查；直接 `bun run docs:build` 使用的本机 Node 22.17.1 低于 Astro 要求，改用现有 Bun runtime 完成构建。
+
+本地 CodeRabbit 审查后的补充回归覆盖：密码文件无 LF 时保留末尾 CR、非整块密文拒绝、密码不可读时先保存新世代待办并在来源恢复后由 daemon 补部署、失效密码目录不阻断可证明无关的 PEM 目标、同绑定及跨绑定两个方向的文件身份冲突、0200/0000 目标无需读权限的重复部署，以及过时世代/缺失绑定/不确定 reload 的零写入拒绝。Windows storage all-targets 交叉检查通过；这不代表 Windows 原生运行验收。依赖采用已发布的 Forge HTTP/utils/panic alpha.3 和 process alpha.4；严格 audit 在最新 RustSec 数据库下通过。默认并发曾触发既有吊销 100ms 计时测试，之后一次复跑触发未修改的账户零 POST 断言；账户测试单独复跑及上述最终单线程全量通过，不将首次失败记作通过。
+
+OpenSSL 4.1.0 手动互通（不加入自动化依赖）：通过临时测试 fixture 调用实际 bundle builder，使用 rcgen 测试证书、PKCS#8 与 ASCII/中文 BMP 两种虚拟密码生成 p12，随后删除临时 fixture。两种密码均通过 `openssl pkcs12 -info -noout` 的 MAC 检查；解出的叶证书 DER 与原 DER、解出的私钥 PKCS#8 与原 pk8 均逐字节一致；错误密码返回非零及 `Mac verify error`。重复验收可用 CLI 已发布 bundle，在私有临时目录中执行：
+
+```sh
+(
+set -eu
+umask 077
+P12_CHECK_DIR=$(mktemp -d)
+trap 'rm -rf -- "$P12_CHECK_DIR"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+openssl pkcs12 -in /path/to/certificate.p12 -passin file:/path/to/password -info -noout
+openssl pkcs12 -in /path/to/certificate.p12 -passin file:/path/to/password \
+  -nocerts -noenc -out "$P12_CHECK_DIR/key.pem"
+openssl pkcs8 -topk8 -nocrypt -in "$P12_CHECK_DIR/key.pem" \
+  -outform DER -out "$P12_CHECK_DIR/key.pk8"
+cmp /path/to/generation/private-key.pk8 "$P12_CHECK_DIR/key.pk8"
+openssl pkcs12 -in /path/to/certificate.p12 -passin file:/path/to/password \
+  -clcerts -nokeys -out "$P12_CHECK_DIR/leaf.pem"
+openssl x509 -in "$P12_CHECK_DIR/leaf.pem" -outform DER -out "$P12_CHECK_DIR/leaf.der"
+openssl x509 -in /path/to/generation/fullchain.pem -outform DER -out "$P12_CHECK_DIR/original.der"
+cmp "$P12_CHECK_DIR/original.der" "$P12_CHECK_DIR/leaf.der"
+# 必须失败，并报告 MAC 验证拒绝；这里只使用虚拟错误密码。
+if openssl pkcs12 -in /path/to/certificate.p12 -passin pass:wrong-test-password -info -noout; then
+  echo 'Unexpected success with an incorrect password' >&2
+  exit 1
+fi
+)
+```
+
+以上证明本地编码、密码处理与 OpenSSL 互通；未运行 Linux/Windows 原生验收或 Java/IIS/其他消费端导入，不宣称服务已加载。JSON 的 `pkcs12_path` 表示本次文件发布成功，reload 和服务健康仍是独立结果。
+
+### PR #57 本地覆盖率与 review 补充（2026-11-21）
+
+基于 `b75315b` 的未提交工作区，macOS arm64。`cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report -- --test-threads=2` 主套件 **1087 passed、0 failed、13 ignored**；随后在相同插桩目录执行五项 PTY 场景（隐藏输入/确认、取消、JSON、add、纯 PEM 不提示），以独立 shell 导出合并 LCOV。严格 workspace/all-targets Clippy、Windows GNU CLI/storage all-targets 交叉检查、14 项 Python 单测、actionlint、文档/依赖/import 检查通过；Windows 仅交叉检查，不代表原生运行。
+
+覆盖率将 LCOV 可执行生产行与固定基点 `a129569` 到本地工作树的 diff 相交：**651/685 = 95.03650%**，34 行未覆盖。对同一基点和已推送 `b75315b` 的 CI LCOV 复算为 **598/659 = 90.74355%**，与 Codecov 的 61 行一致。密码提示、来源展示、取消退出状态的新增行已覆盖；剩余主要为 RNG/DER/HMAC 失败、后台线程 JoinError、读取中增长的文件上限等保护分支。本地结果未上传，不表示远端 Codecov 已更新。
+
+Review 补充验证：外部密码文件允许空格/中文文件名和 root 所有父目录，但仍从不跟随最终链接的已打开句柄验证文件权限、所有者、硬链接数和 4096 字节上限；缺失、超限、不安全文件和特殊条目拒绝读取。身份冲突比较观察最终目录项自身，不跟随链接；其他绑定的链接/特殊目标仍被其发布校验拒绝，独立密码绑定继续部署。无法读取身份的错误仍失败关闭，并有超长文件名的零写入回归。

@@ -48,6 +48,17 @@ pub(crate) async fn retry_due(
         let selected = definitions
             .into_iter()
             .filter(|binding| binding.checkpoint().due(&generation, now))
+            .filter(|binding| {
+                !matches!(
+                    binding.target,
+                    aster_acme_cli_storage::issuance::DeploymentTarget::Files {
+                        pkcs12: Some(_),
+                        pkcs12_password_env: None,
+                        pkcs12_password_file: None,
+                        ..
+                    }
+                )
+            })
             .collect::<Vec<_>>();
         if selected.is_empty() {
             continue;
@@ -115,6 +126,7 @@ pub(super) async fn run_selected(
             intent,
             Some(progress),
             Some(execution),
+            Some(&progress.output),
         )
         .await;
         if execution.attempted {
@@ -131,11 +143,12 @@ pub(in crate::commands::cert) async fn after_issuance(
     name: &CertificateName,
     generation: &str,
     execution: &aster_acme::solver::ExecutionContext,
+    output: &crate::common::session::OutputSession,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
     // Do not drop automatic_inner at the operation deadline: a started blocking
     // publication continues under its lease. The worker records the final publish
     // state, then checks the deadline before starting reload or another target.
-    Box::pin(automatic_inner(store, name, generation, execution)).await
+    Box::pin(automatic_inner(store, name, generation, execution, output)).await
 }
 
 pub(super) async fn automatic_inner(
@@ -143,6 +156,7 @@ pub(super) async fn automatic_inner(
     name: &CertificateName,
     generation: &str,
     execution: &aster_acme::solver::ExecutionContext,
+    output: &crate::common::session::OutputSession,
 ) -> (Vec<DeploymentBinding>, Vec<DeploymentEvent>) {
     let execution = Execution::from(execution);
     let definitions = match store.deployments(name).await {
@@ -167,17 +181,11 @@ pub(super) async fn automatic_inner(
         {
             continue;
         }
-        match store.open_deployment(name, &definition.id).await {
-            Ok(mut session) => match session.save_pending_generation(generation).await {
-                Ok(()) => *definition = session.definition().clone(),
-                Err(error) => events.push(event(
-                    MessageKind::Error,
-                    format!(
-                        "Deployment '{}' intent could not be saved: {error}",
-                        definition.id
-                    ),
-                )),
-            },
+        match store
+            .queue_deployment(name, &definition.id, generation)
+            .await
+        {
+            Ok(updated) => *definition = updated,
             Err(error) => events.push(event(
                 MessageKind::Error,
                 format!(
@@ -207,6 +215,7 @@ pub(super) async fn automatic_inner(
             DeploymentIntent::AfterIssuance { generation },
             None,
             Some(&execution),
+            Some(output),
         ))
         .await;
         events.extend(target.events);

@@ -99,37 +99,56 @@ impl PreparedPublication {
                 fullchain,
                 ca_chain,
                 private_key,
-            } => [
-                (
-                    private_key,
-                    artifacts.private_key.as_slice(),
-                    permissions.key_mode,
-                ),
-                (
-                    certificate,
-                    artifacts.certificate.as_slice(),
-                    permissions.file_mode,
-                ),
-                (
-                    fullchain,
-                    artifacts.fullchain.as_slice(),
-                    permissions.file_mode,
-                ),
-                (
-                    ca_chain,
-                    artifacts.ca_chain.as_slice(),
-                    permissions.file_mode,
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(path, contents, mode)| {
-                path.as_ref().map(|path| Destination {
-                    path: path.clone(),
-                    contents,
-                    mode,
+                pkcs12,
+                ..
+            } => {
+                let pkcs12_destination: Option<(&Option<PathBuf>, &[u8], Option<u32>)> = match (
+                    pkcs12,
+                    &artifacts.pkcs12,
+                ) {
+                    (Some(_), Some(bundle)) => {
+                        Some((pkcs12, bundle.as_slice(), permissions.key_mode))
+                    }
+                    (Some(_), None) => {
+                        return Err(failure(
+                            "PKCS#12 bundle was not prepared; a resolvable password source is required",
+                        ));
+                    }
+                    (None, _) => None,
+                };
+                [
+                    (
+                        private_key,
+                        artifacts.private_key.as_slice(),
+                        permissions.key_mode,
+                    ),
+                    (
+                        certificate,
+                        artifacts.certificate.as_slice(),
+                        permissions.file_mode,
+                    ),
+                    (
+                        fullchain,
+                        artifacts.fullchain.as_slice(),
+                        permissions.file_mode,
+                    ),
+                    (
+                        ca_chain,
+                        artifacts.ca_chain.as_slice(),
+                        permissions.file_mode,
+                    ),
+                ]
+                .into_iter()
+                .chain(pkcs12_destination)
+                .filter_map(|(path, contents, mode)| {
+                    path.as_ref().map(|path| Destination {
+                        path: path.clone(),
+                        contents,
+                        mode,
+                    })
                 })
-            })
-            .collect(),
+                .collect()
+            }
         };
         stage_all(files, stage_file)
     }

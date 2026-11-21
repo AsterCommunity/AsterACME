@@ -3001,7 +3001,7 @@ async fn deployment_retry_is_durable_bounded_and_uncertain_reload_is_never_sched
         .unwrap();
     let mut session = fixture
         .store
-        .open_deployment(&current.name, &binding.id)
+        .open_deployment(&current.name, &binding.id, None)
         .await
         .unwrap();
     let now = time::OffsetDateTime::now_utc();
@@ -3042,7 +3042,7 @@ async fn deployment_retry_is_durable_bounded_and_uncertain_reload_is_never_sched
 
     let mut session = fixture
         .store
-        .open_deployment(&current.name, &binding.id)
+        .open_deployment(&current.name, &binding.id, None)
         .await
         .unwrap();
     session

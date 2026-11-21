@@ -671,6 +671,8 @@ fn automatic_deployment_uses_same_table_and_orders_events_after_certificate_summ
         last_error: None,
     };
     let events = vec![DeploymentEvent {
+        pkcs12_path: None,
+        cancelled: false,
         deployment: Some("nginx".into()),
         kind: output::MessageKind::Info,
         message: "Started deployment 'nginx'".into(),

@@ -34,6 +34,8 @@ fn maintenance_events_preserve_stage_order_severity_and_saved_deployment_times()
         cancelled: true,
     };
     let deployment = DeploymentEvent {
+        pkcs12_path: None,
+        cancelled: false,
         deployment: Some("service".into()),
         kind: MessageKind::Error,
         message: "reload failed; result retained".into(),

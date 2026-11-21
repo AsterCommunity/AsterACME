@@ -321,3 +321,42 @@ fn unix_modes_and_update_changes_have_strict_parameter_boundaries() {
         assert!(parse(&words).is_err());
     }
 }
+
+#[test]
+fn pkcs12_flags_require_a_destination_and_exclusive_password_sources() {
+    for action in ["add", "update"] {
+        for source in [
+            vec![],
+            vec!["--p12-password-env", "P12_PASSWORD"],
+            vec!["--p12-password-file", "/tmp/password"],
+        ] {
+            let mut arguments = vec![action, "web", "--p12-path", "/tmp/bundle.p12"];
+            arguments.extend(source);
+            assert!(parse(&arguments).is_ok(), "{arguments:?}");
+        }
+        for arguments in [
+            vec![action, "web", "--p12-password-env", "PASSWORD"],
+            vec![action, "web", "--p12-password-file", "/tmp/password"],
+            vec![
+                action,
+                "web",
+                "--target",
+                "/tmp",
+                "--p12-path",
+                "/tmp/bundle.p12",
+            ],
+            vec![
+                action,
+                "web",
+                "--p12-path",
+                "/tmp/bundle.p12",
+                "--p12-password-env",
+                "PASSWORD",
+                "--p12-password-file",
+                "/tmp/password",
+            ],
+        ] {
+            assert!(parse(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+}

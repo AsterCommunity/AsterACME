@@ -13,7 +13,7 @@ async fn stale_daemon_snapshot_cannot_bypass_changed_retry_uncertainty_or_genera
     let generation = fixture.generation().await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "retry")
+        .open_deployment(&fixture.name, "retry", None)
         .await
         .unwrap();
     session
@@ -43,7 +43,7 @@ async fn stale_daemon_snapshot_cannot_bypass_changed_retry_uncertainty_or_genera
     ] {
         let mut session = fixture
             .store
-            .open_deployment(&fixture.name, "retry")
+            .open_deployment(&fixture.name, "retry", None)
             .await
             .unwrap();
         session.save_state(phase, 1, None).await.unwrap();
@@ -73,6 +73,7 @@ async fn stale_daemon_snapshot_cannot_bypass_changed_retry_uncertainty_or_genera
         },
         None,
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await;
     assert!(
@@ -94,6 +95,7 @@ async fn assert_skipped(fixture: &Fixture, generation: &str, snapshot: &Deployme
         },
         None,
         None,
+        Some(&crate::common::session::OutputSession::new(true)),
     )
     .await;
     assert!(!execution.attempted);
@@ -145,7 +147,16 @@ async fn deployment_retry_child() {
             snapshot: &snapshot,
         }
     };
-    let execution = run_target(&store, &name, &snapshot, intent, None, None).await;
+    let execution = run_target(
+        &store,
+        &name,
+        &snapshot,
+        intent,
+        None,
+        None,
+        Some(&crate::common::session::OutputSession::new(true)),
+    )
+    .await;
     fs::write(
         root.join(format!("result-{role}")),
         execution.attempted.to_string(),
@@ -206,7 +217,7 @@ async fn prepare_retry(fixture: &Fixture) {
     fixture.add("retry", command, 0).await;
     let mut session = fixture
         .store
-        .open_deployment(&fixture.name, "retry")
+        .open_deployment(&fixture.name, "retry", None)
         .await
         .unwrap();
     session

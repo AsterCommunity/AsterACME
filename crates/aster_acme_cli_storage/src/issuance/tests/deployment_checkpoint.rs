@@ -31,7 +31,7 @@ async fn retry_updates_reject_changed_binding_and_selection_without_overwriting_
                 .unwrap();
             let mut session = f
                 .store
-                .open_deployment(&current.name, &binding.id)
+                .open_deployment(&current.name, &binding.id, None)
                 .await
                 .unwrap();
             session
@@ -93,7 +93,7 @@ async fn retry_checkpoint_cannot_attribute_an_old_attempt_to_the_current_generat
     write_selection(&slot, &config).unwrap();
     let mut session = f
         .store
-        .open_deployment(&current.name, &binding.id)
+        .open_deployment(&current.name, &binding.id, None)
         .await
         .unwrap();
     let before = std::fs::read(slot.join("cert.toml")).unwrap();
@@ -147,7 +147,7 @@ async fn queueing_an_already_deployed_generation_is_idempotent() {
 
     let mut session = f
         .store
-        .open_deployment(&current.name, &binding.id)
+        .open_deployment(&current.name, &binding.id, None)
         .await
         .unwrap();
     session
@@ -156,6 +156,61 @@ async fn queueing_an_already_deployed_generation_is_idempotent() {
         .unwrap();
 
     assert!(session.definition().checkpoint().is_deployed());
+    assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
+    drop(session);
+    let queued = f
+        .store
+        .queue_deployment(&current.name, &binding.id, &current.generation_name())
+        .await
+        .unwrap();
+    assert!(queued.checkpoint().is_deployed());
+    assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
+}
+
+#[tokio::test]
+async fn queueing_rejects_stale_generation_missing_binding_and_uncertain_reload_without_writes() {
+    let f = fixture().await;
+    let current = completed_generation(&f).await;
+    let target = f.temp.path().join("deployment");
+    std::fs::create_dir(&target).unwrap();
+    f.store
+        .add_deployment(
+            &current.name,
+            DeploymentDefinition {
+                permissions: DeploymentPermissions::default(),
+                name: Some("service".into()),
+                target: DeploymentTarget::Directory { path: target },
+                reload_command: vec![],
+                timeout_seconds: 1,
+                max_retries: 0,
+            },
+        )
+        .await
+        .unwrap();
+    let slot = f.store.slot(&current.name);
+    let before = std::fs::read(slot.join("cert.toml")).unwrap();
+    for (id, generation) in [
+        ("service", "stale"),
+        ("missing", current.generation_name().as_str()),
+    ] {
+        assert!(
+            f.store
+                .queue_deployment(&current.name, id, generation)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
+    }
+    let mut config = selection(&slot).unwrap();
+    config.cert.deployments[0].phase = DeploymentPhase::ReloadUncertain;
+    write_selection(&slot, &config).unwrap();
+    let before = std::fs::read(slot.join("cert.toml")).unwrap();
+    assert!(
+        f.store
+            .queue_deployment(&current.name, "service", &current.generation_name())
+            .await
+            .is_err()
+    );
     assert_eq!(std::fs::read(slot.join("cert.toml")).unwrap(), before);
 }
 
@@ -202,7 +257,7 @@ async fn unavailable_existing_destination_blocks_configuration_and_execution_unt
     std::fs::remove_dir(&existing).unwrap();
     assert!(
         f.store
-            .open_deployment(&current.name, "new")
+            .open_deployment(&current.name, "new", None)
             .await
             .err()
             .unwrap()
@@ -211,7 +266,11 @@ async fn unavailable_existing_destination_blocks_configuration_and_execution_unt
     );
     assert!(std::fs::read_dir(&available).unwrap().next().is_none());
     std::fs::create_dir(&existing).unwrap();
-    let session = f.store.open_deployment(&current.name, "new").await.unwrap();
+    let session = f
+        .store
+        .open_deployment(&current.name, "new", None)
+        .await
+        .unwrap();
     session.publish().await.unwrap();
     assert!(available.join("cert.pem").is_file());
 }

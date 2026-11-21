@@ -9,6 +9,7 @@ use zeroize::Zeroizing;
 mod checkpoint;
 mod configuration;
 mod permissions;
+mod pkcs12;
 mod publication;
 mod session;
 mod targets;
@@ -37,6 +38,19 @@ pub enum DeploymentTarget {
         /// Destination for the PEM private key; stored with the key mode policy.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         private_key: Option<PathBuf>,
+        /// Destination for the PKCS#12 bundle (leaf, chain and private key);
+        /// stored with the key mode policy. Password sources are references;
+        /// an explicit interactive run may instead supply a transient password.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pkcs12: Option<PathBuf>,
+        /// Environment variable holding the PKCS#12 password; the value is
+        /// never persisted. Mutually exclusive with `pkcs12_password_file`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pkcs12_password_env: Option<String>,
+        /// File whose first line holds the PKCS#12 password, user-managed
+        /// and stored 0600. Mutually exclusive with `pkcs12_password_env`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pkcs12_password_file: Option<PathBuf>,
     },
 }
 
@@ -164,6 +178,9 @@ pub struct DeploymentArtifacts {
     pub ca_chain: Vec<u8>,
     /// PEM private key, zeroized when this artifact snapshot is dropped.
     pub private_key: Zeroizing<Vec<u8>>,
+    /// PKCS#12 bundle (leaf, chain and private key) when the binding
+    /// publishes one; zeroized when this artifact snapshot is dropped.
+    pub pkcs12: Option<Zeroizing<Vec<u8>>>,
 }
 
 /// Exclusive deployment operation. The lease serializes renew, remove and deploy.

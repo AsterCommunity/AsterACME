@@ -187,6 +187,32 @@ pub(super) fn open_regular(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+#[cfg(windows)]
+pub(super) fn entry_identity(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let mut options = OpenOptions::new();
+    // FILE_READ_ATTRIBUTES requests metadata only, including for files whose
+    // contents are not readable. Inspect the final reparse object itself.
+    options.access_mode(0x80);
+    // FILE_FLAG_BACKUP_SEMANTICS also permits observing directory entries.
+    options.custom_flags(OPEN_REPARSE_POINT | 0x0200_0000);
+    let file = options.open(path)?;
+    identity(&file)
+}
+
+#[cfg(not(windows))]
+pub(super) fn entry_identity(_path: &Path) -> io::Result<(u64, u64)> {
+    Err(io::Error::other(
+        "file identity is unavailable on this platform",
+    ))
+}
+
+pub(super) fn open_external_private(path: &Path) -> io::Result<File> {
+    let file = open_regular(path)?;
+    check_handle(&file)?;
+    Ok(file)
+}
+
 pub(super) fn expose_public_file(file: &File) -> io::Result<()> {
     check_private(&file.metadata()?)
 }

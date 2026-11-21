@@ -137,6 +137,9 @@ fn target_lines(target: &DeploymentTarget, color: bool) -> Vec<String> {
             private_key,
             ca_chain,
             fullchain,
+            pkcs12,
+            pkcs12_password_env,
+            pkcs12_password_file,
         } => {
             lines.push(field("Target mode:", "exact files", color));
             for (label, path) in [
@@ -144,8 +147,22 @@ fn target_lines(target: &DeploymentTarget, color: bool) -> Vec<String> {
                 ("Private key:", private_key),
                 ("CA chain:", ca_chain),
                 ("Full chain:", fullchain),
+                ("PKCS#12 bundle:", pkcs12),
             ] {
                 lines.push(field(label, &path_text(path.as_deref()), color));
+            }
+            if pkcs12.is_some() {
+                let source = if let Some(name) = pkcs12_password_env {
+                    format!("environment variable: {name}")
+                } else if let Some(path) = pkcs12_password_file {
+                    format!(
+                        "password file: {}",
+                        output::safe(&path.display().to_string())
+                    )
+                } else {
+                    "prompted at run time (nothing stored)".into()
+                };
+                lines.push(field("PKCS#12 password:", &source, color));
             }
         }
     }

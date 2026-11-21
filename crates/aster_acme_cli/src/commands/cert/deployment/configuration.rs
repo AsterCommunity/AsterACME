@@ -45,6 +45,9 @@ pub(super) async fn update(
         || args.fullchain_path.is_some()
         || args.ca_path.is_some()
         || args.key_path.is_some()
+        || args.p12_path.is_some()
+        || args.p12_password_env.is_some()
+        || args.p12_password_file.is_some()
     {
         Some(destination(
             args.target,
@@ -52,6 +55,9 @@ pub(super) async fn update(
             args.fullchain_path,
             args.ca_path,
             args.key_path,
+            args.p12_path,
+            args.p12_password_env,
+            args.p12_password_file.as_deref(),
         )?)
     } else {
         None
@@ -87,6 +93,9 @@ pub(super) fn definition(args: DeployAddArgs) -> CliResult<DeploymentDefinition>
             args.fullchain_path,
             args.ca_path,
             args.key_path,
+            args.p12_path,
+            args.p12_password_env,
+            args.p12_password_file.as_deref(),
         )?,
         reload_command: args
             .reload_cmd
@@ -205,25 +214,42 @@ pub(super) async fn select_certificate(
 
 /// Called after a completed issuance/renewal. A deployment error never changes
 /// the saved CA certificate result; each target retains its own retry checkpoint.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Map the flat destination flags as one complete replacement set"
+)]
 pub(super) fn destination(
     target: Option<PathBuf>,
     certificate: Option<PathBuf>,
     fullchain: Option<PathBuf>,
     ca_chain: Option<PathBuf>,
     key: Option<PathBuf>,
+    p12: Option<PathBuf>,
+    p12_password_env: Option<String>,
+    p12_password_file: Option<&Path>,
 ) -> CliResult<DeploymentTarget> {
-    match (target, certificate, fullchain, ca_chain, key) {
-        (Some(path), None, None, None, None) => {
+    match (target, certificate, fullchain, ca_chain, key, p12) {
+        (Some(path), None, None, None, None, None) => {
             Ok(DeploymentTarget::Directory { path: directory(&path)? })
         }
-        (None, certificate, fullchain, ca_chain, private_key)
-            if certificate.is_some() || fullchain.is_some() || ca_chain.is_some() || private_key.is_some() => Ok(DeploymentTarget::Files {
+        (None, certificate, fullchain, ca_chain, private_key, pkcs12)
+            if certificate.is_some()
+                || fullchain.is_some()
+                || ca_chain.is_some()
+                || private_key.is_some()
+                || pkcs12.is_some() =>
+            Ok(DeploymentTarget::Files {
                 certificate: certificate.as_deref().map(canonical_file_path).transpose()?,
                 fullchain: fullchain.as_deref().map(canonical_file_path).transpose()?,
                 ca_chain: ca_chain.as_deref().map(canonical_file_path).transpose()?,
                 private_key: private_key.as_deref().map(canonical_file_path).transpose()?,
+                pkcs12: pkcs12.as_deref().map(canonical_file_path).transpose()?,
+                pkcs12_password_env: p12_password_env,
+                pkcs12_password_file: p12_password_file
+                    .map(canonical_file_path)
+                    .transpose()?,
             }),
-        _ => Err("Use --target DIR or at least one of --cert-path, --key-path, --ca-path, --fullchain-path; these forms are mutually exclusive.".into()),
+        _ => Err("Use --target DIR or at least one of --cert-path, --key-path, --ca-path, --fullchain-path, --p12-path; these forms are mutually exclusive.".into()),
     }
 }
 

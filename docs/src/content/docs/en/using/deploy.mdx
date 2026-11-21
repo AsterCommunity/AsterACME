@@ -30,6 +30,20 @@ Directory and exact-path modes are mutually exclusive, and all exact paths must 
 
 Adding a binding performs the first publication immediately; every successful renewal republishes afterwards.
 
+## PKCS#12 bundles
+
+`--p12-path PATH` publishes a `.p12` chain and private-key bundle alongside any selected exact PEM paths. Directory mode keeps the four PEM files. Bindings store password references only; for the daemon, use a user-managed UTF-8, 0600 password file (first line, up to 4096 bytes):
+
+```sh
+aster-acme cert deploy add example-cert -n java \
+  --p12-path /etc/myservice/certificate.p12 \
+  --p12-password-file /etc/myservice/p12-password
+```
+
+`--p12-password-env ENV_VAR` is the exclusive alternative; the daemon needs the variable in its startup environment. Empty, missing or unreadable sources fail publication, preserving existing files and skipping reload. Passwords cannot contain NUL or characters outside the Unicode BMP. Unix rejects linked or group/other-accessible password files; operators must restrict inherited Windows ACLs.
+
+Omit the source only for an explicit interactive `cert deploy run`: hidden input is used once and never stored. Add retains the binding but fails its first publication without a source. JSON, redirected terminals, renewal and the daemon never prompt; source-free bindings are not retried automatically. When updating a source, supply `--p12-path` and all exact paths to retain because target flags replace the whole path set. Bundles follow `--key-mode` (0600 by default on Unix); show/JSON display paths and source references only.
+
 ## File permissions
 
 - Unix default: `0600` for the private key and likewise for cert/CA/fullchain files

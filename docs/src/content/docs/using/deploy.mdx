@@ -30,6 +30,20 @@ aster-acme cert deploy add example-cert -n haproxy \
 
 添加绑定会立即执行首次发布;之后每次续期成功自动发布。
 
+## PKCS#12 bundle
+
+`--p12-path PATH` 发布证书链和私钥的 `.p12` bundle；可与 PEM 精确路径组合，目录模式仍只有四个 PEM 文件。密码只保存来源引用，daemon 推荐使用用户管理的 UTF-8、0600 密码文件（读取第一行，最多 4096 字节）：
+
+```sh
+aster-acme cert deploy add example-cert -n java \
+  --p12-path /etc/myservice/certificate.p12 \
+  --p12-password-file /etc/myservice/p12-password
+```
+
+`--p12-password-env ENV_VAR` 是互斥的替代来源，daemon 需要在启动环境中设置。密码为空、来源缺失或不可读时发布失败，不覆盖旧文件、不 reload。密码不得含 NUL 或 Unicode BMP 之外字符。Unix 拒绝密码文件的符号链接、硬链接及组/其他用户权限；Windows 需操作者限制继承 ACL。
+
+省略来源只适合显式交互式 `cert deploy run`：密码隐藏输入，仅本次有效，不保存。add 不询问密码，其首次发布失败后保留绑定；JSON、非TTY、续期和 daemon 不提示，无来源绑定不自动重试。`update` 切换密码来源时必须同时提供 `--p12-path` 及所有需要保留的精确路径；目标集合整体替换。p12 权限使用 `--key-mode`（Unix 默认 0600）；show/JSON 只展示路径与来源引用。
+
 ## 文件权限
 
 - Unix 默认私钥 `0600`,证书/CA链/fullchain 同样 `0600`
