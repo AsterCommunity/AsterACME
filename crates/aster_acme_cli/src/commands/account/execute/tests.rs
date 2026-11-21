@@ -1,6 +1,7 @@
 //! Real account orchestration with explicit loopback transport and durable files.
-use crate::commands::account::args::AccountArgs;
+use crate::commands::account::args::{AccountArgs, AccountCommand};
 use crate::commands::account::execute::{Operation, remote};
+use crate::commands::account::mutation::update_with_transport;
 use crate::commands::account::render;
 use crate::commands::account::report::AccountReport;
 use crate::common::context::{CliSettings, CommandContext};
@@ -119,6 +120,50 @@ impl Fixture {
 
     fn store(&self) -> CliAccountStore {
         CliAccountStore::open(self.temp.path(), "work", Duration::from_secs(1)).unwrap()
+    }
+
+    async fn context(&self) -> crate::common::context::CliContext {
+        let options = self.options();
+        CliSettings::load(&options)
+            .await
+            .unwrap()
+            .account(&options)
+            .await
+            .unwrap()
+    }
+
+    fn network_args(&self) -> crate::commands::account::args::NetworkArgs {
+        use crate::commands::account::args::{CaArgs, NameArgs, NetworkArgs};
+        use crate::common::args::{HttpArgs, LocalArgs};
+        NetworkArgs {
+            identity: NameArgs {
+                name: Some("work".into()),
+                ..NameArgs::default()
+            },
+            ca: CaArgs {
+                ca_directory: Some(format!("{}/directory", self.server.uri())),
+                ..CaArgs::default()
+            },
+            http: HttpArgs::default(),
+            local: LocalArgs {
+                data_dir: Some(self.temp.path().into()),
+                json: true,
+            },
+        }
+    }
+
+    fn update_args(
+        &self,
+        enable: bool,
+        disable: bool,
+    ) -> crate::commands::account::args::UpdateArgs {
+        crate::commands::account::args::UpdateArgs {
+            network: self.network_args(),
+            auto_accept_new_terms: enable,
+            clear_auto_accept_new_terms: disable,
+            yes: true,
+            ..Default::default()
+        }
     }
 
     async fn record(&self) -> AccountRecord {
@@ -426,5 +471,140 @@ async fn contact_updates_preserve_terms_delegation_without_reporting_automatic_a
     assert_eq!(
         payload,
         serde_json::json!({"contact":["mailto:new@example.com"]})
+    );
+}
+
+/// Enabling the delegation must survive a later terms change without prompting
+/// and must never send a CA account request while it is applied.
+#[tokio::test]
+async fn enabled_delegation_unblocks_ensure_after_a_terms_change() {
+    let fixture = Fixture::new().await;
+    fixture
+        .mount(Some("https://ca.example/terms/one"), false)
+        .await;
+    let mut options = fixture.options();
+    options.contact = vec!["admin@example.com".into()];
+    options.accept_terms = true;
+    fixture.run(options, Operation::Register).await.unwrap();
+    assert!(!fixture.record().await.auto_accept_terms_updates);
+
+    let context = fixture.context().await;
+    let before = fixture.posts().await;
+    let report = update_with_transport(
+        fixture.update_args(true, false),
+        &context,
+        TransportOptions {
+            allow_loopback_http: true,
+            ..TransportOptions::default()
+        },
+        &CommandContext::new(true),
+    )
+    .await
+    .unwrap();
+    let json = render::tests::json_value(&report);
+    assert_eq!(json["auto_accept_terms_updates"], true);
+    assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/one");
+    assert_eq!(json["ca_account_update_sent"], false);
+    assert_eq!(json["directory_checked"], true);
+    assert_eq!(
+        fixture.posts().await,
+        before,
+        "enabling sends no CA account POST"
+    );
+    assert!(fixture.record().await.auto_accept_terms_updates);
+
+    fixture
+        .mount(Some("https://ca.example/terms/two"), true)
+        .await;
+    let ensure = fixture
+        .run(fixture.options(), Operation::Register)
+        .await
+        .unwrap();
+    assert_eq!(
+        render::tests::json_value(&ensure)["auto_accepted_terms"],
+        true
+    );
+    let record = fixture.record().await;
+    assert!(record.auto_accept_terms_updates);
+    assert_eq!(
+        record.accepted_terms_url.as_ref().unwrap().as_str(),
+        "https://ca.example/terms/two"
+    );
+
+    let shown = crate::commands::account::execute::execute(
+        AccountCommand::Show {
+            verify: false,
+            profiles: false,
+            options: fixture.network_args(),
+        },
+        &CommandContext::new(true),
+    )
+    .await
+    .unwrap();
+    let json = render::tests::json_value(&shown);
+    assert_eq!(json["auto_accept_terms_updates"], true);
+    assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/two");
+    assert!(
+        render::render(&shown, crate::common::session::Format::plain(false))
+            .unwrap()
+            .contains("enabled")
+    );
+}
+
+/// After revoking the delegation a changed URL must block the unattended
+/// ensure before any POST, while the last accepted URL stays recorded.
+#[tokio::test]
+async fn disabled_delegation_blocks_ensure_until_explicit_consent() {
+    let fixture = Fixture::new().await;
+    fixture
+        .mount(Some("https://ca.example/terms/one"), false)
+        .await;
+    let mut options = fixture.options();
+    options.accept_terms = true;
+    fixture.run(options, Operation::Register).await.unwrap();
+    let context = fixture.context().await;
+    let transport = TransportOptions {
+        allow_loopback_http: true,
+        ..TransportOptions::default()
+    };
+    update_with_transport(
+        fixture.update_args(true, false),
+        &context,
+        transport.clone(),
+        &CommandContext::new(true),
+    )
+    .await
+    .unwrap();
+    update_with_transport(
+        fixture.update_args(false, true),
+        &context,
+        transport,
+        &CommandContext::new(true),
+    )
+    .await
+    .unwrap();
+    let record = fixture.record().await;
+    assert!(!record.auto_accept_terms_updates);
+    assert_eq!(
+        record.accepted_terms_url.as_ref().unwrap().as_str(),
+        "https://ca.example/terms/one"
+    );
+
+    fixture
+        .mount(Some("https://ca.example/terms/two"), true)
+        .await;
+    let error = fixture
+        .run(fixture.options(), Operation::Register)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("https://ca.example/terms/two"), "{error}");
+    assert_eq!(fixture.posts().await, 0, "no POST before explicit consent");
+    let record = fixture.record().await;
+    assert!(!record.auto_accept_terms_updates);
+    assert_eq!(
+        record.accepted_terms_url.as_ref().unwrap().as_str(),
+        "https://ca.example/terms/one"
     );
 }

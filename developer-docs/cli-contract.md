@@ -8,11 +8,13 @@
 | --- | --- | --- |
 | `-y / --yes` | 自动接受当前命令所有操作确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
 | `--accept-terms` | 注册时同意所选 CA 当前实际公布的条款 | 不确认复用已有账户，不作为永久自动接受配置 |
-| `--auto-accept-new-terms` | 注册时同意当前条款，并持久化授权自动接受未来条款 URL 更新 | 不由 `--yes`、JSON 或隐式 ensure 开启；授权一旦保存，普通 register/ensure 不会静默撤销 |
+| `--auto-accept-new-terms` | 注册或 `account update` 时同意当前条款，并持久化授权自动接受未来条款 URL 更新 | 不由 `--yes`、JSON 或隐式 ensure 开启；update 开启只写本地元数据、不发送 CA 账户更新；`--clear-auto-accept-new-terms` 是唯一撤销入口并保留已接受 URL |
 | `--verify` | 查询已有资源的 CA 状态，更新观察快照 | 不启动验证、不 finalize、不新建订单 |
 | `--json` | 输出结构化命令结果/诊断，禁止提示、ANSI 和人类阶段日志 | 不隐含确认或强制，不猜测歧义目标 |
 
 未来条款更新授权在终端默认否；`--yes` 跳过这项可选授权询问并保持原授权状态，不代替当前条款同意。首次接受条款不报告为自动接受“更新”；只有先前已保存的条款 URL 改变才报告更新。
+
+`account update` 的条款授权与联系人/profile 互斥；联系人和 profile 仍可同时修改。开启必须能读取在线 directory：读不到当前条款就失败关闭，不静默开启；CA 未公布条款时仍可开启，报告明确说明本次未接受任何 URL、之后公布的条款自动接受。开启只保存本地委托与精确 URL，不向 CA 发送账户更新；撤销纯本地、不访问网络并保留已接受 URL。交互菜单选中该 scope 时，条款同意仍需显式回答，`--yes` 不代替。
 
 没有通用的 `--skip-*` 同义参数。--yes 不等于“完全非交互”：终端里的名称选择、输入、独立条款同意仍有自己的条件；脚本应提供完整参数，JSON 或非 TTY 从不弹问题。没有 --yes 的危险操作在交互终端默认否，在脚本中立即给出确认要求。取消交互退出 130。
 
@@ -21,7 +23,7 @@
 | 命令 | --yes 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已经存在的本地身份；不代替 --accept-terms |
-| `account update` | 替换/清空联系人，和/或设置/清除默认证书 profile |
+| `account update` | 替换/清空联系人、设置/清除默认证书 profile，或开启/关闭未来条款授权（条款授权与联系人/profile 互斥） |
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
 | `account remove --deactivate` | 删除本地账户并不可逆停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
@@ -72,7 +74,7 @@
 | account default | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
 | account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、--auto-accept-new-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
-| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、已有账户 CA 选择、HTTP、-y |
+| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、--auto-accept-new-terms 或 --clear-auto-accept-new-terms（条款组与联系人/profile 互斥）、已有账户 CA 选择、HTTP、-y |
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
 | account remove --deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y；纯本地删除时无 CA/HTTP |
 | account remove | [NAME] / -n、-y；仅本地操作 |
@@ -254,7 +256,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | --- | --- | --- |
 | account register | 新建/继续、账户名、CA、联系人、条款、未来条款更新授权和复用确认 | EAB、密钥算法等高级选项 |
 | account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
-| account update/rotate-key/remove --deactivate | 账户选择、联系人/profile 输入或操作确认 | key-type 等可选参数使用默认/显式值 |
+| account update/rotate-key/remove --deactivate | 账户选择、联系人/profile/条款授权输入或操作确认 | key-type 等可选参数使用默认/显式值 |
 | cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
 | cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
 | cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |

@@ -62,7 +62,7 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
             AccountError::TermsRequired(url) => (
                 "The CA requires your agreement to its current terms.".into(),
                 Some(format!(
-                    "Review {} and rerun account register with --accept-terms.",
+                    "Review {} and rerun account register with --accept-terms; an existing account can delegate future updates with account update --auto-accept-new-terms.",
                     safe(url)
                 )),
             ),
@@ -260,6 +260,19 @@ mod tests {
         assert!(hint.unwrap().contains("--accept-terms"));
         assert!(!message.contains("Problem {"));
     }
+    #[test]
+    fn terms_required_hint_offers_explicit_consent_and_delegation() {
+        let url = "https://ca.example/terms".to_owned();
+        let (message, hint) = diagnostic(&AccountError::TermsRequired(url));
+        assert!(message.contains("agreement"), "{message}");
+        let hint = hint.unwrap();
+        assert!(hint.contains("--accept-terms"), "{hint}");
+        assert!(
+            hint.contains("account update --auto-accept-new-terms"),
+            "{hint}"
+        );
+    }
+
     #[test]
     fn terminal_controls_are_escaped_and_plain_output_has_no_ansi() {
         assert_eq!(safe("bad\x1b[2J\n"), "bad\\u{1b}[2J\\n");

@@ -42,6 +42,16 @@ pub(super) enum Output<'a> {
         previous: &'a Option<String>,
         current: &'a Option<String>,
     },
+    /// Future terms delegation: local metadata, never a CA account update.
+    TermsDelegation {
+        name: &'a str,
+        auto_accept_terms_updates: bool,
+        previous_auto_accept_terms_updates: bool,
+        accepted_terms_url: Option<&'a String>,
+        advertised_terms_url: Option<&'a String>,
+        directory_checked: bool,
+        ca_account_update_sent: bool,
+    },
 }
 
 #[derive(Serialize)]
@@ -267,6 +277,23 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 name,
                 previous,
                 current,
+            },
+            AccountReport::TermsDelegation {
+                name,
+                previous,
+                current,
+                accepted_terms_url,
+                advertised_terms_url,
+                directory_checked,
+            } => Self::TermsDelegation {
+                name,
+                auto_accept_terms_updates: *current,
+                previous_auto_accept_terms_updates: *previous,
+                accepted_terms_url: accepted_terms_url.as_ref(),
+                advertised_terms_url: advertised_terms_url.as_ref(),
+                directory_checked: *directory_checked,
+                // Enabling reads the directory but never mutates the CA account.
+                ca_account_update_sent: false,
             },
             AccountReport::List {
                 accounts,

@@ -52,6 +52,18 @@ pub(crate) enum AccountReport {
         previous: Option<String>,
         current: Option<String>,
     },
+    /// Local delegation for future CA terms URL changes; never a CA account request.
+    TermsDelegation {
+        name: String,
+        previous: bool,
+        current: bool,
+        /// Accepted terms value after the change, kept verbatim; retained when disabling.
+        accepted_terms_url: Option<String>,
+        /// Terms value read from the live directory; None when not checked or absent.
+        advertised_terms_url: Option<String>,
+        /// Whether this command read the live directory (enabling) or stayed local.
+        directory_checked: bool,
+    },
 }
 
 #[derive(Clone, Copy, serde::Serialize)]
@@ -86,7 +98,8 @@ impl AccountReport {
             | Self::Removed { .. }
             | Self::Deactivated { .. }
             | Self::Profiles { .. }
-            | Self::ProfilePreference { .. } => false,
+            | Self::ProfilePreference { .. }
+            | Self::TermsDelegation { .. } => false,
         }
     }
 }

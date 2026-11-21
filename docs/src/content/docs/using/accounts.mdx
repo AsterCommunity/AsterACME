@@ -53,6 +53,20 @@ aster-acme account update default --profile shortlived --yes
 
 `--contact` 是完整替换列表;`--clear-contacts` 显式清空,两者互斥,缺省输入不当作清空。`--yes` 确认替换或清空已有联系人。
 
+## 自动接受条款更新
+
+```sh
+# 注册时委托:接受当前条款,并自动接受未来的条款 URL 更新
+aster-acme account register default --auto-accept-new-terms
+# 注册后开启或撤销该委托(与联系人/profile 互斥)
+aster-acme account update default --auto-accept-new-terms --yes
+aster-acme account update default --clear-auto-accept-new-terms --yes
+```
+
+开启表示"同意 CA 当前公布的条款,并信任 directory 之后返回的新条款 URL"。开启前会读取在线 directory 记录精确 URL;读不到 directory 时直接失败,不会静默开启。CA 目前没有公布条款时仍可开启,报告会明确说明本次未接受任何 URL。撤销只改本地记录、不访问网络,并保留已接受的 URL。
+
+两种修改都不向 CA 发送账户更新,和联系人修改(会同步 CA)是不同操作;`--yes`、JSON 模式和隐式账户检查不会自行开启。授权状态与精确 URL 可在 `account show` 中查看。
+
 ## 换钥
 
 ```sh
@@ -77,7 +91,7 @@ aster-acme account remove default --yes
 | --- | --- | --- |
 | `account register` | 创建或继续本地账户身份 | 复用/继续已存在的本地身份 |
 | `account recover` | 用保存的密钥重建账户观察 | (无危险确认) |
-| `account update` | 替换/清空联系人;设置/清除默认 profile | 替换或显式清空 |
+| `account update` | 替换/清空联系人;设置/清除默认 profile;开启/撤销未来条款授权(与联系人/profile 互斥) | 替换或显式清空;或确认条款授权变更 |
 | `account rotate-key` | ACME keyChange 换钥 | 轮换或对账事务 |
 | `account remove --deactivate` | 停用 CA 账户(不可逆)+ 删除本地资料 | 停用+删除 |
 | `account remove` | 删除本地账户资料及私钥 | 本地删除 |

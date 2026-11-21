@@ -20,7 +20,7 @@ python3 scripts/check-workspace-deps.py
 - PKCS#8 往返、错误密钥、JWK thumbprint、原始 ES256 签名及篡改拒绝。
 - jwk/kid 互斥、精确签名 URL、POST-as-GET 空 payload、HS256 EAB 签名与响应确认。
 - 显式条款、EAB 必需、联系人 URI 边界及输入上限。
-- 自动接受条款更新的授权边界：精确 URL 变化、已授权隐式 ensure、未授权 `TermsRequired`、无 ToS、旧 TOML 缺字段默认关闭，以及 CLI 交互默认拒绝/显式同意和 JSON/`--yes` 不隐含授权。
+- 自动接受条款更新的授权边界：精确 URL 变化、已授权隐式 ensure、未授权 `TermsRequired`、无 ToS、旧 TOML 缺字段默认关闭，以及 CLI 交互默认拒绝/显式同意和 JSON/`--yes` 不隐含授权。`account update` 入口另行覆盖：互斥解析、开启/撤销、不可达失败关闭、无条款开启、零 CA 账户请求与 ensure 放行/阻塞。
 - 新账户先持久化 intent、只读找回、CA 明确 not-found 才注册、注册响应丢失后的恢复。
 - 请求超时、任务取消保留 pending；坏 nonce 使用错误响应的新值重签且有次数上限。
 - 8 个并发请求的 nonce 唯一性、签名有效性；非法/重复 nonce 拒绝。
@@ -95,3 +95,26 @@ User-Agent 验证显式注册值写账户 TOML、缺省不写、配置无全局�
 真实文件租约与 loopback CA 测试覆盖跨算法连续轮换、缺省沿用原类型、暂存钥重启恢复、显式冲突不写文件、取消后新算法对账且不重发 keyChange、主钥已换而元数据尚未提交的跨算法崩溃恢复。普通 save 不得改变算法，提交后主钥/指纹/算法一致，账户 ID 保持不变。双层 JWS 单独验证外层旧算法及内层新算法、同 URL、内层无 nonce/kid。
 
 工作区 315 项测试通过；后续帮助/呈现调整的 125 项 CLI 测试及跨算法部分提交恢复专项通过，严格 Clippy 零 warning。实际二进制在临时目录检查四种算法注册后的持久化/离线详情/列表、显式不匹配保留原钥，以及各级标准帮助入口。`rotate-key help` 保持位置账户名，不增加参数改写。未访问公网 CA，未验证各公开 CA 对所有算法的接受范围。
+
+## 条款授权修改入口（2026-11-21）
+
+工作树基于 `a129569`（含 #54 的条款原样字符串改动），Windows 原生（rustc/cargo 1.100.0）。`account update --auto-accept-new-terms` / `--clear-auto-accept-new-terms` 的验证：
+
+- 解析：`--clear-auto-accept-new-terms` 仅在 `account update` 上可用；`--auto-accept-new-terms` 在 register（既有）与 update 上可用。两个 update flag 彼此互斥且与 `-m/--clear-contacts/--profile/--clear-profile` 冲突；contact+profile 组合保持可用；其他账户子命令拒绝这些选项。
+- 开启：读取在线 directory 的当前条款值并写入授权；重复开启幂等；条款值变化记录新值；CA 无条款时仍开启、报告中说明未接受新值且保留旧值；directory 不可达时失败关闭、记录不变；非交互缺 `--yes` 拒绝且零写入；并发写入的其他字段保留；未注册账户在 discovery 前拒绝。
+- 关闭：零 HTTP、保留已接受条款值、重复关闭幂等。
+- 编排：开启后复跑 ensure 接受变更条款值（`auto_accepted_terms=true`）；撤销后 ensure 以 `TermsRequired` 阻断且零 POST；`account show`/JSON 反映授权与条款值；授权变更不发送 CA 账户 POST（`ca_account_update_sent=false`）。
+- 报告：开启/已开启/无条款/关闭/已关闭文案与 JSON 字段；`TermsRequired` 提示补充 update 入口。
+- 适配：上游 #54 将 directory 条款值改为原样 `String`；本入口按 `String` 读写，报告的 `accepted_terms_url`/`advertised_terms_url` 同步为字符串，显示前经 `safe()` 转义。
+
+命令：`cargo test -p aster_acme_cli --locked commands::account`（66 项通过）、`cargo test --workspace --locked`（1040 项通过、0 失败）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户；交互式 scope 菜单仅在单测层覆盖（索引映射），未在原生终端执行，也未扩展 PTY 脚本。
+
+## 交互 scope 菜单注入覆盖与冲突声明去重（2026-11-21）
+
+Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同一工作树追加提交：
+
+- 菜单边界：`account update` 的交互 scope 选择迁入 `interaction::update_scope_choice`，经既有 `RegistrationPrompts` 注入边界驱动（与注册 contact/profile 选择同构）。注入式单测固定菜单标签与展示顺序（防标签改动与索引映射脱节）、三个 scope 的索引映射、`Cancel` 项返回空 scope、prompt 取消传播为 `Canceled`；菜单永不触发确认或邮箱提问。
+- 编排映射：`scope_intent` 纯函数覆盖菜单结果到 contact/profile/terms 意图位的映射及空 scope 取消；`update_with_transport` 中真实终端的交互分支编排行仍仅在 PTY 层验收，本轮未扩展 PTY 脚本（菜单无新增终端行为，仅消除裸 `terminal` 依赖）。
+- 渲染：委托报告四态文案改为 `DelegationTransition` 派生，替代 `(previous, current)` 布尔对，删除 `clippy::fn_params_excessive_bools` 抑制；`UpdateArgs` 的 `struct_excessive_bools` 保留（五个独立 CLI 开关是参数面现实）。渲染行为不变，既有渲染测试通过。
+- 解析：terms 的 9 对互斥冲突改为每对声明一次（clap `conflicts_with` 为单向生效，原先 terms 两 flag 互为对方声明属冗余）；互斥组合解析测试维持两 terms flag 与 contact/profile 四开关的全组合覆盖。
+- 命令：`cargo test -p aster_acme_cli --locked commands::account`（69 项通过）、`cargo test --workspace --locked`（1078 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。

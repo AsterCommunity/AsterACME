@@ -601,6 +601,84 @@ fn command_specific_options_are_rejected_by_unrelated_commands() {
     }
 }
 
+#[test]
+fn terms_delegation_flags_are_update_only_conflicting_and_explicit() {
+    for flag in ["--auto-accept-new-terms", "--clear-auto-accept-new-terms"] {
+        let parsed =
+            Args::try_parse_from(["aster-acme", "account", "update", "work", flag, "--json"])
+                .unwrap();
+        let Command::Account { command } = parsed.command else {
+            panic!("expected account command");
+        };
+        let AccountCommand::Update(args) = command else {
+            panic!("expected update command");
+        };
+        assert_eq!(
+            args.auto_accept_new_terms,
+            flag == "--auto-accept-new-terms"
+        );
+        assert_eq!(
+            args.clear_auto_accept_new_terms,
+            flag == "--clear-auto-accept-new-terms"
+        );
+        for command in ["show", "recover", "default", "remove", "rotate-key", "list"] {
+            assert!(
+                Args::try_parse_from(["aster-acme", "account", command, flag]).is_err(),
+                "{command} must reject {flag}"
+            );
+        }
+    }
+    assert!(
+        Args::try_parse_from([
+            "aster-acme",
+            "account",
+            "register",
+            "--clear-auto-accept-new-terms"
+        ])
+        .is_err(),
+        "only update can revoke the delegation"
+    );
+    let conflict = Args::try_parse_from([
+        "aster-acme",
+        "account",
+        "update",
+        "work",
+        "--auto-accept-new-terms",
+        "--clear-auto-accept-new-terms",
+    ])
+    .err()
+    .unwrap();
+    assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
+    for other in [
+        vec!["-m", "you@example.com"],
+        vec!["--clear-contacts"],
+        vec!["--profile", "classic"],
+        vec!["--clear-profile"],
+    ] {
+        for flag in ["--auto-accept-new-terms", "--clear-auto-accept-new-terms"] {
+            let mut argv = vec!["aster-acme", "account", "update", "work", flag];
+            argv.extend(other.clone());
+            let error = Args::try_parse_from(argv).err().unwrap();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+    }
+    assert!(
+        Args::try_parse_from([
+            "aster-acme",
+            "account",
+            "update",
+            "work",
+            "-m",
+            "you@example.com",
+            "--profile",
+            "classic",
+            "--yes"
+        ])
+        .is_ok(),
+        "contact and profile keep combining"
+    );
+}
+
 // Test fixtures use resolved input; rebuild only fields owned by each parser group.
 impl From<crate::commands::account::args::AccountArgs> for LocalArgs {
     fn from(args: crate::commands::account::args::AccountArgs) -> Self {

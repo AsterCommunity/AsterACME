@@ -90,6 +90,21 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
             previous,
             current,
         } => profile_preference_text(name, previous.as_ref(), current.as_ref(), color),
+        AccountReport::TermsDelegation {
+            name,
+            previous,
+            current,
+            accepted_terms_url,
+            advertised_terms_url,
+            directory_checked,
+        } => terms_delegation_text(
+            name,
+            DelegationTransition::from_states(*previous, *current),
+            accepted_terms_url.as_ref(),
+            advertised_terms_url.as_ref(),
+            *directory_checked,
+            color,
+        ),
     })
 }
 
@@ -151,6 +166,65 @@ fn profile_preference_text(
             color,
         )
     }
+}
+
+/// Delegation state transition being reported; each state has its own wording.
+#[derive(Clone, Copy)]
+enum DelegationTransition {
+    Enabled,
+    AlreadyEnabled,
+    Disabled,
+    AlreadyDisabled,
+}
+
+impl DelegationTransition {
+    fn from_states(previous: bool, current: bool) -> Self {
+        match (previous, current) {
+            (false, true) => Self::Enabled,
+            (true, true) => Self::AlreadyEnabled,
+            (true, false) => Self::Disabled,
+            (false, false) => Self::AlreadyDisabled,
+        }
+    }
+}
+
+/// Terms delegation text: consent is stored locally, so it never claims a CA sync.
+fn terms_delegation_text(
+    name: &str,
+    transition: DelegationTransition,
+    accepted: Option<&String>,
+    advertised: Option<&String>,
+    directory_checked: bool,
+    color: bool,
+) -> String {
+    let accepted = accepted.map_or_else(|| "(none saved)".to_owned(), |url| safe(url));
+    let notice = if directory_checked && advertised.is_none() {
+        " The CA publishes no terms today; no new URL was accepted and any saved URL is retained."
+    } else {
+        ""
+    };
+    let message = match transition {
+        DelegationTransition::Enabled => format!(
+            "Account {} now accepts future CA terms updates automatically; accepted terms URL: {}. This is local consent only; no CA account request was sent.{notice}",
+            safe(name),
+            accepted
+        ),
+        DelegationTransition::AlreadyEnabled => format!(
+            "Account {} already accepts future CA terms updates automatically; accepted terms URL: {}.{notice}",
+            safe(name),
+            accepted
+        ),
+        DelegationTransition::Disabled => format!(
+            "Account {} no longer accepts future CA terms updates automatically. The saved accepted terms URL ({}) is retained; future changes require explicit consent.",
+            safe(name),
+            accepted
+        ),
+        DelegationTransition::AlreadyDisabled => format!(
+            "Account {} was already set to not accept future CA terms updates automatically.",
+            safe(name)
+        ),
+    };
+    success(&message, color)
 }
 
 fn success(message: &str, color: bool) -> String {
@@ -766,4 +840,83 @@ fn profile_preference_text_distinguishes_set_and_clear() {
     assert!(text.contains("Explicit cert issue --profile still wins"));
     let text = render(&report(Some("shortlived"), None), Format::plain(false)).unwrap();
     assert!(text.contains("Cleared account work default profile"));
+}
+
+#[test]
+fn terms_delegation_reports_local_consent_without_a_ca_sync() {
+    let report =
+        |previous, current, accepted: Option<&str>, advertised: Option<&str>, directory_checked| {
+            AccountReport::TermsDelegation {
+                name: "work".to_owned(),
+                previous,
+                current,
+                accepted_terms_url: accepted.map(str::to_owned),
+                advertised_terms_url: advertised.map(str::to_owned),
+                directory_checked,
+            }
+        };
+    let text = |report: &AccountReport| render(report, Format::plain(false)).unwrap();
+
+    let enabled = report(
+        false,
+        true,
+        Some("https://ca.example/terms/v2"),
+        Some("https://ca.example/terms/v2"),
+        true,
+    );
+    let value = tests::json_value(&enabled);
+    assert_eq!(value["name"], "work");
+    assert_eq!(value["auto_accept_terms_updates"], true);
+    assert_eq!(value["previous_auto_accept_terms_updates"], false);
+    assert_eq!(value["accepted_terms_url"], "https://ca.example/terms/v2");
+    assert_eq!(value["advertised_terms_url"], "https://ca.example/terms/v2");
+    assert_eq!(value["directory_checked"], true);
+    assert_eq!(value["ca_account_update_sent"], false);
+    assert!(!enabled.has_failures());
+    let enabled_text = text(&enabled);
+    assert!(
+        enabled_text.contains("now accepts")
+            && enabled_text.contains("no CA account request was sent"),
+        "{enabled_text}"
+    );
+
+    let no_terms = report(false, true, None, None, true);
+    let no_terms_text = text(&no_terms);
+    assert!(
+        no_terms_text.contains("publishes no terms today"),
+        "{no_terms_text}"
+    );
+    let value = tests::json_value(&no_terms);
+    assert_eq!(value["advertised_terms_url"], serde_json::Value::Null);
+    assert_eq!(value["directory_checked"], true);
+
+    let disabled = report(
+        true,
+        false,
+        Some("https://ca.example/terms/v2"),
+        None,
+        false,
+    );
+    let disabled_text = text(&disabled);
+    assert!(
+        disabled_text.contains("no longer accepts") && disabled_text.contains("retained"),
+        "{disabled_text}"
+    );
+    let value = tests::json_value(&disabled);
+    assert_eq!(value["auto_accept_terms_updates"], false);
+    assert_eq!(value["previous_auto_accept_terms_updates"], true);
+    assert_eq!(value["directory_checked"], false);
+    assert_eq!(value["advertised_terms_url"], serde_json::Value::Null);
+    assert_eq!(value["ca_account_update_sent"], false);
+
+    let already_enabled = report(
+        true,
+        true,
+        Some("https://ca.example/terms/v2"),
+        Some("https://ca.example/terms/v2"),
+        true,
+    );
+    assert!(text(&already_enabled).contains("already accepts"));
+    let already_disabled = report(false, false, None, None, false);
+    assert!(text(&already_disabled).contains("was already set"));
 }

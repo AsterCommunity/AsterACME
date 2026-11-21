@@ -1,6 +1,7 @@
 //! Confirmed account mutations share selection, normalization, and service boundaries.
 use crate::commands::account::{
     args::{AccountArgs, RotateKeyArgs},
+    interaction::update_scope_choice,
     report::{AccountReport, RemoteAction},
 };
 use crate::common::output;
@@ -10,6 +11,7 @@ use crate::common::{
     terminal,
 };
 use aster_acme::account::{AccountError, AccountService};
+use aster_acme::crypto::JwsSigner;
 use aster_acme::storage::account::{AccountKeyStore, AccountRotationStore, AccountStore};
 use std::sync::Arc;
 
@@ -31,26 +33,17 @@ async fn context(
     Ok(context)
 }
 
-/// Update account preferences: CA contacts and/or the default certificate
-/// profile. Contact changes mutate the CA account; profile preferences are
-/// local metadata validated against the advertised list when reachable.
-/// Draft-ietf-acme-profiles
-/// (<https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles>):
-/// interactive updates pick their scope from a menu, mirroring the provider
-/// editor. `None` means cancel; scripts never reach this path.
-fn interactive_update_scope(cli: &crate::common::context::CommandContext) -> Option<(bool, bool)> {
-    let choices = ["Contact addresses", "Default certificate profile", "Cancel"].map(str::to_owned);
-    let selection = terminal::select_index_or_back(
-        "Update which account preference?",
-        &choices,
-        0,
-        &cli.output,
-    )
-    .ok()?;
-    match selection {
-        Some(0) => Some((true, false)),
-        Some(1) => Some((false, true)),
-        _ => None,
+/// Translate the menu outcome into the update intent flags; leaving the menu
+/// without a scope (the Cancel entry or Esc) cancels the whole update.
+fn scope_intent(
+    scope: Option<crate::commands::account::interaction::UpdateScope>,
+) -> CliResult<(bool, bool, bool)> {
+    use crate::commands::account::interaction::UpdateScope;
+    match scope {
+        Some(UpdateScope::Contacts) => Ok((true, false, false)),
+        Some(UpdateScope::Profile) => Ok((false, true, false)),
+        Some(UpdateScope::TermsDelegation) => Ok((false, false, true)),
+        None => Err(crate::common::terminal::Canceled.into()),
     }
 }
 
@@ -84,14 +77,25 @@ fn replacement_contacts(
     )
 }
 
-async fn update_with_transport(
+#[expect(
+    clippy::too_many_lines,
+    reason = "Update dispatch keeps scope admission, contact persistence and profile selection in one auditable flow"
+)]
+pub(super) async fn update_with_transport(
     args: crate::commands::account::args::UpdateArgs,
     context: &CliContext,
     transport: aster_acme::transport::TransportOptions,
     cli: &crate::common::context::CommandContext,
 ) -> CliResult<AccountReport> {
-    let wants_contacts = args.contact_set() || args.clear_contacts;
-    let wants_profile = args.profile_set() || args.clear_profile;
+    // Terms flags conflict with contact/profile flags; a terminal menu may pick
+    // exactly one of the three scopes when no flag is given.
+    let terms_flag = if args.auto_accept_new_terms {
+        Some(true)
+    } else if args.clear_auto_accept_new_terms {
+        Some(false)
+    } else {
+        None
+    };
     let explicit_profile_set = args.profile.is_some();
     let profile_target = if args.clear_profile {
         None
@@ -99,20 +103,22 @@ async fn update_with_transport(
         args.profile.clone()
     };
     let interactive = terminal::interactive(args.network.local.json);
-    let mut wants_contacts = wants_contacts;
-    let mut wants_profile = wants_profile;
+    let mut wants_contacts = args.contact_set() || args.clear_contacts;
+    let mut wants_profile = args.profile_set() || args.clear_profile;
+    let mut terms_scope = terms_flag.is_some();
     let mut profile_target = profile_target;
-    if !wants_contacts && !wants_profile {
+    if !wants_contacts && !wants_profile && terms_flag.is_none() {
         if !interactive {
             return Err(
-                "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or both.".into(),
+                "Specify contacts with --contact/--clear-contacts, a profile with --profile/--clear-profile, or future terms delegation with --auto-accept-new-terms/--clear-auto-accept-new-terms.".into(),
             );
         }
-        let Some((scope_contacts, scope_profile)) = interactive_update_scope(cli) else {
-            return Err(crate::common::terminal::Canceled.into());
-        };
+        let (scope_contacts, scope_profile, scope_terms) = scope_intent(update_scope_choice(
+            &mut crate::commands::account::interaction::TerminalPrompts(&cli.output),
+        )?)?;
         wants_contacts = scope_contacts;
         wants_profile = scope_profile;
+        terms_scope = scope_terms;
     }
     let signer = context
         .store
@@ -130,6 +136,21 @@ async fn update_with_transport(
     record
         .action(aster_acme_core::account::AccountOperation::Update)
         .map_err(AccountError::from)?;
+    if terms_scope {
+        // Flags are mutually exclusive with contacts/profile, so delegation is
+        // the only scope applied here; the menu also selects a single scope.
+        let target = terms_flag.unwrap_or(!record.auto_accept_terms_updates);
+        return terms_delegation(
+            context,
+            &signer,
+            &record,
+            target,
+            args.yes && terms_flag.is_some(),
+            transport,
+            cli,
+        )
+        .await;
+    }
     // Draft-ietf-acme-profiles: validate the requested profile against the
     // advertisement BEFORE the contact mutation, so an invalid profile never
     // half-applies. The advertised map then feeds the save without a second
@@ -189,6 +210,109 @@ async fn update_with_transport(
         cli,
     )
     .await
+}
+
+/// Toggle the durable future-terms delegation. Enabling reads the live
+/// directory so the exact current URL is accepted; disabling is pure local
+/// metadata. Neither path sends a CA account update, so this never claims the
+/// CA accepted anything.
+async fn terms_delegation(
+    context: &CliContext,
+    signer: &Arc<dyn JwsSigner>,
+    snapshot: &aster_acme::account::AccountRecord,
+    target: bool,
+    confirmed: bool,
+    transport: aster_acme::transport::TransportOptions,
+    cli: &crate::common::context::CommandContext,
+) -> CliResult<AccountReport> {
+    // Granting consent needs the directory's current URL; revoking is local.
+    let (directory_checked, advertised_terms) = if target {
+        let client = cli
+            .http
+            .discover(context.directory.clone(), transport)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Cannot enable automatic terms updates: the CA directory could not be read to confirm its current terms: {error}"
+                )
+            })?;
+        (true, client.directory().meta.terms_of_service.clone())
+    } else {
+        (false, None)
+    };
+    let accepted = snapshot
+        .accepted_terms_url
+        .as_ref()
+        .map_or_else(|| "(none saved)".to_owned(), |url| output::safe(url));
+    let advertised = advertised_terms.as_ref().map_or_else(
+        || {
+            if directory_checked {
+                "not advertised".to_owned()
+            } else {
+                "not checked".to_owned()
+            }
+        },
+        |url| output::safe(url),
+    );
+    let details = if target {
+        format!(
+            "Enable automatic CA terms updates\n  Name: {}\n  CA: {}\n  Current CA terms: {}\n  Previously accepted: {}\n\nThis accepts the CA's current terms and lets unattended account checks accept future terms URL changes without review.\nThe CA account is not modified; the consent is stored locally.",
+            output::safe(&context.name),
+            output::safe(context.directory.as_str()),
+            advertised,
+            accepted,
+        )
+    } else {
+        format!(
+            "Disable automatic CA terms updates\n  Name: {}\n  CA: {}\n  Accepted terms URL (retained): {}\n\nFuture terms URL changes will block unattended account checks until you review them.",
+            output::safe(&context.name),
+            output::safe(context.directory.as_str()),
+            accepted,
+        )
+    };
+    terminal::confirm_action(
+        &details,
+        if target {
+            "Enable automatic terms updates?"
+        } else {
+            "Disable automatic terms updates?"
+        },
+        confirmed,
+        &cli.output,
+    )?;
+    let thumbprint = signer.jwk()?.thumbprint()?;
+    let lease = context
+        .store
+        .lock_account(&context.directory, &thumbprint)
+        .await?;
+    let mut record = context
+        .store
+        .load(&context.directory, &thumbprint)
+        .await?
+        .ok_or(AccountError::AccountDoesNotExist)?;
+    if record.directory_url != context.directory
+        || record.key_thumbprint != thumbprint
+        || record.key_algorithm != signer.algorithm()
+    {
+        return Err(AccountError::IdentityMismatch.into());
+    }
+    record
+        .action(aster_acme_core::account::AccountOperation::Update)
+        .map_err(AccountError::from)?;
+    let previous = record.auto_accept_terms_updates;
+    record.auto_accept_terms_updates = target;
+    if let Some(url) = &advertised_terms {
+        record.accepted_terms_url = Some(url.clone());
+    }
+    AccountStore::save(context.store.as_ref(), &record, &lease).await?;
+    Ok(AccountReport::TermsDelegation {
+        name: context.name.clone(),
+        previous,
+        current: record.auto_accept_terms_updates,
+        accepted_terms_url: record.accepted_terms_url,
+        advertised_terms_url: advertised_terms,
+        directory_checked,
+    })
 }
 
 /// Reload past any contact mutation and persist the profile preference,
@@ -471,21 +595,20 @@ mod tests {
         }
     }
 
-    /// Registered loopback account bound to a wiremock directory advertising
-    /// `meta.profiles` like a profiles-enabled CA.
+    /// Registered loopback account bound to a wiremock directory. `terms`
+    /// controls the advertised `meta.termsOfService`.
     struct HarnessHandles {
         _temp: tempfile::TempDir,
     }
 
-    async fn harness() -> (
-        MockServer,
+    async fn account_fixture(
+        server: &MockServer,
+    ) -> (
         CliContext,
         Arc<dyn aster_acme::crypto::JwsSigner>,
         aster_acme::transport::TransportOptions,
-        AcmeUrl,
         HarnessHandles,
     ) {
-        let server = MockServer::start().await;
         let temp = tempfile::tempdir().unwrap();
         let store =
             Arc::new(CliAccountStore::open(temp.path(), "work", Duration::from_secs(1)).unwrap());
@@ -511,16 +634,50 @@ mod tests {
             .account(&options)
             .await
             .unwrap();
+        let transport = aster_acme::transport::TransportOptions {
+            allow_loopback_http: true,
+            ..aster_acme::transport::TransportOptions::default()
+        };
+        (context, signer, transport, HarnessHandles { _temp: temp })
+    }
+
+    async fn harness() -> (
+        MockServer,
+        CliContext,
+        Arc<dyn aster_acme::crypto::JwsSigner>,
+        aster_acme::transport::TransportOptions,
+        AcmeUrl,
+        HarnessHandles,
+    ) {
+        harness_with_terms(None).await
+    }
+
+    async fn harness_with_terms(
+        terms: Option<&str>,
+    ) -> (
+        MockServer,
+        CliContext,
+        Arc<dyn aster_acme::crypto::JwsSigner>,
+        aster_acme::transport::TransportOptions,
+        AcmeUrl,
+        HarnessHandles,
+    ) {
+        let server = MockServer::start().await;
+        let (context, signer, transport, handles) = account_fixture(&server).await;
+        let mut meta = serde_json::json!({"profiles": {
+            "classic": "https://ca.example/classic",
+            "shortlived": "https://ca.example/shortlived"
+        }});
+        if let Some(terms) = terms {
+            meta["termsOfService"] = serde_json::json!(terms);
+        }
         Mock::given(method("GET"))
             .and(path("/directory"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "newNonce": format!("{}/nonce", server.uri()),
                 "newAccount": format!("{}/new-account", server.uri()),
                 "newOrder": format!("{}/orders", server.uri()),
-                "meta": {"profiles": {
-                    "classic": "https://ca.example/classic",
-                    "shortlived": "https://ca.example/shortlived"
-                }}
+                "meta": meta
             })))
             .mount(&server)
             .await;
@@ -529,18 +686,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(204).insert_header("Replay-Nonce", "initial"))
             .mount(&server)
             .await;
-        let transport = aster_acme::transport::TransportOptions {
-            allow_loopback_http: true,
-            ..aster_acme::transport::TransportOptions::default()
-        };
-        (
-            server,
-            context,
-            signer,
-            transport,
-            directory,
-            HarnessHandles { _temp: temp },
-        )
+        let directory = context.directory.clone();
+        (server, context, signer, transport, directory, handles)
     }
 
     async fn stored(
@@ -816,6 +963,8 @@ mod tests {
             clear_contacts: false,
             profile: Some("shortlived".into()),
             clear_profile: false,
+            auto_accept_new_terms: false,
+            clear_auto_accept_new_terms: false,
             yes: true,
         };
         // Loopback CA: inject the loopback-permitting transport through the
@@ -836,6 +985,395 @@ mod tests {
         assert_eq!(
             record.server_contacts.as_deref(),
             Some(["mailto:new@example.com".to_owned()].as_slice())
+        );
+    }
+
+    fn report_json(report: &AccountReport) -> serde_json::Value {
+        crate::commands::account::render::tests::json_value(report)
+    }
+
+    #[test]
+    fn scope_intent_maps_each_menu_scope_and_cancels_without_one() {
+        use crate::commands::account::interaction::UpdateScope;
+        assert_eq!(
+            scope_intent(Some(UpdateScope::Contacts)).unwrap(),
+            (true, false, false)
+        );
+        assert_eq!(
+            scope_intent(Some(UpdateScope::Profile)).unwrap(),
+            (false, true, false)
+        );
+        assert_eq!(
+            scope_intent(Some(UpdateScope::TermsDelegation)).unwrap(),
+            (false, false, true)
+        );
+        assert!(
+            scope_intent(None)
+                .unwrap_err()
+                .is::<crate::common::terminal::Canceled>()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_without_an_explicit_scope_lists_every_option() {
+        let (_server, context, _signer, transport, _directory, _handles) =
+            harness_with_terms(None).await;
+        let args = crate::commands::account::args::UpdateArgs {
+            network: crate::commands::account::args::NetworkArgs {
+                identity: crate::commands::account::args::NameArgs::default(),
+                ca: crate::commands::account::args::CaArgs::default(),
+                http: HttpArgs::default(),
+                local: crate::common::args::LocalArgs {
+                    data_dir: None,
+                    json: true,
+                },
+            },
+            ..Default::default()
+        };
+        let error = update_with_transport(args, &context, transport, &CommandContext::new(true))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("--contact/--clear-contacts")
+                && error.contains("--profile/--clear-profile")
+                && error.contains("--auto-accept-new-terms")
+                && error.contains("--clear-auto-accept-new-terms"),
+            "{error}"
+        );
+    }
+
+    fn report_text(report: &AccountReport) -> String {
+        crate::commands::account::render::render(
+            report,
+            crate::common::session::Format::plain(false),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn enabling_terms_delegation_accepts_current_terms_without_a_ca_write() {
+        let (server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let before = server.received_requests().await.unwrap().len();
+        let snapshot = stored(&context, &signer).await;
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &snapshot,
+            true,
+            true,
+            transport.clone(),
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let json = report_json(&report);
+        assert_eq!(json["auto_accept_terms_updates"], true);
+        assert_eq!(json["previous_auto_accept_terms_updates"], false);
+        assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/v2");
+        assert_eq!(json["advertised_terms_url"], "https://ca.example/terms/v2");
+        assert_eq!(json["directory_checked"], true);
+        assert_eq!(json["ca_account_update_sent"], false);
+        let text = report_text(&report);
+        assert!(
+            text.contains("now accepts") && text.contains("no CA account request was sent"),
+            "{text}"
+        );
+        let record = stored(&context, &signer).await;
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/v2"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests[before..]
+                .iter()
+                .all(|request| request.method == "GET" && request.url.path() == "/directory"),
+            "enabling only reads the directory; no CA account request"
+        );
+
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &record,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let json = report_json(&report);
+        assert_eq!(json["previous_auto_accept_terms_updates"], true);
+        assert_eq!(json["auto_accept_terms_updates"], true);
+        assert!(report_text(&report).contains("already accepts"));
+    }
+
+    #[tokio::test]
+    async fn enabling_records_the_updated_terms_url() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let mut saved = stored(&context, &signer).await;
+        saved.accepted_terms_url = Some("https://ca.example/terms/v1".to_owned());
+        context.store.save(&saved).await.unwrap();
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &saved,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let record = stored(&context, &signer).await;
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/v2"
+        );
+        assert_eq!(
+            report_json(&report)["accepted_terms_url"],
+            "https://ca.example/terms/v2"
+        );
+    }
+
+    #[tokio::test]
+    async fn enabling_without_advertised_terms_reports_no_url_accepted() {
+        let (server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(None).await;
+        let snapshot = stored(&context, &signer).await;
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &snapshot,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let record = stored(&context, &signer).await;
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(record.accepted_terms_url, None);
+        let json = report_json(&report);
+        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
+        assert_eq!(json["directory_checked"], true);
+        assert_eq!(json["auto_accept_terms_updates"], true);
+        let text = report_text(&report);
+        assert!(text.contains("publishes no terms today"), "{text}");
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.method == "GET")
+        );
+    }
+
+    #[tokio::test]
+    async fn enabling_without_terms_retains_the_previously_accepted_url() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(None).await;
+        let mut saved = stored(&context, &signer).await;
+        saved.accepted_terms_url = Some("https://ca.example/terms/old".to_owned());
+        context.store.save(&saved).await.unwrap();
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &saved,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let record = stored(&context, &signer).await;
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/old"
+        );
+        let json = report_json(&report);
+        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
+        assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/old");
+        assert_eq!(json["directory_checked"], true);
+        let text = report_text(&report);
+        assert!(text.contains("any saved URL is retained"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn enabling_fails_closed_when_the_directory_cannot_confirm_terms() {
+        let server = MockServer::start().await;
+        let (context, signer, transport, _handles) = account_fixture(&server).await;
+        let before = stored(&context, &signer).await;
+        let error = terms_delegation(
+            &context,
+            &signer,
+            &before,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            error.contains("could not be read to confirm its current terms"),
+            "{error}"
+        );
+        assert_eq!(stored(&context, &signer).await, before);
+    }
+
+    #[tokio::test]
+    async fn disabling_terms_delegation_is_local_and_retains_the_accepted_url() {
+        let (server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v1")).await;
+        let mut saved = stored(&context, &signer).await;
+        saved.auto_accept_terms_updates = true;
+        saved.accepted_terms_url = Some("https://ca.example/terms/v1".to_owned());
+        context.store.save(&saved).await.unwrap();
+        let before = server.received_requests().await.unwrap().len();
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &saved,
+            false,
+            true,
+            transport.clone(),
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let record = stored(&context, &signer).await;
+        assert!(!record.auto_accept_terms_updates);
+        assert_eq!(
+            record.accepted_terms_url.as_ref().unwrap().as_str(),
+            "https://ca.example/terms/v1"
+        );
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            before,
+            "disabling never contacts the CA"
+        );
+        let json = report_json(&report);
+        assert_eq!(json["auto_accept_terms_updates"], false);
+        assert_eq!(json["previous_auto_accept_terms_updates"], true);
+        assert_eq!(json["directory_checked"], false);
+        assert_eq!(json["advertised_terms_url"], serde_json::Value::Null);
+        assert_eq!(json["ca_account_update_sent"], false);
+        let text = report_text(&report);
+        assert!(
+            text.contains("no longer accepts") && text.contains("retained"),
+            "{text}"
+        );
+
+        let report = terms_delegation(
+            &context,
+            &signer,
+            &record,
+            false,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        assert!(report_text(&report).contains("was already set"));
+    }
+
+    #[tokio::test]
+    async fn terms_delegation_requires_confirmation_in_automation() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v1")).await;
+        let before = stored(&context, &signer).await;
+        let error = terms_delegation(
+            &context,
+            &signer,
+            &before,
+            true,
+            false,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            error.contains("requires confirmation") && error.contains("--yes"),
+            "{error}"
+        );
+        assert_eq!(stored(&context, &signer).await, before);
+    }
+
+    #[tokio::test]
+    async fn terms_delegation_preserves_metadata_saved_after_its_snapshot() {
+        let (_server, context, signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v1")).await;
+        let stale = stored(&context, &signer).await;
+        let mut fresh = stale.clone();
+        fresh.preferred_profile = Some("shortlived".into());
+        fresh.server_contacts = Some(vec!["mailto:new@example.com".into()]);
+        context.store.save(&fresh).await.unwrap();
+        terms_delegation(
+            &context,
+            &signer,
+            &stale,
+            true,
+            true,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .unwrap();
+        let record = stored(&context, &signer).await;
+        assert!(record.auto_accept_terms_updates);
+        assert_eq!(record.preferred_profile.as_deref(), Some("shortlived"));
+        assert_eq!(
+            record.server_contacts.as_deref(),
+            Some(["mailto:new@example.com".to_owned()].as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rejects_terms_delegation_for_an_unregistered_account_before_http() {
+        let server = MockServer::start().await;
+        let (context, signer, transport, _handles) = account_fixture(&server).await;
+        let mut saved = stored(&context, &signer).await;
+        saved.state = aster_acme_core::account::AccountRecordState::RegistrationPending;
+        context.store.save(&saved).await.unwrap();
+        let args = crate::commands::account::args::UpdateArgs {
+            network: crate::commands::account::args::NetworkArgs {
+                identity: crate::commands::account::args::NameArgs::default(),
+                ca: crate::commands::account::args::CaArgs::default(),
+                http: HttpArgs::default(),
+                local: crate::common::args::LocalArgs {
+                    data_dir: None,
+                    json: true,
+                },
+            },
+            auto_accept_new_terms: true,
+            yes: true,
+            ..Default::default()
+        };
+        let error = update_with_transport(args, &context, transport, &CommandContext::new(true))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("no registered account exists"), "{error}");
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "the account gate precedes discovery"
         );
     }
 }

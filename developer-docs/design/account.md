@@ -24,6 +24,8 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 `--auto-accept-new-terms` 是显式的信任委托：接受当前 directory 条款，并保存 `auto_accept_terms_updates` 供后续 ensure 使用；未授权账户仍要求精确 URL 同意。此授权信任 directory 返回的任何条款 URL，ToS 比较不是 directory 被篡改时的安全边界。条款 URL 仍精确持久化；普通 register/隐式 ensure 保留已有授权。终端的未来授权询问默认否，`--yes` 跳过该可选询问且不隐含授权；首次接受与后续 URL 更新的报告分开。
 
+`account update` 是注册后的授权修改入口：`--auto-accept-new-terms` 先读取在线 directory，接受其当前条款（若有）并写入授权，读不到 directory 时失败关闭、不静默开启；CA 未公布条款时仍可开启，报告明确说明本次没有可接受的 URL。`--clear-auto-accept-new-terms` 只改本地元数据并保留 `accepted_terms_url`，不访问网络。两者都不发送 CA 账户更新（RFC 8555 没有条款更新请求），且与联系人/profile 是互斥 scope；交互菜单选中该 scope 时条款同意仍需显式回答。
+
 参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。default 支持位置 NAME 或 -n/--name，无注册、网络选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
 
 配置只读写 <data-dir>/config.toml，不支持独立 --config 或配置内 data_dir。ca 为 letsencrypt/zerossl/google 生产预设，ca_directory 为显式自定义 URL，两者互斥。默认生产 Let’s Encrypt，生产代码无 staging/test 提供商或按构建类型切换。测试地址只在独立测试命令中显式传入。配置加载校验版本、账户名、URL、超时和邮箱；旧 directory/server 参数不保留别名。
@@ -48,7 +50,7 @@ CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），regis
 
 ## 账户联系人与密钥轮换
 
-RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `account update` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；同命令亦可设置/清除默认证书 profile（`--profile`/`--clear-profile`，draft-ietf-acme-profiles）；脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
+RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `account update` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；同命令亦可设置/清除默认证书 profile（`--profile`/`--clear-profile`，draft-ietf-acme-profiles），或开启/关闭未来条款授权（`--auto-accept-new-terms`/`--clear-auto-accept-new-terms`）；条款授权与联系人/profile 互斥，联系人和 profile 仍可同时提供，脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
 
 RFC 8555 §7.3.5 的端点从 directory.keyChange 发现。`KeyChangePayload` 绑定原 Location 的精确账户 URL 和旧 JWK。内层由新钥签名，header 含 jwk、与外层一致的 url，省略 nonce/kid；外层由旧钥签名，使用原账户 kid 和新 nonce。成功 HTTP 200 可以没有 JSON body；不更改 account_id、account_url、contacts、订单或授权。只有 last_used_at 因成功轮换推进；没有账户对象不能伪造新的状态观察时间。
 

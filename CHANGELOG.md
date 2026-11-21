@@ -7,6 +7,7 @@
 ### Added
 
 - **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests.
+- **Change future CA terms delegation after registration** — `account update --auto-accept-new-terms` accepts the CA's current terms and durably enables automatic acceptance of future terms URL changes; `--clear-auto-accept-new-terms` revokes the delegation locally while keeping the saved accepted URL. Enabling reads the live directory before writing and fails closed when it cannot confirm the current terms (a CA that publishes no terms still records the delegation with an explicit notice); revoking sends nothing. Neither change sends a CA account request, `--yes`/JSON never imply consent, and the preference is mutually exclusive with contact/profile updates in one invocation. `account show` keeps reporting the delegation and the exact accepted URL.
 
 ## [0.1.0-alpha.3] - 2026-11-20
 
