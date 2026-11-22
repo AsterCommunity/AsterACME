@@ -12,6 +12,8 @@ Key modules:
 - `renewal`, `revocation`, and `maintenance` define ARI plans, retry admission, explicit signing identity, and host-supplied maintenance execution.
 - `precheck` is optional and advisory; it never replaces CA validation.
 
+`AccountService::update_contacts` returns `ContactUpdateError` to distinguish no submission, explicit CA rejection, an unconfirmed remote result, and CA acceptance followed by failed local persistence. Callers must retain that evidence and must not automatically replay an unconfirmed update.
+
 DNS provider records use the protocol-neutral contracts in `aster_acme_dns`. The CLI supplies the ADPP executable adapter; embedded applications can provide another solver.
 
 ```rust

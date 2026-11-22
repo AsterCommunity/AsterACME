@@ -8,13 +8,19 @@
 | --- | --- | --- |
 | `-y / --yes` | 自动接受当前命令所有操作确认 | 不选目标、不填写缺失输入、不自动同意条款、不绕过校验、不强制重放 mutation |
 | `--accept-terms` | 注册时同意所选 CA 当前实际公布的条款 | 不确认复用已有账户，不作为永久自动接受配置 |
-| `--auto-accept-new-terms` | 注册或 `account update` 时同意当前条款，并持久化授权自动接受未来条款 URL 更新 | 不由 `--yes`、JSON 或隐式 ensure 开启；update 开启只写本地元数据、不发送 CA 账户更新；`--clear-auto-accept-new-terms` 是唯一撤销入口并保留已接受 URL |
+| `--auto-accept-new-terms` | 注册或 `account update` 时同意当前条款，并持久化授权自动接受未来条款 URL 更新 | 不由 `--yes`、JSON 或隐式 ensure 开启；update 开启只写本地元数据、不发送 CA 账户更新；`--clear-auto-accept-new-terms` 是唯一撤销入口并保留已接受 URL；可与联系人/profile 同次组合 |
 | `--verify` | 查询已有资源的 CA 状态，更新观察快照 | 不启动验证、不 finalize、不新建订单 |
 | `--json` | 输出结构化命令结果/诊断，禁止提示、ANSI 和人类阶段日志 | 不隐含确认或强制，不猜测歧义目标 |
 
 未来条款更新授权在终端默认否；`--yes` 跳过这项可选授权询问并保持原授权状态，不代替当前条款同意。首次接受条款不报告为自动接受“更新”；只有先前已保存的条款 URL 改变才报告更新。
 
-`account update` 的条款授权与联系人/profile 互斥；联系人和 profile 仍可同时修改。开启必须能读取在线 directory：读不到当前条款就失败关闭，不静默开启；CA 未公布条款时仍可开启，报告明确说明本次未接受任何 URL、之后公布的条款自动接受。开启只保存本地委托与精确 URL，不向 CA 发送账户更新；撤销纯本地、不访问网络并保留已接受 URL。交互菜单选中该 scope 时，条款同意仍需显式回答，`--yes` 不代替。
+`account update` 的三个 scope（联系人、profile、条款授权）可任意组合，报告逐段给出每个已生效 scope 的结果，组合调用不丢失已提交 CA mutation 的证据；未指定任何 scope 的交互终端由单选菜单引导。全部 directory 校验（profile 广告、条款授权开启所需条款值）先于第一个副作用（联系人提交），校验失败整个调用零副作用；联系人提交后任一本地保存失败时，错误列明已生效的 scope；后续确认被拒绝或取消时仍退出 130，并保留已生效 scope 的说明。开启必须能读取在线 directory：读不到当前条款就失败关闭，不静默开启；CA 未公布条款时仍可开启，报告明确说明本次未接受任何 URL、之后公布的条款自动接受。开启只保存本地委托与精确 URL，不向 CA 发送账户更新；撤销 scope 只修改本地授权并保留原已接受 URL；单独撤销不访问网络，与联系人/profile 组合时也不因其他 scope 读取 directory 而接受新条款。交互菜单选中条款 scope 时，条款同意仍需显式回答，`--yes` 不代替；显式条款 flag 与 `--yes` 同时给出时才跳过该确认。
+
+组合更新的 contacts、profile 与 terms 逐 scope 确认；除显式 `--yes` 外，联系人确认不会跳过 profile 目标的展示与确认。拒绝/取消 profile 确认时，保留已提交联系人证据，profile 与后续 terms 不保存。`account show` 的离线/在线文本均显示 `Default profile`，未设置时明确显示 CA 默认；此本地偏好不因 CA 查询标为远端字段。
+
+联系人更新错误按执行证据区分：POST 前失败明确未提交；有明确 ACME 拒绝时报告该尝试被拒绝；badNonce 后缺少新 nonce 或重签准备失败，保留首次拒绝与准备失败原因，不误报为从未提交；超时、坏响应或不能确认的服务端结果仍为未知，不自动重放；CA 返回 200 与合法账户对象后观察保存失败，诊断保留 CA 已接受与本地保存未确认两项事实，并停止后续 scope。
+
+清除 profile 和撤销条款授权可组合纯离线执行；设置具名 profile 或展示 profile 菜单时，预检、菜单与保存校验复用同一份 directory 广告。联系人/profile 保存成功后，若持锁重读发现授权位相对确认快照变化，或已接受条款已被其他进程改为不同于本次确认的值，条款 scope 拒绝覆盖并报告前序已生效结果。文件保存失败可能发生在替换之后，诊断明确持久化结果未确认，提示先用 `account show` 检查；不承诺失败就意味着原值仍保留。
 
 没有通用的 `--skip-*` 同义参数。--yes 不等于“完全非交互”：终端里的名称选择、输入、独立条款同意仍有自己的条件；脚本应提供完整参数，JSON 或非 TTY 从不弹问题。没有 --yes 的危险操作在交互终端默认否，在脚本中立即给出确认要求。取消交互退出 130。
 
@@ -23,7 +29,7 @@
 | 命令 | --yes 确认什么 |
 | --- | --- |
 | `account register` | 复用/继续已经存在的本地身份；不代替 --accept-terms |
-| `account update` | 替换/清空联系人、设置/清除默认证书 profile，或开启/关闭未来条款授权（条款授权与联系人/profile 互斥） |
+| `account update` | 替换/清空联系人、设置/清除默认证书 profile，和/或开启/关闭未来条款授权（三个 scope 可组合；条款确认仅对显式条款 flag 生效） |
 | `account rotate-key` | 轮换或对账当前保存的换钥事务 |
 | `account remove --deactivate` | 删除本地账户并不可逆停用 CA 账户 |
 | `account remove` | 删除本地托管账户资料及私钥 |
@@ -74,7 +80,7 @@
 | account default | [NAME] / -n；仅本地操作，无 CA/HTTP/注册参数 |
 | account register | [NAME] / -n、-m、-k/--key-type、--ca / --ca-directory、--accept-terms、--auto-accept-new-terms、HTTP、-y、成对 EAB |
 | account recover | [NAME] / -n、已有账户 CA 选择、HTTP；不创建新密钥/新 CA 账户 |
-| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、--auto-accept-new-terms 或 --clear-auto-accept-new-terms（条款组与联系人/profile 互斥）、已有账户 CA 选择、HTTP、-y |
+| account update | [NAME] / -n、-m 或 --clear-contacts、--profile 或 --clear-profile、--auto-accept-new-terms 或 --clear-auto-accept-new-terms（三者可组合，条款两 flag 互斥）、已有账户 CA 选择、HTTP、-y |
 | account rotate-key | [NAME] / -n、-k/--key-type、已有账户 CA 选择、HTTP、-y |
 | account remove --deactivate | [NAME] / -n、已有账户 CA 选择、HTTP、-y；纯本地删除时无 CA/HTTP |
 | account remove | [NAME] / -n、-y；仅本地操作 |

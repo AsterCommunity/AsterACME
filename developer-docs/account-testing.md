@@ -118,3 +118,76 @@ Review 补测，接上一段。macOS 原生（当前 stable rustc/cargo），同
 - 渲染：委托报告四态文案改为 `DelegationTransition` 派生，替代 `(previous, current)` 布尔对，删除 `clippy::fn_params_excessive_bools` 抑制；`UpdateArgs` 的 `struct_excessive_bools` 保留（五个独立 CLI 开关是参数面现实）。渲染行为不变，既有渲染测试通过。
 - 解析：terms 的 9 对互斥冲突改为每对声明一次（clap `conflicts_with` 为单向生效，原先 terms 两 flag 互为对方声明属冗余）；互斥组合解析测试维持两 terms flag 与 contact/profile 四开关的全组合覆盖。
 - 命令：`cargo test -p aster_acme_cli --locked commands::account`（69 项通过）、`cargo test --workspace --locked`（1078 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。
+
+## update 组合 scope 报告模型（2026-11-21，issue #58）
+
+工作树基于 main（`db8bc24`，含 #56/#57）。`account update` 报告模型重构与 scope 组合放开的验证：
+
+- 模型：单一 `Updated(UpdateOutcome)` 承载一次调用全部 scope（contacts/profile/terms 各自独立 outcome），删除仅被 update 使用的 `ProfilePreference`/`TermsDelegation` variant 与 `RemoteAction::UpdateContact`（contacts 走 `ContactsUpdate` outcome）。组合调用不再丢弃前序 scope 的 report：contacts+profile、contacts+terms、三 scope 全组合的报告同时含全部已生效段，human 文本逐段渲染、JSON 为单个 `{name, contacts, profile, terms}` 对象（未发布格式允许形状变更，CHANGELOG 注明）。
+- 编排：profile 广告校验与条款开启的 directory 读取合并为前置 preflight，先于第一个副作用（联系人提交）；未广告 profile + 条款开启的组合在 preflight 失败时整调用零副作用（记录不变、零账户 POST）。contacts（唯一 CA mutation）→ profile（reload 后保存）→ terms（租约内保存）顺序执行；本地保存失败时错误列明已生效 scope（`partial_update_error`），不再只映射 profile 一个前缀。
+- 确认语义不变：条款确认仍仅对显式条款 flag + `--yes` 生效，同次调用确认的联系人替换不能代替；无 flag 的交互菜单保持单选引导。
+- 解析：terms 两 flag 与 contacts/profile 的组合全部被接受；`--auto-accept-new-terms` 与 `--clear-auto-accept-new-terms` 彼此互斥且两个参数序均断言冲突。
+- 端到端：loopback CA 覆盖 contacts+terms 组合恰好一个账户 POST（条款部分零 POST）、三 scope 组合后记录三字段全部生效、enable 后 ensure 静默接受变更条款、撤销后 ensure 以 `TermsRequired` 阻断且零 POST（沿用）。
+- 命令：`cargo test -p aster_acme_cli --locked commands::account`（72 项通过）、`cargo test --workspace --locked`（1111 项通过、0 失败）、`cargo clippy -p aster_acme_cli --all-targets --locked -- -D warnings`、`cargo fmt -p aster_acme_cli --check`、`python scripts/check-doc-links.py`。未访问公网 CA、未新增 staging 账户。
+
+
+## update 组合 scope 的撤销与取消边界（2026-11-22，issue #58）
+
+基于 `732c221` 的未提交修复，macOS Apple Silicon，rustc/cargo 1.100.0。保留三 scope 组合与单个 `{name, contacts, profile, terms}` 报告：
+
+- 撤销隔离：preflight 仅在开启授权时携带条款值；profile 所需的 directory 读取不构成条款同意。32 种组合覆盖 CA 有/无条款、原授权开/关、原已接受 URL 有/无、profile 设置/清除、联系人 scope 有/无。撤销后原 URL 保持不变，terms 段不声称检查或接受本次条款，联系人 POST 数量与请求 scope 一致。
+- 部分失败：用在线 directory 广告的超限 profile 名称和条款字符串触发真实文件保存失败，验证联系人成功后 profile 失败，以及 contacts/profile 任意组合成功后 terms 失败；失败返回非零，错误列明此前全部已生效 scope，文件保留已提交字段，后续 scope 不执行。
+- 错误与取消：操作上下文保留原始错误链，统一诊断保留 typed recovery hint，根命令沿错误链识别取消。嵌套上下文的取消仍为 130，普通保存错误仍为 1；JSON 诊断同时保留上下文和底层可操作提示。
+- 快照：原元数据保留测试改为先取得旧 record 与 preflight，再写入新 profile/server_contacts，最后用旧快照执行条款变更；锁内 reload 保留后来保存的字段。另验证 preflight 后账户停用进入 pending/confirmed 时拒绝授权变更且记录不变，以及组合请求遇到 directory 故障时只读 GET、零账户 POST、记录不变。
+- 原生 PTY：扩展 `scripts/test-account-terminal.py`，原 5 个注册场景与新增 14 个 update 场景全部通过。覆盖显式条款 flag 的人工同意/默认否/拒绝/Ctrl-C、撤销确认的同意/拒绝/Ctrl-C（零 HTTP）、无 scope 菜单带 `--yes` 后仍独立确认、三 scope 手动/免提示成功、组合后拒绝/取消保留 contacts/profile 证据，以及 profile 确认拒绝；实际调用 `crate::finish` 并断言其返回退出码 130（测试驱动断言 Rust 测试子进程退出 0，未将其当作真实 CLI 进程退出码验收），检查账户落盘、POST 数量与 termios 恢复。
+- 文档：CLI 契约、账户设计、README/CHANGELOG 双语和文档站双语同步撤销与确认边界；CHANGELOG 基线为 `v0.1.0-alpha.3`，修订现有 Unreleased #58 条目，不单独记录同版本自修复；比较链接保持正确。
+
+本轮命令：`cargo test -p aster_acme_cli --locked commands::account`（76 passed、2 ignored，忽略的 PTY fixture 由脚本单独驱动）、`python3 scripts/test-account-terminal.py`（19 场景通过）、`cargo test --workspace --locked`（含 doctest，全部通过）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked`、workspace 依赖/import/features/doc-links 检查及 `python3 -m unittest discover -s scripts/tests`（14 项通过）。未访问公网 CA，未执行 Linux/Windows 原生验收；推送前在 `9fcf401` 补跑其余原生 PTY：确认输入 18、Provider 32、PKCS#12 部署 5 个场景均通过。以上为提交前本地验收；推送和远端 CI 状态另行核对。
+
+CodeRabbit CLI 首轮以 `9fcf401` 相对 `origin/main` 审查 22 个文件，返回 `review_completed`、0 条 verified finding、1 条 unverified finding（review card `4dd51d19-a14f-40ef-a4ae-9478c468944a`）。人工核实该文案问题成立：组合调用的条款段不得笼统声称整次调用未发送账户请求；改为明确仅条款授权本身未发送账户请求，并在真实联系人 POST 的组合测试中断言该范围。后续 CLI 复审结果与最终 revision 单独核对。
+
+
+## CodeRabbit CLI 第二轮边界复核（2026-11-22，issue #58）
+
+第二轮审查 `86cb693`，review card `82fe3015-4734-4411-858d-12cab1c2799d`，返回 5 条 `minor`。对照当前调用链与依赖源码核实后处理：
+
+- profile 菜单直接使用 preflight 广告，选择与保存校验保持同一快照；PTY 断言整个菜单流程只有一次 directory GET。
+- `--clear-profile --clear-auto-accept-new-terms --yes` 在没有 directory 服务的真实文件 fixture 上成功，零 HTTP，原已接受条款保持不变。
+- profile 保存移除锁外快照写回，确认后持锁 reload、复核身份和准入，再记录真实 previous/current。竞争租约测试验证随后保存的其他字段及准确的 previous 值得到保留；停用 pending/confirmed 时 profile 与 terms 均拒绝修改。
+- terms 在持锁后检测 accepted_terms_url 快照冲突，保留并发值并返回错误。矩阵覆盖不同新值、同一目标值、并发清空和未公布条款；PTY 在真实组合调用停留于条款确认时写入新值，确认后验证联系人/profile 已生效、条款新值未被覆盖、`crate::finish` 返回 1。
+- 核对 Forge utils alpha.3 `StateDirectory::atomic_write` 的 rename → directory sync 顺序，确认错误可能晚于文件替换。因此 profile/terms 错误报告 update 未完整完成，保存错误另说明结果未确认并提示 `account show`，不再断言“未保存”。真实文件上限失败测试覆盖诊断和前序结果保留；本轮未向内核注入 rename 后目录同步故障。
+- 明确 PTY 证据边界：脚本运行 Rust 测试程序并要求子进程退出 0；fixture 断言 `crate::finish` 对拒绝/取消返回 130，不能称为 CLI 可执行文件进程退出码验收。
+
+第一次默认并发账户复测 78 passed、1 failed：未修改的 `registration_saves_explicit_contact_before_discovery_failure` 在 loopback accept 的 2 秒期限处报 `Elapsed`。该用例单独复测通过；按测试指南以 `--test-threads=2` 复测账户测试 79 passed、2 ignored。账户 PTY 扩展为 5 个注册与 16 个 update，共 21 场景通过。原失败日志保留，不修改注册测试预算。
+
+
+CodeRabbit CLI 第三轮审查 `3dbe0f6`（review card `a00a2aa4-9057-45d6-b8d4-519c56f73e8f`），两条 `minor` 均核实处理：开启授权前在租约内比较 `auto_accept_terms_updates` 与确认快照，避免旧确认覆盖并发撤销（矩阵覆盖原/新授权开关与 CA 有/无条款，8 种组合）；terms preflight 使用 `ContextError` 保留 `TransportError`，单独开启与三 scope 组合在 directory 429 时保留 60 秒 Retry-After 提示，零账户 POST、原记录不变。
+
+
+## PR #60 托管 coverage 与线上 review 复核（2026-11-22，基于 `84025ee`）
+
+读取当前 PR revision 与 CI run `44965919797` 的原始 LCOV，逐行映射到 `origin/main` diff，复现 122 条未覆盖新增可执行行：mutation 120、render 1、main 1。多数是账户 PTY fixture 与交互路径；普通平台检查运行了账户 PTY，但 coverage job 只合并部署 PTY 数据。改为在同一 `CARGO_TARGET_DIR` / `CARGO_LLVM_COV_TARGET_DIR` 下执行账户和部署驱动；账户驱动增加 `--binary PATH` 以复用插桩测试程序。补充缺失/空 profile 广告不提示、profile 密钥算法不匹配拒绝写入、联系人 valid/deactivated/revoked/未知状态渲染与控制字符转义测试。
+
+线上 review `6009169314` 的 1 条 Major、2 条 Minor 对照 `84025ee` 核实：
+
+- 授权位快照检查同时适用于开启与撤销；16 种矩阵覆盖目标开/关、快照授权开/关、并发授权开/关、CA 有/无条款。开启授权时，无公告也要求 accepted_terms_url 与确认快照一致；有公告则额外允许并发值恰为该公告，冲突保存值不覆盖。
+- 联系人更新使用服务层 `ContactUpdateError` 保留未提交、明确拒绝、远端结果未知、CA 已接受但本地观察保存未确认四阶段证据。库注入保存前/替换后失败，CLI 通过真实文件故障使 POST 200 后保存失败，断言 JSON 保留 CA 已接受证据且 profile/terms 不执行。POST 前 nonce 故障不算联系人提交；明确 400/403 ACME Problem 与 408/429/5xx、非规范 2xx、坏响应/超时分开，不自动重放。review 中“非 200 均表示 CA 未变更”不成立，未知结果必须诚实保留未知。
+- 诊断保留底层提示，未知结果仍给出人工验证/禁自动重放，并保留 Retry-After。库 README、CLI 契约、账户设计和双语 CHANGELOG 同步错误返回类型与证据边界。
+
+插桩全量的双线程复跑曾在未修改的 inspect deadline 与 revocation timeout 两项测试触发请求次数 0/预期 1；单测试线程完整插桩运行通过，未扩大或更改其时间预算。本地 LCOV 合并账户 PTY 前后与最终推送状态另行核对，托管 89.07789% 结果不代表本地未推送修改。
+
+
+本地 LCOV 对当前工作区相对 `origin/main` 的新增可执行行统计：合并账户 PTY 前 1357/1475（92.00%），合并账户与部署 PTY 后 1474/1475（99.93%）；mutation 1171/1171、render 127/127、main 1/1。计数包含仓库被 LLVM 记录的测试/fixture 行，不等同于全仓覆盖率；剩余 1 行是库联系人更新的身份拒绝分支。单线程完整 workspace/all-features 插桩测试通过，最后 nonce 阶段分类补充通过账户相关插桩复测；账户 PTY 21、部署 PTY 5 场景合并成功。
+
+本地 CodeRabbit CLI 对本轮 16 个未提交改动文件审查返回 `review_completed`、0 findings（review card `42713204-ba58-4282-89aa-70d5ded93aec`）。本地覆盖率与 review 不代表新 revision 的托管 Codecov/CI；推送后须重新核对远端结果。
+
+最终未插桩验证：`cargo test --workspace --all-features --locked -- --test-threads=1`（含 doctest）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked` 全部通过；workspace/import/feature/doc-links 检查、14 项 Python tests 与 Actionlint 均通过。账户/部署插桩 PTY 共 26 场景通过。原双线程插桩失败证据保留，最终未调整那些测试的期限。
+
+
+## PR #60 review `6009341561`（2026-11-22，基于 `7c8e89c`）
+
+逐条核实 3 条 Minor（其中 2 条位于 diff 外）：
+
+- profile 不再把 wants_contacts 当作已确认；无 `--yes` 时，contacts/profile/terms 分别展示目标并确认。PTY 更新原三 scope 场景，并新增 contacts 已提交后拒绝 profile 设置、Ctrl-C、拒绝 profile 清除：返回取消 130 的 `finish` 值，保存原 profile，条款未启用，错误只保留联系人已生效证据。带 `--yes` 不出现三类确认提示。
+- `account show` 文本始终显示本地 Default profile：未设置时为 `(none; the CA default applies)`。渲染矩阵覆盖在线/离线、设置/未设置与控制字符转义；真实离线 show 测试覆盖 key-only/pending/registered，不要求密钥、零 HTTP、文件不变，JSON 保持原字段语义。
+- transport 的 `RetryPreparation` 保存首次 badNonce 拒绝和新 nonce/重签准备错误，submission 标记仍表示当前是否有未确定的请求。联系人分类区分首次发送前失败、明确拒绝但无法重签、重签 POST 后未知；不再把第一次已发送且被拒绝的 POST 报为未提交。库测试覆盖重试预算 0/1/5、缺失/非法 Replay-Nonce、首次签名失败/第二次签名失败、重签后 503/坏响应/超时/成功，验证 POST 数量、原观察不变与错误来源。CLI JSON 断言同时保留拒绝和重签失败原因。

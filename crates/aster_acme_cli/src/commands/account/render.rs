@@ -37,13 +37,12 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
         } => {
             use crate::commands::account::report::RemoteAction;
             match action {
-                RemoteAction::Register | RemoteAction::Recover | RemoteAction::UpdateContact => {
+                RemoteAction::Register | RemoteAction::Recover => {
                     let verb = match action {
                         RemoteAction::Register if *reused => "Reused",
                         RemoteAction::Register if account.recovered => "Recovered existing",
                         RemoteAction::Register => "Registered",
                         RemoteAction::Recover => "Recovered",
-                        RemoteAction::UpdateContact => "Updated contacts for",
                     };
                     let status = match &account.status {
                         aster_acme_core::protocol::AccountStatus::Valid => String::new(),
@@ -85,27 +84,44 @@ pub(crate) fn render(report: &AccountReport, format: Format) -> CliResult<String
             directory,
             profiles,
         } => profiles_text(directory, profiles.as_ref()),
-        AccountReport::ProfilePreference {
-            name,
-            previous,
-            current,
-        } => profile_preference_text(name, previous.as_ref(), current.as_ref(), color),
-        AccountReport::TermsDelegation {
-            name,
-            previous,
-            current,
-            accepted_terms_url,
-            advertised_terms_url,
-            directory_checked,
-        } => terms_delegation_text(
-            name,
-            DelegationTransition::from_states(*previous, *current),
-            accepted_terms_url.as_ref(),
-            advertised_terms_url.as_ref(),
-            *directory_checked,
-            color,
-        ),
+        AccountReport::Updated(outcome) => {
+            let mut sections: Vec<String> = Vec::new();
+            if let Some(contacts) = &outcome.contacts {
+                sections.push(contacts_text(&outcome.name, &contacts.account, color));
+            }
+            if let Some(profile) = &outcome.profile {
+                sections.push(profile_preference_text(
+                    &outcome.name,
+                    profile.previous.as_ref(),
+                    profile.current.as_ref(),
+                    color,
+                ));
+            }
+            if let Some(terms) = &outcome.terms {
+                sections.push(terms_delegation_text(
+                    &outcome.name,
+                    DelegationTransition::from_states(terms.previous, terms.current),
+                    terms.accepted_terms_url.as_ref(),
+                    terms.advertised_terms_url.as_ref(),
+                    terms.directory_checked,
+                    color,
+                ));
+            }
+            sections.join("\n")
+        }
     })
+}
+
+/// CA-confirmed contacts text: the echoed account state is the evidence.
+fn contacts_text(name: &str, account: &aster_acme::account::AcmeAccount, color: bool) -> String {
+    let status = match &account.status {
+        aster_acme_core::protocol::AccountStatus::Valid => String::new(),
+        other => format!(" Status: {}.", safe(&String::from(other.clone()))),
+    };
+    success(
+        &format!("Updated contacts for account {}.{status}", safe(name)),
+        color,
+    )
 }
 
 /// Draft-ietf-acme-profiles listing; an empty advertisement states the CA default.
@@ -205,7 +221,7 @@ fn terms_delegation_text(
     };
     let message = match transition {
         DelegationTransition::Enabled => format!(
-            "Account {} now accepts future CA terms updates automatically; accepted terms URL: {}. This is local consent only; no CA account request was sent.{notice}",
+            "Account {} now accepts future CA terms updates automatically; accepted terms URL: {}. This is local consent only; the terms delegation itself sent no CA account request.{notice}",
             safe(name),
             accepted
         ),
@@ -360,6 +376,10 @@ fn local_state(local: &LocalAccountReport, color: bool) -> String {
     styled(label, style, color)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Account details are rendered together in display order"
+)]
 fn local_text(local: &LocalAccountReport, color: bool) -> String {
     let mut lines = vec![
         format!(
@@ -378,6 +398,15 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
         ),
         field("Key thumbprint:", &safe(&local.key_thumbprint), color),
         field("Local state:", &local_state(local, color), color),
+        field(
+            "Default profile:",
+            &local
+                .record
+                .as_ref()
+                .and_then(|record| record.preferred_profile.as_deref())
+                .map_or_else(|| "(none; the CA default applies)".into(), safe),
+            color,
+        ),
     ];
     if let Some(record) = &local.record {
         if let Some(user_agent) = &record.user_agent {
@@ -483,6 +512,52 @@ pub(super) mod tests {
 
     pub(in crate::commands::account) fn json_value(report: &AccountReport) -> serde_json::Value {
         serde_json::to_value(crate::commands::account::output::Output::from(report)).unwrap()
+    }
+
+    #[test]
+    fn contact_updates_report_nonvalid_ca_status_and_escape_untrusted_text() {
+        use aster_acme_core::protocol::AccountStatus;
+        for status in [
+            AccountStatus::Valid,
+            AccountStatus::Deactivated,
+            AccountStatus::Revoked,
+            AccountStatus::Unknown("custom\x1b[2J\n".into()),
+        ] {
+            let account = aster_acme::account::AcmeAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                times: aster_acme::account::AccountTimes::default(),
+                account_id: "account-id".into(),
+                directory_url: AcmeUrl::new("https://ca.example/directory").unwrap(),
+                account_url: AcmeUrl::new("https://ca.example/account/1").unwrap(),
+                status: status.clone(),
+                contacts: vec![],
+                recovered: false,
+            };
+            let report = AccountReport::Updated(crate::commands::account::report::UpdateOutcome {
+                name: "work\n".into(),
+                contacts: Some(crate::commands::account::report::ContactsUpdate { account }),
+                profile: None,
+                terms: None,
+            });
+            let text = render(&report, Format::plain(false)).unwrap();
+            assert!(
+                text.contains("Updated contacts for account work\\n."),
+                "{text}"
+            );
+            assert_eq!(text.lines().count(), 1);
+            assert!(!text.contains('\x1b'));
+            if status == AccountStatus::Valid {
+                assert!(!text.contains("Status:"));
+            } else {
+                assert!(
+                    text.contains(&format!("Status: {}.", safe(&String::from(status.clone()))))
+                );
+            }
+            let json = json_value(&report);
+            assert_eq!(json["contacts"]["status"], String::from(status));
+            assert_eq!(json["contacts"]["verified"], true);
+            assert_eq!(json["contacts"]["source"], "remote");
+        }
     }
 
     #[test]
@@ -717,39 +792,58 @@ pub(super) mod tests {
             state: AccountRecordState::Registered,
         };
         let mut labels = Vec::new();
-        for verified in [false, true] {
-            let local = LocalAccountReport {
-                verified,
-                name: "default".into(),
-                directory: directory.clone(),
-                key_thumbprint: "thumbprint".into(),
-                record: Some(account.clone()),
-            };
-            let text = local_text(&local, false);
-            labels.push(
-                text.lines()
-                    .filter_map(|line| line.split_once(": ").map(|(label, _)| label.to_owned()))
-                    .collect::<Vec<_>>(),
-            );
-            assert!(
-                text.split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .contains(if verified {
-                        "CA query: account refreshed"
-                    } else {
-                        "CA query: not performed (local data only)"
-                    })
-            );
-            let report = AccountReport::Local(local);
-            let json = json_value(&report);
-            assert_eq!(json["ca_query"]["account_refreshed"], verified);
-            assert!(json.get("verified").is_none());
-            assert!(json.get("source").is_none());
-            assert_eq!(json["key_thumbprint"], "thumbprint");
-            assert_eq!(json["contacts"][0], "mailto:a@example.com");
+        for profile in [None, Some("shortlived"), Some("custom\n\x1b[2J")] {
+            for verified in [false, true] {
+                let mut account = account.clone();
+                account.preferred_profile = profile.map(str::to_owned);
+                let local = LocalAccountReport {
+                    verified,
+                    name: "default".into(),
+                    directory: directory.clone(),
+                    key_thumbprint: "thumbprint".into(),
+                    record: Some(account.clone()),
+                };
+                let text = local_text(&local, false);
+                assert!(
+                    text.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains(&format!(
+                            "Default profile: {}",
+                            profile.map_or_else(|| "(none; the CA default applies)".into(), safe)
+                        ))
+                );
+                assert!(!text.contains('\x1b'));
+                labels.push(
+                    text.lines()
+                        .filter_map(|line| line.split_once(": ").map(|(label, _)| label.to_owned()))
+                        .collect::<Vec<_>>(),
+                );
+                assert!(
+                    text.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains(if verified {
+                            "CA query: account refreshed"
+                        } else {
+                            "CA query: not performed (local data only)"
+                        })
+                );
+                let report = AccountReport::Local(local);
+                let json = json_value(&report);
+                assert_eq!(json["ca_query"]["account_refreshed"], verified);
+                assert!(json.get("verified").is_none());
+                assert!(json.get("source").is_none());
+                assert_eq!(json["key_thumbprint"], "thumbprint");
+                assert_eq!(json["preferred_profile"], serde_json::json!(profile));
+                assert_eq!(json["contacts"][0], "mailto:a@example.com");
+            }
         }
-        assert_eq!(labels[0], labels[1]);
+        assert!(
+            labels
+                .iter()
+                .all(|labels_for_case| labels_for_case == &labels[0])
+        );
     }
     #[test]
     fn profiles_and_preference_reports_serialize_with_explicit_fields() {
@@ -778,14 +872,21 @@ pub(super) mod tests {
         });
         assert_eq!(json["profiles"], serde_json::Value::Null);
 
-        let json = json_value(&AccountReport::ProfilePreference {
-            name: "work".to_owned(),
-            previous: Some("classic".to_owned()),
-            current: None,
-        });
+        let json = json_value(&AccountReport::Updated(
+            crate::commands::account::report::UpdateOutcome {
+                name: "work".to_owned(),
+                contacts: None,
+                profile: Some(crate::commands::account::report::ProfileChange {
+                    previous: Some("classic".to_owned()),
+                    current: None,
+                }),
+                terms: None,
+            },
+        ));
         assert_eq!(json["name"], "work");
-        assert_eq!(json["previous"], "classic");
-        assert_eq!(json["current"], serde_json::Value::Null);
+        assert_eq!(json["profile"]["previous"], "classic");
+        assert_eq!(json["profile"]["current"], serde_json::Value::Null);
+        assert_eq!(json["contacts"], serde_json::Value::Null);
     }
 }
 
@@ -826,10 +927,16 @@ fn profiles_listing_reports_advertised_names_and_descriptions() {
 
 #[test]
 fn profile_preference_text_distinguishes_set_and_clear() {
-    let report = |previous: Option<&str>, current: Option<&str>| AccountReport::ProfilePreference {
-        name: "work".to_owned(),
-        previous: previous.map(str::to_owned),
-        current: current.map(str::to_owned),
+    let report = |previous: Option<&str>, current: Option<&str>| {
+        AccountReport::Updated(crate::commands::account::report::UpdateOutcome {
+            name: "work".to_owned(),
+            contacts: None,
+            profile: Some(crate::commands::account::report::ProfileChange {
+                previous: previous.map(str::to_owned),
+                current: current.map(str::to_owned),
+            }),
+            terms: None,
+        })
     };
     let text = render(
         &report(Some("classic"), Some("shortlived")),
@@ -846,14 +953,18 @@ fn profile_preference_text_distinguishes_set_and_clear() {
 fn terms_delegation_reports_local_consent_without_a_ca_sync() {
     let report =
         |previous, current, accepted: Option<&str>, advertised: Option<&str>, directory_checked| {
-            AccountReport::TermsDelegation {
+            AccountReport::Updated(crate::commands::account::report::UpdateOutcome {
                 name: "work".to_owned(),
-                previous,
-                current,
-                accepted_terms_url: accepted.map(str::to_owned),
-                advertised_terms_url: advertised.map(str::to_owned),
-                directory_checked,
-            }
+                contacts: None,
+                profile: None,
+                terms: Some(crate::commands::account::report::TermsChange {
+                    previous,
+                    current,
+                    accepted_terms_url: accepted.map(str::to_owned),
+                    advertised_terms_url: advertised.map(str::to_owned),
+                    directory_checked,
+                }),
+            })
         };
     let text = |report: &AccountReport| render(report, Format::plain(false)).unwrap();
 
@@ -866,17 +977,23 @@ fn terms_delegation_reports_local_consent_without_a_ca_sync() {
     );
     let value = tests::json_value(&enabled);
     assert_eq!(value["name"], "work");
-    assert_eq!(value["auto_accept_terms_updates"], true);
-    assert_eq!(value["previous_auto_accept_terms_updates"], false);
-    assert_eq!(value["accepted_terms_url"], "https://ca.example/terms/v2");
-    assert_eq!(value["advertised_terms_url"], "https://ca.example/terms/v2");
-    assert_eq!(value["directory_checked"], true);
-    assert_eq!(value["ca_account_update_sent"], false);
+    assert_eq!(value["terms"]["auto_accept_terms_updates"], true);
+    assert_eq!(value["terms"]["previous_auto_accept_terms_updates"], false);
+    assert_eq!(
+        value["terms"]["accepted_terms_url"],
+        "https://ca.example/terms/v2"
+    );
+    assert_eq!(
+        value["terms"]["advertised_terms_url"],
+        "https://ca.example/terms/v2"
+    );
+    assert_eq!(value["terms"]["directory_checked"], true);
+    assert_eq!(value["terms"]["ca_account_update_sent"], false);
     assert!(!enabled.has_failures());
     let enabled_text = text(&enabled);
     assert!(
         enabled_text.contains("now accepts")
-            && enabled_text.contains("no CA account request was sent"),
+            && enabled_text.contains("the terms delegation itself sent no CA account request"),
         "{enabled_text}"
     );
 
@@ -887,8 +1004,11 @@ fn terms_delegation_reports_local_consent_without_a_ca_sync() {
         "{no_terms_text}"
     );
     let value = tests::json_value(&no_terms);
-    assert_eq!(value["advertised_terms_url"], serde_json::Value::Null);
-    assert_eq!(value["directory_checked"], true);
+    assert_eq!(
+        value["terms"]["advertised_terms_url"],
+        serde_json::Value::Null
+    );
+    assert_eq!(value["terms"]["directory_checked"], true);
 
     let disabled = report(
         true,
@@ -903,11 +1023,14 @@ fn terms_delegation_reports_local_consent_without_a_ca_sync() {
         "{disabled_text}"
     );
     let value = tests::json_value(&disabled);
-    assert_eq!(value["auto_accept_terms_updates"], false);
-    assert_eq!(value["previous_auto_accept_terms_updates"], true);
-    assert_eq!(value["directory_checked"], false);
-    assert_eq!(value["advertised_terms_url"], serde_json::Value::Null);
-    assert_eq!(value["ca_account_update_sent"], false);
+    assert_eq!(value["terms"]["auto_accept_terms_updates"], false);
+    assert_eq!(value["terms"]["previous_auto_accept_terms_updates"], true);
+    assert_eq!(value["terms"]["directory_checked"], false);
+    assert_eq!(
+        value["terms"]["advertised_terms_url"],
+        serde_json::Value::Null
+    );
+    assert_eq!(value["terms"]["ca_account_update_sent"], false);
 
     let already_enabled = report(
         true,

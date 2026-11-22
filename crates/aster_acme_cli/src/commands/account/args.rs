@@ -42,11 +42,12 @@ pub(crate) enum AccountCommand {
     Remove(RemoveArgs),
 }
 
-/// Replace contacts, set or clear the default certificate profile, or change
-/// the future terms delegation. Contact changes update the CA account; profile
-/// and delegation preferences are local metadata (the delegation is validated
-/// against the live directory before it is enabled). Contacts and profile may
-/// still be combined; the terms delegation is exclusive with both.
+/// Replace contacts, set or clear the default certificate profile, and/or
+/// change the future terms delegation. Contact changes update the CA account;
+/// profile and delegation preferences are local metadata (the delegation is
+/// validated against the live directory before it is enabled). All scopes may
+/// be combined. Skipping terms confirmation requires an explicit terms flag
+/// plus `--yes`; otherwise an interactive terminal asks separately.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Independent contact, profile, delegation and confirmation switches"
@@ -73,24 +74,14 @@ pub(crate) struct UpdateArgs {
     #[arg(long)]
     pub(crate) clear_profile: bool,
     /// Accept the CA's current terms and automatically accept future terms URL
-    /// updates; stored locally without a CA account request.
-    #[arg(
-        long,
-        conflicts_with_all = [
-            "contact",
-            "clear_contacts",
-            "profile",
-            "clear_profile",
-            "clear_auto_accept_new_terms"
-        ]
-    )]
+    /// updates; stored locally without a CA account request. Combinable with
+    /// contact and profile changes. Use `--yes` with this flag to skip the
+    /// separate terms confirmation; otherwise confirm interactively.
+    #[arg(long, conflicts_with = "clear_auto_accept_new_terms")]
     pub(crate) auto_accept_new_terms: bool,
     /// Stop automatically accepting future terms URL updates; the saved
     /// accepted terms URL is retained (local metadata only).
-    #[arg(
-        long,
-        conflicts_with_all = ["contact", "clear_contacts", "profile", "clear_profile"]
-    )]
+    #[arg(long)]
     pub(crate) clear_auto_accept_new_terms: bool,
     /// Confirm this update without prompting.
     #[arg(short = 'y', long)]

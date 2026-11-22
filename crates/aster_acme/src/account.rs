@@ -168,6 +168,25 @@ pub struct AcmeAccount {
     pub recovered: bool,
 }
 
+/// Contact-update failure with evidence about this invocation's CA mutation.
+/// Local contact intent is independent of the CA's last confirmed observation.
+#[derive(Debug, Error)]
+pub enum ContactUpdateError {
+    /// No contact POST was attempted; the CA was not changed by this invocation.
+    #[error("contact update was not submitted to the CA")]
+    NotSubmitted(#[source] Box<AccountError>),
+    /// The CA explicitly refused this attempt with a definitive ACME problem.
+    #[error("the CA rejected the contact update")]
+    Rejected(#[source] Box<AccountError>),
+    /// A request may have reached the CA, but its result was not confirmed.
+    #[error("the contact update result at the CA is unknown")]
+    Unconfirmed(#[source] Box<AccountError>),
+    /// HTTP 200 with a valid account object confirmed the CA change, but saving
+    /// that observation failed. The save may have replaced the file before erroring.
+    #[error("the CA accepted the contact update but local persistence is unconfirmed")]
+    Persistence(#[source] AccountStoreError),
+}
+
 /// Account-level failure. Pending intent remains persisted after uncertain transport errors.
 #[derive(Debug, Error)]
 pub enum AccountError {

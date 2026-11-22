@@ -33,7 +33,7 @@ python3 scripts/check-precheck-features.py
 
 证书报告的字节级回归用例位于 `crates/aster_acme_cli/src/commands/cert/render/tests/contract.rs`，快照来自模块拆分前的 `26ef130`，覆盖文本、颜色和 JSON 输出以及对应退出状态；ActionRequired 文本提示有意追加精确 `--operation`，对应两项基准已定点更新。预期路径仅按宿主路径分隔符适配，不修改实际输出；报告有意变更时应先核对 [CLI 契约](cli-contract.md)，不要在结构重构中重新生成快照掩盖差异。
 
-覆盖率由 CI 的 Linux `coverage` 任务收集：先用 `cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report` 运行普通测试，再在相同 `CARGO_LLVM_COV_TARGET_DIR` 中追加下文的 PKCS#12 PTY 数据，最后以独立步骤运行 `cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info` 导出合并报告，发布摘要并上传 Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
+覆盖率由 CI 的 Linux `coverage` 任务收集：先用 `cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report` 运行普通测试，再在相同 `CARGO_TARGET_DIR` / `CARGO_LLVM_COV_TARGET_DIR` 中追加下文的账户与 PKCS#12 PTY 数据，最后以独立步骤运行 `cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info` 导出合并报告，发布摘要并上传 Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
 
 ## 证据记录
 
@@ -49,11 +49,11 @@ python3 scripts/check-precheck-features.py
 
 Unix原生确认终端回归：`python3 scripts/test-confirmation-terminal.py` 在PTY中验证提示/输入同一行、可见答案、光标/删除/退格、大小写、非法输入与长度上限、默认否，以及不发送任何按键时的deadline/外部取消/shutdown和完整termios恢复。Linux/macOS CI执行；Windows保留原生编译和普通测试。
 
-PKCS#12 原生终端回归：`python3 scripts/test-deployment-terminal.py` 验证隐藏密码与确认输入、取消零发布/零配置修改、JSON 不提示和 termios 恢复；Linux/macOS CI 执行。coverage 任务先运行普通测试保留 LLVM 数据，再通过 `cargo llvm-cov show-env --sh` 设置相同插桩环境，执行 PTY 驱动，最后导出合并报告，避免独立执行的终端测试遗漏于覆盖率。驱动可用 `--binary PATH` 复用已经插桩的测试程序；默认自行查找测试程序，子进程继承覆盖率环境。普通 Rust 测试不依赖 crate 归档之外的仓库脚本。密码来源、编码、解密、权限与自动部署的普通测试分别归 cli_storage 和 CLI deployment 模块。OpenSSL 互通使用手动验收，不引入自动测试依赖。
+PKCS#12 原生终端回归：`python3 scripts/test-deployment-terminal.py` 验证隐藏密码与确认输入、取消零发布/零配置修改、JSON 不提示和 termios 恢复；Linux/macOS CI 执行。coverage 任务先运行普通测试保留 LLVM 数据，再通过 `cargo llvm-cov show-env --sh` 设置相同插桩环境，执行 PTY 驱动，最后导出合并报告，避免独立执行的终端测试遗漏于覆盖率。账户与部署驱动均可用 `--binary PATH` 复用已经插桩的测试程序；默认自行查找测试程序，子进程继承覆盖率环境。普通 Rust 测试不依赖 crate 归档之外的仓库脚本。密码来源、编码、解密、权限与自动部署的普通测试分别归 cli_storage 和 CLI deployment 模块。OpenSSL 互通使用手动验收，不引入自动测试依赖。
 
 Provider 原生终端回归：`python3 scripts/test-provider-terminal.py` 在 PTY 中验证 add/show/cleanup/remove/update 和签发 Profile 选择、搜索、颜色与 NO_COLOR、默认否/取消、update 保存/丢弃草稿、子菜单返回并保留草稿及 termios 恢复，不执行真实 Provider 或访问 CA；Linux/macOS CI 同步执行。
 
-账户条款原生终端回归：`python3 scripts/test-account-terminal.py` 使用 loopback CA、真实账户文件和 inquire 提示，验证 `--yes --accept-terms` 不等待未来授权询问、显式同意、默认否、拒绝及取消；核对授权落盘、取消零 POST 和 termios 恢复。Linux/macOS CI 同步执行，不访问公网 CA。
+账户条款原生终端回归：`python3 scripts/test-account-terminal.py` 使用 loopback CA、真实账户文件和 inquire 提示，覆盖 5 个注册与 19 个 update 场景。注册验证 `--yes --accept-terms` 不等待未来授权询问、显式同意、默认否、拒绝及取消；update 验证显式条款 flag 的人工确认与默认否、撤销确认同意/拒绝/取消时零 HTTP、菜单中的 `--yes` 不替代条款同意、三 scope 分别确认、拒绝/取消 profile 保留已提交联系人但不执行后续条款、profile 菜单只读取一次 directory、确认期间并发条款变更不覆盖、后续确认拒绝/取消时保留已提交 contacts/profile 的说明，以及 `crate::finish` 对拒绝或取消返回退出码 130（脚本运行 Rust 测试程序，测试子进程本身退出 0）。核对授权落盘、账户 POST 数量和 termios 恢复。Linux/macOS CI 同步执行，不访问公网 CA。
 
 DNS 后端测试包括：registry 重复/未知 ID、编译 feature 集合、写请求前 checkpoint 确认、失败与部分结果、HTTP 精确字节/禁重试/禁重定向/收发上限/取消期限、Cloudflare 分页/同值所有权/错误脱敏/丢响应恢复/精确删除，以及条件 RRset 冲突重读、metadata 保留和不确定所有权。CLI loopback 测试使用真实 Cloudflare 状态机、实际文件恢复存储和 ACME 服务；PTY 额外核对后端选择及敏感输入不回显。真实 DNS/CA 验收不由这些 mock 代替。
 

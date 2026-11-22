@@ -211,9 +211,14 @@ async fn nonce_retry_is_bounded_and_missing_or_invalid_nonce_is_rejected() {
             .await
             .err()
             .unwrap();
-        match header {
-            Some("fresh") => assert!(error.is_problem(&ProblemKind::BadNonce)),
-            _ => assert!(matches!(error, TransportError::MissingNonce)),
+        if header == Some("fresh") {
+            assert!(error.is_problem(&ProblemKind::BadNonce));
+        } else {
+            let TransportError::RetryPreparation { rejection, source } = error else {
+                panic!("expected a rejected POST with failed nonce preparation");
+            };
+            assert!(rejection.is_problem(&ProblemKind::BadNonce));
+            assert!(matches!(source.as_ref(), TransportError::MissingNonce));
         }
         let count = server
             .received_requests()

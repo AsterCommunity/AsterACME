@@ -1,6 +1,8 @@
 //! Account lifecycle operations.
 
-use crate::account::{AccountError, AccountService, AcmeAccount, validate_contacts};
+use crate::account::{
+    AccountError, AccountService, AcmeAccount, ContactUpdateError, validate_contacts,
+};
 use crate::{crypto::JwsSigner, transport::json_payload};
 use aster_acme_core::{
     account::{AccountAction, AccountOperation, DeactivationState},
@@ -14,48 +16,83 @@ impl AccountService {
     /// remains distinct from the last CA response if the update fails.
     ///
     /// # Errors
-    /// Rejects invalid contacts, inactive identities, storage failures, or CA errors.
+    /// Distinguishes no submission, explicit rejection, an unconfirmed remote
+    /// result, and CA acceptance followed by failed local observation persistence.
     pub async fn update_contacts(
         &self,
         signer: &dyn JwsSigner,
         contacts: Vec<String>,
-    ) -> Result<AcmeAccount, AccountError> {
-        validate_contacts(&contacts)?;
+    ) -> Result<AcmeAccount, ContactUpdateError> {
         let directory = self.client.directory_url();
-        let thumbprint = signer.jwk()?.thumbprint()?;
-        let lease = self.store.lock_account(directory, &thumbprint).await?;
-        let mut record = self
-            .store
-            .load(directory, &thumbprint)
-            .await?
-            .ok_or(AccountError::AccountDoesNotExist)?;
-        if record.directory_url != *directory
-            || record.key_thumbprint != thumbprint
-            || record.key_algorithm != signer.algorithm()
-        {
-            return Err(AccountError::IdentityMismatch);
+        let (mut record, account_url, payload, lease) = async {
+            validate_contacts(&contacts)?;
+            let thumbprint = signer.jwk()?.thumbprint()?;
+            let lease = self.store.lock_account(directory, &thumbprint).await?;
+            let mut record = self
+                .store
+                .load(directory, &thumbprint)
+                .await?
+                .ok_or(AccountError::AccountDoesNotExist)?;
+            if record.directory_url != *directory
+                || record.key_thumbprint != thumbprint
+                || record.key_algorithm != signer.algorithm()
+            {
+                return Err(AccountError::IdentityMismatch);
+            }
+            record
+                .action(AccountOperation::Update)
+                .map_err(AccountError::from)?;
+            let account_url = record
+                .account_url
+                .clone()
+                .ok_or(AccountError::AccountDoesNotExist)?;
+            record.contacts.clone_from(&contacts);
+            self.store.save(&record, &lease).await?;
+            let payload = json_payload(&AccountUpdateRequest { contact: &contacts })?;
+            Ok::<_, AccountError>((record, account_url, payload, lease))
         }
-        record
-            .action(AccountOperation::Update)
-            .map_err(AccountError::from)?;
-        let account_url = record
-            .account_url
-            .clone()
-            .ok_or(AccountError::AccountDoesNotExist)?;
-        record.contacts.clone_from(&contacts);
-        self.store.save(&record, &lease).await?;
-        let payload = json_payload(&AccountUpdateRequest { contact: &contacts })?;
+        .await
+        .map_err(|error| ContactUpdateError::NotSubmitted(Box::new(error)))?;
+        let submitted = std::sync::atomic::AtomicBool::new(false);
         let response = self
             .client
-            .signed(&account_url, signer, Some(&account_url), &payload)
-            .await?;
+            .signed_observed(
+                &account_url,
+                signer,
+                Some(&account_url),
+                &payload,
+                &submitted,
+                || std::future::ready(Ok(())),
+            )
+            .await
+            .map_err(|error| {
+                if matches!(
+                    error,
+                    crate::transport::TransportError::RetryPreparation { .. }
+                ) && error.is_definitive_rejection()
+                {
+                    ContactUpdateError::Rejected(Box::new(error.into()))
+                } else if !submitted.load(std::sync::atomic::Ordering::SeqCst) {
+                    ContactUpdateError::NotSubmitted(Box::new(error.into()))
+                } else if error.is_definitive_rejection() {
+                    ContactUpdateError::Rejected(Box::new(error.into()))
+                } else {
+                    ContactUpdateError::Unconfirmed(Box::new(error.into()))
+                }
+            })?;
         if response.status != reqwest::StatusCode::OK {
-            return Err(AccountError::InvalidResponse);
+            return Err(ContactUpdateError::Unconfirmed(Box::new(
+                AccountError::InvalidResponse,
+            )));
         }
-        let account: AccountObject =
-            serde_json::from_slice(&response.body).map_err(|_| AccountError::InvalidResponse)?;
+        let account: AccountObject = serde_json::from_slice(&response.body).map_err(|_| {
+            ContactUpdateError::Unconfirmed(Box::new(AccountError::InvalidResponse))
+        })?;
         record.observe(&account, self.clock.now());
-        self.store.save(&record, &lease).await?;
+        self.store
+            .save(&record, &lease)
+            .await
+            .map_err(ContactUpdateError::Persistence)?;
         Ok(AcmeAccount {
             key_algorithm: signer.algorithm(),
             times: record.times,

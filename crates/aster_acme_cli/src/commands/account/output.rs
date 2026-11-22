@@ -37,21 +37,44 @@ pub(super) enum Output<'a> {
         directory: &'a AcmeUrl,
         profiles: &'a Option<std::collections::BTreeMap<String, String>>,
     },
-    ProfilePreference {
-        name: &'a str,
-        previous: &'a Option<String>,
-        current: &'a Option<String>,
-    },
-    /// Future terms delegation: local metadata, never a CA account update.
-    TermsDelegation {
-        name: &'a str,
-        auto_accept_terms_updates: bool,
-        previous_auto_accept_terms_updates: bool,
-        accepted_terms_url: Option<&'a String>,
-        advertised_terms_url: Option<&'a String>,
-        directory_checked: bool,
-        ca_account_update_sent: bool,
-    },
+    /// One `account update` invocation; each applied scope reports its own outcome.
+    Updated(Updated<'a>),
+}
+
+#[derive(Serialize)]
+pub(super) struct Updated<'a> {
+    name: &'a str,
+    /// Contacts committed at the CA; the echoed account state is remote-verified.
+    contacts: Option<ContactsUpdated<'a>>,
+    profile: Option<ProfileUpdated<'a>>,
+    terms: Option<TermsUpdated<'a>>,
+}
+
+#[derive(Serialize)]
+pub(super) struct ContactsUpdated<'a> {
+    #[serde(flatten)]
+    identity: Identity<'a>,
+}
+
+#[derive(Serialize)]
+pub(super) struct ProfileUpdated<'a> {
+    previous: &'a Option<String>,
+    current: &'a Option<String>,
+}
+
+/// Future terms delegation: local metadata, never a CA account update.
+#[derive(Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Fixed JSON contract: before/after states, directory evidence and the CA-write flag are independent facts"
+)]
+pub(super) struct TermsUpdated<'a> {
+    auto_accept_terms_updates: bool,
+    previous_auto_accept_terms_updates: bool,
+    accepted_terms_url: Option<&'a String>,
+    advertised_terms_url: Option<&'a String>,
+    directory_checked: bool,
+    ca_account_update_sent: bool,
 }
 
 #[derive(Serialize)]
@@ -269,32 +292,26 @@ impl<'a> From<&'a AccountReport> for Output<'a> {
                 directory,
                 profiles,
             },
-            AccountReport::ProfilePreference {
-                name,
-                previous,
-                current,
-            } => Self::ProfilePreference {
-                name,
-                previous,
-                current,
-            },
-            AccountReport::TermsDelegation {
-                name,
-                previous,
-                current,
-                accepted_terms_url,
-                advertised_terms_url,
-                directory_checked,
-            } => Self::TermsDelegation {
-                name,
-                auto_accept_terms_updates: *current,
-                previous_auto_accept_terms_updates: *previous,
-                accepted_terms_url: accepted_terms_url.as_ref(),
-                advertised_terms_url: advertised_terms_url.as_ref(),
-                directory_checked: *directory_checked,
-                // Enabling reads the directory but never mutates the CA account.
-                ca_account_update_sent: false,
-            },
+            AccountReport::Updated(outcome) => Self::Updated(Updated {
+                name: &outcome.name,
+                contacts: outcome.contacts.as_ref().map(|contacts| ContactsUpdated {
+                    // The CA's echoed account response is remote-verified by definition.
+                    identity: Identity::new(&outcome.name, &contacts.account, true),
+                }),
+                profile: outcome.profile.as_ref().map(|profile| ProfileUpdated {
+                    previous: &profile.previous,
+                    current: &profile.current,
+                }),
+                terms: outcome.terms.as_ref().map(|terms| TermsUpdated {
+                    auto_accept_terms_updates: terms.current,
+                    previous_auto_accept_terms_updates: terms.previous,
+                    accepted_terms_url: terms.accepted_terms_url.as_ref(),
+                    advertised_terms_url: terms.advertised_terms_url.as_ref(),
+                    directory_checked: terms.directory_checked,
+                    // Enabling reads the directory but never mutates the CA account.
+                    ca_account_update_sent: false,
+                }),
+            }),
             AccountReport::List {
                 accounts,
                 default,

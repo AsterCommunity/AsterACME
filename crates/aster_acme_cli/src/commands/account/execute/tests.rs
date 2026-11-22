@@ -443,7 +443,7 @@ async fn contact_updates_preserve_terms_delegation_without_reporting_automatic_a
         .unwrap();
     let before = fixture.record().await;
     let contacts = vec!["mailto:new@example.com".to_owned()];
-    let report = crate::commands::account::mutation::submit_contacts(
+    crate::commands::account::mutation::submit_contacts(
         &context,
         signer,
         contacts.clone(),
@@ -455,9 +455,8 @@ async fn contact_updates_preserve_terms_delegation_without_reporting_automatic_a
     )
     .await
     .unwrap();
-    let json = render::tests::json_value(&report);
-    assert_eq!(json["action"], "update_contact");
-    assert_eq!(json["auto_accepted_terms"], false);
+    // The contacts outcome carries the CA-echoed account; the delegation
+    // metadata is judged from the record, not a report variant.
     let after = fixture.record().await;
     assert!(after.auto_accept_terms_updates);
     assert_eq!(after.accepted_terms_url, before.accepted_terms_url);
@@ -502,10 +501,15 @@ async fn enabled_delegation_unblocks_ensure_after_a_terms_change() {
     .await
     .unwrap();
     let json = render::tests::json_value(&report);
-    assert_eq!(json["auto_accept_terms_updates"], true);
-    assert_eq!(json["accepted_terms_url"], "https://ca.example/terms/one");
-    assert_eq!(json["ca_account_update_sent"], false);
-    assert_eq!(json["directory_checked"], true);
+    assert_eq!(json["terms"]["auto_accept_terms_updates"], true);
+    assert_eq!(
+        json["terms"]["accepted_terms_url"],
+        "https://ca.example/terms/one"
+    );
+    assert_eq!(json["terms"]["ca_account_update_sent"], false);
+    assert_eq!(json["terms"]["directory_checked"], true);
+    assert_eq!(json["contacts"], serde_json::Value::Null);
+    assert_eq!(json["profile"], serde_json::Value::Null);
     assert_eq!(
         fixture.posts().await,
         before,

@@ -27,6 +27,7 @@ mod update;
 struct MemoryStore {
     record: Mutex<Option<AccountRecord>>,
     fail_save: AtomicBool,
+    save_then_fail: AtomicBool,
 }
 
 #[tokio::test]
@@ -464,6 +465,12 @@ impl AccountStore for MemoryStore {
             });
         }
         *self.record.lock().await = Some(record.clone());
+        if self.save_then_fail.load(Ordering::SeqCst) {
+            return Err(AccountStoreError {
+                message: "injected post-replacement sync failure".into(),
+                kind: crate::storage::account::AccountStoreErrorKind::Other,
+            });
+        }
         Ok(())
     }
 }

@@ -76,6 +76,18 @@ pub enum TransportError {
     /// No valid replay nonce was available.
     #[error("ACME response did not provide a valid Replay-Nonce")]
     MissingNonce,
+    /// A badNonce response rejected the previous POST, but preparing its retry
+    /// failed before another POST was sent. Retains both pieces of evidence.
+    #[error(
+        "the CA rejected the request with badNonce; a replacement request could not be prepared"
+    )]
+    RetryPreparation {
+        /// The definitive rejection of the preceding request.
+        rejection: Box<TransportError>,
+        /// The failure acquiring a replacement nonce, signing, or preparing HTTP.
+        #[source]
+        source: Box<TransportError>,
+    },
     /// Account resource location is required for durable identity.
     #[error("ACME account response is missing a valid Location URL")]
     MissingLocation,
@@ -106,7 +118,11 @@ pub enum TransportError {
 impl TransportError {
     /// Only a structured ACME refusal can clear this attempt's submission evidence.
     pub(crate) fn is_definitive_rejection(&self) -> bool {
-        matches!(self, Self::Problem { status, .. } if definitive_rejection(*status))
+        match self {
+            Self::Problem { status, .. } => definitive_rejection(*status),
+            Self::RetryPreparation { rejection, .. } => rejection.is_definitive_rejection(),
+            _ => false,
+        }
     }
 
     /// Match a complete ACME problem URI; unknown errors do not trigger known behavior.
@@ -348,19 +364,28 @@ impl AcmeClient {
         let jwk = signer.jwk()?;
         let mut current_nonce = self.take_nonce().await?;
         let mut before_submit = Some(before_submit);
+        let mut retry_rejection: Option<TransportError> = None;
         for attempt in 0..=self.options.bad_nonce_retries {
             let identity = match kid {
                 Some(kid) => RequestIdentity::Kid { kid: kid.as_str() },
                 None => RequestIdentity::Jwk { jwk: &jwk },
             };
-            let jws = sign_request(signer, identity, &current_nonce, url.as_str(), payload)?;
+            let mut preparation_error = |source| match retry_rejection.take() {
+                Some(rejection) => TransportError::RetryPreparation {
+                    rejection: Box::new(rejection),
+                    source: Box::new(source),
+                },
+                None => source,
+            };
+            let jws = sign_request(signer, identity, &current_nonce, url.as_str(), payload)
+                .map_err(|error| preparation_error(error.into()))?;
             let started = std::time::Instant::now();
             tracing::debug!(
                 request_kind = "signed_post",
                 nonce_retry = attempt,
                 "ACME request started"
             );
-            let http = self.http_pool.client().await?;
+            let http = self.http_pool.client().await.map_err(preparation_error)?;
             let prepared = request(http, Method::POST, url, &self.options)
                 .header("Content-Type", "application/jose+json")
                 .json(&jws);
@@ -399,11 +424,24 @@ impl AcmeClient {
                 return Ok(response);
             }
             let error = response_error(&response);
-            if error.is_problem(&ProblemKind::BadNonce) && attempt < self.options.bad_nonce_retries
+            if error.is_problem(&ProblemKind::BadNonce)
+                && error.is_definitive_rejection()
+                && attempt < self.options.bad_nonce_retries
             {
                 // RFC 8555 §6.5: retry MUST consume this response's nonce, not a pooled nonce.
                 submitted.store(false, std::sync::atomic::Ordering::SeqCst);
-                current_nonce = fresh.ok_or(TransportError::MissingNonce)?;
+                match fresh {
+                    Some(nonce) => {
+                        current_nonce = nonce;
+                        retry_rejection = Some(error);
+                    }
+                    None => {
+                        return Err(TransportError::RetryPreparation {
+                            rejection: Box::new(error),
+                            source: Box::new(TransportError::MissingNonce),
+                        });
+                    }
+                }
             } else {
                 self.remember_nonce(fresh).await;
                 return Err(error);

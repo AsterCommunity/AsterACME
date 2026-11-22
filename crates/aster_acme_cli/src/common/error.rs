@@ -13,6 +13,40 @@ pub(crate) mod problem;
 
 pub(crate) type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
+/// Operation context retains the source for diagnostics and process disposition.
+#[derive(Debug)]
+pub(crate) struct ContextError {
+    pub(crate) context: String,
+    pub(crate) source: Box<dyn std::error::Error>,
+}
+
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.context)
+    }
+}
+
+impl std::error::Error for ContextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// Cancellation remains cancellation when an operation adds partial-result context.
+pub(crate) fn exit_status(
+    mut error: &(dyn std::error::Error + 'static),
+) -> crate::common::session::ExitStatus {
+    loop {
+        if error.is::<crate::common::terminal::Canceled>() {
+            return crate::common::session::ExitStatus::Cancelled;
+        }
+        match error.source() {
+            Some(source) => error = source,
+            None => return crate::common::session::ExitStatus::Failed,
+        }
+    }
+}
+
 /// Missing local identity, distinct from a CA rejecting an existing signing key.
 #[derive(Debug)]
 pub(crate) struct MissingLocalAccount {
@@ -28,6 +62,10 @@ impl std::error::Error for MissingLocalAccount {}
 /// Convert structured library failures at the CLI boundary; embedded callers retain
 /// the original problem document and retry metadata for their own policy decisions.
 pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, Option<String>) {
+    if let Some(context) = error.downcast_ref::<ContextError>() {
+        let (message, hint) = diagnostic(context.source.as_ref());
+        return (format!("{context}: {message}"), hint);
+    }
     if let Some(missing) = error.downcast_ref::<MissingLocalAccount>() {
         return (
             missing.to_string(),
@@ -40,6 +78,10 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
     if let Some(issue) = error.downcast_ref::<aster_acme::issuance::IssueError>() {
         return issue_diagnostic(issue);
     }
+    if let Some(update) = error.downcast_ref::<aster_acme::account::ContactUpdateError>() {
+        return contact_update_diagnostic(update);
+    }
+
     if let Some(account) = error.downcast_ref::<AccountError>() {
         return match account {
             AccountError::KeyRotationUncertain => (
@@ -113,6 +155,46 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
         return (storage.to_string(),Some("Check the account name, selected CA and data directory. Switching requires an already registered account.".into()));
     }
     (error.to_string(), None)
+}
+
+fn contact_update_diagnostic(
+    update: &aster_acme::account::ContactUpdateError,
+) -> (String, Option<String>) {
+    use aster_acme::account::ContactUpdateError;
+    let (context, (message, hint)) = match update {
+        ContactUpdateError::NotSubmitted(source) => (
+            "Contacts were not submitted to the CA; this invocation did not change CA contacts",
+            diagnostic(source.as_ref()),
+        ),
+        ContactUpdateError::Rejected(source) => (
+            "The CA explicitly rejected the contact update; contacts were not changed by this attempt",
+            diagnostic(source.as_ref()),
+        ),
+        ContactUpdateError::Unconfirmed(source) => {
+            let (message, _) = diagnostic(source.as_ref());
+            let mut hint = "Inspect account show --verify before deciding whether to retry; do not automatically replay the contact mutation.".to_owned();
+            if let AccountError::Transport(
+                TransportError::Problem { retry_after, .. }
+                | TransportError::HttpStatus { retry_after, .. },
+            ) = source.as_ref()
+                && let Some(retry_after) = retry_after
+            {
+                hint.push(' ');
+                hint.push_str(&retry_hint(Some(retry_after)));
+            }
+            return (
+                format!(
+                    "The contact update result at the CA is unknown; local intent is retained and no subsequent update scopes were applied: {message}"
+                ),
+                Some(hint),
+            );
+        }
+        ContactUpdateError::Persistence(source) => (
+            "Contacts were updated at the CA; local persistence of the confirmed response could not be verified",
+            diagnostic(source),
+        ),
+    };
+    (format!("{context}: {message}"), hint)
 }
 
 fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option<String>) {
@@ -191,6 +273,11 @@ fn retry_hint(retry_after: Option<&RetryAfter>) -> String {
 
 fn transport_diagnostic(error: &TransportError) -> (String, Option<String>) {
     match error {
+        TransportError::RetryPreparation { rejection, source } => {
+            let (rejection, _) = transport_diagnostic(rejection);
+            let (cause, hint) = transport_diagnostic(source);
+            (format!("{rejection}; no replacement request was sent: {cause}"), hint)
+        },
         TransportError::Problem {status,problem,retry_after} => self::problem::diagnostic(*status, problem, retry_after.as_ref()),
         TransportError::Network(network) if network.is_timeout() => ("The CA request timed out.".into(),Some("The remote result may be unknown. Retry with the same account and data directory; its saved key is retained.".into())),
         TransportError::Network(_) => ("Could not connect to the CA securely.".into(),Some("Check the directory URL, network and TLS trust. The saved account key is retained.".into())),
@@ -242,6 +329,113 @@ pub(crate) fn render(
 mod tests {
     use crate::common::error::*;
     use aster_acme_protocol::problem::ProblemKind;
+
+    #[test]
+    fn rejected_bad_nonce_retry_keeps_rejection_and_preparation_failure_in_json() {
+        use aster_acme::account::ContactUpdateError;
+        for source in [
+            TransportError::MissingNonce,
+            TransportError::Crypto(aster_acme::crypto::CryptoError::Signing),
+        ] {
+            let rejection = TransportError::Problem {
+                status: 400,
+                problem: Box::new(aster_acme_protocol::problem::Problem {
+                    kind: ProblemKind::BadNonce,
+                    detail: Some("nonce expired".into()),
+                    instance: None,
+                    subproblems: vec![],
+                    extensions: serde_json::Map::new(),
+                }),
+                retry_after: None,
+            };
+            let error = ContactUpdateError::Rejected(Box::new(AccountError::Transport(
+                TransportError::RetryPreparation {
+                    rejection: Box::new(rejection),
+                    source: Box::new(source),
+                },
+            )));
+            let json: serde_json::Value = serde_json::from_str(
+                &render(&error, crate::common::session::Format::plain(true)).unwrap(),
+            )
+            .unwrap();
+            let message = json["error"]["message"].as_str().unwrap();
+            assert!(message.contains("explicitly rejected"), "{message}");
+            assert!(
+                message.contains("HTTP 400") && message.contains("nonce expired"),
+                "{message}"
+            );
+            assert!(
+                message.contains("no replacement request was sent"),
+                "{message}"
+            );
+            assert!(
+                message.contains("Replay-Nonce") || message.contains("signing failed"),
+                "{message}"
+            );
+            assert!(!message.contains("were not submitted"), "{message}");
+        }
+    }
+
+    #[test]
+    fn contact_errors_keep_submission_phase_and_actionable_ca_diagnostics() {
+        use aster_acme::account::ContactUpdateError;
+        let source = || Box::new(AccountError::InvalidContact);
+        for error in [
+            ContactUpdateError::NotSubmitted(source()),
+            ContactUpdateError::Rejected(source()),
+        ] {
+            let (message, hint) = diagnostic(&error);
+            assert!(message.contains("not changed") || message.contains("did not change"));
+            assert!(hint.unwrap().contains("--contact"));
+        }
+        let (_, hint) = diagnostic(&ContactUpdateError::Unconfirmed(Box::new(
+            AccountError::InvalidResponse,
+        )));
+        assert!(hint.unwrap().contains("do not automatically replay"));
+    }
+
+    #[test]
+    fn contextual_errors_retain_cancellation_and_typed_recovery_hints() {
+        let cancelled = ContextError {
+            context: "the terms delegation was not saved".into(),
+            source: Box::new(crate::common::terminal::Canceled),
+        };
+        let nested = ContextError {
+            context: "Contacts were updated at the CA".into(),
+            source: Box::new(cancelled),
+        };
+        assert_eq!(
+            exit_status(&nested),
+            crate::common::session::ExitStatus::Cancelled
+        );
+        let (message, _) = diagnostic(&nested);
+        assert!(message.contains("Contacts were updated at the CA"));
+        assert_eq!(message.matches("Canceled;").count(), 1);
+
+        let failed = ContextError {
+            context: "the terms delegation was not saved".into(),
+            source: Box::new(AccountError::IdentityMismatch),
+        };
+        assert_eq!(
+            exit_status(&failed),
+            crate::common::session::ExitStatus::Failed
+        );
+        let json = render(&failed, crate::common::session::Format::plain(true)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not match")
+        );
+        assert!(
+            json["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("original account key")
+        );
+    }
+
     #[test]
     fn missing_account_is_actionable_and_not_a_debug_dump() {
         let error = TransportError::Problem {
