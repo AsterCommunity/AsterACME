@@ -387,17 +387,21 @@ async fn apply_terms_change(
         .action(aster_acme_core::account::AccountOperation::Update)
         .map_err(AccountError::from)?;
     let previous = record.auto_accept_terms_updates;
-    if target && previous != snapshot.auto_accept_terms_updates {
+    if previous != snapshot.auto_accept_terms_updates {
         return Err("Automatic CA terms delegation changed while this update was awaiting confirmation; the concurrently saved delegation was preserved. Rerun account update to review the current authorization.".into());
     }
     record.auto_accept_terms_updates = target;
-    if target && let Some(url) = &advertised_terms {
+    if target {
         if record.accepted_terms_url != snapshot.accepted_terms_url
-            && record.accepted_terms_url.as_ref() != Some(url)
+            && advertised_terms
+                .as_ref()
+                .is_none_or(|url| record.accepted_terms_url.as_ref() != Some(url))
         {
             return Err("Accepted CA terms changed while this update was awaiting confirmation; the concurrently saved value was preserved. Rerun account update to review the current terms.".into());
         }
-        record.accepted_terms_url = Some(url.clone());
+        if let Some(url) = &advertised_terms {
+            record.accepted_terms_url = Some(url.clone());
+        }
     }
     AccountStore::save(context.store.as_ref(), &record, &lease)
         .await
@@ -555,7 +559,10 @@ pub(super) async fn submit_contacts(
     let client = Arc::new(
         cli.http
             .discover(context.directory.clone(), transport)
-            .await?,
+            .await.map_err(|error| crate::common::error::ContextError {
+                context: "Contacts were not submitted to the CA; directory discovery failed before any contact mutation".into(),
+                source: Box::new(error),
+            })?,
     );
     let account = AccountService::new(client, context.store.clone())
         .update_contacts(signer.as_ref(), contacts)
@@ -1580,6 +1587,234 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profile_save_rejects_a_mismatched_key_algorithm_without_writing() {
+        let (_server, context, signer, _transport, _directory, _handles) = harness().await;
+        // Simulate metadata replaced after the signer was loaded. Ordinary
+        // AccountStore::save rejects algorithm changes, so edit only this fixture.
+        let path = context
+            .config_path
+            .parent()
+            .unwrap()
+            .join("accounts/work/account.toml");
+        let mut document = std::fs::read_to_string(&path)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        document["account"]["key_algorithm"] = toml_edit::value("ecdsa-p384");
+        let before = document.to_string();
+        std::fs::write(&path, &before).unwrap();
+        let error = save_profile_preference(
+            &context,
+            signer.as_ref(),
+            None,
+            None,
+            true,
+            &CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(
+            error.downcast_ref::<AccountError>(),
+            Some(AccountError::IdentityMismatch)
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn profile_menu_without_an_advertisement_fails_before_prompting() {
+        for advertised in [None, Some(std::collections::BTreeMap::new())] {
+            let error = interactive_profile_selection(
+                None,
+                advertised.as_ref(),
+                &CommandContext::new(true),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not advertise certificate profiles")
+            );
+            assert!(error.to_string().contains("--clear-profile"));
+            assert!(!error.is::<crate::common::terminal::Canceled>());
+        }
+    }
+
+    #[tokio::test]
+    async fn contact_discovery_failure_reports_no_submission_and_leaves_record_unchanged() {
+        let server = MockServer::start().await;
+        let (context, signer, transport, _handles) = account_fixture(&server).await;
+        let before = stored(&context, &signer).await;
+        let error = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                clear_contacts: true,
+                yes: true,
+                ..update_args(&context)
+            },
+            &context,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap();
+        let (message, _) = crate::common::error::diagnostic(error.as_ref());
+        assert!(message.contains("Contacts were not submitted"), "{message}");
+        assert_eq!(stored(&context, &signer).await, before);
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.method != "POST")
+        );
+    }
+
+    #[tokio::test]
+    async fn contact_acceptance_with_failed_local_save_reports_remote_evidence() {
+        let (server, context, _signer, transport, _directory, _handles) =
+            harness_with_terms(Some("https://ca.example/terms/v2")).await;
+        let metadata = context
+            .config_path
+            .parent()
+            .unwrap()
+            .join("accounts/work/account.toml");
+        let retained = metadata.with_extension("retained.toml");
+        let response_metadata = metadata.clone();
+        let response_retained = retained.clone();
+        Mock::given(method("POST"))
+            .and(path("/acct/1"))
+            .respond_with(move |_: &wiremock::Request| {
+                // The CA received the POST. Make the subsequent real-file save
+                // fail without deleting the already persisted contact intent.
+                std::fs::rename(&response_metadata, &response_retained).unwrap();
+                std::fs::create_dir(&response_metadata).unwrap();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status":"valid", "contact":["mailto:accepted@example.com"]
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = update_with_transport(
+            crate::commands::account::args::UpdateArgs {
+                contact: vec!["accepted@example.com".into()],
+                profile: Some("shortlived".into()),
+                auto_accept_new_terms: true,
+                yes: true,
+                ..update_args(&context)
+            },
+            &context,
+            transport,
+            &CommandContext::new(true),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(
+            error.downcast_ref::<aster_acme::account::ContactUpdateError>(),
+            Some(aster_acme::account::ContactUpdateError::Persistence(_))
+        ));
+        let json: serde_json::Value = serde_json::from_str(
+            &crate::common::error::render(
+                error.as_ref(),
+                crate::common::session::Format::plain(true),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let message = json["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("Contacts were updated at the CA"),
+            "{message}"
+        );
+        assert!(message.contains("local persistence"), "{message}");
+        assert!(!message.contains("not changed"), "{message}");
+        assert_eq!(
+            crate::common::error::exit_status(error.as_ref()),
+            crate::common::session::ExitStatus::Failed
+        );
+        let record: toml::Value =
+            toml::from_str(&std::fs::read_to_string(retained).unwrap()).unwrap();
+        assert_eq!(
+            record["account"]["contacts"].as_array().unwrap()[0].as_str(),
+            Some("mailto:accepted@example.com")
+        );
+        assert!(record["account"].get("preferred_profile").is_none());
+        assert_eq!(
+            record["account"]["auto_accept_terms_updates"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_or_uncertain_contact_updates_never_apply_later_scopes() {
+        for (status, problem, rejected) in [
+            (400, true, true),
+            (400, false, false),
+            (503, false, false),
+            (429, true, false),
+        ] {
+            let (server, context, signer, transport, _directory, _handles) = harness().await;
+            Mock::given(method("POST"))
+                .and(path("/acct/1"))
+                .respond_with(if problem {
+                    ResponseTemplate::new(status)
+                        .insert_header("Retry-After", "60")
+                        .set_body_json(
+                            serde_json::json!({"type":"urn:ietf:params:acme:error:unauthorized"}),
+                        )
+                } else {
+                    ResponseTemplate::new(status)
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = update_with_transport(
+                crate::commands::account::args::UpdateArgs {
+                    clear_contacts: true,
+                    profile: Some("shortlived".into()),
+                    clear_auto_accept_new_terms: true,
+                    yes: true,
+                    ..update_args(&context)
+                },
+                &context,
+                transport,
+                &CommandContext::new(true),
+            )
+            .await
+            .err()
+            .unwrap();
+            let (message, hint) = crate::common::error::diagnostic(error.as_ref());
+            assert_eq!(
+                message.contains("explicitly rejected"),
+                rejected,
+                "{message}"
+            );
+            assert_eq!(
+                message.contains("result at the CA is unknown"),
+                !rejected,
+                "{message}"
+            );
+            if !rejected {
+                assert!(
+                    hint.as_ref()
+                        .unwrap()
+                        .contains("do not automatically replay")
+                );
+            }
+            if status == 429 {
+                assert!(hint.unwrap().contains("60 seconds"));
+            }
+            let saved = stored(&context, &signer).await;
+            assert_eq!(saved.preferred_profile, None);
+            assert!(!saved.auto_accept_terms_updates);
+            assert_eq!(saved.accepted_terms_url, None);
+        }
+    }
+
+    #[tokio::test]
     async fn terms_preflight_preserves_rate_limit_diagnostics_before_any_mutation() {
         for combined in [false, true] {
             let server = MockServer::start().await;
@@ -1632,34 +1867,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terms_enable_never_overwrites_a_concurrent_delegation_change() {
-        for snapshot_enabled in [false, true] {
-            for saved_enabled in [false, true] {
-                for advertised in [None, Some("terms")] {
-                    let (_server, context, signer, transport, _directory, _handles) =
-                        harness_with_terms(advertised).await;
-                    let mut snapshot = stored(&context, &signer).await;
-                    snapshot.auto_accept_terms_updates = snapshot_enabled;
-                    snapshot.accepted_terms_url = advertised.map(str::to_owned);
-                    context.store.save(&snapshot).await.unwrap();
-                    let cli = CommandContext::new(true);
-                    let preflight = update_preflight(&context, transport, false, true, None, &cli)
-                        .await
-                        .unwrap();
-                    let mut changed = snapshot.clone();
-                    changed.auto_accept_terms_updates = saved_enabled;
-                    context.store.save(&changed).await.unwrap();
-                    let result = apply_terms_change(
-                        &context, &signer, &snapshot, true, true, &preflight, &cli,
-                    )
-                    .await;
-                    if snapshot_enabled == saved_enabled {
-                        result.unwrap();
-                        assert!(stored(&context, &signer).await.auto_accept_terms_updates);
-                    } else {
-                        let error = result.err().unwrap();
-                        assert!(error.to_string().contains("delegation changed"));
-                        assert_eq!(stored(&context, &signer).await, changed);
+    async fn terms_changes_never_overwrite_a_concurrent_delegation_change() {
+        for target in [false, true] {
+            for snapshot_enabled in [false, true] {
+                for saved_enabled in [false, true] {
+                    for advertised in [None, Some("terms")] {
+                        let (_server, context, signer, transport, _directory, _handles) =
+                            harness_with_terms(advertised).await;
+                        let mut snapshot = stored(&context, &signer).await;
+                        snapshot.auto_accept_terms_updates = snapshot_enabled;
+                        snapshot.accepted_terms_url = advertised.map(str::to_owned);
+                        context.store.save(&snapshot).await.unwrap();
+                        let cli = CommandContext::new(true);
+                        let preflight =
+                            update_preflight(&context, transport, false, true, None, &cli)
+                                .await
+                                .unwrap();
+                        let mut changed = snapshot.clone();
+                        changed.auto_accept_terms_updates = saved_enabled;
+                        context.store.save(&changed).await.unwrap();
+                        let result = apply_terms_change(
+                            &context, &signer, &snapshot, target, true, &preflight, &cli,
+                        )
+                        .await;
+                        if snapshot_enabled == saved_enabled {
+                            result.unwrap();
+                            assert_eq!(
+                                stored(&context, &signer).await.auto_accept_terms_updates,
+                                target
+                            );
+                        } else {
+                            let error = result.err().unwrap();
+                            assert!(error.to_string().contains("delegation changed"));
+                            assert_eq!(stored(&context, &signer).await, changed);
+                        }
                     }
                 }
             }
@@ -1706,7 +1947,10 @@ mod tests {
             (Some("old"), None, Some("advertised"), true),
             (Some("old"), Some("advertised"), Some("advertised"), false),
             (Some("old"), Some("old"), Some("advertised"), false),
-            (Some("old"), Some("newer"), None, false),
+            (Some("old"), Some("newer"), None, true),
+            (Some("old"), Some("old"), None, false),
+            (None, Some("newer"), None, true),
+            (Some("old"), None, None, true),
         ] {
             let (_server, context, signer, transport, _directory, _handles) =
                 harness_with_terms(advertised).await;

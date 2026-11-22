@@ -162,3 +162,23 @@ CodeRabbit CLI 首轮以 `9fcf401` 相对 `origin/main` 审查 22 个文件，�
 
 
 CodeRabbit CLI 第三轮审查 `3dbe0f6`（review card `a00a2aa4-9057-45d6-b8d4-519c56f73e8f`），两条 `minor` 均核实处理：开启授权前在租约内比较 `auto_accept_terms_updates` 与确认快照，避免旧确认覆盖并发撤销（矩阵覆盖原/新授权开关与 CA 有/无条款，8 种组合）；terms preflight 使用 `ContextError` 保留 `TransportError`，单独开启与三 scope 组合在 directory 429 时保留 60 秒 Retry-After 提示，零账户 POST、原记录不变。
+
+
+## PR #60 托管 coverage 与线上 review 复核（2026-11-22，基于 `84025ee`）
+
+读取当前 PR revision 与 CI run `44965919797` 的原始 LCOV，逐行映射到 `origin/main` diff，复现 122 条未覆盖新增可执行行：mutation 120、render 1、main 1。多数是账户 PTY fixture 与交互路径；普通平台检查运行了账户 PTY，但 coverage job 只合并部署 PTY 数据。改为在同一 `CARGO_TARGET_DIR` / `CARGO_LLVM_COV_TARGET_DIR` 下执行账户和部署驱动；账户驱动增加 `--binary PATH` 以复用插桩测试程序。补充缺失/空 profile 广告不提示、profile 密钥算法不匹配拒绝写入、联系人 valid/deactivated/revoked/未知状态渲染与控制字符转义测试。
+
+线上 review `6009169314` 的 1 条 Major、2 条 Minor 对照 `84025ee` 核实：
+
+- 授权位快照检查同时适用于开启与撤销；16 种矩阵覆盖目标开/关、快照授权开/关、并发授权开/关、CA 有/无条款。开启授权时，无公告也要求 accepted_terms_url 与确认快照一致；有公告则额外允许并发值恰为该公告，冲突保存值不覆盖。
+- 联系人更新使用服务层 `ContactUpdateError` 保留未提交、明确拒绝、远端结果未知、CA 已接受但本地观察保存未确认四阶段证据。库注入保存前/替换后失败，CLI 通过真实文件故障使 POST 200 后保存失败，断言 JSON 保留 CA 已接受证据且 profile/terms 不执行。POST 前 nonce 故障不算联系人提交；明确 400/403 ACME Problem 与 408/429/5xx、非规范 2xx、坏响应/超时分开，不自动重放。review 中“非 200 均表示 CA 未变更”不成立，未知结果必须诚实保留未知。
+- 诊断保留底层提示，未知结果仍给出人工验证/禁自动重放，并保留 Retry-After。库 README、CLI 契约、账户设计和双语 CHANGELOG 同步错误返回类型与证据边界。
+
+插桩全量的双线程复跑曾在未修改的 inspect deadline 与 revocation timeout 两项测试触发请求次数 0/预期 1；单测试线程完整插桩运行通过，未扩大或更改其时间预算。本地 LCOV 合并账户 PTY 前后与最终推送状态另行核对，托管 89.07789% 结果不代表本地未推送修改。
+
+
+本地 LCOV 对当前工作区相对 `origin/main` 的新增可执行行统计：合并账户 PTY 前 1357/1475（92.00%），合并账户与部署 PTY 后 1474/1475（99.93%）；mutation 1171/1171、render 127/127、main 1/1。计数包含仓库被 LLVM 记录的测试/fixture 行，不等同于全仓覆盖率；剩余 1 行是库联系人更新的身份拒绝分支。单线程完整 workspace/all-features 插桩测试通过，最后 nonce 阶段分类补充通过账户相关插桩复测；账户 PTY 21、部署 PTY 5 场景合并成功。
+
+本地 CodeRabbit CLI 对本轮 16 个未提交改动文件审查返回 `review_completed`、0 findings（review card `42713204-ba58-4282-89aa-70d5ded93aec`）。本地覆盖率与 review 不代表新 revision 的托管 Codecov/CI；推送后须重新核对远端结果。
+
+最终未插桩验证：`cargo test --workspace --all-features --locked -- --test-threads=1`（含 doctest）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked` 全部通过；workspace/import/feature/doc-links 检查、14 项 Python tests 与 Actionlint 均通过。账户/部署插桩 PTY 共 26 场景通过。原双线程插桩失败证据保留，最终未调整那些测试的期限。

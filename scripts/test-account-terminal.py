@@ -1,4 +1,5 @@
 """Native account terms consent through loopback CA, real storage and terminal prompts."""
+import argparse
 import errno
 import json
 import os
@@ -77,14 +78,20 @@ def run_case(binary, mode, answers, fixture=FIXTURE, done_prefix="ACCOUNT_TERMS_
 
 
 def main():
-    build = subprocess.run(
-        ["cargo", "test", "-p", "aster_acme_cli", "--locked", "--no-run", "--message-format=json"],
-        cwd=ROOT, check=True, text=True, encoding="utf-8", capture_output=True,
-    )
-    binaries = [item["executable"] for line in build.stdout.splitlines()
-                if (item := json.loads(line)).get("reason") == "compiler-artifact"
-                and item.get("executable") and item.get("profile", {}).get("test")]
-    binary, = binaries
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", type=Path, help="Use an already-built test executable")
+    args = parser.parse_args()
+    if args.binary is not None:
+        binary = args.binary.resolve()
+    else:
+        build = subprocess.run(
+            ["cargo", "test", "-p", "aster_acme_cli", "--locked", "--no-run", "--message-format=json"],
+            cwd=ROOT, check=True, text=True, encoding="utf-8", capture_output=True,
+        )
+        binaries = [item["executable"] for line in build.stdout.splitlines()
+                    if (item := json.loads(line)).get("reason") == "compiler-artifact"
+                    and item.get("executable") and item.get("profile", {}).get("test")]
+        binary, = binaries
     for mode, answers in [
         ("yes", []),
         ("grant", [(CURRENT, b"y\r"), (FUTURE, b"y\r")]),

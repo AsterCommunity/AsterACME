@@ -502,6 +502,52 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn contact_updates_report_nonvalid_ca_status_and_escape_untrusted_text() {
+        use aster_acme_core::protocol::AccountStatus;
+        for status in [
+            AccountStatus::Valid,
+            AccountStatus::Deactivated,
+            AccountStatus::Revoked,
+            AccountStatus::Unknown("custom\x1b[2J\n".into()),
+        ] {
+            let account = aster_acme::account::AcmeAccount {
+                key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
+                times: aster_acme::account::AccountTimes::default(),
+                account_id: "account-id".into(),
+                directory_url: AcmeUrl::new("https://ca.example/directory").unwrap(),
+                account_url: AcmeUrl::new("https://ca.example/account/1").unwrap(),
+                status: status.clone(),
+                contacts: vec![],
+                recovered: false,
+            };
+            let report = AccountReport::Updated(crate::commands::account::report::UpdateOutcome {
+                name: "work\n".into(),
+                contacts: Some(crate::commands::account::report::ContactsUpdate { account }),
+                profile: None,
+                terms: None,
+            });
+            let text = render(&report, Format::plain(false)).unwrap();
+            assert!(
+                text.contains("Updated contacts for account work\\n."),
+                "{text}"
+            );
+            assert_eq!(text.lines().count(), 1);
+            assert!(!text.contains('\x1b'));
+            if status == AccountStatus::Valid {
+                assert!(!text.contains("Status:"));
+            } else {
+                assert!(
+                    text.contains(&format!("Status: {}.", safe(&String::from(status.clone()))))
+                );
+            }
+            let json = json_value(&report);
+            assert_eq!(json["contacts"]["status"], String::from(status));
+            assert_eq!(json["contacts"]["verified"], true);
+            assert_eq!(json["contacts"]["source"], "remote");
+        }
+    }
+
+    #[test]
     fn time_columns_are_utc_unknown_values_are_explicit_and_json_keeps_precision() {
         let at = time::OffsetDateTime::from_unix_timestamp(0)
             .unwrap()

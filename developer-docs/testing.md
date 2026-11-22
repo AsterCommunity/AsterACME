@@ -33,7 +33,7 @@ python3 scripts/check-precheck-features.py
 
 证书报告的字节级回归用例位于 `crates/aster_acme_cli/src/commands/cert/render/tests/contract.rs`，快照来自模块拆分前的 `26ef130`，覆盖文本、颜色和 JSON 输出以及对应退出状态；ActionRequired 文本提示有意追加精确 `--operation`，对应两项基准已定点更新。预期路径仅按宿主路径分隔符适配，不修改实际输出；报告有意变更时应先核对 [CLI 契约](cli-contract.md)，不要在结构重构中重新生成快照掩盖差异。
 
-覆盖率由 CI 的 Linux `coverage` 任务收集：先用 `cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report` 运行普通测试，再在相同 `CARGO_LLVM_COV_TARGET_DIR` 中追加下文的 PKCS#12 PTY 数据，最后以独立步骤运行 `cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info` 导出合并报告，发布摘要并上传 Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
+覆盖率由 CI 的 Linux `coverage` 任务收集：先用 `cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report` 运行普通测试，再在相同 `CARGO_TARGET_DIR` / `CARGO_LLVM_COV_TARGET_DIR` 中追加下文的账户与 PKCS#12 PTY 数据，最后以独立步骤运行 `cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info` 导出合并报告，发布摘要并上传 Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
 
 ## 证据记录
 
@@ -49,7 +49,7 @@ python3 scripts/check-precheck-features.py
 
 Unix原生确认终端回归：`python3 scripts/test-confirmation-terminal.py` 在PTY中验证提示/输入同一行、可见答案、光标/删除/退格、大小写、非法输入与长度上限、默认否，以及不发送任何按键时的deadline/外部取消/shutdown和完整termios恢复。Linux/macOS CI执行；Windows保留原生编译和普通测试。
 
-PKCS#12 原生终端回归：`python3 scripts/test-deployment-terminal.py` 验证隐藏密码与确认输入、取消零发布/零配置修改、JSON 不提示和 termios 恢复；Linux/macOS CI 执行。coverage 任务先运行普通测试保留 LLVM 数据，再通过 `cargo llvm-cov show-env --sh` 设置相同插桩环境，执行 PTY 驱动，最后导出合并报告，避免独立执行的终端测试遗漏于覆盖率。驱动可用 `--binary PATH` 复用已经插桩的测试程序；默认自行查找测试程序，子进程继承覆盖率环境。普通 Rust 测试不依赖 crate 归档之外的仓库脚本。密码来源、编码、解密、权限与自动部署的普通测试分别归 cli_storage 和 CLI deployment 模块。OpenSSL 互通使用手动验收，不引入自动测试依赖。
+PKCS#12 原生终端回归：`python3 scripts/test-deployment-terminal.py` 验证隐藏密码与确认输入、取消零发布/零配置修改、JSON 不提示和 termios 恢复；Linux/macOS CI 执行。coverage 任务先运行普通测试保留 LLVM 数据，再通过 `cargo llvm-cov show-env --sh` 设置相同插桩环境，执行 PTY 驱动，最后导出合并报告，避免独立执行的终端测试遗漏于覆盖率。账户与部署驱动均可用 `--binary PATH` 复用已经插桩的测试程序；默认自行查找测试程序，子进程继承覆盖率环境。普通 Rust 测试不依赖 crate 归档之外的仓库脚本。密码来源、编码、解密、权限与自动部署的普通测试分别归 cli_storage 和 CLI deployment 模块。OpenSSL 互通使用手动验收，不引入自动测试依赖。
 
 Provider 原生终端回归：`python3 scripts/test-provider-terminal.py` 在 PTY 中验证 add/show/cleanup/remove/update 和签发 Profile 选择、搜索、颜色与 NO_COLOR、默认否/取消、update 保存/丢弃草稿、子菜单返回并保留草稿及 termios 恢复，不执行真实 Provider 或访问 CA；Linux/macOS CI 同步执行。
 

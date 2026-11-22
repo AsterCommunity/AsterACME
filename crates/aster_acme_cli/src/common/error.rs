@@ -78,6 +78,10 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
     if let Some(issue) = error.downcast_ref::<aster_acme::issuance::IssueError>() {
         return issue_diagnostic(issue);
     }
+    if let Some(update) = error.downcast_ref::<aster_acme::account::ContactUpdateError>() {
+        return contact_update_diagnostic(update);
+    }
+
     if let Some(account) = error.downcast_ref::<AccountError>() {
         return match account {
             AccountError::KeyRotationUncertain => (
@@ -151,6 +155,46 @@ pub(crate) fn diagnostic(error: &(dyn std::error::Error + 'static)) -> (String, 
         return (storage.to_string(),Some("Check the account name, selected CA and data directory. Switching requires an already registered account.".into()));
     }
     (error.to_string(), None)
+}
+
+fn contact_update_diagnostic(
+    update: &aster_acme::account::ContactUpdateError,
+) -> (String, Option<String>) {
+    use aster_acme::account::ContactUpdateError;
+    let (context, (message, hint)) = match update {
+        ContactUpdateError::NotSubmitted(source) => (
+            "Contacts were not submitted to the CA; this invocation did not change CA contacts",
+            diagnostic(source.as_ref()),
+        ),
+        ContactUpdateError::Rejected(source) => (
+            "The CA explicitly rejected the contact update; contacts were not changed by this attempt",
+            diagnostic(source.as_ref()),
+        ),
+        ContactUpdateError::Unconfirmed(source) => {
+            let (message, _) = diagnostic(source.as_ref());
+            let mut hint = "Inspect account show --verify before deciding whether to retry; do not automatically replay the contact mutation.".to_owned();
+            if let AccountError::Transport(
+                TransportError::Problem { retry_after, .. }
+                | TransportError::HttpStatus { retry_after, .. },
+            ) = source.as_ref()
+                && let Some(retry_after) = retry_after
+            {
+                hint.push(' ');
+                hint.push_str(&retry_hint(Some(retry_after)));
+            }
+            return (
+                format!(
+                    "The contact update result at the CA is unknown; local intent is retained and no subsequent update scopes were applied: {message}"
+                ),
+                Some(hint),
+            );
+        }
+        ContactUpdateError::Persistence(source) => (
+            "Contacts were updated at the CA; local persistence of the confirmed response could not be verified",
+            diagnostic(source),
+        ),
+    };
+    (format!("{context}: {message}"), hint)
 }
 
 fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option<String>) {
@@ -280,6 +324,24 @@ pub(crate) fn render(
 mod tests {
     use crate::common::error::*;
     use aster_acme_protocol::problem::ProblemKind;
+
+    #[test]
+    fn contact_errors_keep_submission_phase_and_actionable_ca_diagnostics() {
+        use aster_acme::account::ContactUpdateError;
+        let source = || Box::new(AccountError::InvalidContact);
+        for error in [
+            ContactUpdateError::NotSubmitted(source()),
+            ContactUpdateError::Rejected(source()),
+        ] {
+            let (message, hint) = diagnostic(&error);
+            assert!(message.contains("not changed") || message.contains("did not change"));
+            assert!(hint.unwrap().contains("--contact"));
+        }
+        let (_, hint) = diagnostic(&ContactUpdateError::Unconfirmed(Box::new(
+            AccountError::InvalidResponse,
+        )));
+        assert!(hint.unwrap().contains("do not automatically replay"));
+    }
 
     #[test]
     fn contextual_errors_retain_cancellation_and_typed_recovery_hints() {
