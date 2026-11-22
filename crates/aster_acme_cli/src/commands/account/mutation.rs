@@ -188,7 +188,7 @@ pub(super) async fn update_with_transport(
             signer.as_ref(),
             profile_target,
             preflight.advertised_profiles.as_ref(),
-            args.yes || wants_contacts,
+            args.yes,
             cli,
         )
         .await
@@ -2172,6 +2172,8 @@ mod tests {
         let (server, context, signer, transport, _directory, _handles) =
             harness_with_terms(Some("https://ca.example/terms/v2")).await;
         let combined = mode.starts_with("update-combined-");
+        let profile_cancel = combined && mode.contains("-profile-");
+        let profile_clear = mode == "update-combined-profile-clear-deny";
         let menu = mode.starts_with("update-menu-");
         let profile_only = mode == "update-profile-deny";
         let profile_menu = mode == "update-menu-profile";
@@ -2182,6 +2184,11 @@ mod tests {
             let mut saved = stored(&context, &signer).await;
             saved.auto_accept_terms_updates = revoke;
             saved.accepted_terms_url = Some("https://ca.example/terms/v1".into());
+            context.store.save(&saved).await.unwrap();
+        }
+        if profile_cancel {
+            let mut saved = stored(&context, &signer).await;
+            saved.preferred_profile = Some("classic".into());
             context.store.save(&saved).await.unwrap();
         }
         let before = stored(&context, &signer).await;
@@ -2213,7 +2220,11 @@ mod tests {
             args.contact = vec!["new@example.com".into()];
         }
         if combined || profile_only {
-            args.profile = Some("shortlived".into());
+            if profile_clear {
+                args.clear_profile = true;
+            } else {
+                args.profile = Some("shortlived".into());
+            }
         }
         let cli = CommandContext::new(false);
         let result = update_with_transport(args, &context, transport, &cli).await;
@@ -2228,7 +2239,10 @@ mod tests {
                     message.contains("Contacts were updated at the CA"),
                     combined
                 );
-                assert_eq!(message.contains("the default profile was saved"), combined);
+                assert_eq!(
+                    message.contains("the default profile was saved"),
+                    combined && !profile_cancel
+                );
                 crate::finish(Err(error), &cli)
             }
             Ok(report) => {
@@ -2268,7 +2282,11 @@ mod tests {
         assert_eq!(saved.contacts.is_empty(), !combined);
         assert_eq!(
             saved.preferred_profile.as_deref(),
-            (combined || profile_menu).then_some("shortlived")
+            if profile_cancel {
+                before.preferred_profile.as_deref()
+            } else {
+                (combined || profile_menu).then_some("shortlived")
+            }
         );
         assert_eq!(
             saved.auto_accept_terms_updates,

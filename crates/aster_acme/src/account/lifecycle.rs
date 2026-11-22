@@ -66,7 +66,13 @@ impl AccountService {
             )
             .await
             .map_err(|error| {
-                if !submitted.load(std::sync::atomic::Ordering::SeqCst) {
+                if matches!(
+                    error,
+                    crate::transport::TransportError::RetryPreparation { .. }
+                ) && error.is_definitive_rejection()
+                {
+                    ContactUpdateError::Rejected(Box::new(error.into()))
+                } else if !submitted.load(std::sync::atomic::Ordering::SeqCst) {
                     ContactUpdateError::NotSubmitted(Box::new(error.into()))
                 } else if error.is_definitive_rejection() {
                     ContactUpdateError::Rejected(Box::new(error.into()))

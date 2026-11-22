@@ -67,7 +67,14 @@ def run_case(binary, mode, answers, fixture=FIXTURE, done_prefix="ACCOUNT_TERMS_
             assert CURRENT not in output and FUTURE not in output, repr(bytes(output))
         if mode == "update-combined-yes":
             assert b"Replace these contacts?" not in output, repr(bytes(output))
+            assert b"Save this profile preference?" not in output, repr(bytes(output))
             assert b"Enable automatic terms updates?" not in output, repr(bytes(output))
+        elif mode.startswith("update-combined-"):
+            assert b"Save this profile preference?" in output, repr(bytes(output))
+            expected = b"(none; the CA default applies)" if mode == "update-combined-profile-clear-deny" else b"shortlived"
+            assert expected in output, repr(bytes(output))
+            if "-profile-" in mode:
+                assert b"Enable automatic terms updates?" not in output, repr(bytes(output))
         assert termios.tcgetattr(slave) == before, "terminal state was not restored"
     finally:
         if process.poll() is None:
@@ -102,6 +109,7 @@ def main():
         run_case(binary, mode, answers)
     enable = b"Enable automatic terms updates?"
     contacts = (b"Replace these contacts?", b"y\r")
+    profile = (b"Save this profile preference?", b"y\r")
     menu = (b"Update which account preference?", b"\x1b[B\x1b[B\r")
     update_cases = [
         ("update-grant", [(enable, b"y\r")]),
@@ -115,16 +123,19 @@ def main():
         ("update-menu-deny", [menu, (enable, b"n\r")]),
         ("update-menu-profile", [(b"Update which account preference?", b"\x1b[B\r"),
                                  (b"Default certificate profile:", b"\x1b[B\r")]),
-        ("update-combined-grant", [contacts, (enable, b"y\r")]),
-        ("update-combined-deny", [contacts, (enable, b"n\r")]),
-        ("update-combined-cancel", [contacts, (enable, b"\x03")]),
+        ("update-combined-grant", [contacts, profile, (enable, b"y\r")]),
+        ("update-combined-deny", [contacts, profile, (enable, b"n\r")]),
+        ("update-combined-cancel", [contacts, profile, (enable, b"\x03")]),
+        ("update-combined-profile-deny", [contacts, (b"Save this profile preference?", b"n\r")]),
+        ("update-combined-profile-cancel", [contacts, (b"Save this profile preference?", b"\x03")]),
+        ("update-combined-profile-clear-deny", [contacts, (b"Save this profile preference?", b"n\r")]),
         ("update-combined-yes", []),
-        ("update-combined-conflict", [contacts, (enable, b"y\r")]),
+        ("update-combined-conflict", [contacts, profile, (enable, b"y\r")]),
         ("update-profile-deny", [(b"Save this profile preference?", b"n\r")]),
     ]
     for mode, answers in update_cases:
         run_case(binary, mode, answers, UPDATE_FIXTURE, "ACCOUNT_UPDATE_DONE")
-    print("Account terms PTY: 5 registration and 16 update scenarios passed (consent, revocation, default no, menu snapshot, combined scopes, concurrent consent conflict, partial cancellation, finish exit 130, terminal restoration)")
+    print("Account terms PTY: 5 registration and 19 update scenarios passed (separate profile consent, consent, revocation, default no, menu snapshot, combined scopes, concurrent consent conflict, partial cancellation, finish exit 130, terminal restoration)")
 
 
 if __name__ == "__main__":

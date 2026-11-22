@@ -376,6 +376,10 @@ fn local_state(local: &LocalAccountReport, color: bool) -> String {
     styled(label, style, color)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Account details are rendered together in display order"
+)]
 fn local_text(local: &LocalAccountReport, color: bool) -> String {
     let mut lines = vec![
         format!(
@@ -394,6 +398,15 @@ fn local_text(local: &LocalAccountReport, color: bool) -> String {
         ),
         field("Key thumbprint:", &safe(&local.key_thumbprint), color),
         field("Local state:", &local_state(local, color), color),
+        field(
+            "Default profile:",
+            &local
+                .record
+                .as_ref()
+                .and_then(|record| record.preferred_profile.as_deref())
+                .map_or_else(|| "(none; the CA default applies)".into(), safe),
+            color,
+        ),
     ];
     if let Some(record) = &local.record {
         if let Some(user_agent) = &record.user_agent {
@@ -779,39 +792,58 @@ pub(super) mod tests {
             state: AccountRecordState::Registered,
         };
         let mut labels = Vec::new();
-        for verified in [false, true] {
-            let local = LocalAccountReport {
-                verified,
-                name: "default".into(),
-                directory: directory.clone(),
-                key_thumbprint: "thumbprint".into(),
-                record: Some(account.clone()),
-            };
-            let text = local_text(&local, false);
-            labels.push(
-                text.lines()
-                    .filter_map(|line| line.split_once(": ").map(|(label, _)| label.to_owned()))
-                    .collect::<Vec<_>>(),
-            );
-            assert!(
-                text.split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .contains(if verified {
-                        "CA query: account refreshed"
-                    } else {
-                        "CA query: not performed (local data only)"
-                    })
-            );
-            let report = AccountReport::Local(local);
-            let json = json_value(&report);
-            assert_eq!(json["ca_query"]["account_refreshed"], verified);
-            assert!(json.get("verified").is_none());
-            assert!(json.get("source").is_none());
-            assert_eq!(json["key_thumbprint"], "thumbprint");
-            assert_eq!(json["contacts"][0], "mailto:a@example.com");
+        for profile in [None, Some("shortlived"), Some("custom\n\x1b[2J")] {
+            for verified in [false, true] {
+                let mut account = account.clone();
+                account.preferred_profile = profile.map(str::to_owned);
+                let local = LocalAccountReport {
+                    verified,
+                    name: "default".into(),
+                    directory: directory.clone(),
+                    key_thumbprint: "thumbprint".into(),
+                    record: Some(account.clone()),
+                };
+                let text = local_text(&local, false);
+                assert!(
+                    text.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains(&format!(
+                            "Default profile: {}",
+                            profile.map_or_else(|| "(none; the CA default applies)".into(), safe)
+                        ))
+                );
+                assert!(!text.contains('\x1b'));
+                labels.push(
+                    text.lines()
+                        .filter_map(|line| line.split_once(": ").map(|(label, _)| label.to_owned()))
+                        .collect::<Vec<_>>(),
+                );
+                assert!(
+                    text.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains(if verified {
+                            "CA query: account refreshed"
+                        } else {
+                            "CA query: not performed (local data only)"
+                        })
+                );
+                let report = AccountReport::Local(local);
+                let json = json_value(&report);
+                assert_eq!(json["ca_query"]["account_refreshed"], verified);
+                assert!(json.get("verified").is_none());
+                assert!(json.get("source").is_none());
+                assert_eq!(json["key_thumbprint"], "thumbprint");
+                assert_eq!(json["preferred_profile"], serde_json::json!(profile));
+                assert_eq!(json["contacts"][0], "mailto:a@example.com");
+            }
         }
-        assert_eq!(labels[0], labels[1]);
+        assert!(
+            labels
+                .iter()
+                .all(|labels_for_case| labels_for_case == &labels[0])
+        );
     }
     #[test]
     fn profiles_and_preference_reports_serialize_with_explicit_fields() {

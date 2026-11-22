@@ -273,6 +273,11 @@ fn retry_hint(retry_after: Option<&RetryAfter>) -> String {
 
 fn transport_diagnostic(error: &TransportError) -> (String, Option<String>) {
     match error {
+        TransportError::RetryPreparation { rejection, source } => {
+            let (rejection, _) = transport_diagnostic(rejection);
+            let (cause, hint) = transport_diagnostic(source);
+            (format!("{rejection}; no replacement request was sent: {cause}"), hint)
+        },
         TransportError::Problem {status,problem,retry_after} => self::problem::diagnostic(*status, problem, retry_after.as_ref()),
         TransportError::Network(network) if network.is_timeout() => ("The CA request timed out.".into(),Some("The remote result may be unknown. Retry with the same account and data directory; its saved key is retained.".into())),
         TransportError::Network(_) => ("Could not connect to the CA securely.".into(),Some("Check the directory URL, network and TLS trust. The saved account key is retained.".into())),
@@ -324,6 +329,52 @@ pub(crate) fn render(
 mod tests {
     use crate::common::error::*;
     use aster_acme_protocol::problem::ProblemKind;
+
+    #[test]
+    fn rejected_bad_nonce_retry_keeps_rejection_and_preparation_failure_in_json() {
+        use aster_acme::account::ContactUpdateError;
+        for source in [
+            TransportError::MissingNonce,
+            TransportError::Crypto(aster_acme::crypto::CryptoError::Signing),
+        ] {
+            let rejection = TransportError::Problem {
+                status: 400,
+                problem: Box::new(aster_acme_protocol::problem::Problem {
+                    kind: ProblemKind::BadNonce,
+                    detail: Some("nonce expired".into()),
+                    instance: None,
+                    subproblems: vec![],
+                    extensions: serde_json::Map::new(),
+                }),
+                retry_after: None,
+            };
+            let error = ContactUpdateError::Rejected(Box::new(AccountError::Transport(
+                TransportError::RetryPreparation {
+                    rejection: Box::new(rejection),
+                    source: Box::new(source),
+                },
+            )));
+            let json: serde_json::Value = serde_json::from_str(
+                &render(&error, crate::common::session::Format::plain(true)).unwrap(),
+            )
+            .unwrap();
+            let message = json["error"]["message"].as_str().unwrap();
+            assert!(message.contains("explicitly rejected"), "{message}");
+            assert!(
+                message.contains("HTTP 400") && message.contains("nonce expired"),
+                "{message}"
+            );
+            assert!(
+                message.contains("no replacement request was sent"),
+                "{message}"
+            );
+            assert!(
+                message.contains("Replay-Nonce") || message.contains("signing failed"),
+                "{message}"
+            );
+            assert!(!message.contains("were not submitted"), "{message}");
+        }
+    }
 
     #[test]
     fn contact_errors_keep_submission_phase_and_actionable_ca_diagnostics() {

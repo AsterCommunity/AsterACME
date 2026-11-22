@@ -3,6 +3,186 @@ use crate::account::tests::*;
 use crate::transport::TransportOptions;
 use std::time::Duration;
 
+struct FailingAttemptSigner<'a> {
+    key: &'a SoftwareSigningKey,
+    attempts: std::sync::atomic::AtomicUsize,
+    fail_on: usize,
+}
+
+impl JwsSigner for FailingAttemptSigner<'_> {
+    fn algorithm(&self) -> KeyAlgorithm {
+        self.key.algorithm()
+    }
+    fn jwk(&self) -> Result<crate::crypto::jwk::Jwk, crate::crypto::CryptoError> {
+        self.key.jwk()
+    }
+    fn sign(&self, input: &[u8]) -> Result<Vec<u8>, crate::crypto::CryptoError> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_on {
+            Err(crate::crypto::CryptoError::Signing)
+        } else {
+            self.key.sign(input)
+        }
+    }
+}
+
+#[tokio::test]
+async fn bad_nonce_without_a_retry_nonce_keeps_the_ca_rejection() {
+    for retries in [0, 1, 5] {
+        for nonce in [None, Some("invalid nonce")] {
+            let (server, service, store, key) = deactivation::fixture(TransportOptions {
+                bad_nonce_retries: retries,
+                ..local_options()
+            })
+            .await;
+            let before = store.record.lock().await.clone().unwrap();
+            let mut response = ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({"type":ProblemKind::BadNonce}));
+            if let Some(nonce) = nonce {
+                response = response.insert_header("Replay-Nonce", nonce);
+            }
+            Mock::given(method("POST"))
+                .and(path("/account/1"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = service.update_contacts(&key, vec![]).await.unwrap_err();
+            let ContactUpdateError::Rejected(source) = error else {
+                panic!("expected CA rejection");
+            };
+            let AccountError::Transport(source) = source.as_ref() else {
+                panic!("expected transport evidence");
+            };
+            if retries == 0 {
+                assert!(source.is_problem(&ProblemKind::BadNonce));
+            } else {
+                let crate::transport::TransportError::RetryPreparation { rejection, source } =
+                    source
+                else {
+                    panic!("expected the rejected POST and the retry failure");
+                };
+                assert!(rejection.is_problem(&ProblemKind::BadNonce));
+                assert!(matches!(
+                    source.as_ref(),
+                    crate::transport::TransportError::MissingNonce
+                ));
+            }
+            let saved = store.record.lock().await.clone().unwrap();
+            assert_eq!(saved.contacts, Vec::<String>::new());
+            assert_eq!(saved.server_contacts, before.server_contacts);
+            assert_eq!(saved.times, before.times);
+        }
+    }
+}
+
+#[tokio::test]
+async fn signing_failure_distinguishes_before_first_post_from_after_bad_nonce() {
+    for fail_on in [1, 2] {
+        let (server, service, _store, key) = deactivation::fixture(local_options()).await;
+        Mock::given(method("POST"))
+            .and(path("/account/1"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .insert_header("Replay-Nonce", "new_nonce")
+                    .set_body_json(serde_json::json!({"type":ProblemKind::BadNonce})),
+            )
+            .expect(u64::try_from(fail_on - 1).unwrap())
+            .mount(&server)
+            .await;
+        let signer = FailingAttemptSigner {
+            key: &key,
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            fail_on,
+        };
+        let error = service.update_contacts(&signer, vec![]).await.unwrap_err();
+        if fail_on == 1 {
+            assert!(matches!(error, ContactUpdateError::NotSubmitted(_)));
+        } else {
+            let ContactUpdateError::Rejected(source) = error else {
+                panic!("expected rejected first POST");
+            };
+            let AccountError::Transport(crate::transport::TransportError::RetryPreparation {
+                rejection,
+                source,
+            }) = source.as_ref()
+            else {
+                panic!("expected preparation error");
+            };
+            assert!(rejection.is_problem(&ProblemKind::BadNonce));
+            assert!(matches!(
+                source.as_ref(),
+                crate::transport::TransportError::Crypto(crate::crypto::CryptoError::Signing)
+            ));
+        }
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method == "POST")
+                .count(),
+            fail_on - 1
+        );
+    }
+}
+
+#[tokio::test]
+async fn submitted_retry_uses_its_own_remote_result() {
+    for (response, succeeds) in [
+        (ResponseTemplate::new(503), false),
+        (ResponseTemplate::new(200).set_body_string("broken"), false),
+        (
+            ResponseTemplate::new(200).set_delay(Duration::from_secs(2)),
+            false,
+        ),
+        (
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"status":"valid"})),
+            true,
+        ),
+    ] {
+        let (server, service, _store, key) = deactivation::fixture(TransportOptions {
+            request_timeout: Duration::from_secs(1),
+            ..local_options()
+        })
+        .await;
+        Mock::given(method("POST"))
+            .and(path("/account/1"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .insert_header("Replay-Nonce", "retry_nonce")
+                    .set_body_json(serde_json::json!({"type":ProblemKind::BadNonce})),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/account/1"))
+            .respond_with(response)
+            .with_priority(10)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = service.update_contacts(&key, vec![]).await;
+        if succeeds {
+            result.unwrap();
+        } else {
+            assert!(matches!(result, Err(ContactUpdateError::Unconfirmed(_))));
+        }
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.method == "POST")
+                .count(),
+            2
+        );
+    }
+}
+
 #[tokio::test]
 async fn update_replaces_or_clears_contacts_without_touching_identity() {
     for contacts in [vec![], vec!["mailto:new@example.org".into()]] {
@@ -215,6 +395,30 @@ async fn only_definitive_acme_problems_establish_contact_rejection() {
                 matches!(error, ContactUpdateError::Unconfirmed(_)),
                 "{error}"
             );
+        }
+    }
+}
+
+#[tokio::test]
+async fn uncertain_bad_nonce_response_is_never_replayed() {
+    for status in [408, 429, 500, 503] {
+        for nonce in [None, Some("retry_nonce")] {
+            let (server, service, _store, key) = deactivation::fixture(local_options()).await;
+            let mut response = ResponseTemplate::new(status)
+                .set_body_json(serde_json::json!({"type": ProblemKind::BadNonce}));
+            if let Some(nonce) = nonce {
+                response = response.insert_header("Replay-Nonce", nonce);
+            }
+            Mock::given(method("POST"))
+                .and(path("/account/1"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                service.update_contacts(&key, vec![]).await,
+                Err(ContactUpdateError::Unconfirmed(_))
+            ));
         }
     }
 }

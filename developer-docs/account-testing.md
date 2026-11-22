@@ -182,3 +182,12 @@ CodeRabbit CLI 第三轮审查 `3dbe0f6`（review card `a00a2aa4-9057-45d6-b8d4-
 本地 CodeRabbit CLI 对本轮 16 个未提交改动文件审查返回 `review_completed`、0 findings（review card `42713204-ba58-4282-89aa-70d5ded93aec`）。本地覆盖率与 review 不代表新 revision 的托管 Codecov/CI；推送后须重新核对远端结果。
 
 最终未插桩验证：`cargo test --workspace --all-features --locked -- --test-threads=1`（含 doctest）、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo fmt --all --check`、`cargo doc --workspace --no-deps --locked` 全部通过；workspace/import/feature/doc-links 检查、14 项 Python tests 与 Actionlint 均通过。账户/部署插桩 PTY 共 26 场景通过。原双线程插桩失败证据保留，最终未调整那些测试的期限。
+
+
+## PR #60 review `6009341561`（2026-11-22，基于 `7c8e89c`）
+
+逐条核实 3 条 Minor（其中 2 条位于 diff 外）：
+
+- profile 不再把 wants_contacts 当作已确认；无 `--yes` 时，contacts/profile/terms 分别展示目标并确认。PTY 更新原三 scope 场景，并新增 contacts 已提交后拒绝 profile 设置、Ctrl-C、拒绝 profile 清除：返回取消 130 的 `finish` 值，保存原 profile，条款未启用，错误只保留联系人已生效证据。带 `--yes` 不出现三类确认提示。
+- `account show` 文本始终显示本地 Default profile：未设置时为 `(none; the CA default applies)`。渲染矩阵覆盖在线/离线、设置/未设置与控制字符转义；真实离线 show 测试覆盖 key-only/pending/registered，不要求密钥、零 HTTP、文件不变，JSON 保持原字段语义。
+- transport 的 `RetryPreparation` 保存首次 badNonce 拒绝和新 nonce/重签准备错误，submission 标记仍表示当前是否有未确定的请求。联系人分类区分首次发送前失败、明确拒绝但无法重签、重签 POST 后未知；不再把第一次已发送且被拒绝的 POST 报为未提交。库测试覆盖重试预算 0/1/5、缺失/非法 Replay-Nonce、首次签名失败/第二次签名失败、重签后 503/坏响应/超时/成功，验证 POST 数量、原观察不变与错误来源。CLI JSON 断言同时保留拒绝和重签失败原因。

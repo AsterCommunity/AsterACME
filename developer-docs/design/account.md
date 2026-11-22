@@ -54,7 +54,7 @@ CLI 单账户目标统一为 NameArgs（位置 NAME 与 --name 互斥），regis
 
 RFC 8555 §7.3.2 的联系人更新为原账户 URL 上的 kid 签名 POST，只提交具名 `AccountUpdateRequest.contact`，不混入 orders、条款或注册字段。CLI 的 `account update` 接受普通邮箱、重复 `--contact` 或显式 `--clear-contacts`，无输入时可交互填写；同命令亦可设置/清除默认证书 profile（`--profile`/`--clear-profile`，draft-ietf-acme-profiles），和/或开启/关闭未来条款授权（`--auto-accept-new-terms`/`--clear-auto-accept-new-terms`）；三个 scope 可任意组合，条款同意仅在显式条款 flag 与 `--yes` 同时给出时跳过，脚本必须显式给出输入和 `--yes`。本地 contacts 是请求意图，server_contacts 与状态时间只在成功 HTTP 200 + 合法账户对象后更新，失败不冒充 CA 已接受。
 
-`AccountService::update_contacts` 返回 `ContactUpdateError`，区分 `NotSubmitted`、`Rejected`、`Unconfirmed` 和 `Persistence`；服务以 transport 已有的 submission observation 区分发送前后，并仅将明确 ACME Problem 拒绝视为 `Rejected`。200 加合法账户对象之后的本地写入错误是 `Persistence`，不能丢失 CA 已接受的证据。CLI 映射保留源错误与 Retry-After，未知结果提示先验证，不把非 200 一概当作未生效。开启与撤销都比较授权位确认快照；开启时无条款公告也比较已接受值，避免批准快照外的并发同意。
+`AccountService::update_contacts` 返回 `ContactUpdateError`，区分 `NotSubmitted`、`Rejected`、`Unconfirmed` 和 `Persistence`；服务以 transport 已有的 submission observation 区分发送前后，并仅将明确 ACME Problem 拒绝视为 `Rejected`。200 加合法账户对象之后的本地写入错误是 `Persistence`，不能丢失 CA 已接受的证据。transport 的 `RetryPreparation` 同时保留 badNonce 拒绝与下一次发送前的准备失败；首次发送前失败仍为未提交，重签已发送后的未知结果保持未知。CLI 映射保留源错误与 Retry-After，未知结果提示先验证，不把非 200 一概当作未生效。开启与撤销都比较授权位确认快照；开启时无条款公告也比较已接受值，避免批准快照外的并发同意。
 
 RFC 8555 §7.3.5 的端点从 directory.keyChange 发现。`KeyChangePayload` 绑定原 Location 的精确账户 URL 和旧 JWK。内层由新钥签名，header 含 jwk、与外层一致的 url，省略 nonce/kid；外层由旧钥签名，使用原账户 kid 和新 nonce。成功 HTTP 200 可以没有 JSON body；不更改 account_id、account_url、contacts、订单或授权。只有 last_used_at 因成功轮换推进；没有账户对象不能伪造新的状态观察时间。
 
@@ -84,3 +84,5 @@ AccountStore::lock_account返回Arc<dyn AccountLease>，AccountStore::save显式
 换钥提交先保存Prepared，nonce/HTTP初始化完成后才保存Pending。Pending保存与HTTP请求由同一个独立持锁任务负责；调用方取消后任务仍完成结果分类，避免“Pending已写但future被丢弃、请求从未发出”的窗口。进入Pending前取消则不提交，保留可重试Prepared；收到RFC 8555 §7.3.5的200后先保存Confirmed，恢复只补本地提交。传输结果未知保持Pending，不自动重复keyChange。
 
 EAB确认与账户身份找回分开：RFC 8555 §7.3.4要求创建成功时回显相同绑定，否则本次创建返回ExternalAccountNotConfirmed。§7.3.1的onlyReturnExisting可找回同一密钥已存在的账户，这只能证明账户身份，不证明此前外部绑定成功；不持久化EAB MAC凭据或把找回伪装成绑定确认。离线show仅持锁读取metadata，不要求私钥；远端verify仍要求真实签名器。
+
+组合 update 的 profile 与 contacts 分别确认，只有 `--yes` 跳过 profile 确认。联系人已提交后取消 profile 时不执行后续 scope；离线和在线 `account show` 文本明确显示本地默认 profile 或未设置状态，以供保存结果未确认时核对。
