@@ -260,10 +260,10 @@ async fn update_preflight(
         .await
         .map_err(|error| -> Box<dyn std::error::Error> {
             if terms_enable {
-                format!(
-                    "Cannot enable automatic terms updates: the CA directory could not be read to confirm its current terms: {error}"
-                )
-                .into()
+                Box::new(crate::common::error::ContextError {
+                    context: "Cannot enable automatic terms updates: the CA directory could not be read to confirm its current terms".into(),
+                    source: Box::new(error),
+                })
             } else {
                 error.into()
             }
@@ -387,6 +387,9 @@ async fn apply_terms_change(
         .action(aster_acme_core::account::AccountOperation::Update)
         .map_err(AccountError::from)?;
     let previous = record.auto_accept_terms_updates;
+    if target && previous != snapshot.auto_accept_terms_updates {
+        return Err("Automatic CA terms delegation changed while this update was awaiting confirmation; the concurrently saved delegation was preserved. Rerun account update to review the current authorization.".into());
+    }
     record.auto_accept_terms_updates = target;
     if target && let Some(url) = &advertised_terms {
         if record.accepted_terms_url != snapshot.accepted_terms_url
@@ -1343,8 +1346,8 @@ mod tests {
             )
             .await
             .err()
-            .unwrap()
-            .to_string();
+            .unwrap();
+            let (error, _) = crate::common::error::diagnostic(error.as_ref());
             assert!(
                 error.contains("could not be read to confirm its current terms"),
                 "{error}"
@@ -1570,6 +1573,93 @@ mod tests {
                                 serde_json::json!(accepted)
                             );
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn terms_preflight_preserves_rate_limit_diagnostics_before_any_mutation() {
+        for combined in [false, true] {
+            let server = MockServer::start().await;
+            let (context, signer, transport, _handles) = account_fixture(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/directory"))
+                .respond_with(
+                    ResponseTemplate::new(429)
+                        .insert_header("Retry-After", "60")
+                        .insert_header("Content-Type", "application/problem+json")
+                        .set_body_json(
+                            serde_json::json!({"type": "urn:ietf:params:acme:error:rateLimited"}),
+                        ),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let before = stored(&context, &signer).await;
+            let error = update_with_transport(
+                crate::commands::account::args::UpdateArgs {
+                    clear_contacts: combined,
+                    profile: combined.then(|| "shortlived".into()),
+                    auto_accept_new_terms: true,
+                    yes: true,
+                    ..update_args(&context)
+                },
+                &context,
+                transport,
+                &CommandContext::new(true),
+            )
+            .await
+            .err()
+            .unwrap();
+            let (message, hint) = crate::common::error::diagnostic(error.as_ref());
+            assert!(
+                message.contains("Cannot enable automatic terms updates"),
+                "{message}"
+            );
+            assert!(hint.unwrap().contains("60 seconds"));
+            assert_eq!(stored(&context, &signer).await, before);
+            assert!(
+                server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.method == "GET")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn terms_enable_never_overwrites_a_concurrent_delegation_change() {
+        for snapshot_enabled in [false, true] {
+            for saved_enabled in [false, true] {
+                for advertised in [None, Some("terms")] {
+                    let (_server, context, signer, transport, _directory, _handles) =
+                        harness_with_terms(advertised).await;
+                    let mut snapshot = stored(&context, &signer).await;
+                    snapshot.auto_accept_terms_updates = snapshot_enabled;
+                    snapshot.accepted_terms_url = advertised.map(str::to_owned);
+                    context.store.save(&snapshot).await.unwrap();
+                    let cli = CommandContext::new(true);
+                    let preflight = update_preflight(&context, transport, false, true, None, &cli)
+                        .await
+                        .unwrap();
+                    let mut changed = snapshot.clone();
+                    changed.auto_accept_terms_updates = saved_enabled;
+                    context.store.save(&changed).await.unwrap();
+                    let result = apply_terms_change(
+                        &context, &signer, &snapshot, true, true, &preflight, &cli,
+                    )
+                    .await;
+                    if snapshot_enabled == saved_enabled {
+                        result.unwrap();
+                        assert!(stored(&context, &signer).await.auto_accept_terms_updates);
+                    } else {
+                        let error = result.err().unwrap();
+                        assert!(error.to_string().contains("delegation changed"));
+                        assert_eq!(stored(&context, &signer).await, changed);
                     }
                 }
             }

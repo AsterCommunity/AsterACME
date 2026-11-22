@@ -26,7 +26,7 @@ CLI 参考 AsterDrive，拆分 app / dispatch / common / commands/account/{args,
 
 `account update` 是注册后的授权修改入口：`--auto-accept-new-terms` 先读取在线 directory，接受其当前条款（若有）并写入授权，读不到 directory 时失败关闭、不静默开启；CA 未公布条款时仍可开启，报告明确说明本次没有可接受的 URL。`--clear-auto-accept-new-terms` 只改本地元数据并保留 `accepted_terms_url`，单独撤销不访问网络，与联系人/profile 组合也不接受本次 directory 中的新条款。两者都不发送 CA 账户更新（RFC 8555 没有条款更新请求），且可与联系人/profile 同次组合；组合调用逐 scope 报告结果，directory 校验先于全部 mutation，本地保存失败时错误保留已提交 CA mutation 的证据；错误上下文保留原始错误链和取消分类，拒绝或取消后续确认仍退出 130。交互菜单选中该 scope 时条款同意仍需显式回答。
 
-profile 清除不要求在线 directory；菜单复用预检广告，不进行第二次 discovery。profile 与 terms 均在确认后持锁重读再保存；开启 terms 时，若已接受值在快照后发生冲突，拒绝用预检值覆盖。保存返回错误可能晚于文件替换，CLI 保守报告持久化结果未确认；前序成功 scope 的证据仍保留。
+profile 清除不要求在线 directory；菜单复用预检广告，不进行第二次 discovery。profile 与 terms 均在确认后持锁重读再保存；开启 terms 时，若授权位在快照后改变或已接受值发生冲突，拒绝用旧确认覆盖。保存返回错误可能晚于文件替换，CLI 保守报告持久化结果未确认；前序成功 scope 的证据仍保留。
 
 参数按 LocalArgs / TargetArgs / NetworkArgs / RegisterArgs 组合，解析时拒绝无关命令选项。default 支持位置 NAME 或 -n/--name，无注册、网络选项；show 的 HTTP 参数必须带 --verify。交互 selection 与命令行共同产生解析后的输入，只负责补参数，业务执行没有第二套。CliSettings 先加载统一数据目录配置，再完成选择并构建账户上下文；账户枚举不加载私钥或发 HTTP。
 

@@ -159,3 +159,6 @@ CodeRabbit CLI 首轮以 `9fcf401` 相对 `origin/main` 审查 22 个文件，�
 - 明确 PTY 证据边界：脚本运行 Rust 测试程序并要求子进程退出 0；fixture 断言 `crate::finish` 对拒绝/取消返回 130，不能称为 CLI 可执行文件进程退出码验收。
 
 第一次默认并发账户复测 78 passed、1 failed：未修改的 `registration_saves_explicit_contact_before_discovery_failure` 在 loopback accept 的 2 秒期限处报 `Elapsed`。该用例单独复测通过；按测试指南以 `--test-threads=2` 复测账户测试 79 passed、2 ignored。账户 PTY 扩展为 5 个注册与 16 个 update，共 21 场景通过。原失败日志保留，不修改注册测试预算。
+
+
+CodeRabbit CLI 第三轮审查 `3dbe0f6`（review card `a00a2aa4-9057-45d6-b8d4-519c56f73e8f`），两条 `minor` 均核实处理：开启授权前在租约内比较 `auto_accept_terms_updates` 与确认快照，避免旧确认覆盖并发撤销（矩阵覆盖原/新授权开关与 CA 有/无条款，8 种组合）；terms preflight 使用 `ContextError` 保留 `TransportError`，单独开启与三 scope 组合在 directory 429 时保留 60 秒 Retry-After 提示，零账户 POST、原记录不变。
