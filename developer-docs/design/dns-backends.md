@@ -62,15 +62,15 @@ Cloudflare 使用单记录对象及 publication comment，不使用 RRset 全量
 
 ### Google Cloud DNS：changes 事务与 journal 差异所有权
 
-`google_cloud_dns`（#42）为 opt-in，CLI 对应 `dns-google-cloud-dns`。厂商实现只发出已有 HTTP/Checkpoint/Wait effects，不在后端访问文件或创建 HTTP client。服务账号 JSON 通过私有 settings 输入；JWT 使用 AWS-LC RS256，固定 OAuth endpoint 与 DNS API origin，不采用凭据 JSON 中的任意网络地址。access token 仅缓存在当前工厂内存，提前 60 秒过期，不写 journal。
+`google_cloud_dns`（#42）为 opt-in，CLI 对应 `dns-google-cloud-dns`。厂商实现只发出已有 HTTP/Checkpoint/Wait effects，不在后端访问文件或创建 HTTP client。服务账号 JSON 通过私有 settings 输入；JWT 使用 AWS-LC RS256，固定 OAuth endpoint 与 DNS API origin，不采用凭据 JSON 中的任意网络地址。access token 仅缓存在当前工厂内存，提前 60 秒过期，不写 journal。OAuth token type 按 RFC 6749 不区分大小写；401 仅在请求使用的 token 仍为缓存当前值时使其失效，迟到响应不会清除后来刷新的 token。
 
-发布枚举 public managed zones，按最终 TXT owner 的最长标签后缀匹配；分页循环、重复 ID、同优先级歧义均拒绝。zone ID/dnsName 随 publication 固定。发布前保存完整 additions/deletions 及目标值差异，Google `changes.create` 原子应用增删，deletions 必须与当前 RRset 精确匹配；明确冲突先保存拒绝再重读，最多四次。保留当前无关值、TTL 与未知 metadata；路由策略和签名 RRset 不按普通静态 TXT 处理。新 RRset TTL 使用固定计划请求值，限制为 `0..=2147483647`。
+发布枚举 public managed zones，按最终 TXT owner 的最长标签后缀匹配；分页循环、重复 ID、同优先级歧义均拒绝。zone ID/dnsName 随 publication 固定。发布前保存完整 additions/deletions 及目标值差异，Google `changes.create` 原子应用增删，deletions 必须与当前 RRset 精确匹配；明确冲突先保存拒绝再重读，最多四次。保留当前无关值、TTL 与未知 metadata；路由策略和签名 RRset 不按普通静态 TXT 处理。新 RRset TTL 使用固定计划请求值，限制为 `0..=2147483647`。合并结果在保存意图前复用恢复校验；本地最多 100 个值，99 加 1 允许，100 加 1 在任何写入前拒绝。Google TXT 支持带引号与不带引号的字符块、转义及多块拼接，比较逻辑值而保留原 wire 表示；其他厂商的共享解码语义不变。
 
 Google RRset 没有 publication 标记。本实现对所有预存同值记录拒绝借用，包括其他 publication 的值，保留远端记录，不通过本地锁推断所有权。成功响应的 change ID 先落盘，再经 `changes.get` 核对完整增删与状态并重读 TXT；`done` 不等于公网传播完成。清理重读当前 RRset，只减去 journal 证明本次添加的目标值，保留后来新增值，不恢复旧快照。终态 checkpoint 防止重复清理误删后来重建的值。
 
 若提交响应丢失且没有持久化 change ID，保留意图并返回结果未知，不靠 TXT 存在、相同历史 payload 或 `clientOperationId` 推断归属，不自动重放。已保存 change ID 的轮询丢响应可在重启后只读恢复。Google exact-value 前置条件不提供不可复用 revision，因此不冒充 `ConditionalRrsetFactory` 的完整契约；外部删除/重建同值的 ABA 无法仅凭 journal 检出。操作者需协调其他写入者，建议使用专用委派 owner；本地租约仅保护同一 data-dir。
 
-官方依据：[changes.create](https://cloud.google.com/dns/docs/reference/v1/changes/create)、[Change](https://cloud.google.com/dns/docs/reference/v1/changes)、[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)。2026-11-26 核对官方 DNS v1 discovery：change ID 为服务端只读字段，`done` 表示已发送权威更新请求，deletions 须精确匹配已有数据。实现与 mock 证据不替代真实 Google Cloud/CA 验收。
+官方依据：[changes.create](https://cloud.google.com/dns/docs/reference/v1/changes/create)、[Change](https://cloud.google.com/dns/docs/reference/v1/changes)、[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)、[TXT 记录格式](https://docs.cloud.google.com/dns/docs/records-overview)、[RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1)。2026-11-26 核对官方 DNS v1 discovery：change ID 为服务端只读字段，`done` 表示已发送权威更新请求，deletions 须精确匹配已有数据。实现与 mock 证据不替代真实 Google Cloud/CA 验收。
 
 ## 扩展和验证
 

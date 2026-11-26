@@ -366,7 +366,7 @@ fn rejected_conflict_rechecks_current_values_before_retry() {
 fn malformed_rrsets_and_duplicate_logical_txt_fail_closed() {
     for set in [
         rrset(&["\"our-value\"", "\"our-\" \"value\""]),
-        json!({"name":record().name,"type":"TXT","ttl":120,"rrdatas":["bad"]}),
+        json!({"name":record().name,"type":"TXT","ttl":120,"rrdatas":["\"unterminated"]}),
         json!({"name":record().name,"type":"TXT","ttl":120,"rrdatas":["\"other\""],"routingPolicy":{}}),
     ] {
         let f = factory();
@@ -390,6 +390,157 @@ fn malformed_rrsets_and_duplicate_logical_txt_fail_closed() {
         assert!(!err.message.contains("private-key-sentinel"));
         assert_eq!(err.side_effect, SideEffect::Unknown);
     }
+}
+
+#[test]
+fn merged_rrset_limit_is_checked_before_checkpoint_and_write() {
+    let f = factory();
+    let values: Vec<String> = (0..100).map(|n| format!("\"existing-{n}\"")).collect();
+    let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+    let mut rejected = begin(&f);
+    let error = rejected
+        .advance(response(&json!({"rrsets":[rrset(&refs)]})))
+        .err()
+        .unwrap();
+    assert_eq!(error.side_effect, SideEffect::None);
+    assert!(error.message.contains("100 values"));
+    // 99 existing values plus our value remain readable and restartable.
+    let mut accepted = begin(&f);
+    let (intent, plan) = submit(accepted.as_mut(), &[rrset(&refs[..99])]);
+    assert_eq!(
+        plan["additions"][0]["rrdatas"].as_array().unwrap().len(),
+        100
+    );
+    assert!(
+        f.start(ProviderAction::Present(record()), Some(intent))
+            .is_ok()
+    );
+    applied(accepted.as_mut(), &plan, "limit-100");
+    let saved = cp(accepted
+        .advance(response(&json!({"rrsets":[plan["additions"][0].clone()]})))
+        .unwrap());
+    let ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) =
+        accepted.advance(ProviderEvent::CheckpointSaved).unwrap()
+    else {
+        panic!("expected receipt")
+    };
+    let mut cleanup = f.start(cleanup_action(receipt), Some(saved)).unwrap();
+    http(cleanup.advance(ProviderEvent::Start).unwrap(), "GET");
+    cp(cleanup
+        .advance(response(&json!({"rrsets":[plan["additions"][0].clone()]})))
+        .unwrap());
+    let request = http(
+        cleanup.advance(ProviderEvent::CheckpointSaved).unwrap(),
+        "POST",
+    );
+    let removal: Value = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(
+        removal["additions"][0]["rrdatas"].as_array().unwrap().len(),
+        99
+    );
+}
+
+#[test]
+fn google_txt_accepts_unquoted_chunks_preserving_wire_data_and_ownership() {
+    let f = factory();
+    let mut op = begin(&f);
+    let (_, plan) = submit(
+        op.as_mut(),
+        &[rrset(&["existing", "foo\\032bar", "\"two\" chunks"])],
+    );
+    assert_eq!(
+        plan["deletions"][0],
+        rrset(&["\"two\" chunks", "existing", "foo\\032bar"])
+    );
+    let mut op = begin(&f);
+    assert_eq!(
+        op.advance(response(&json!({"rrsets":[rrset(&["our-value"])]})))
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::RecordConflict
+    );
+    let mut op = begin(&f);
+    assert!(
+        op.advance(response(
+            &json!({"rrsets":[rrset(&["our-value", "\"our-value\""])]})
+        ))
+        .is_err()
+    );
+    for wire in [
+        "\"unterminated",
+        "bad\\",
+        "bad\"quote",
+        "\"foo\"bar",
+        "\\999",
+        "",
+    ] {
+        let mut op = begin(&f);
+        assert!(
+            op.advance(response(&json!({"rrsets":[rrset(&[wire])]})))
+                .is_err(),
+            "{wire:?}"
+        );
+    }
+    for (wire, expected) in [
+        ("foo\\032bar", "foo bar"),
+        ("\"two\" chunks", "twochunks"),
+        ("one\\ two", "one two"),
+    ] {
+        let set: api::Rrset = serde_json::from_value(rrset(&[wire])).unwrap();
+        set.validate(&record().name).unwrap();
+        assert_eq!(set.matches(expected).unwrap().as_deref(), Some(wire));
+    }
+}
+
+#[test]
+fn oauth_bearer_type_is_case_insensitive_but_other_types_are_rejected() {
+    for kind in ["Bearer", "bearer", "BEARER", "bEaReR"] {
+        assert!(
+            auth::token(
+                &serde_json::to_vec(
+                    &json!({"access_token":"token","token_type":kind,"expires_in":3600})
+                )
+                .unwrap()
+            )
+            .is_ok()
+        );
+    }
+    assert!(
+        auth::token(br#"{"access_token":"token","token_type":"MAC","expires_in":3600}"#).is_err()
+    );
+}
+
+#[test]
+fn late_unauthorized_response_cannot_invalidate_a_refreshed_token() {
+    let f = factory();
+    let mut first = f.start(ProviderAction::Present(record()), None).unwrap();
+    let mut late = f.start(ProviderAction::Present(record()), None).unwrap();
+    http(first.advance(ProviderEvent::Start).unwrap(), "GET");
+    http(late.advance(ProviderEvent::Start).unwrap(), "GET");
+    assert!(first.advance(status_event(401, "authError")).is_err());
+    assert!(f.token.lock().unwrap().is_none());
+    let mut refreshed = f.start(ProviderAction::Present(record()), None).unwrap();
+    http(refreshed.advance(ProviderEvent::Start).unwrap(), "POST");
+    http(
+        refreshed
+            .advance(response(
+                &json!({"access_token":"new-token","token_type":"bearer","expires_in":3600}),
+            ))
+            .unwrap(),
+        "GET",
+    );
+    assert!(late.advance(status_event(401, "authError")).is_err());
+    assert_eq!(
+        f.token.lock().unwrap().as_ref().unwrap().value.as_str(),
+        "new-token"
+    );
+    let mut next = f.start(ProviderAction::Present(record()), None).unwrap();
+    assert!(
+        http(next.advance(ProviderEvent::Start).unwrap(), "GET")
+            .headers
+            .contains(&("Authorization".into(), "Bearer new-token".into()))
+    );
 }
 
 #[test]

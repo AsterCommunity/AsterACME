@@ -61,7 +61,7 @@ impl Rrset {
             || self
                 .rrdatas
                 .iter()
-                .any(|v| v.len() > 4096 || txt_decode(v).is_none())
+                .any(|v| v.len() > 4096 || google_txt_decode(v).is_none())
         {
             return Err(invalid(false));
         }
@@ -72,13 +72,70 @@ impl Rrset {
         let matches: Vec<_> = self
             .rrdatas
             .iter()
-            .filter(|wire| txt_decode(wire).as_deref() == Some(value.as_bytes()))
+            .filter(|wire| google_txt_decode(wire).as_deref() == Some(value.as_bytes()))
             .collect();
         if matches.len() > 1 {
             return Err(invalid(false));
         }
         Ok(matches.first().map(|v| (*v).clone()))
     }
+}
+
+// Cloud DNS accepts both quoted and unquoted character strings. Normalize one
+// chunk at a time while retaining the shared decoder's escape and size checks.
+fn google_txt_decode(value: &str) -> Option<Vec<u8>> {
+    let mut input = value.char_indices().peekable();
+    let mut decoded = Vec::new();
+    let mut chunks = 0;
+    while input.peek().is_some() {
+        while input.peek().is_some_and(|(_, ch)| ch.is_ascii_whitespace()) {
+            input.next();
+        }
+        let Some((start, first)) = input.next() else {
+            break;
+        };
+        let quoted = first == '"';
+        let mut end = start + first.len_utf8();
+        let mut escaped = first == '\\';
+        let mut closed = false;
+        while let Some(&(index, ch)) = input.peek() {
+            if !quoted && !escaped && ch.is_ascii_whitespace() {
+                break;
+            }
+            input.next();
+            end = index + ch.len_utf8();
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                if !quoted {
+                    return None;
+                }
+                closed = true;
+                break;
+            }
+        }
+        if quoted && !closed {
+            return None;
+        }
+        if quoted
+            && input
+                .peek()
+                .is_some_and(|(_, ch)| !ch.is_ascii_whitespace())
+        {
+            return None;
+        }
+        let wire = &value[start..end];
+        let chunk = if quoted {
+            txt_decode(wire)?
+        } else {
+            txt_decode(&format!("\"{wire}\""))?
+        };
+        decoded.extend(chunk);
+        chunks += 1;
+    }
+    (chunks > 0).then_some(decoded)
 }
 
 #[derive(Deserialize)]

@@ -183,7 +183,7 @@ async fn google_profile_uses_generic_settings_and_redacts_service_account() {
         assert!(
             !output.contains("PRIVATE KEY")
                 && !output.contains("key-sentinel")
-                && !output.contains("cnbw@test-project")
+                && !output.contains(account["service_account"]["client_email"].as_str().unwrap())
         );
     }
     let profile = root.path().join("providers/google.toml");

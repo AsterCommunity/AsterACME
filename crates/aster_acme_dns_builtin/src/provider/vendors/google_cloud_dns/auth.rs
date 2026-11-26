@@ -131,7 +131,7 @@ pub(super) fn token(body: &[u8]) -> Result<Token, ProviderError> {
     let response: Response = serde_json::from_slice(body)
         .map_err(|_| configuration_error("invalid Google token response"))?;
     let value = Zeroizing::new(response.access_token);
-    if response.token_type != "Bearer"
+    if !response.token_type.eq_ignore_ascii_case("Bearer")
         || !(61..=3600).contains(&response.expires_in)
         || value.is_empty()
         || value.len() > 16384

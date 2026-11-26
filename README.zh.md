@@ -28,7 +28,7 @@
 
 AsterACME 通过保存请求状态、固定密钥与 CSR，以及明确的中断恢复流程，管理证书生命周期。可以交互使用 CLI、编写脚本，也可以将 Rust 服务嵌入应用，注入自己的存储、签名器和验证适配器。
 
-CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod 和华为云 DNS。华为云 RRset 更新无法保证与外部写入者原子隔离；嵌入式应用仍需显式选择所需 provider feature。Google Cloud DNS 通过 `dns-google-cloud-dns` 显式启用，使用服务账号 OAuth 和持久化 changes 事务。[DNS Provider 配置](developer-docs/dns-providers.md)
+CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod 和华为云 DNS。华为云 RRset 更新无法保证与外部写入者原子隔离；嵌入式应用在 `aster_acme_dns_builtin` 上显式选择所需 provider feature，Google Cloud DNS 对应库 feature `google_cloud_dns`。CLI 通过 `dns-google-cloud-dns` 显式启用，使用服务账号 OAuth 和持久化 changes 事务。[DNS Provider 配置](developer-docs/dns-providers.md)
 
 **现已发布：** AsterACME `0.1.0-alpha.3` 已发布到 crates.io。这是预发布版本，Rust API 与本地格式仍可能变化。内置 Cloudflare 和 ADPP 后端已包含在统一的 DNS solver 之中，真实 DNS/公网 CA 验收另计。
 

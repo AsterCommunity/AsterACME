@@ -78,6 +78,7 @@ enum Stage {
 struct Operation {
     config: Config,
     token: Arc<Mutex<Option<Token>>>,
+    request_token: Option<zeroize::Zeroizing<String>>,
     action: ProviderAction,
     saved: Option<Checkpoint>,
     stage: Stage,
@@ -146,6 +147,7 @@ impl OperationFactory for Factory {
         Ok(Box::new(Operation {
             config: self.config.clone(),
             token: self.token.clone(),
+            request_token: None,
             action,
             saved,
             stage: Stage::Start,
@@ -213,6 +215,7 @@ impl Operation {
                 Err(failure) => Err(failure),
             };
         };
+        self.request_token = Some(zeroize::Zeroizing::new(bearer.clone()));
         let mut url = url::Url::parse("https://dns.googleapis.com/dns/v1/projects/")
             .map_err(|_| invalid(false))?;
         {
@@ -425,6 +428,17 @@ impl Operation {
         });
         state.change_id = None;
         state.retry_at = None;
+        if state
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.additions.iter().any(|set| set.rrdatas.len() > 100))
+        {
+            return Err(configuration_error(
+                "Google DNS merged RRset exceeds the supported limit of 100 values",
+            ));
+        }
+        // Apply the same constraints used on restart before any write is authorized.
+        validate(&state, self.record(), &self.owner()?)?;
         self.checkpoint(state, Stage::Save(Request::Submit))
     }
 
@@ -604,10 +618,17 @@ impl ProviderOperation for Operation {
                     Err(failure) => return Err(transport(failure)),
                 };
                 if response.status == 401 {
-                    *self
+                    let mut cached = self
                         .token
                         .lock()
-                        .map_err(|_| configuration_error("Google token cache unavailable"))? = None;
+                        .map_err(|_| configuration_error("Google token cache unavailable"))?;
+                    if cached.as_ref().is_some_and(|token| {
+                        self.request_token
+                            .as_ref()
+                            .is_some_and(|used| used.as_str() == token.value.as_str())
+                    }) {
+                        *cached = None;
+                    }
                 }
                 match kind {
                     Request::Zones => self.zones(&response),

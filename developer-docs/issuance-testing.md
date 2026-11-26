@@ -376,3 +376,10 @@ Review 补充验证：外部密码文件允许空格/中文文件名和 root 所
 Windows 本地执行 `cargo llvm-cov -p aster_acme_dns_builtin --all-features --locked --lcov --output-path <temporary-report>`：114 passed。`api.rs` 为 94/94，`auth.rs` 为 91/94，`operation.rs` 为 516/517；严格 builtin all-features/all-targets Clippy、fmt、Rust import 检查通过。测试进程沿用 `AWS_LC_SYS_PREBUILT_NASM=1`、`CL=/utf-8`。
 
 以同一 PR diff 与 CI LCOV 的原始 804 个可执行改动行计数，原结果为 729/804（90.67164%）；保留原 CI 命中并叠加本次本地实际命中后为 799/804（99.37811%）。这是相同生产源码上的本地补充证据，非一次完整 CI 重跑，也不代表远端 Codecov 状态已更新。剩余 5 个原 CI 改动行主要为 RSA 模数范围拒绝及不可由正常输入触发的错误保护分支；未为覆盖率改写生产逻辑或放宽断言。没有执行真实 Google Cloud/CA 验收，没有提交或推送本次补充。
+### PR #61：评审边界修复（2026-11-26）
+
+基于 `cfaec02` 的本地修复工作区。修复合并后超过 100 值时的写前拒绝、Google TXT 引号/非引号字符块与转义解析、OAuth token type 大小写、迟到 401 对新 token 缓存的保护；邮箱脱敏断言改为引用实际输入，README 区分 CLI 和库 feature。没有改变其他厂商共享 TXT 解码语义。
+
+Windows 本地 `cargo test -p aster_acme_dns_builtin --all-features --locked`：118 passed；`cargo test -p aster_acme_cli --all-features --locked google_`：5 passed、1 ignored（由父测试执行的子进程夹具）。新增回归覆盖 99+1 可发布和清理、100+1 在检查点与 POST 前拒绝、引号/非引号同值冲突、转义与非法 TXT、token type 大小写，以及旧请求 401 晚于新 token 缓存更新的交错顺序。
+
+`cargo llvm-cov -p aster_acme_dns_builtin --all-features --locked --lcov` 同样运行 118 项通过；本地 Google `api.rs` 140/142、`auth.rs` 91/94、`operation.rs` 534/535。该统计仅包含 builtin 测试，不冒充全 workspace 或远端 Codecov 结果。原生环境继续使用仅进程级 `AWS_LC_SYS_PREBUILT_NASM=1`、`CL=/utf-8`。真实 Google Cloud/CA 验收未运行。
