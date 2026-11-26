@@ -17,11 +17,14 @@ default = []
 cloudflare = ["_http", "_publication-markers"]
 aliyun = ["_individual-records"]
 tencent_cloud = ["_individual-records"]
-huawei_cloud = ["_signed-api", "_publication-markers", "dep:url"]
+huawei_cloud = ["_signed-api", "_publication-markers", "_txt", "dep:url"]
+google_cloud_dns = ["_rpc", "_txt", "dep:aws-lc-rs", "dep:time", "dep:zeroize", "dep:url", "dep:base64"]
 # Implementation capabilities: selected automatically by vendor features.
 _publication-markers = []
+_txt = []
 _http = ["dep:linkme"]
-_signed-api = ["_http", "dep:aws-lc-rs", "dep:httpdate", "dep:time", "dep:zeroize"]
+_rpc = ["_http", "dep:httpdate"]
+_signed-api = ["_rpc", "dep:aws-lc-rs", "dep:time", "dep:zeroize"]
 _individual-records = ["_signed-api", "_publication-markers"]
 
 [dependencies]
@@ -34,6 +37,7 @@ linkme = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 
 [lints]
 workspace = true

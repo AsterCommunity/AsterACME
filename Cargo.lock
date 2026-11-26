@@ -280,6 +280,7 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "aster_acme_dns",
  "aws-lc-rs",
+ "base64 0.23.1",
  "httpdate",
  "linkme",
  "serde",

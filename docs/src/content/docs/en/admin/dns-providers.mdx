@@ -65,6 +65,14 @@ The default CLI build includes backend `com.astercosm.acme.dns.huawei-cloud`; a 
 
 See [Huawei configuration and limitations](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md).
 
+## Google Cloud DNS (opt-in)
+
+Enable `dns-google-cloud-dns` in a CLI source build or `google_cloud_dns` in the embedded crate. Supply the fields from a Google RSA service-account JSON key as a private `[service_account]` settings table. The backend ID is `com.astercosm.acme.dns.google-cloud-dns`; it uses the same `provider add --settings-file` and DNS-01 flow, without a Google SDK or ambient credentials.
+
+The backend discovers the public zone for the final CNAME owner, merges TXT values transactionally, and removes only its owned value. Identical pre-existing values are not borrowed. A saved change ID enables recovery; a lost submission response without a saved ID remains unknown and is never replayed. Coordinate external writers, including delete-and-recreate of identical values. Live Google Cloud/CA acceptance is separate.
+
+See the [settings, permissions and recovery guide](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md).
+
 ## ADPP external executables
 
 Other providers implement [ADPP](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md) (AsterACME DNS Provider Protocol), a stdin/stdout JSON protocol:

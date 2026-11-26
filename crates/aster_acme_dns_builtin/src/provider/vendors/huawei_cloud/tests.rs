@@ -1,8 +1,9 @@
+use crate::provider::common::txt::{txt_decode, txt_encode};
 use crate::provider::vendors::huawei_cloud::{
     BACKEND_ID, Config, HuaweiCloudBackend,
     api::{SignedRequest, canonical_query, canonical_uri, safe_huawei_error_code, safe_request_id},
     operation::Factory,
-    txt::{add_marker, remove_marker, txt_decode, txt_encode},
+    txt::{add_marker, remove_marker},
 };
 use aster_acme_dns::{
     CleanupRequest, CleanupStatus, DnsRecord, ProviderErrorCode, RecordOwnership, SideEffect,

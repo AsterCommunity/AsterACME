@@ -31,6 +31,10 @@ async fn backend_inventory_reports_only_compiled_implementations_without_provide
     );
     for (id, enabled) in [
         (
+            "com.astercosm.acme.dns.google-cloud-dns",
+            cfg!(feature = "dns-google-cloud-dns"),
+        ),
+        (
             "com.astercosm.acme.dns.aliyun",
             cfg!(feature = "dns-aliyun"),
         ),
@@ -129,6 +133,98 @@ async fn native_profile_crud_is_offline_redacted_and_invalid_update_is_atomic() 
     assert!(!text.contains("credential-sentinel"));
     execute(
         command(&["remove", "native", "--yes", "--data-dir", dir, "--json"]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    assert!(!profile.exists());
+}
+
+#[cfg(feature = "dns-google-cloud-dns")]
+#[tokio::test]
+async fn google_profile_uses_generic_settings_and_redacts_service_account() {
+    use crate::{commands::provider::render::render, common::session::Format};
+    use aster_acme::crypto::{key::SoftwareSigningKey, key_algorithm::KeyAlgorithm};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let root = tempfile::tempdir().unwrap();
+    let settings = aster_acme_cli_storage::state_file::StateDirectory::open(root.path()).unwrap();
+    let key = SoftwareSigningKey::generate(KeyAlgorithm::Rsa2048).unwrap();
+    let pem = format!(
+        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+        STANDARD.encode(key.to_pkcs8().unwrap().as_slice())
+    );
+    let account = serde_json::json!({"service_account": {"type":"service_account", "project_id":"test-project", "client_email":"test@test-project.iam.gserviceaccount.com", "private_key_id":"key-sentinel", "private_key":pem, "token_uri":"https://oauth2.googleapis.com/token"}});
+    let text = toml::to_string(&account).unwrap();
+    settings
+        .atomic_write("google.toml", text.as_bytes())
+        .unwrap();
+    let path = root.path().join("google.toml");
+    let cli = CommandContext::new(true);
+    let directory = root.path().to_str().unwrap();
+    let report = execute(
+        command(&[
+            "add",
+            "google",
+            "--backend",
+            "com.astercosm.acme.dns.google-cloud-dns",
+            "--settings-file",
+            path.to_str().unwrap(),
+            "--data-dir",
+            directory,
+            "--json",
+        ]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    for json in [true, false] {
+        let output = render(&report, Format { json, color: false }).unwrap();
+        assert!(
+            !output.contains("PRIVATE KEY")
+                && !output.contains("key-sentinel")
+                && !output.contains("cnbw@test-project")
+        );
+    }
+    let profile = root.path().join("providers/google.toml");
+    let original = std::fs::read(&profile).unwrap();
+    settings
+        .atomic_write(
+            "google.toml",
+            b"[service_account]\nprivate_key = 'private-key-sentinel'\n",
+        )
+        .unwrap();
+    let error = execute(
+        command(&[
+            "update",
+            "google",
+            "--settings-file",
+            path.to_str().unwrap(),
+            "--data-dir",
+            directory,
+            "--json",
+        ]),
+        &cli,
+    )
+    .await
+    .unwrap_err();
+    assert!(!error.to_string().contains("private-key-sentinel"));
+    assert_eq!(std::fs::read(&profile).unwrap(), original);
+    execute(
+        command(&["show", "google", "--data-dir", directory, "--json"]),
+        &cli,
+    )
+    .await
+    .unwrap();
+    execute(
+        command(&[
+            "remove",
+            "google",
+            "--yes",
+            "--data-dir",
+            directory,
+            "--json",
+        ]),
         &cli,
     )
     .await

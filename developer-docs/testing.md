@@ -11,6 +11,7 @@ cargo test -p aster_acme_cli_storage --locked issuance::deployment
 cargo test -p aster_acme_dns --locked
 cargo test -p aster_acme_dns_builtin --all-features --locked
 cargo test -p aster_acme_cli --features dns-aliyun,dns-tencent-cloud,dns-huawei-cloud --locked signed_
+cargo test -p aster_acme_cli --no-default-features --features dns-google-cloud-dns --locked google_
 cargo test -p aster_acme_dns_http --locked
 cargo test -p aster_acme_cli_storage --locked provider_publication
 cargo check --workspace --locked
@@ -60,3 +61,5 @@ DNS 后端测试包括：registry 重复/未知 ID、编译 feature 集合、写
 阿里云与 DNSPod 的 mock 测试验证签名字节、分页、所有权和清理边界。CLI 的 `signed_rpc` 测试把真实文件 checkpoint、跨进程租约、厂商 HTTP mock 和 ACME loopback 服务组合在同一签发流程中。覆盖已持久化 ID、创建响应丢失、恢复、TTL 回读和限频下限。独立 feature 矩阵验证未启用、单厂商启用和 registry 一致性。
 
 华为云测试对照官方 HWS GET/POST 签名向量，验证 marker 分页、TXT 引号/转义、多 publication 同 owner、意图与 ID 恢复、描述保留、最后一个值删除、变更身份拒绝、有界冲突与 pending、限频脱敏。CLI `signed_rpc` 同时覆盖华为云文件恢复、跨进程争用、丢响应和取消后的 ACME loopback 签发/清理。它证明本地契约，不证明云端 CAS 或真实厂商/公网 CA 验收。
+
+Google Cloud DNS 的 mock 覆盖 OAuth RS256 签名/令牌过期、分页与最终 owner zone、changes 前置条件、保存 ID 后恢复、无 ID 未知提交不重放、同值拒绝、差异清理及错误脱敏。CLI `google_` 测试组合真实 publication 文件、子进程租约争用与 ACME loopback，并检查 settings 脱敏和限流下限持久化。真实 Google Cloud 项目和 CA 验收另记，不由本地测试替代。

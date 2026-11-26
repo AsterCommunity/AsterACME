@@ -4,7 +4,7 @@
 
 `aster_acme_dns::backend` 定义后端 ID、字段描述符、配置校验/远端 binding/工厂契约及显式不可变 registry。注册项通过 `linkme` 收集，宿主也可调用 `ProviderRegistry::new` 注入实现；重复 ID、坏描述符和未编译的后端失败关闭。CLI 对所有供应商使用同一字段展示和工厂，不维护厂商分支。描述符和运行时构造始终来自同一个 backend 对象。
 
-`aster_acme_dns_builtin` 保存厂商配置、签名、API 解析和状态机，无网络或文件访问。默认 feature 为空；提供 `cloudflare`、`aliyun`、`tencent_cloud`、`huawei_cloud` 厂商 feature。它同时提供 `ConditionalRrsetFactory`，供具备真实条件更新能力的后端复用；这不代表已实现其他厂商。`aster_acme_dns_adpp` 通过同一注册表提供外部后端，保留自己的 wire/process 错误语义。
+`aster_acme_dns_builtin` 保存厂商配置、签名、API 解析和状态机，无网络或文件访问。默认 feature 为空；提供 `cloudflare`、`aliyun`、`tencent_cloud`、`huawei_cloud`、`google_cloud_dns` 厂商 feature。它同时提供 `ConditionalRrsetFactory`，供具备真实条件更新能力的后端复用；这不代表已实现其他厂商。`aster_acme_dns_adpp` 通过同一注册表提供外部后端，保留自己的 wire/process 错误语义。
 
 供应商 feature 在 Cargo 中自动启用 `_http`、`_signed-api`、`_individual-records` 等内部能力，共享模块只判断能力开关，不枚举所有使用它的厂商。下划线前缀的 feature 是实现细节，宿主只选供应商 feature。`HttpRequest.method` 使用 `aster_acme_dns::operation::HttpMethod`，类型及其完整动词集合不按厂商裁剪；仅签名和 HTTP 传输边界转换为 wire 表示。
 
@@ -16,7 +16,7 @@
 
 ## 身份与格式
 
-- 后端类型：`com.astercosm.acme.dns.cloudflare`、`com.astercosm.acme.dns.aliyun`、`com.astercosm.acme.dns.tencent-cloud`、`com.astercosm.acme.dns.huawei-cloud`、`com.astercosm.acme.adpp`。
+- 后端类型：`com.astercosm.acme.dns.cloudflare`、`com.astercosm.acme.dns.aliyun`、`com.astercosm.acme.dns.tencent-cloud`、`com.astercosm.acme.dns.huawei-cloud`、`com.astercosm.acme.dns.google-cloud-dns`、`com.astercosm.acme.adpp`。
 - ADPP wire `protocol`：`com.astercosm.acme.adpp`；相同字符串位于不同语义字段，不用 wire 协议版本推断后端配置版本。
 - Profile 名称是用户配置实例，publication ID 是稳定发布身份，两者不代替后端/账号/zone 范围。
 - 保存证书定义冻结后端和非秘密 binding，续期沿用；凭据本身不写入定义或发布检查点。
@@ -59,6 +59,18 @@ Cloudflare 使用单记录对象及 publication comment，不使用 RRset 全量
 - 仅对结构化明确 409 拒绝保存证据后重读合并，单次调用最多四次写入；429/认证/授权等错误结构化脱敏，限频下限随签发 journal 持久化。不确定响应保留意图；pending 状态有界轮询，不能把 HTTP 200/202 当作完成。
 
 官方 SDK revision `3da3be180a23bcbf8f6e668606c6ef26e76e95af` 的 [请求元数据](https://github.com/huaweicloud/huaweicloud-sdk-go-v3/blob/3da3be180a23bcbf8f6e668606c6ef26e76e95af/services/dns/v2/dns_meta.go#L1711) 声明整组 POST/PUT/DELETE，未声明条件写入。签名测试对照同 revision 的 [HWS 官方向量](https://github.com/huaweicloud/huaweicloud-sdk-go-v3/blob/3da3be180a23bcbf8f6e668606c6ef26e76e95af/core/auth/signer/signer_test.go)。这只证明公开契约边界，不断言未公开的请求头能力。
+
+### Google Cloud DNS：changes 事务与 journal 差异所有权
+
+`google_cloud_dns`（#42）为 opt-in，CLI 对应 `dns-google-cloud-dns`。厂商实现只发出已有 HTTP/Checkpoint/Wait effects，不在后端访问文件或创建 HTTP client。服务账号 JSON 通过私有 settings 输入；JWT 使用 AWS-LC RS256，固定 OAuth endpoint 与 DNS API origin，不采用凭据 JSON 中的任意网络地址。access token 仅缓存在当前工厂内存，提前 60 秒过期，不写 journal。
+
+发布枚举 public managed zones，按最终 TXT owner 的最长标签后缀匹配；分页循环、重复 ID、同优先级歧义均拒绝。zone ID/dnsName 随 publication 固定。发布前保存完整 additions/deletions 及目标值差异，Google `changes.create` 原子应用增删，deletions 必须与当前 RRset 精确匹配；明确冲突先保存拒绝再重读，最多四次。保留当前无关值、TTL 与未知 metadata；路由策略和签名 RRset 不按普通静态 TXT 处理。新 RRset TTL 使用固定计划请求值，限制为 `0..=2147483647`。
+
+Google RRset 没有 publication 标记。本实现对所有预存同值记录拒绝借用，包括其他 publication 的值，保留远端记录，不通过本地锁推断所有权。成功响应的 change ID 先落盘，再经 `changes.get` 核对完整增删与状态并重读 TXT；`done` 不等于公网传播完成。清理重读当前 RRset，只减去 journal 证明本次添加的目标值，保留后来新增值，不恢复旧快照。终态 checkpoint 防止重复清理误删后来重建的值。
+
+若提交响应丢失且没有持久化 change ID，保留意图并返回结果未知，不靠 TXT 存在、相同历史 payload 或 `clientOperationId` 推断归属，不自动重放。已保存 change ID 的轮询丢响应可在重启后只读恢复。Google exact-value 前置条件不提供不可复用 revision，因此不冒充 `ConditionalRrsetFactory` 的完整契约；外部删除/重建同值的 ABA 无法仅凭 journal 检出。操作者需协调其他写入者，建议使用专用委派 owner；本地租约仅保护同一 data-dir。
+
+官方依据：[changes.create](https://cloud.google.com/dns/docs/reference/v1/changes/create)、[Change](https://cloud.google.com/dns/docs/reference/v1/changes)、[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)。2026-11-26 核对官方 DNS v1 discovery：change ID 为服务端只读字段，`done` 表示已发送权威更新请求，deletions 须精确匹配已有数据。实现与 mock 证据不替代真实 Google Cloud/CA 验收。
 
 ## 扩展和验证
 

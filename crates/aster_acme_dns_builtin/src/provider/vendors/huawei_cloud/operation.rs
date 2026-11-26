@@ -1,4 +1,5 @@
 //! Best-effort Huawei `RRset` lifecycle; it never invents an atomic revision.
+use crate::provider::common::txt::{txt_decode, txt_encode};
 use crate::provider::{
     common::{
         retry::ReadRetry,
@@ -7,7 +8,7 @@ use crate::provider::{
     vendors::huawei_cloud::{
         Config,
         api::{SignedRequest, decode_body, marker_from_next, payload},
-        txt::{add_marker, has_foreign_marker, has_marker, remove_marker, txt_decode, txt_encode},
+        txt::{add_marker, has_foreign_marker, has_marker, remove_marker},
     },
 };
 use aster_acme_dns::operation::HttpMethod;

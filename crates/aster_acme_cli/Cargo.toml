@@ -58,6 +58,7 @@ dns-cloudflare = ["aster_acme_dns_builtin/cloudflare"]
 dns-aliyun = ["aster_acme_dns_builtin/aliyun"]
 dns-tencent-cloud = ["aster_acme_dns_builtin/tencent_cloud"]
 dns-huawei-cloud = ["aster_acme_dns_builtin/huawei_cloud"]
+dns-google-cloud-dns = ["aster_acme_dns_builtin/google_cloud_dns"]
 
 [dependencies]
 aster_acme_dns_builtin.workspace = true

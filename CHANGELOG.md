@@ -6,6 +6,8 @@
 
 ### Added
 
+- **Google Cloud DNS (#42)** — Opt-in `google_cloud_dns` library / `dns-google-cloud-dns` CLI backend with service-account OAuth, final-owner zone discovery, transactional RRset merge/cleanup and durable change-ID recovery. Existing identical values are never borrowed; unconfirmed submissions are retained without replay. Live Google Cloud/CA acceptance is separate.
+
 - **PKCS#12 deployment (#55)** — Publish chain and private-key bundles with `cert deploy add/update --p12-path`, using key permissions and the existing prepare-before-publish pipeline. Bindings store exclusive environment/file password references only; use a 0600 password file for the daemon or a transient password during interactive explicit run. Automatic execution without a source fails without retries, JSON excludes password values, and directory targets retain the four PEM files.
 
 - **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests.
