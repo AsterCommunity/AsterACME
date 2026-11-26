@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 keywords = ['acme', 'dns', 'dns-01', 'resolver', 'cname']
+categories = ["authentication", "network-programming"]
 description = "Hickory DNS observation adapter for AsterACME publication policy."
 readme = "README.md"
 

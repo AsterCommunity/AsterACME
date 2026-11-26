@@ -9,6 +9,7 @@ repository.workspace = true
 description = "DNS-01 challenge automation for AsterACME."
 publish.workspace = true
 keywords = ["acme", "dns", "dns-01", "caa", "tls"]
+categories = ["authentication", "network-programming"]
 readme = "README.md"
 
 [features]

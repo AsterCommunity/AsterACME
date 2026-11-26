@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Typed ACME wire models and discovered resource URLs."
 publish.workspace = true
 keywords = ["acme", "protocol", "wire", "json", "pki"]
+categories = ["authentication", "network-programming"]
 readme = "README.md"
 
 [dependencies]

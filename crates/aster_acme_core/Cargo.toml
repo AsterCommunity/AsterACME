@@ -9,6 +9,7 @@ repository.workspace = true
 description = "ACME resource states and state machine decisions."
 publish.workspace = true
 keywords = ["acme", "certificate", "pki", "protocol", "state-machine"]
+categories = ["authentication", "data-structures"]
 readme = "README.md"
 
 [dependencies]

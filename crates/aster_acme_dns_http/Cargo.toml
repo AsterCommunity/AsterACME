@@ -9,6 +9,8 @@ repository.workspace = true
 description = "Forge HTTP execution adapter for AsterACME DNS provider actions."
 publish.workspace = true
 keywords = ["acme", "dns", "http", "rustls", "provider"]
+categories = ["authentication", "network-programming"]
+readme = "README.md"
 
 
 [dependencies]

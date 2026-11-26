@@ -9,6 +9,8 @@ repository.workspace = true
 description = "DNS challenge publication contracts and routing policy for AsterACME."
 publish.workspace = true
 keywords = ["acme", "dns", "dns-01", "certificate", "challenge"]
+categories = ["authentication", "network-programming"]
+readme = "README.md"
 
 [dependencies]
 async-trait.workspace = true
