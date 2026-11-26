@@ -554,3 +554,449 @@ fn failed_token_refresh_before_dns_write_persists_not_sent_evidence() {
     );
     assert!(request.url.contains("/rrsets?"));
 }
+
+fn presented(f: &Factory) -> (RecoveryState, aster_acme_dns::PublicationReceipt) {
+    let mut op = begin(f);
+    let (_, plan) = submit(op.as_mut(), &[]);
+    applied(op.as_mut(), &plan, "presented");
+    let saved = cp(op
+        .advance(response(&json!({"rrsets":[rrset(&["\"our-value\""])]})))
+        .unwrap());
+    let ProviderEffect::Complete(ProviderOutcome::Presented(receipt)) =
+        op.advance(ProviderEvent::CheckpointSaved).unwrap()
+    else {
+        panic!("expected publication receipt")
+    };
+    (saved, receipt)
+}
+
+fn cleanup_action(receipt: aster_acme_dns::PublicationReceipt) -> ProviderAction {
+    ProviderAction::Cleanup(CleanupRequest {
+        publication_id: record().publication_id.clone(),
+        record: record(),
+        receipt,
+    })
+}
+
+fn status_event(status: u16, reason: &str) -> ProviderEvent {
+    ProviderEvent::Http(Ok(HttpResponse {
+        status,
+        headers: vec![],
+        body: serde_json::to_vec(
+            &json!({"error":{"errors":[{"reason":reason}],"message":"secret-sentinel"}}),
+        )
+        .unwrap(),
+    }))
+}
+
+#[test]
+fn credentials_reject_malformed_pem_der_and_token_responses_without_echoing_secrets() {
+    let mut account = config().service_account.clone();
+    for pem in [
+        "secret-sentinel".to_owned(),
+        "x".repeat(16385),
+        "-----BEGIN PRIVATE KEY-----\n!secret-sentinel!\n-----END PRIVATE KEY-----".into(),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+            STANDARD.encode(b"invalid DER")
+        ),
+    ] {
+        account.private_key = pem;
+        let error = auth::key(&account).err().unwrap();
+        assert!(!error.to_string().contains("secret-sentinel"));
+    }
+    for body in [
+        b"not JSON".as_slice(),
+        br#"{"access_token":"secret-sentinel"}"#,
+    ] {
+        let error = auth::token(body).err().unwrap();
+        assert!(!error.to_string().contains("secret-sentinel"));
+    }
+    for value in [
+        json!({"access_token":"token","token_type":"MAC","expires_in":3600}),
+        json!({"access_token":"","token_type":"Bearer","expires_in":3600}),
+        json!({"access_token":"x".repeat(16385),"token_type":"Bearer","expires_in":3600}),
+        json!({"access_token":"token","token_type":"Bearer","expires_in":3601}),
+    ] {
+        assert!(auth::token(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn invalid_publication_identity_and_corrupt_recovery_are_rejected_before_io() {
+    let f = factory();
+    for (owner, id, value) in [
+        ("bad..owner", "pub", "value"),
+        ("example.com.", "", "value"),
+        ("example.com.", "pub", ""),
+        ("example.com.", "pub", "非ASCII"),
+    ] {
+        let mut request = record();
+        request.name = owner.into();
+        request.publication_id = id.into();
+        request.value = value.into();
+        assert!(f.start(ProviderAction::Present(request), None).is_err());
+    }
+    assert!(
+        f.start(
+            ProviderAction::Present(record()),
+            Some(RecoveryState {
+                version: 1,
+                data: json!({"phase":"made-up"})
+            })
+        )
+        .is_err()
+    );
+    let (saved, receipt) = presented(&f);
+    for field in [
+        "publication",
+        "name",
+        "chain",
+        "ownership",
+        "id",
+        "missing-state",
+    ] {
+        let ProviderAction::Cleanup(mut request) = cleanup_action(receipt.clone()) else {
+            unreachable!()
+        };
+        match field {
+            "publication" => request.publication_id = "different".into(),
+            "name" => request.receipt.record_name = "elsewhere.example.".into(),
+            "chain" => request.receipt.cname_chain.clear(),
+            "ownership" => request.receipt.ownership = aster_acme_dns::RecordOwnership::Preexisting,
+            "id" => request.receipt.record_id = "different".into(),
+            _ => {}
+        }
+        let recovery = (field != "missing-state").then(|| saved.clone());
+        assert!(
+            f.start(ProviderAction::Cleanup(request), recovery).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn zone_discovery_rejects_duplicates_private_only_and_equal_suffix_ambiguity() {
+    let f = factory();
+    for zones in [
+        json!([]),
+        json!([{"id":"private","dnsName":"validation.net.","visibility":"private"}]),
+        json!([{"id":"bad/id","dnsName":"validation.net.","visibility":"public"}]),
+        json!([{"id":"one","dnsName":"validation.net.","visibility":"public"},{"id":"one","dnsName":"validation.net.","visibility":"public"}]),
+        json!([{"id":"one","dnsName":"validation.net.","visibility":"public"},{"id":"two","dnsName":"validation.net.","visibility":"public"}]),
+    ] {
+        let mut op = f.start(ProviderAction::Present(record()), None).unwrap();
+        http(op.advance(ProviderEvent::Start).unwrap(), "GET");
+        assert!(
+            op.advance(response(&json!({"managedZones":zones})))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn rrset_pagination_requires_a_single_complete_exact_owner_snapshot() {
+    let f = factory();
+    let mut op = begin(&f);
+    let next = http(
+        op.advance(response(&json!({"rrsets":[],"nextPageToken":"second"})))
+            .unwrap(),
+        "GET",
+    );
+    assert!(next.url.contains("pageToken=second"));
+    let (_, plan) = submit(op.as_mut(), &[rrset(&["\"existing\""])]);
+    assert_eq!(plan["deletions"][0]["rrdatas"], json!(["\"existing\""]));
+    let mut op = begin(&f);
+    http(
+        op.advance(response(
+            &json!({"rrsets":[rrset(&["\"existing\""])],"nextPageToken":"second"}),
+        ))
+        .unwrap(),
+        "GET",
+    );
+    assert!(
+        op.advance(response(&json!({"rrsets":[rrset(&["\"another\""])]})))
+            .is_err()
+    );
+}
+
+#[test]
+fn restored_publication_checks_current_presence_and_retains_effective_ttl() {
+    let f = factory();
+    let (saved, receipt) = presented(&f);
+    let mut op = f
+        .start(ProviderAction::Present(record()), Some(saved.clone()))
+        .unwrap();
+    http(op.advance(ProviderEvent::Start).unwrap(), "GET");
+    let mut current = rrset(&["\"our-value\""]);
+    current["ttl"] = json!(600);
+    cp(op.advance(response(&json!({"rrsets":[current]}))).unwrap());
+    let ProviderEffect::Complete(ProviderOutcome::Presented(observed)) =
+        op.advance(ProviderEvent::CheckpointSaved).unwrap()
+    else {
+        panic!("expected receipt")
+    };
+    assert_eq!(observed.record_id, receipt.record_id);
+    assert_eq!(observed.effective_ttl_seconds, Some(600));
+    let mut op = f
+        .start(ProviderAction::Present(record()), Some(saved.clone()))
+        .unwrap();
+    http(op.advance(ProviderEvent::Start).unwrap(), "GET");
+    assert_eq!(
+        op.advance(response(&json!({"rrsets":[]})))
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::RecordNotOwned
+    );
+    let action = cleanup_action(receipt);
+    let mut op = f.start(action.clone(), Some(saved)).unwrap();
+    http(op.advance(ProviderEvent::Start).unwrap(), "GET");
+    let cleaned = cp(op.advance(response(&json!({"rrsets":[]}))).unwrap());
+    assert!(matches!(
+        op.advance(ProviderEvent::CheckpointSaved).unwrap(),
+        ProviderEffect::Complete(ProviderOutcome::Cleaned(CleanupStatus::AlreadyAbsent))
+    ));
+    let mut op = f.start(action, Some(cleaned)).unwrap();
+    assert!(matches!(
+        op.advance(ProviderEvent::Start).unwrap(),
+        ProviderEffect::Complete(ProviderOutcome::Cleaned(CleanupStatus::AlreadyAbsent))
+    ));
+}
+
+#[test]
+fn change_acknowledgement_is_not_enough_without_matching_plan_and_current_value() {
+    let f = factory();
+    for mutation in ["count", "id", "status", "ttl", "metadata"] {
+        let mut op = begin(&f);
+        let (_, mut change) = submit(op.as_mut(), &[]);
+        change["id"] = json!("change-1");
+        change["status"] = json!("done");
+        match mutation {
+            "count" => change["additions"] = json!([]),
+            "id" => change["id"] = json!("bad/id"),
+            "status" => change["status"] = json!("unknown"),
+            "ttl" => change["additions"][0]["ttl"] = json!(601),
+            _ => change["additions"][0]["unexpected"] = json!(true),
+        }
+        assert!(op.advance(response(&change)).is_err(), "{mutation}");
+    }
+    let mut op = begin(&f);
+    let (_, plan) = submit(op.as_mut(), &[]);
+    applied(op.as_mut(), &plan, "known");
+    assert_eq!(
+        op.advance(response(&json!({"rrsets":[]})))
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::RecordNotOwned
+    );
+    let mut op = begin(&f);
+    let (_, mut change) = submit(op.as_mut(), &[]);
+    change["id"] = json!("known");
+    change["status"] = json!("done");
+    cp(op.advance(response(&change)).unwrap());
+    http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "GET");
+    change["id"] = json!("different");
+    assert!(op.advance(response(&change)).is_err());
+}
+
+#[test]
+fn pending_change_has_a_bounded_read_only_poll_budget() {
+    let f = factory();
+    let mut op = begin(&f);
+    let (_, mut change) = submit(op.as_mut(), &[]);
+    change["id"] = json!("pending");
+    change["status"] = json!("pending");
+    let saved = cp(op.advance(response(&change)).unwrap());
+    http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "GET");
+    for _ in 0..8 {
+        assert!(matches!(
+            op.advance(response(&change)).unwrap(),
+            ProviderEffect::WaitUntil(_)
+        ));
+        http(op.advance(ProviderEvent::Timer).unwrap(), "GET");
+    }
+    let error = op.advance(response(&change)).err().unwrap();
+    assert_eq!(error.code, ProviderErrorCode::ProviderUnavailable);
+    assert_eq!(error.side_effect, SideEffect::Unknown);
+    let mut restored = f
+        .start(ProviderAction::Present(record()), Some(saved))
+        .unwrap();
+    assert!(
+        http(restored.advance(ProviderEvent::Start).unwrap(), "GET")
+            .url
+            .ends_with("/changes/pending")
+    );
+}
+
+#[test]
+fn cleanup_intent_resumes_by_change_id_and_rejects_a_still_present_value() {
+    let f = factory();
+    let (saved, receipt) = presented(&f);
+    let action = cleanup_action(receipt);
+    let mut op = f.start(action.clone(), Some(saved)).unwrap();
+    http(op.advance(ProviderEvent::Start).unwrap(), "GET");
+    cp(op
+        .advance(response(&json!({"rrsets":[rrset(&["\"our-value\""])]})))
+        .unwrap());
+    let req = http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "POST");
+    let mut change: Value = serde_json::from_slice(&req.body).unwrap();
+    change["id"] = json!("cleanup");
+    change["status"] = json!("done");
+    let intent = cp(op.advance(response(&change)).unwrap());
+    let mut resumed = f.start(action, Some(intent)).unwrap();
+    http(resumed.advance(ProviderEvent::Start).unwrap(), "GET");
+    http(resumed.advance(response(&change)).unwrap(), "GET");
+    assert_eq!(
+        resumed
+            .advance(response(&json!({"rrsets":[rrset(&["\"our-value\""])]})))
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::RecordNotOwned
+    );
+}
+
+#[test]
+fn known_unsent_and_rejected_writes_require_persisted_evidence_before_retry() {
+    let f = factory();
+    let mut op = begin(&f);
+    submit(op.as_mut(), &[]);
+    let state = cp(op
+        .advance(ProviderEvent::Http(Err(HttpFailure {
+            code: ProviderErrorCode::ProviderTimeout,
+            side_effect: SideEffect::None,
+        })))
+        .unwrap());
+    assert_eq!(state.data["phase"], "resolved");
+    assert_eq!(
+        op.advance(ProviderEvent::CheckpointSaved)
+            .err()
+            .unwrap()
+            .side_effect,
+        SideEffect::None
+    );
+    let mut op = begin(&f);
+    submit(op.as_mut(), &[]);
+    assert_eq!(
+        op.advance(status_event(500, "internalError"))
+            .err()
+            .unwrap()
+            .side_effect,
+        SideEffect::Unknown
+    );
+    let (saved, receipt) = presented(&f);
+    let mut op = f.start(cleanup_action(receipt), Some(saved)).unwrap();
+    http(op.advance(ProviderEvent::Start).unwrap(), "GET");
+    cp(op
+        .advance(response(&json!({"rrsets":[rrset(&["\"our-value\""])]})))
+        .unwrap());
+    http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "POST");
+    let state = cp(op.advance(status_event(403, "forbidden")).unwrap());
+    assert_eq!(state.data["phase"], "presented");
+    assert_eq!(
+        op.advance(ProviderEvent::CheckpointSaved)
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::AuthorizationDenied
+    );
+}
+
+#[test]
+fn structured_api_rejections_are_classified_without_raw_error_text() {
+    for (status, reason, code) in [
+        (400, "invalid", ProviderErrorCode::InvalidRequest),
+        (401, "authError", ProviderErrorCode::AuthenticationFailed),
+        (403, "forbidden", ProviderErrorCode::AuthorizationDenied),
+        (404, "notFound", ProviderErrorCode::InvalidRequest),
+        (403, "quotaExceeded", ProviderErrorCode::RateLimited),
+    ] {
+        let ProviderEvent::Http(Ok(reply)) = status_event(status, reason) else {
+            unreachable!()
+        };
+        let failure = api::failure(&reply, true);
+        assert_eq!(failure.code, code);
+        assert_eq!(failure.side_effect, SideEffect::None);
+        assert!(!failure.message.contains("secret-sentinel"));
+    }
+    let mut op = begin(&factory());
+    let (_, mut change) = submit(op.as_mut(), &[]);
+    change["id"] = json!("poll");
+    change["status"] = json!("done");
+    cp(op.advance(response(&change)).unwrap());
+    http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "GET");
+    assert_eq!(
+        op.advance(status_event(403, "forbidden"))
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::AuthorizationDenied
+    );
+}
+
+#[test]
+fn token_failures_and_invalid_event_order_never_emit_dns_mutations() {
+    let mut f = factory();
+    f.config.service_account.private_key = "invalid secret-sentinel".into();
+    *f.token.lock().unwrap() = None;
+    let mut op = f.start(ProviderAction::Present(record()), None).unwrap();
+    assert!(op.advance(ProviderEvent::Start).is_err());
+    let mut op = begin(&factory());
+    assert!(op.advance(ProviderEvent::Timer).is_err());
+    let f = factory();
+    let mut op = begin(&f);
+    cp(op.advance(response(&json!({"rrsets":[]}))).unwrap());
+    f.token.lock().unwrap().as_mut().unwrap().expires = Instant::now();
+    http(op.advance(ProviderEvent::CheckpointSaved).unwrap(), "POST");
+    let saved = cp(op.advance(status_event(401, "authError")).unwrap());
+    assert_eq!(saved.data["phase"], "resolved");
+    assert_eq!(
+        op.advance(ProviderEvent::CheckpointSaved)
+            .err()
+            .unwrap()
+            .side_effect,
+        SideEffect::None
+    );
+    let f = factory();
+    *f.token.lock().unwrap() = None;
+    let mut op = f.start(ProviderAction::Present(record()), None).unwrap();
+    http(op.advance(ProviderEvent::Start).unwrap(), "POST");
+    assert_eq!(
+        op.advance(status_event(403, "forbidden"))
+            .err()
+            .unwrap()
+            .code,
+        ProviderErrorCode::AuthorizationDenied
+    );
+}
+
+#[test]
+fn corrupt_intents_cannot_gain_publication_or_cleanup_authority() {
+    let f = factory();
+    let mut op = begin(&f);
+    let (intent, _) = submit(op.as_mut(), &[]);
+    let mut mutations = Vec::new();
+    let mut changed = intent.clone();
+    changed.data["plan"]["additions"] = json!([]);
+    mutations.push(changed);
+    let mut changed = intent.clone();
+    changed.data["plan"]["deletions"] = json!([rrset(&["\"our-value\""])]);
+    mutations.push(changed);
+    let mut changed = intent.clone();
+    changed.data["plan"]["additions"] = json!([rrset(&["\"our-value\""]), rrset(&["\"other\""])]);
+    mutations.push(changed);
+    let mut changed = intent.clone();
+    changed.data["phase"] = json!("resolved");
+    mutations.push(changed);
+    let mut changed = intent;
+    changed.data["cleanup_removed"] = json!(true);
+    mutations.push(changed);
+    for changed in mutations {
+        assert!(
+            f.start(ProviderAction::Present(record()), Some(changed))
+                .is_err()
+        );
+    }
+}

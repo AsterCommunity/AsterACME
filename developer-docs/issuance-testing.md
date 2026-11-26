@@ -369,3 +369,10 @@ Review 补充验证：外部密码文件允许空格/中文文件名和 root 所
 恢复限制：响应丢失时若已持久化 change ID，可只读对账；没有 ID 的未知提交保留意图和远端材料，不根据同值或相同历史请求认领、不自动重放。无标记 RRset 的外部删除/重建同值无法可靠区分，须协调其他写入者。
 
 未运行真实 Google Cloud 项目、真实 DNS 传播或 Let's Encrypt staging/production 验收：用户确认没有相应环境和凭据。上述结果仅证明本地 mock/loopback 契约，不将 issue 的公网验收项标为完成；Linux/macOS 本机验收也未执行。
+### Issue #42：覆盖率补充（2026-11-26）
+
+针对 PR #61 的 `24ea4e789f0b87bf1ff14347c011849b77fc7d2b`，读取 CI run `45772406668` 的 `rust-coverage` LCOV 后，仅补充 Google 后端测试，生产代码不变。新增 12 项测试覆盖无效凭据、zone 歧义、RRset 分页、恢复身份、事务响应不一致、清理恢复、轮询预算、明确未发送与结构化拒绝。
+
+Windows 本地执行 `cargo llvm-cov -p aster_acme_dns_builtin --all-features --locked --lcov --output-path <temporary-report>`：114 passed。`api.rs` 为 94/94，`auth.rs` 为 91/94，`operation.rs` 为 516/517；严格 builtin all-features/all-targets Clippy、fmt、Rust import 检查通过。测试进程沿用 `AWS_LC_SYS_PREBUILT_NASM=1`、`CL=/utf-8`。
+
+以同一 PR diff 与 CI LCOV 的原始 804 个可执行改动行计数，原结果为 729/804（90.67164%）；保留原 CI 命中并叠加本次本地实际命中后为 799/804（99.37811%）。这是相同生产源码上的本地补充证据，非一次完整 CI 重跑，也不代表远端 Codecov 状态已更新。剩余 5 个原 CI 改动行主要为 RSA 模数范围拒绝及不可由正常输入触发的错误保护分支；未为覆盖率改写生产逻辑或放宽断言。没有执行真实 Google Cloud/CA 验收，没有提交或推送本次补充。
