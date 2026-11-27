@@ -1,4 +1,7 @@
 //! Tencent Cloud `DNSPod` API 2021-03-23 using TC3-HMAC-SHA256.
+//!
+//! `DNSPod` API 3.0 reference: <https://docs.dnspod.cn/api/api3>
+//! TC3-HMAC-SHA256 signing: <https://cloud.tencent.com/document/product/213/30654>
 use crate::provider::common::{
     individual::{
         api::{IndividualApi, PAGE_SIZE, Page, Record, RecordMarking, Zone},
@@ -29,6 +32,7 @@ pub const BACKEND_ID: &str = "com.astercosm.acme.dns.tencent-cloud";
 const HOST: &str = "dnspod.tencentcloudapi.com";
 const SERVICE: &str = "dnspod";
 const VERSION: &str = "2021-03-23";
+// DNSPod assigns the line ID "0" to the default resolution line.
 const DEFAULT_LINE: &str = "0";
 
 #[derive(Clone, Copy)]
@@ -195,6 +199,9 @@ impl Keys {
         timestamp: i64,
         body: &[u8],
     ) -> Result<String, ProviderError> {
+        // TC3-HMAC-SHA256 canonical request (step 1) and signing key chain
+        // (steps 2-3) follow the v3 signing reference in the module docs; only
+        // headers present in the canonical form are listed as signed.
         const SIGNED: &str = "content-type;host;x-tc-action";
         let date = OffsetDateTime::from_unix_timestamp(timestamp)
             .map_err(|_| configuration_error("invalid TC3 request time"))?

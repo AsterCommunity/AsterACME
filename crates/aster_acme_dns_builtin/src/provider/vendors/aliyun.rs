@@ -1,4 +1,8 @@
 //! Alibaba Cloud DNS RPC, API version 2015-01-09, signed with ACS3.
+//!
+//! API reference: <https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-overview>
+//! ACS3 (V3) request structure and signing:
+//! <https://help.aliyun.com/zh/sdk/product-overview/v3-request-structure-and-signature>
 use crate::provider::common::{
     individual::{
         api::{IndividualApi, PAGE_SIZE, Page, Record, RecordMarking, Zone, valid_id},
@@ -29,6 +33,9 @@ use zeroize::ZeroizeOnDrop;
 pub const BACKEND_ID: &str = "com.astercosm.acme.dns.aliyun";
 const HOST: &str = "alidns.aliyuncs.com";
 const VERSION: &str = "2015-01-09";
+// AddDomainRecord accepts TTL values up to 86400 seconds (default 600); larger
+// request values are clamped to this public maximum.
+// <https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-adddomainrecord>
 const MAX_TTL: u32 = 86400;
 
 #[derive(Clone, Copy)]
@@ -570,6 +577,9 @@ fn safe_provider_code(code: &str) -> Option<String> {
 }
 
 fn query(parameters: &[(&str, &str)]) -> String {
+    // ACS3 canonical queries percent-encode everything outside the RFC 3986
+    // unreserved set (<https://www.rfc-editor.org/rfc/rfc3986#section-2.3>),
+    // then sort by encoded name/value before joining.
     fn encode(input: &str) -> String {
         let mut result = String::new();
         for byte in input.bytes() {

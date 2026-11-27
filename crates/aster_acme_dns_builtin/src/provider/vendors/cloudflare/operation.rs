@@ -507,6 +507,9 @@ impl Operation {
             kind: "TXT",
             name: self.record().name.trim_end_matches('.'),
             content: &self.record().value,
+            // Cloudflare accepts TTL 60..=86400 (1 means "automatic", which
+            // this backend never sends); values outside the range are clamped.
+            // <https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/>
             ttl: self.record().ttl_seconds.unwrap_or(120).clamp(60, 86400),
             comment: self.tag(),
         })
