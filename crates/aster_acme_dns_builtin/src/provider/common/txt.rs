@@ -1,4 +1,8 @@
 //! Lossless DNS TXT presentation shared by `RRset` providers.
+//!
+//! Character-string boundaries follow [RFC 1035 §5.1](https://www.rfc-editor.org/rfc/rfc1035#section-5.1).
+//! The [Google Cloud DNS TXT presentation](https://docs.cloud.google.com/dns/docs/records-overview)
+//! uses quoted character strings; this encoder escapes quotes/backslashes and uses `\DDD` for bytes.
 pub(in crate::provider) fn txt_encode(value: &str) -> String {
     use std::fmt::Write;
     let mut output = String::from("\"");

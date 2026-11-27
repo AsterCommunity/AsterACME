@@ -418,6 +418,8 @@ impl Operation {
                 state.phase = Phase::CleanupIntent;
             }
         }
+        // Reject a plan we could not later read back or recover before checkpointing
+        // it; the API's project quota can exceed this backend's bounded local limit.
         state.plan = Some(Plan {
             deletions: current.into_iter().collect(),
             additions: if desired.rrdatas.is_empty() {
@@ -428,6 +430,8 @@ impl Operation {
         });
         state.change_id = None;
         state.retry_at = None;
+        // Keep plans restart-readable; the Cloud DNS project quota can be higher
+        // than this backend's deliberate per-RRset bound of 100 values.
         if state
             .plan
             .as_ref()
@@ -617,6 +621,8 @@ impl ProviderOperation for Operation {
                     }
                     Err(failure) => return Err(transport(failure)),
                 };
+                // RFC 6749 §5.1 leaves an older concurrent request's 401 unable to
+                // invalidate a newer token; compare against the credential used here.
                 if response.status == 401 {
                     let mut cached = self
                         .token

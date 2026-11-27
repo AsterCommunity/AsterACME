@@ -1,4 +1,7 @@
 //! OAuth service-account JWT exchange. Tokens live only in factory memory.
+//!
+//! Follows [Google's service-account OAuth profile](https://developers.google.com/identity/protocols/oauth2/service-account)
+//! and [RFC 6749 §5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1) token responses.
 use crate::provider::vendors::google_cloud_dns::ServiceAccount;
 use aster_acme_dns::{
     ProviderError,
@@ -123,7 +126,9 @@ pub(super) fn request(account: &ServiceAccount, now: i64) -> Result<HttpRequest,
 #[derive(Deserialize)]
 struct Response {
     access_token: String,
+    /// RFC 6749 §5.1 requires case-insensitive comparison of this token type.
     token_type: String,
+    /// RFC 6749 §5.1 lifetime; requests refresh sixty seconds before this expires.
     expires_in: u64,
 }
 
@@ -141,6 +146,7 @@ pub(super) fn token(body: &[u8]) -> Result<Token, ProviderError> {
             "invalid Google access token or expiration",
         ));
     }
+    // Refresh 60 seconds before expires_in, leaving time for the next request.
     Ok(Token {
         value,
         expires: Instant::now() + Duration::from_secs(response.expires_in - 60),

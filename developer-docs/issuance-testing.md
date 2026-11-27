@@ -383,3 +383,10 @@ Windows 本地执行 `cargo llvm-cov -p aster_acme_dns_builtin --all-features --
 Windows 本地 `cargo test -p aster_acme_dns_builtin --all-features --locked`：118 passed；`cargo test -p aster_acme_cli --all-features --locked google_`：5 passed、1 ignored（由父测试执行的子进程夹具）。新增回归覆盖 99+1 可发布和清理、100+1 在检查点与 POST 前拒绝、引号/非引号同值冲突、转义与非法 TXT、token type 大小写，以及旧请求 401 晚于新 token 缓存更新的交错顺序。
 
 `cargo llvm-cov -p aster_acme_dns_builtin --all-features --locked --lcov` 同样运行 118 项通过；本地 Google `api.rs` 140/142、`auth.rs` 91/94、`operation.rs` 534/535。该统计仅包含 builtin 测试，不冒充全 workspace 或远端 Codecov 结果。原生环境继续使用仅进程级 `AWS_LC_SYS_PREBUILT_NASM=1`、`CL=/utf-8`。真实 Google Cloud/CA 验收未运行。
+### PR #61 review follow-up：代码就地引用与 issue 状态（2026-11-27）
+
+按 reviewer 要求，在 Google DNS/auth/API、共享 TXT 编码和关键状态判断旁增加官方资料及 RFC 引用：Cloud DNS managedZones/RRsets/changes、discovery schema、RFC 6749 §5.1、Google service-account OAuth、Google TXT presentation、RFC 1035 §5.1。仅添加依据说明，不改变行为。
+
+因 #42 的真实 Google Cloud 与 Let's Encrypt 验收仍未完成，PR 正文使用 `Refs #42`，避免合并时自动关闭 issue。真实验收完成后再关闭 issue。
+
+本地复验：`cargo test -p aster_acme_dns_builtin --all-features --locked` 118 passed；Google CLI 集成 5 passed、1 ignored 子进程夹具；CLI/builtin 严格 Clippy、fmt、文档链接和 Rust import 检查通过。PR 最新 CI 在先前 head 的 macOS/Linux/Windows、Docs、coverage 和 precheck-features 均通过；本次仅注释和 PR 关联文字变更。

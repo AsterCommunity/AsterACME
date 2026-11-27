@@ -1,4 +1,9 @@
 //! Google DNS v1 wire types and redacted error classification.
+//!
+//! The [v1 discovery document](https://dns.googleapis.com/$discovery/rest?version=v1)
+//! declares `RRset` TTL as `int32`, change IDs server-generated/read-only, and `done` as
+//! the authoritative-update request being sent. The [changes API](https://cloud.google.com/dns/docs/reference/v1/changes/create)
+//! requires each deletion to match existing data exactly.
 use crate::provider::common::{
     rpc::{ApiErrorDetails, api_error, invalid},
     txt::txt_decode,
@@ -32,6 +37,7 @@ pub(super) struct Rrset {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
+    /// Google DNS v1 discovery defines this field as `int32`.
     pub ttl: u32,
     #[serde(deserialize_with = "unique_values")]
     pub rrdatas: BTreeSet<String>,
@@ -51,6 +57,7 @@ fn unique_values<'de, D: serde::Deserializer<'de>>(input: D) -> Result<BTreeSet<
 
 impl Rrset {
     pub fn validate(&self, owner: &str) -> Result<(), ProviderError> {
+        // The discovery schema defines TTL as signed int32 (0..=2^31-1).
         if absolute_name(&self.name).ok().as_deref() != Some(owner)
             || self.kind != "TXT"
             || self.ttl > 2_147_483_647
@@ -150,12 +157,15 @@ pub(super) struct Rrsets {
 #[serde(deny_unknown_fields)]
 pub(super) struct Plan {
     pub additions: Vec<Rrset>,
+    /// Google `changes.create` requires each deletion to exactly match existing data.
     pub deletions: Vec<Rrset>,
 }
 
 #[derive(Deserialize)]
 pub(super) struct Change {
+    /// Server-generated, read-only ID according to the v1 discovery schema.
     pub id: String,
+    /// `done` means the authoritative update request was sent, not globally propagated.
     pub status: String,
     #[serde(default)]
     pub additions: Vec<Rrset>,
@@ -165,6 +175,8 @@ pub(super) struct Change {
 
 impl Change {
     pub fn verifies(&self, plan: &Plan) -> bool {
+        // `id` and `status` semantics are server-owned in the v1 discovery schema;
+        // `done` does not mean the change has propagated to public resolvers.
         safe_id(&self.id)
             && matches!(self.status.as_str(), "pending" | "done")
             && equivalent(&self.additions, &plan.additions)

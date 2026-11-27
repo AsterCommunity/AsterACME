@@ -1,4 +1,10 @@
-//! Google Cloud DNS changes transactions with durable publication ownership.
+//! Google Cloud DNS v1 changes backend with durable publication ownership.
+//!
+//! API references: [managed zones](https://cloud.google.com/dns/docs/reference/v1/managedZones/list),
+//! [RRsets](https://cloud.google.com/dns/docs/reference/v1/resourceRecordSets/list),
+//! and [atomic changes](https://cloud.google.com/dns/docs/reference/v1/changes/create).
+//! Service-account authentication follows the
+//! [Google OAuth profile](https://developers.google.com/identity/protocols/oauth2/service-account).
 use crate::provider::{common::rpc::settings, vendors::google_cloud_dns::operation::Factory};
 use aster_acme_dns::{
     ProviderError,
