@@ -1,10 +1,10 @@
 # DNS Provider 配置与自动发布
 
-本页描述当前源码中的 DNS-01 自动化入口：内置 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod、华为云 DNS，以及用户安装的 ADPP 外部 executable。它们共用 `dns_provider` solver、路由、回执、传播和清理流程。ADPP wire 见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，后端注册与状态机见[实现契约](design/dns-backends.md)。Cloudflare 与 ADPP 自 `0.1.0-alpha.2` 起可用；内置 Cloudflare 已在真实 DNS 与 Let's Encrypt production/staging 环境完成验收，除 DNS-PERSIST-01 草案外的全部 challenge 方法已走真实 CA 签发，草案真实 CA 签发验收另行进行。
+本页描述当前源码中的 DNS-01 自动化入口：内置 Cloudflare、阿里云云解析 DNS、腾讯云 DNSPod、华为云 DNS、显式启用的 Google Cloud DNS，以及用户安装的 ADPP 外部 executable。它们共用 `dns_provider` solver、路由、回执、传播和清理流程。ADPP wire 见 [RFC 0001](rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)，后端注册与状态机见[实现契约](design/dns-backends.md)。Cloudflare 与 ADPP 自 `0.1.0-alpha.2` 起可用；内置 Cloudflare 已在真实 DNS 与 Let's Encrypt production/staging 环境完成验收，除 DNS-PERSIST-01 草案外的全部 challenge 方法已走真实 CA 签发，草案真实 CA 签发验收另行进行。
 
 ## 内置 Cloudflare
 
-运行 `aster-acme provider backends` 查看本次构建实际支持的后端及配置字段。CLI 默认包含所有内置 provider：`dns-cloudflare`、`dns-aliyun`、`dns-tencent-cloud`、`dns-huawei-cloud`。如需精简 CLI，可用 `--no-default-features` 并显式选 feature；嵌入式 crate 默认不启用厂商，宿主按需选择 `cloudflare`、`aliyun`、`tencent_cloud` 或 `huawei_cloud`。
+运行 `aster-acme provider backends` 查看本次构建实际支持的后端及配置字段。CLI 默认包含以下内置 provider：`dns-cloudflare`、`dns-aliyun`、`dns-tencent-cloud`、`dns-huawei-cloud`。如需精简 CLI，可用 `--no-default-features` 并显式选 feature；嵌入式 crate 默认不启用厂商，宿主按需选择 `cloudflare`、`aliyun`、`tencent_cloud`、`huawei_cloud` 或显式启用 `google_cloud_dns`。
 
 ```sh
 aster-acme provider add cf-prod --backend com.astercosm.acme.dns.cloudflare
@@ -143,6 +143,36 @@ provider `present` 成功只表示 DNS API 操作已完成或完成对账。保�
 `timeout_seconds` 为每次 provider 调用（含内置批次或外部进程）1–300 秒；`propagation_timeout` 现在表示单次本地检查预算（1–3600 秒）；`propagation_interval` 现在表示检查前等待（1–60 秒），不再表示轮询间隔。已有 Profile 使用文件中明确保存的数值，不自动重写；例如旧文件的 `propagation_timeout = 120` 会给单次检查最多 120 秒，可手动改为 5。额外等待固定为 10 秒。共享策略位于 `aster_acme_dns`，供外部及内置 adapter 复用。
 
 `ttl_seconds` 默认 120，采用 RFC 2181 §8 的 `0..=2147483647` 范围。它是请求值，Cloudflare 当前将其限制到 60–86400；其他 backend 拥有各自的限制。TTL 不会清除已有递归或负缓存，也不代表传播等待时间。第一次写入前把 TTL 与目标和值一起固定在 publication plan 中；修改 Profile 只影响尚未生成计划的新发布，恢复、对账与清理继续使用已保存的计划，不因配置变化改写同一 publication ID。可通过 `provider add/update NAME --ttl-seconds 300` 设置；show 的人类和 JSON 输出也展示请求值。
+
+## Google Cloud DNS（显式启用）
+
+源码构建使用 `cargo build -p aster_acme_cli --features dns-google-cloud-dns --locked`；嵌入式依赖选择 `aster_acme_dns_builtin/google_cloud_dns`。默认 CLI 厂商集合不变。后端 ID 为 `com.astercosm.acme.dns.google-cloud-dns`。
+
+将 Google 下载的服务账号 JSON 对象放入私有 settings 的 `service_account` 表。下列字段值均为占位值，替换为实际 JSON 对应值；附带的证书 URL 等字段可保留，但不会用作请求地址。
+
+```toml
+[service_account]
+type = "service_account"
+project_id = "your-project"
+client_email = "service@your-project.iam.gserviceaccount.com"
+private_key_id = "key-id"
+token_uri = "https://oauth2.googleapis.com/token"
+private_key = '''-----BEGIN PRIVATE KEY-----
+PKCS8_RSA_KEY_FROM_GOOGLE_JSON
+-----END PRIVATE KEY-----'''
+```
+
+```sh
+aster-acme provider add google-dns --backend com.astercosm.acme.dns.google-cloud-dns \
+  --settings-file /absolute/path/google-settings.toml --allow-zone example.com --json
+aster-acme cert issue -a default -d example.com -c dns_provider --provider google-dns
+```
+
+Unix settings 使用 0600 权限；整个 `service_account` 字段隐藏输入并全量脱敏。需要启用 Cloud DNS API，服务账号权限覆盖 `dns.managedZones.list`、`dns.resourceRecordSets.list`、`dns.changes.create/get` 及目标 zone 的 `dns.resourceRecordSets.create/update/delete`；以实际 IAM 权限检查为准并限制可操作 zone。仅支持服务账号 RSA JSON，不隐式加载 ADC、宿主环境变量或 Google SDK。
+
+按 CNAME 最终发布目标选择最长匹配的公网 zone，保存后恢复与清理沿用。项目是持久 binding；同项目凭据轮换允许，切换项目需新 Profile/证书定义。已有 RRset 保留当前 TTL，新建使用请求 TTL（`0..=2147483647`）；传播和 CA 判断仍由公共流程处理。
+
+Google TXT 的引号与非引号字符块按逻辑值比较，读合并保留原记录表示。合并后的 RRset 超过本地 100 值上限时在写入前拒绝。无备注字段时，任何预存同值 TXT 都拒绝借用并保留。提交前写入 journal 差异，保存 change ID 后可只读恢复；提交响应丢失、ID 未落盘时保留未知结果，不自动重放，需操作者核查。清理只删除有本次证据的值，不删除用户其他值。外部删除/重建同值不可与原记录区分，须协调写入者，推荐专用 ACME 委派 owner。具体并发与恢复保证见[后端契约](design/dns-backends.md)。本地测试不能代表真实 Google Cloud/公网 CA 已验收。
 
 ## 恢复、所有权和清理
 

@@ -353,3 +353,40 @@ fi
 覆盖率将 LCOV 可执行生产行与固定基点 `a129569` 到本地工作树的 diff 相交：**651/685 = 95.03650%**，34 行未覆盖。对同一基点和已推送 `b75315b` 的 CI LCOV 复算为 **598/659 = 90.74355%**，与 Codecov 的 61 行一致。密码提示、来源展示、取消退出状态的新增行已覆盖；剩余主要为 RNG/DER/HMAC 失败、后台线程 JoinError、读取中增长的文件上限等保护分支。本地结果未上传，不表示远端 Codecov 已更新。
 
 Review 补充验证：外部密码文件允许空格/中文文件名和 root 所有父目录，但仍从不跟随最终链接的已打开句柄验证文件权限、所有者、硬链接数和 4096 字节上限；缺失、超限、不安全文件和特殊条目拒绝读取。身份冲突比较观察最终目录项自身，不跟随链接；其他绑定的链接/特殊目标仍被其发布校验拒绝，独立密码绑定继续部署。无法读取身份的错误仍失败关闭，并有超长文件名的零写入回归。
+
+### Issue #42：Google Cloud DNS 本地验收（2026-11-26）
+
+基于 `a41523d05e9909025a67bed08202b5ad9a2cd50f` 的 `feat/issue-42-google-cloud-dns` 未提交工作区，Windows 原生执行，Cargo 1.99.1。初次构建因本机缺少 NASM 失败；后续仅在验证进程设置 `AWS_LC_SYS_PREBUILT_NASM=1` 使用 AWS-LC 包内对象，并设置 `CL=/utf-8`，未修改依赖版本或全局环境。Cargo 对仓库 publish-age 配置发出当前工具链不启用该特性的提示；本次使用现有锁定版本，未作版本升级。
+
+- `cargo test -p aster_acme_dns_builtin --all-features --locked`：102 passed；覆盖所有已有厂商及 Google 的 JWT 签名、缓存过期/拒绝失效、令牌刷新失败时未发送证据、分页/同值拒绝、changes 意图与 ID 恢复、差异清理、重复清理、冲突、限流与错误脱敏。
+- `cargo test -p aster_acme_dns_builtin --no-default-features --features google_cloud_dns --locked`：22 passed；完全关闭厂商的同命令去掉 `--features`：9 passed。
+- `cargo test -p aster_acme_cli --all-features --locked commands::cert::validation::tests::flow::dns_provider`：39 passed、2 ignored；ignored 项是由父用例显式启动的跨进程夹具。包含实际 publication 文件、进程租约、模拟 Google API 与 ACME loopback。
+- `cargo test -p aster_acme_cli --all-features --locked commands::provider::`：31 passed；包含 Google 私有 settings 导入、脱敏、无效更新不覆盖及删除。
+- 最终 `cargo test -p aster_acme_cli --all-features --locked google_`：5 passed、1 ignored（同一子进程夹具）。验证持久 change ID 的恢复、未知提交不重放/不 ack、取消后保存 ID 和限流重启下限。
+- `cargo test -p aster_acme_cli --no-default-features --locked backend_inventory`：1 passed；未编译厂商不出现在 registry。
+- `cargo clippy -p aster_acme_cli -p aster_acme_dns_builtin --all-features --all-targets --locked -- -D warnings`、格式、Rust import、workspace 依赖、TLS backend、生产 feature 和本地文档链接检查通过。
+
+恢复限制：响应丢失时若已持久化 change ID，可只读对账；没有 ID 的未知提交保留意图和远端材料，不根据同值或相同历史请求认领、不自动重放。无标记 RRset 的外部删除/重建同值无法可靠区分，须协调其他写入者。
+
+未运行真实 Google Cloud 项目、真实 DNS 传播或 Let's Encrypt staging/production 验收：用户确认没有相应环境和凭据。上述结果仅证明本地 mock/loopback 契约，不将 issue 的公网验收项标为完成；Linux/macOS 本机验收也未执行。
+### Issue #42：覆盖率补充（2026-11-26）
+
+针对 PR #61 的 `24ea4e789f0b87bf1ff14347c011849b77fc7d2b`，读取 CI run `45772406668` 的 `rust-coverage` LCOV 后，仅补充 Google 后端测试，生产代码不变。新增 12 项测试覆盖无效凭据、zone 歧义、RRset 分页、恢复身份、事务响应不一致、清理恢复、轮询预算、明确未发送与结构化拒绝。
+
+Windows 本地执行 `cargo llvm-cov -p aster_acme_dns_builtin --all-features --locked --lcov --output-path <temporary-report>`：114 passed。`api.rs` 为 94/94，`auth.rs` 为 91/94，`operation.rs` 为 516/517；严格 builtin all-features/all-targets Clippy、fmt、Rust import 检查通过。测试进程沿用 `AWS_LC_SYS_PREBUILT_NASM=1`、`CL=/utf-8`。
+
+以同一 PR diff 与 CI LCOV 的原始 804 个可执行改动行计数，原结果为 729/804（90.67164%）；保留原 CI 命中并叠加本次本地实际命中后为 799/804（99.37811%）。这是相同生产源码上的本地补充证据，非一次完整 CI 重跑，也不代表远端 Codecov 状态已更新。剩余 5 个原 CI 改动行主要为 RSA 模数范围拒绝及不可由正常输入触发的错误保护分支；未为覆盖率改写生产逻辑或放宽断言。没有执行真实 Google Cloud/CA 验收，没有提交或推送本次补充。
+### PR #61：评审边界修复（2026-11-26）
+
+基于 `cfaec02` 的本地修复工作区。修复合并后超过 100 值时的写前拒绝、Google TXT 引号/非引号字符块与转义解析、OAuth token type 大小写、迟到 401 对新 token 缓存的保护；邮箱脱敏断言改为引用实际输入，README 区分 CLI 和库 feature。没有改变其他厂商共享 TXT 解码语义。
+
+Windows 本地 `cargo test -p aster_acme_dns_builtin --all-features --locked`：118 passed；`cargo test -p aster_acme_cli --all-features --locked google_`：5 passed、1 ignored（由父测试执行的子进程夹具）。新增回归覆盖 99+1 可发布和清理、100+1 在检查点与 POST 前拒绝、引号/非引号同值冲突、转义与非法 TXT、token type 大小写，以及旧请求 401 晚于新 token 缓存更新的交错顺序。
+
+`cargo llvm-cov -p aster_acme_dns_builtin --all-features --locked --lcov` 同样运行 118 项通过；本地 Google `api.rs` 140/142、`auth.rs` 91/94、`operation.rs` 534/535。该统计仅包含 builtin 测试，不冒充全 workspace 或远端 Codecov 结果。原生环境继续使用仅进程级 `AWS_LC_SYS_PREBUILT_NASM=1`、`CL=/utf-8`。真实 Google Cloud/CA 验收未运行。
+### PR #61 review follow-up：代码就地引用与 issue 状态（2026-11-27）
+
+按 reviewer 要求，在 Google DNS/auth/API、共享 TXT 编码和关键状态判断旁增加官方资料及 RFC 引用：Cloud DNS managedZones/RRsets/changes、discovery schema、RFC 6749 §5.1、Google service-account OAuth、Google TXT presentation、RFC 1035 §5.1。仅添加依据说明，不改变行为。
+
+因 #42 的真实 Google Cloud 与 Let's Encrypt 验收仍未完成，PR 正文使用 `Refs #42`，避免合并时自动关闭 issue。真实验收完成后再关闭 issue。
+
+本地复验：`cargo test -p aster_acme_dns_builtin --all-features --locked` 118 passed；Google CLI 集成 5 passed、1 ignored 子进程夹具；CLI/builtin 严格 Clippy、fmt、文档链接和 Rust import 检查通过。PR 最新 CI 在先前 head 的 macOS/Linux/Windows、Docs、coverage 和 precheck-features 均通过；本次仅注释和 PR 关联文字变更。

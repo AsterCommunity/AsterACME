@@ -845,6 +845,8 @@ async fn rate_limit_backoff_is_saved_and_resume_cannot_reinvoke_before_it() {
 
 #[cfg(feature = "dns-cloudflare")]
 mod cloudflare;
+#[cfg(feature = "dns-google-cloud-dns")]
+mod google_cloud_dns;
 #[cfg(any(
     feature = "dns-aliyun",
     feature = "dns-tencent-cloud",

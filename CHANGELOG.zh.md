@@ -6,6 +6,8 @@
 
 ### 新增
 
+- **Google Cloud DNS（#42）** — 库通过 `google_cloud_dns`、CLI 通过 `dns-google-cloud-dns` 显式启用；支持服务账号 OAuth、最终发布目标 zone 发现、RRset 事务合并/清理及持久化 change ID 恢复。已有同值记录不借用，未确认提交保留且不重放；真实 Google Cloud/CA 验收单独记录。
+
 - **PKCS#12 部署（#55）** — `cert deploy add/update --p12-path` 发布证书链与私钥 bundle，沿用密钥权限与完整准备后发布管线。绑定只存互斥的 env/密码文件引用；daemon 推荐 0600 密码文件，只有交互式显式 run 可使用不落盘的密码。无来源的自动执行失败、不自动重试，JSON 不包含密码值，目录仍保持 PEM 四件套。
 
 - **库嵌入签发适配器（#48）** — `aster_acme` 示例使用库内自带的账户与签发适配器，并增加针对内存存储边界的测试。

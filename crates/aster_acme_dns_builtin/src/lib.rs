@@ -21,6 +21,10 @@ mod tests {
         let descriptors = registry.descriptors();
         let vendors = [
             (
+                "com.astercosm.acme.dns.google-cloud-dns",
+                cfg!(feature = "google_cloud_dns"),
+            ),
+            (
                 "com.astercosm.acme.dns.cloudflare",
                 cfg!(feature = "cloudflare"),
             ),

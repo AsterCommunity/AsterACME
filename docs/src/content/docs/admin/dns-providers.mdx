@@ -65,6 +65,14 @@ CLI 默认构建已包含该后端，精简源码构建可启用 `dns-huawei-clo
 
 详见[华为云配置与限制](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md)。
 
+## Google Cloud DNS（显式启用）
+
+源码构建启用 `dns-google-cloud-dns`；嵌入式库使用 `google_cloud_dns`。通过私有 settings 的 `[service_account]` 表传入 Google 服务账号 JSON 的字段（PKCS#8 RSA 私钥），后端为 `com.astercosm.acme.dns.google-cloud-dns`。它复用同一 `provider add --settings-file` 和 DNS-01 流程，不使用 Google SDK 或默认环境凭据。
+
+它选择最终 CNAME 目标所属的公网 zone，事务合并 TXT，清理仅移除本次拥有的值。已有同值记录拒绝借用。保存 change ID 后可恢复；提交响应丢失且没有已保存 ID 时保留未知状态，不自动重放。请协调其他写入者，避免外部删除后重建同值记录。真实 Google Cloud/CA 验收另计。
+
+完整 settings、权限和恢复说明见[Google Cloud DNS 配置](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/dns-providers.md)。
+
 ## ADPP 外部 executable
 
 其他服务商可实现 [ADPP](https://github.com/AsterCommunity/AsterACME/blob/main/developer-docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md)(AsterACME DNS Provider Protocol),通过 stdin/stdout JSON 交互:

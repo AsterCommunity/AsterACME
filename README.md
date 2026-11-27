@@ -28,7 +28,7 @@
 
 AsterACME manages the certificate lifecycle with saved request state, fixed keys and CSRs, and explicit recovery after interruption. Use the CLI interactively or in scripts, or embed the Rust services with your own storage, signer, and validation adapters.
 
-CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Huawei Cloud DNS by default. Huawei Cloud RRset updates cannot guarantee atomic isolation from external writers. Embedded applications select provider features explicitly. [DNS provider setup](developer-docs/dns-providers.md)
+CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Huawei Cloud DNS by default. Huawei Cloud RRset updates cannot guarantee atomic isolation from external writers. Embedded applications select provider features explicitly on `aster_acme_dns_builtin`; Google Cloud DNS uses the library feature `google_cloud_dns`. The CLI exposes it as opt-in `dns-google-cloud-dns`. It uses service-account OAuth and durable changes transactions. [DNS provider setup](developer-docs/dns-providers.md)
 
 **Available now:** AsterACME `0.1.0-alpha.3` is published on crates.io. This is a pre-release; Rust APIs and local formats may still change. It includes native Cloudflare and ADPP backends behind a unified DNS solver. Live DNS/public-CA acceptance is separate.
 

@@ -5,10 +5,13 @@ use aster_acme_dns::{
     ProviderError, ProviderErrorCode, SideEffect, backend::configuration_error,
     operation::HttpResponse,
 };
+#[cfg(feature = "_signed-api")]
 use aws_lc_rs::{digest, hmac};
 use serde::de::DeserializeOwned;
+#[cfg(feature = "_signed-api")]
 use std::fmt::Write;
 
+#[cfg(feature = "_signed-api")]
 pub(in crate::provider) fn hex(bytes: &[u8]) -> String {
     let mut result = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -17,14 +20,17 @@ pub(in crate::provider) fn hex(bytes: &[u8]) -> String {
     result
 }
 
+#[cfg(feature = "_signed-api")]
 pub(in crate::provider) fn sha256(bytes: &[u8]) -> String {
     hex(digest::digest(&digest::SHA256, bytes).as_ref())
 }
 
+#[cfg(feature = "_signed-api")]
 pub(in crate::provider) fn hmac256(key: &[u8], bytes: &[u8]) -> hmac::Tag {
     hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), bytes)
 }
 
+#[cfg(feature = "_signed-api")]
 pub(in crate::provider) fn validate_keys(id: &str, secret: &str) -> Result<(), ProviderError> {
     if id.is_empty()
         || id.len() > 128
@@ -52,6 +58,7 @@ pub(in crate::provider) fn settings<T: DeserializeOwned>(
         .map_err(|_| configuration_error("invalid native DNS backend settings"))
 }
 
+#[cfg(feature = "_signed-api")]
 pub(in crate::provider) const fn key_field(
     name: &'static str,
     label: &'static str,
@@ -204,7 +211,7 @@ pub(in crate::provider) fn decode<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|_| invalid(mutation))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "_signed-api"))]
 mod tests {
     use crate::provider::common::rpc::{
         ApiErrorDetails, api_error, key_field, settings, validate_keys,
