@@ -1,4 +1,9 @@
 //! HWS request signing and bounded API response interpretation.
+//!
+//! Signing behavior is cross-checked against the official SDK's test vectors
+//! at the same pinned revision as the module-level API evidence in
+//! `vendors/huawei_cloud.rs`:
+//! <https://github.com/huaweicloud/huaweicloud-sdk-go-v3/blob/3da3be180a23bcbf8f6e668606c6ef26e76e95af/core/auth/signer/signer_test.go>
 use crate::provider::common::rpc::{ApiErrorDetails, api_error, hex, hmac256, invalid};
 use aster_acme_dns::{
     ProviderError, ProviderErrorCode,

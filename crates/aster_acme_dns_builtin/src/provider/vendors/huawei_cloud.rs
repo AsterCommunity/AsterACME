@@ -3,7 +3,9 @@
 //! The API exposes whole-record-set PUT/DELETE operations without a public
 //! revision precondition. This backend therefore preserves values and durable
 //! intent, but cannot guarantee that a concurrent remote writer is not
-//! overwritten.
+//! overwritten. The official SDK request metadata at a pinned revision
+//! declares only the whole-object operations:
+//! <https://github.com/huaweicloud/huaweicloud-sdk-go-v3/blob/3da3be180a23bcbf8f6e668606c6ef26e76e95af/services/dns/v2/dns_meta.go#L1711>
 use crate::provider::{
     common::rpc::{key_field, settings, validate_keys},
     vendors::huawei_cloud::operation::Factory,

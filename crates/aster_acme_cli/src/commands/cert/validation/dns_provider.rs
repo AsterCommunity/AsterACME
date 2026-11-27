@@ -1,4 +1,7 @@
 //! ADPP solver: frozen routes, checkpointed receipts, separate propagation policy.
+//!
+//! Wire protocol contract:
+//! `developer-docs/rfc/dns-provider-protocol/0001-asteracme-dns-provider-protocol.md`.
 use crate::commands::cert::progress::Progress;
 use crate::common::output::MessageKind;
 use aster_acme::{
