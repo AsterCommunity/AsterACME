@@ -272,6 +272,13 @@ fn request(
             .profile
             .clone()
             .or_else(|| account_default_profile.map(str::to_owned)),
+        preferred_chain: match (&args.preferred_chain, args.default_chain) {
+            (Some(chain), _) => Some(aster_acme::issuance::ChainPreference::Named(
+                aster_acme::issuance::ChainName::new(chain)?,
+            )),
+            (None, true) => Some(aster_acme::issuance::ChainPreference::CaDefault),
+            (None, false) => None,
+        },
         account_name: account.into(),
     };
     request.validate()?;

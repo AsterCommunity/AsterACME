@@ -22,6 +22,12 @@ impl IssueSession for Session {
             let config = selection(&slot)?;
             record.is_in_use = config.cert.in_use.as_deref() == Some(record.operation_id.as_str());
             record.deployment_count = Some(config.cert.deployments.len());
+            // The certificate definition is authoritative for the chain
+            // preference: recover an interactive decision that was written to
+            // the definition but not yet to this generation's journal.
+            record.preferred_chain = record
+                .preferred_chain
+                .or(config.cert.preferred_chain.clone());
             Ok::<_, IssueError>(record)
         })
         .await
@@ -107,6 +113,22 @@ impl IssueSession for Session {
         .map_err(|_| failure("CSR worker failed"))?
     }
 
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        let generation = self.generation.clone();
+        let record = self.initial.clone();
+        let lease = self.lease.clone();
+        let permit = self.io.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lease = lease;
+            check_material(&generation, &record)?;
+            read_private(&generation.join("private-key.pk8"), 64 * 1024)
+                .map_err(|_| failure("fixed certificate key missing or unsafe"))
+        })
+        .await
+        .map_err(|_| failure("certificate key worker failed"))?
+    }
+
     async fn complete(
         &self,
         record: &IssueRecord,
@@ -174,6 +196,12 @@ impl IssueSession for Session {
             publication::NATIVE.publish(&slot, &record)?;
             let mut config = selection(&slot)?;
             config.cert.in_use = Some(record.operation_id.clone());
+            // Promotion also fixes the chain preference into the certificate
+            // definition so renewals inherit the selection that just shipped.
+            config
+                .cert
+                .preferred_chain
+                .clone_from(&record.preferred_chain);
             if let Err(error) = write_selection(&slot, &config) {
                 // The write may have replaced catalog state before a sync error;
                 // recover according to what is actually persisted, not the attempted value.

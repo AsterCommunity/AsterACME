@@ -62,6 +62,17 @@ impl Foreground<'_> {
             self.context.transport_options(self.options)?,
         )?
         .with_observer(self.progress.clone());
+        // Interactive sessions choose among validated alternate chains at
+        // download time; scripts keep the CA default without prompting.
+        let workflow = if terminal::interactive(self.options.json) {
+            workflow.with_chain_selector(Arc::new(
+                crate::commands::cert::execute::chain_selector::InteractiveChainSelector::new(
+                    self.cli,
+                ),
+            ))
+        } else {
+            workflow
+        };
         let (_, max_polls, poll_interval) = self.args.limits(&self.context.config);
         let execution = IssueExecution {
             max_polls,

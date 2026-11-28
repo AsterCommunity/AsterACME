@@ -37,6 +37,7 @@ CLI source builds include Cloudflare, Alibaba Cloud DNS, Tencent Cloud DNSPod, a
 - Named CA accounts: registration, recovery, contacts, key rotation, and deactivation.
 - Single-domain, multi-SAN, wildcard, and IP-address (RFC 8738) certificates; independent account and certificate key choices.
 - CA certificate profiles (draft-ietf-acme-profiles): discover advertised profiles, set an account default, or select per issuance — Let's Encrypt IP identifiers require the `shortlived` profile.
+- Alternate certificate chain selection (RFC 8555 §7.4.2): `--preferred-chain` matches the top-most DN/CN, `--default-chain` pins the CA default; interactive sessions pick from a single prompt and decisions persist into the certificate definition for renewals.
 - Saved issuance recovery, ARI refresh, foreground single/batch renewal, and unattended maintenance for supported validation methods.
 - Multiple deployment targets per certificate, automatic deployment after renewal, and bounded reload commands with stdout/stderr output.
 - Interactive input, structured JSON, offline inspection, and optional debug diagnostics.

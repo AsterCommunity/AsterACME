@@ -16,6 +16,9 @@ aster-acme cert issue -n example-cert -a default \
 - `-d/--domain`:DNS 域名,可重复;通配符写 `*.example.com`,通配符只能走 DNS 验证
 - `--ip`:IP 地址(RFC 8738),可重复;只能走 HTTP-01/TLS-ALPN-01,主标识符为首个 `-d`,否则首个 `--ip`
 - `--profile`:CA 证书 profile(draft-ietf-acme-profiles);`account show --profiles` 查看广告列表,账户默认用 `account update --profile`,显式指定优先。Let's Encrypt 签发 IP 证书必须选 `shortlived`
+- `--preferred-chain CHAIN`:候选证书链选择(RFC 8555 §7.4.2),按链顶证书的 RFC 4514 DN 大小写不敏感精确匹配,CN 相等兜底;`--default-chain` 显式固定 CA 默认链,两者互斥且与 `--resume` 互斥
+
+**证书链选择**:CA 在下载证书时通过 `Link; rel="alternate"` 头提供同叶子的候选链,不同部署端信任库各取所需。显式偏好命中时零额外请求;未命中逐条下载验证后选择——非交互失败关闭(证书已签发、不重新下单,`--resume` 可重入重选),交互终端获得单次列表(CA 默认项预选,Esc 取消)。决策写回证书定义,续期沿用;`cert show` 展示已保存偏好与实际发布链的 DN 和指纹。未设置偏好的存量证书续期继续使用 CA 默认链。
 - `-c/--challenge`:验证实现,见[验证方式](/using/challenges/)
 - `-k/--key-type`:证书公钥算法,默认 ecdsa-p256;支持 ecdsa-p384/p521、ed25519、rsa-2048/3072/4096/8192。CA 拒绝时保留实际错误,不自动换算法重试
 

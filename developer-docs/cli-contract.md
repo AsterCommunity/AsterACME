@@ -62,6 +62,8 @@
 | `-d` | `--domain` | cert issue 的 DNS 域名，可重复 |
 | `--ip` |  | cert issue 的 IP 标识符（RFC 8738），可重复；仅 HTTP-01/TLS-ALPN-01 支持，主标识符为首个 `-d`，否则首个 `--ip` |
 | `--profile` |  | cert issue 显式证书 profile（draft-ietf-acme-profiles）；优先级高于账户默认，CA directory 未广告时在 newOrder 前拒绝 |
+| `--preferred-chain` |  | cert issue 的候选链选择（RFC 8555 §7.4.2 alternate）；按链顶证书 RFC 4514 DN 大小写不敏感精确匹配，CN 相等兜底；与 --default-chain、resume 互斥；无候选命中时失败关闭（已签发不重新下单，--resume 可重入选择） |
+|  | `--default-chain` | cert issue 显式接受 CA 默认链；永不下载 alternate、永不弹链选择，定义随续期沿用 |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update 的邮箱，可重复 |
@@ -86,7 +88,7 @@
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、重复 --ip、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、重复 --ip、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type、--profile、--preferred-chain 或 --default-chain；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、--sign-with account/certificate-key、可选 --reason、-y、HTTP、--operation-timeout；不删除本地文件 |
@@ -256,6 +258,12 @@ INFO显示实际监听启动/停止，DEBUG提示转发要求；建议性公网H
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
 
+## 证书链选择（RFC 8555 §7.4.2）
+
+下载证书时解析响应 `Link; rel="alternate"` 候选链：URL 全部由 CA 提供、绝对地址、去重且与证书 URL 自身去环，逐条 POST-as-GET 后按既有叶子/SAN/公钥/相邻签名检查验证，全部候选验证通过才进入选择；候选上限 8 条，超过即失败关闭。CA 的默认链是签发基线，验证失败直接失败整个阶段，不静默换候选。
+
+选择语义：`--preferred-chain CHAIN` 按链顶证书 RFC 4514 DN 大小写不敏感精确匹配、CN 相等兜底；默认链与偏好命中时零额外请求，未命中才逐条下载 alternate。非交互显式偏好无命中返回 `ChainUnavailable`（证书已签发、不重新下单，`--resume` 重入同一 GET 重新选择）；交互模式由 `ChainSelector` 回调弹单跳列表（默认项"Use the CA default chain"预选，Esc 取消 issuance），交互决策与偏好落定写回证书定义，续期沿用。`--default-chain` 显式接受 CA 默认链：永不下载 alternate、永不弹选择。无偏好且无选择器的嵌入调用方保持零额外请求。已选链的世代记录（链顶 DN + SHA-256 指纹）随记录持久化；alternate URL 不落盘，每次下载现场解析。存量证书定义无 chain 字段，续期继续使用 CA 默认链。
+
 ## 查询筛选与写入边界
 
 所有库存查询均为本地快照，无 HTTP 或私钥加载。账户列表用 AccountQuery（默认全部）；既有账户交互按显式 CA/usable 或 core operation 资格过滤（Update/Deactivate/RotateKey，未确认轮换仍可恢复），注册为了检查名称占用保留全部本地名称。明确名称的账户操作直接读取该身份。
@@ -280,7 +288,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | account register | 新建/继续、账户名、CA、联系人、条款、未来条款更新授权和复用确认 | EAB、密钥算法等高级选项 |
 | account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
 | account update/rotate-key/remove --deactivate | 账户选择、联系人/profile/条款授权输入或操作确认 | key-type 等可选参数使用默认/显式值 |
-| cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
+| cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认；多候选链单跳选择（--default-chain/--preferred-chain 跳过） | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
 | cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
 | cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |
 | cert deploy add | 选证书、名称建议可确认/修改、输入现有目录、可选 reload；脚本缺省部署名自动生成 | 五种精确文件路径只能显式传入 |

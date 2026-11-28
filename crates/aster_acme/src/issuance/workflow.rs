@@ -1,7 +1,7 @@
 //! One invocation owns recovery checks, discovery, optional advice and issuance.
 use crate::{
     issuance::{
-        IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
+        ChainSelector, IssueError, IssueExecution, IssueIdentity, IssueOutcome, IssueRecord,
         progress::IssueObserver, service::IssueService,
     },
     solver::ChallengeSolver,
@@ -26,6 +26,7 @@ pub struct Workflow {
     directory: AcmeUrl,
     transport: TransportOptions,
     observer: Option<Arc<dyn WorkflowObserver>>,
+    chain_selector: Option<Arc<dyn ChainSelector>>,
 }
 impl Workflow {
     /// Configure the CA and connection pool; existing registration is supplied at run time.
@@ -42,12 +43,20 @@ impl Workflow {
             directory,
             transport,
             observer: None,
+            chain_selector: None,
         })
     }
     /// Use one observer for discovery and protocol events.
     #[must_use]
     pub fn with_observer(mut self, observer: Arc<dyn WorkflowObserver>) -> Self {
         self.observer = Some(observer);
+        self
+    }
+
+    /// Offer interactive alternate-chain selection during the download stage.
+    #[must_use]
+    pub fn with_chain_selector(mut self, selector: Arc<dyn ChainSelector>) -> Self {
+        self.chain_selector = Some(selector);
         self
     }
 
@@ -133,6 +142,9 @@ impl Workflow {
         if let Some(observer) = &self.observer {
             observer.discovered(client.directory(), &saved);
             service = service.with_observer(observer.clone());
+        }
+        if let Some(selector) = &self.chain_selector {
+            service = service.with_chain_selector(selector.clone());
         }
         // A previously submitted newOrder is not a new request. Do not add DNS
         // dependencies or rerun advice when reconciling its remote outcome.

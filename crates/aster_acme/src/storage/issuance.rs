@@ -24,6 +24,13 @@ pub trait IssueSession: Send + Sync {
     /// # Errors
     /// Missing, unsafe or corrupt CSR is an error.
     async fn csr(&self) -> Result<Vec<u8>, IssueError>;
+    /// Load the fixed PKCS#8 certificate key, used to validate candidate
+    /// certificate chains ([RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2))
+    /// before selection. Never generate a replacement on read failure.
+    ///
+    /// # Errors
+    /// Missing, unsafe or corrupt key material is an error.
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError>;
     /// Persist a validated chain then atomically select this generation. Populate the
     /// returned record's `renewal` with `RenewalPlan::from_certificate` before promotion
     /// so every adapter durably establishes a fallback independently of ARI availability.

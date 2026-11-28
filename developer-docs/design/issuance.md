@@ -20,6 +20,7 @@ IssueRequest保存域名集合、账户、密钥算法及固定验证实现/配�
 3. ack前保存Submitted。明确4xx Problem拒绝时恢复NotSubmitted供下次显式调用重试；超时/传输错误/5xx保留Submitted，不重放。
 4. finalize提交固定CSR；未知结果只轮询。明确4xx Problem拒绝后保存未提交状态和Retry-After，显式恢复先查订单再按ready推进；orderNotReady在本次有界流程内继续查询；badCSR拒绝保留原HTTP证据，不能靠resume更换CSR。
 5. valid后下载并检查PEM、SAN、公钥、有效期及相邻链签名，写完整产物与回退计划，再发布in_use视图、提交catalog，最后Completed。提交失败按实际catalog恢复视图。
+5a. 下载阶段（RFC 8555 §7.4.2）：响应`Link; rel="alternate"`为候选链唯一来源（绝对URL、去重、与证书URL去环、上限8条，越界失败关闭）；每条候选POST-as-GET后复用既有链验证，默认链验证失败即失败整个阶段。选择顺序：显式`ChainPreference::Named`匹配（RFC 4514 DN大小写不敏感，CN兜底；默认链命中零请求）→ 未命中且无选择器返回`ChainUnavailable` → 无偏好且存在`ChainSelector`回调时交互选择（候选全部验证后单次询问，默认项预选；`CaDefault`/全坏候选不询问）→ 无偏好无选择器零额外请求。交互决策写回`record.preferred_chain`并由`complete`固化进证书定义；`record.selected_chain`保存已发布链顶DN与SHA-256指纹；alternate URL不落盘。选择失败不重新下单，checkpoint停在Downloading可`--resume`重入同一GET。
 
 账户ID、directory和kid绑定签发身份；轮换后的当前签名器可继续旧申请。旧thumbprint继续绑定原挑战材料，不被新密钥替换。授权/选中challenge终态保留Problem并拒绝恢复；已valid订单不会因历史challenge记录而错误阻止下载。
 

@@ -220,6 +220,7 @@ async fn order_and_authorization_extension_nulls_roundtrip_through_journal() {
 
 fn request() -> IssueRequest {
     IssueRequest {
+        preferred_chain: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -3382,5 +3383,98 @@ async fn renewing_an_expired_predecessor_does_not_try_to_reschedule_the_old_cert
     assert_eq!(
         reopened.record().await.unwrap().operation_id,
         record.operation_id
+    );
+}
+
+#[tokio::test]
+async fn chain_preferences_persist_into_and_rebuild_from_the_certificate_definition() {
+    let fixture = fixture().await;
+    let mut defined = request();
+    defined.preferred_chain = Some(aster_acme::issuance::ChainPreference::Named(
+        aster_acme::issuance::ChainName::new("ISRG Root X1").unwrap(),
+    ));
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    let saved = selection(&fixture.store.slot(&defined.name)).unwrap();
+    assert_eq!(
+        saved.cert.preferred_chain, defined.preferred_chain,
+        "the definition written at creation must carry the preference"
+    );
+
+    // Renewals rebuild the request from the definition, not from flags.
+    drop(session);
+    let renewed = fixture
+        .store
+        .renew(&defined.name, &fixture.account)
+        .await
+        .unwrap();
+    assert_eq!(
+        renewed.record().await.unwrap().preferred_chain,
+        defined.preferred_chain
+    );
+}
+
+#[tokio::test]
+async fn promotion_fixes_an_interactive_chain_decision_into_the_definition() {
+    let fixture = fixture().await;
+    let session = fixture
+        .store
+        .create(&request(), &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    let chain = leaf_for(&generation, &record.identifiers);
+    record.phase = IssuancePhase::Completed;
+    record.preferred_chain = Some(aster_acme::issuance::ChainPreference::CaDefault);
+    record.selected_chain = Some(aster_acme::issuance::ChainIdentity {
+        dn: "CN=Mock Default CA".into(),
+        common_name: Some("Mock Default CA".into()),
+        fingerprint_sha256: "00".repeat(32),
+    });
+    session.complete(&record, chain.as_bytes()).await.unwrap();
+    let saved = selection(&fixture.store.slot(&record.name)).unwrap();
+    assert_eq!(
+        saved.cert.preferred_chain,
+        Some(aster_acme::issuance::ChainPreference::CaDefault),
+        "promotion fixes the decided preference into the definition"
+    );
+    let promoted = session.record().await.unwrap();
+    assert!(promoted.selected_chain.is_some());
+}
+
+#[tokio::test]
+async fn record_snapshots_inherit_the_definition_chain_preference() {
+    let fixture = fixture().await;
+    let mut defined = request();
+    defined.preferred_chain = Some(aster_acme::issuance::ChainPreference::CaDefault);
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    assert_eq!(
+        record.preferred_chain,
+        Some(aster_acme::issuance::ChainPreference::CaDefault)
+    );
+    // Simulate a crash between an interactive decision (journal) and the
+    // definition write: the definition stays authoritative for recovery.
+    record.preferred_chain = None;
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    write_journal(&generation.join("operation.toml"), &record).unwrap();
+    assert_eq!(
+        session.record().await.unwrap().preferred_chain,
+        Some(aster_acme::issuance::ChainPreference::CaDefault),
+        "the definition preference must survive journal-only recovery"
     );
 }

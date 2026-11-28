@@ -26,6 +26,7 @@ pub(super) fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String
     }
 }
 
+pub(crate) mod chain_selector;
 pub(crate) mod failure;
 pub(crate) mod foreground;
 pub(crate) mod inspection;

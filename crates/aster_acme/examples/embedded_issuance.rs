@@ -326,6 +326,10 @@ impl IssueSession for EmbeddedIssueSession {
         })
     }
 
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        self.with_generation(|generation| Ok(generation.key.to_vec()))
+    }
+
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         self.with_generation(|generation| Ok(generation.csr.clone()))
     }
@@ -417,6 +421,8 @@ impl IssueStore for EmbeddedIssueStore {
             time::OffsetDateTime::now_utc().unix_timestamp_nanos()
         );
         let record = IssueRecord {
+            preferred_chain: None,
+            selected_chain: None,
             challenge: request.challenge,
             solver_config: request.solver_config.clone(),
             is_in_use: false,
@@ -715,6 +721,10 @@ impl IssueObserver for ProgressPrinter {
                 format!("waiting {delay:?}")
             }
             IssueEvent::Finalizing => "finalizing".to_owned(),
+            IssueEvent::ChainCandidatesObserved { available } => {
+                format!("{} candidate chain(s)", available.len())
+            }
+            IssueEvent::ChainSelected { chain } => format!("chain: {chain}"),
             IssueEvent::Downloading => "downloading certificate".to_owned(),
             IssueEvent::CertificateSaved { name } => {
                 format!("certificate saved: {}", name.as_str())
@@ -898,6 +908,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         ensure_account(&directory, transport.clone(), &account_store, contacts).await?;
 
     let request = IssueRequest {
+        preferred_chain: None,
         challenge: ChallengeKind::Http01,
         solver_id: "embedded-webroot".to_owned(),
         solver_config: serde_json::json!({ "root": args.webroot.display().to_string() }),

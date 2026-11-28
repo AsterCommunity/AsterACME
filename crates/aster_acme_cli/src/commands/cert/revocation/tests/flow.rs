@@ -75,6 +75,7 @@ impl Fixture {
         accounts.save(&account).await.unwrap();
         let store = CliIssueStore::new(temp.path().into(), Duration::from_millis(40));
         let request = IssueRequest {
+            preferred_chain: None,
             challenge: aster_acme::challenge::ChallengeKind::Http01,
             solver_id: "manual_http".into(),
             solver_config: serde_json::json!({}),

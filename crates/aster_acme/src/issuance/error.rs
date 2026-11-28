@@ -32,6 +32,19 @@ pub enum IssueError {
     /// Input invariant or CA resource mismatch.
     #[error("{0}")]
     InvalidInput(&'static str),
+    /// An explicitly selected certificate chain was not among the validated
+    /// [RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2)
+    /// candidates; the certificate stays issued and resumable, and the detail
+    /// names the request and every available candidate.
+    #[error(
+        "no certificate chain matches the preferred chain {requested:?}; available: {available}"
+    )]
+    ChainUnavailable {
+        /// The unmatched operator preference.
+        requested: String,
+        /// RFC 4514 names of every validated candidate chain, comma-joined.
+        available: String,
+    },
     /// The requested CA certificate profile cannot be validated locally;
     /// the detail names the request and every advertised alternative.
     #[error("{0}")]

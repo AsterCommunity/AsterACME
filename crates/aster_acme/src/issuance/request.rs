@@ -101,6 +101,11 @@ pub struct IssueRequest {
     /// `None`
     /// keeps the CA default. Fixed for the lifetime of this definition.
     pub profile: Option<String>,
+    /// Selected certificate chain preference
+    /// ([RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2)
+    /// alternate chains); `None` keeps the CA default chain unless a product
+    /// selector picks among candidates discovered at download time.
+    pub preferred_chain: Option<crate::issuance::chain::ChainPreference>,
     /// Stable local account name, never transmitted to the CA.
     pub account_name: String,
 }

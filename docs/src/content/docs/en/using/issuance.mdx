@@ -16,6 +16,9 @@ aster-acme cert issue -n example-cert -a default \
 - `-d/--domain`: DNS names, repeatable; wildcards are written `*.example.com` and require DNS validation
 - `--ip`: IP addresses (RFC 8738), repeatable; requires HTTP-01/TLS-ALPN-01, the primary identifier is the first `-d`, else the first `--ip`
 - `--profile`: CA certificate profile (draft-ietf-acme-profiles); `account show --profiles` lists the advertisement, `account update --profile` sets an account default, explicit flags win. Let's Encrypt IP issuance requires `shortlived`
+- `--preferred-chain CHAIN`: candidate certificate chain selection (RFC 8555 §7.4.2), matched case-insensitively against the top-most certificate's RFC 4514 distinguished name with a common-name fallback; `--default-chain` pins the CA default. Both flags are mutually exclusive and off `--resume`
+
+**Chain selection**: the CA advertises same-leaf candidate chains via `Link; rel="alternate"` headers on the download response — different deployment trust stores need different chains. A matching explicit preference needs zero extra requests; an unmatched one downloads and validates every alternate before choosing — noninteractive runs fail closed (the certificate stays issued, no reordering; `--resume` re-enters the same GET to choose again), interactive terminals get a single list with the CA default preselected (Esc abandons). The decision is written back to the certificate definition and inherited by renewals; `cert show` displays the saved preference and the published chain's DN and fingerprint. Existing certificates without a preference keep renewing on the CA default.
 - `-c/--challenge`: the validation implementation — see [Validation Methods](/en/using/challenges/)
 - `-k/--key-type`: certificate public key algorithm, ecdsa-p256 by default; also ecdsa-p384/p521, ed25519, rsa-2048/3072/4096/8192. If the CA rejects the choice, the actual error is preserved — AsterACME never retries with a different algorithm
 

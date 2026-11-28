@@ -32,6 +32,7 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(2));
     let account = allocation_account();
     let mut request = IssueRequest {
+        preferred_chain: None,
         name: CertificateName::new("dns-cert").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
         profile: None,
@@ -239,6 +240,7 @@ async fn renewal_failure_predecessor(
 ) -> IssueRecord {
     use rcgen::{CertificateParams, Issuer, KeyPair};
     let request = IssueRequest {
+        preferred_chain: None,
         name: CertificateName::new("deadline").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
         profile: None,
@@ -301,6 +303,7 @@ async fn renewal_material_logs_name_before_ca_for_each_batch_item() {
         for suffix in ["first", "second"] {
             let name = format!("cdn.example.com-{suffix}-{json}");
             let request = IssueRequest {
+                preferred_chain: None,
                 name: CertificateName::new(&name).unwrap(),
                 identifiers: vec![Identifier::Dns(
                     DnsIdentifier::new("cdn.example.com").unwrap(),
@@ -351,6 +354,7 @@ async fn automatic_allocation_retries_only_name_collisions_while_explicit_names_
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
     let account = allocation_account();
     let request = IssueRequest {
+        preferred_chain: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -385,6 +389,7 @@ async fn allocation_propagates_unsafe_storage_errors_without_creating_another_ra
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
     let account = allocation_account();
     let request = IssueRequest {
+        preferred_chain: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -438,6 +443,7 @@ async fn renew_not_due_uses_saved_definition_and_never_contacts_ca_or_creates_a_
     accounts.save(&account).await.unwrap();
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
     let request = IssueRequest {
+        preferred_chain: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),

@@ -245,6 +245,7 @@ impl LocalFixture {
         };
         use rcgen::{CertificateParams, Issuer, KeyPair};
         let request = IssueRequest {
+            preferred_chain: None,
             challenge: aster_acme::challenge::ChallengeKind::Dns01,
             solver_id: "manual_dns".into(),
             solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -837,6 +838,7 @@ impl LocalFixture {
             .unwrap()
         };
         let req = IssueRequest {
+            preferred_chain: None,
             challenge: method.kind(),
             solver_id: method.id().into(),
             solver_config: config,

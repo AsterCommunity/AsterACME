@@ -5,6 +5,7 @@ use std::{sync::Arc, time::Duration};
 
 mod authorization;
 pub mod certificate;
+pub mod chain;
 
 pub mod progress;
 pub mod publication;
@@ -17,6 +18,9 @@ mod request;
 mod retry;
 mod validation;
 
+pub use chain::{
+    ChainCandidate, ChainDecision, ChainIdentity, ChainName, ChainPreference, ChainSelector,
+};
 pub use error::IssueError;
 pub use record::IssueRecord;
 pub use request::{CertificateName, IssueRequest};

@@ -81,6 +81,8 @@ impl CliIssueStore {
                 account_thumbprint: account.key_thumbprint,
                 key_algorithm: request.key_algorithm,
                 profile: request.profile,
+                preferred_chain: request.preferred_chain,
+                selected_chain: None,
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
                 new_order_intent_saved: false,
@@ -278,6 +280,7 @@ fn initialize_definition(
                         identifiers: request.identifiers.clone(),
                         key_algorithm: request.key_algorithm,
                         profile: request.profile.clone(),
+                        preferred_chain: request.preferred_chain.clone(),
                         account_name: request.account_name.clone(),
                         account_id: account.account_id.clone(),
                         directory: account.directory_url.clone(),
@@ -317,6 +320,7 @@ fn initialize_definition(
                 identifiers: config.cert.identifiers,
                 key_algorithm: config.cert.key_algorithm,
                 profile: config.cert.profile,
+                preferred_chain: config.cert.preferred_chain,
                 account_name: config.cert.account_name,
             };
             validate_request(&request, account)?;
