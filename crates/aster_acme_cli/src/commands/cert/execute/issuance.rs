@@ -119,25 +119,29 @@ async fn prompt_profile(
     };
     let names = advertised.keys().cloned().collect::<Vec<_>>();
     // CA-provided names/descriptions are untrusted terminal text: escape the
-    // display labels, while selection still indexes the original names.
-    let mut choices = names
-        .iter()
-        .map(|name| match advertised.get(name).map(String::as_str) {
-            None | Some("") => crate::common::output::safe(name),
-            Some(description) => {
-                format!(
-                    "{} — {}",
-                    crate::common::output::safe(name),
-                    crate::common::output::safe(description)
-                )
-            }
-        })
-        .collect::<Vec<_>>();
-    choices.push("(no default; the CA default applies)".to_owned());
-    let default = names
-        .iter()
-        .position(|name| account.preferred_profile.as_deref() == Some(name.as_str()))
-        .unwrap_or(0);
+    // display labels, while selection still indexes the original names. The
+    // CA-default escape hatch leads the list, so keeping the CA default and
+    // abandoning both cost one Enter from the initial cursor.
+    let mut choices = vec!["(no default; the CA default applies)".to_owned()];
+    choices.extend(
+        names
+            .iter()
+            .map(|name| match advertised.get(name).map(String::as_str) {
+                None | Some("") => crate::common::output::safe(name),
+                Some(description) => {
+                    format!(
+                        "{} — {}",
+                        crate::common::output::safe(name),
+                        crate::common::output::safe(description)
+                    )
+                }
+            }),
+    );
+    let default = account
+        .preferred_profile
+        .as_deref()
+        .and_then(|preferred| names.iter().position(|name| name.as_str() == preferred))
+        .map_or(0, |position| position + 1);
     let selection = crate::common::terminal::select_index_or_back(
         "Default certificate profile:",
         &choices,
@@ -145,7 +149,11 @@ async fn prompt_profile(
         &cli.output,
     )?
     .ok_or(crate::common::terminal::Canceled)?;
-    request.profile = names.get(selection).cloned();
+    request.profile = if selection == 0 {
+        None
+    } else {
+        names.get(selection - 1).cloned()
+    };
     Ok(())
 }
 

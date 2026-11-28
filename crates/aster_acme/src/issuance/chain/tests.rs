@@ -109,6 +109,42 @@ fn identities_reject_non_certificate_and_trailing_garbage_input() {
 }
 
 #[test]
+fn identities_describe_the_top_most_issuer_not_the_shared_leaf() {
+    // Alternates share the leaf; only the chain tail distinguishes them.
+    let leaf = certificate_pem(|name| {
+        name.push(DnType::CommonName, "example.com");
+    });
+    let default_issuer = certificate_pem(|name| {
+        name.push(DnType::CommonName, "Mock Default CA");
+    });
+    let alternate_issuer = certificate_pem(|name| {
+        name.push(DnType::CommonName, "Mock Alternate CA");
+    });
+    let default_chain = [leaf.clone(), default_issuer.clone()].concat();
+    let alternate_chain = [leaf, alternate_issuer.clone()].concat();
+    let default_identity = chain_identity(&default_chain).unwrap();
+    let alternate_identity = chain_identity(&alternate_chain).unwrap();
+    assert_eq!(default_identity.dn, "CN=Mock Default CA");
+    assert_eq!(alternate_identity.dn, "CN=Mock Alternate CA");
+    assert_ne!(default_identity.dn, alternate_identity.dn);
+    assert_ne!(
+        default_identity.fingerprint_sha256,
+        alternate_identity.fingerprint_sha256
+    );
+    assert_eq!(
+        alternate_identity.common_name.as_deref(),
+        Some("Mock Alternate CA")
+    );
+    // The tail wins even when a different certificate is prepended.
+    assert_eq!(
+        chain_identity(&[default_issuer, alternate_issuer].concat())
+            .unwrap()
+            .dn,
+        "CN=Mock Alternate CA"
+    );
+}
+
+#[test]
 fn rfc4514_serializes_reversed_multi_valued_and_unknown_attributes() {
     use x509_parser::x509::X509Name;
     // Name ::= SEQUENCE OF SET OF { type, value }; hand-assemble two RDNs:

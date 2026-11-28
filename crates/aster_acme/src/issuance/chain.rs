@@ -176,25 +176,30 @@ pub trait ChainSelector: Send + Sync {
 }
 
 /// Derive a candidate identity from a complete PEM certificate chain. Callers
-/// must validate the chain first; this only reads the top-most certificate.
+/// must validate the chain first. The identity describes the **top-most**
+/// certificate (the last PEM block, closest to the trust anchor): every
+/// candidate chain shares the same leaf, so only the issuer tail
+/// distinguishes alternatives — this is also what operator-supplied
+/// `--preferred-chain` names refer to.
 ///
 /// # Errors
-/// Rejects empty, non-certificate or malformed leaf PEM data.
+/// Rejects empty, non-certificate or malformed PEM data.
 pub fn chain_identity(chain: &[u8]) -> Result<ChainIdentity, IssueError> {
     let invalid = || IssueError::InvalidInput("invalid certificate chain PEM");
-    let (remaining, pem) = parse_x509_pem(chain).map_err(|_| invalid())?;
-    if pem.label != "CERTIFICATE" {
-        return Err(invalid());
+    let mut tail_der = None;
+    let mut remaining = chain;
+    while remaining.iter().any(|byte| !u8::is_ascii_whitespace(byte)) {
+        let (rest, pem) = parse_x509_pem(remaining).map_err(|_| invalid())?;
+        if pem.label != "CERTIFICATE" {
+            return Err(invalid());
+        }
+        tail_der = Some(pem.contents);
+        remaining = rest;
     }
-    // A bare certificate or a full chain are both acceptable inputs; only the
-    // top-most certificate is inspected, and every remaining byte must be PEM
-    // so hostile trailing data cannot ride along.
-    if !remaining.is_empty() && remaining.iter().any(|byte| !u8::is_ascii_whitespace(byte)) {
-        let _ = parse_x509_pem(remaining).map_err(|_| invalid())?;
-    }
-    let (_, certificate) = x509_parser::certificate::X509Certificate::from_der(&pem.contents)
-        .map_err(|_| invalid())?;
-    let fingerprint = Sha256::digest(&pem.contents);
+    let tail_der = tail_der.ok_or_else(invalid)?;
+    let (_, certificate) =
+        x509_parser::certificate::X509Certificate::from_der(&tail_der).map_err(|_| invalid())?;
+    let fingerprint = Sha256::digest(&tail_der);
     let mut hex = String::with_capacity(fingerprint.len() * 2);
     for byte in fingerprint {
         use std::fmt::Write as _;
@@ -297,10 +302,14 @@ fn rfc4514(name: &X509Name<'_>) -> String {
 }
 
 fn attribute_string(attribute: &AttributeTypeAndValue<'_>) -> String {
-    let value = attribute
-        .attr_value()
-        .as_str()
-        .map_or_else(|_| String::new(), str::to_owned);
+    // AttributeTypeAndValue::as_str dispatches on the ASN.1 string tag
+    // (Printable/UTF8/IA5/Numeric); der_parser's `Any::as_str` does not.
+    // Non-string values (rare BMPString subjects) fall back to lossy bytes
+    // so the identity still displays instead of collapsing to an empty DN.
+    let value = attribute.as_str().map_or_else(
+        |_| String::from_utf8_lossy(attribute.attr_value().as_bytes()).into_owned(),
+        str::to_owned,
+    );
     format!(
         "{}={}",
         attribute_abbreviation(attribute.attr_type().as_bytes()),
