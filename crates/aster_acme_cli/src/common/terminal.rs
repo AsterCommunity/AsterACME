@@ -17,6 +17,16 @@ impl Drop for RawModeGuard {
     }
 }
 
+impl RawModeGuard {
+    fn restore(&mut self) -> io::Result<()> {
+        if self.0 {
+            crossterm::terminal::disable_raw_mode()?;
+            self.0 = false;
+        }
+        Ok(())
+    }
+}
+
 fn wrap_terminal_text(value: &str, max_width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar as _;
 
@@ -122,6 +132,10 @@ pub(crate) fn select_index_or_back(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "bounded prompt owns rendering, input, and terminal restoration"
+)]
 pub(crate) fn select_index_or_back_bounded(
     message: &str,
     choices: &[String],
@@ -148,7 +162,7 @@ pub(crate) fn select_index_or_back_bounded(
     if restore_raw {
         terminal::enable_raw_mode().map_err(&terminal_issue)?;
     }
-    let raw_mode = RawModeGuard(restore_raw);
+    let mut raw_mode = RawModeGuard(restore_raw);
     let mut writer = io::stderr().lock();
     let mut selected = default;
     let mut rendered_lines = 0usize;
@@ -166,32 +180,40 @@ pub(crate) fn select_index_or_back_bounded(
                 )
                 .map_err(terminal_issue)?;
             }
-            write!(writer, "{message}\r\n").map_err(terminal_issue)?;
             let width = terminal::size().map_err(&terminal_issue)?.0.max(1) as usize;
             let wrap_width = width.saturating_sub(2).max(1);
-            let mut option_lines = 0usize;
+            let header_chunks = wrap_terminal_text(message, width);
+            for chunk in &header_chunks {
+                write!(writer, "{chunk}\r\n").map_err(terminal_issue)?;
+            }
+            let mut rendered_option_lines = 0usize;
             for (index, choice) in choices.iter().enumerate() {
                 let marker = if index == selected { "> " } else { "  " };
+                let chunks = wrap_terminal_text(choice, wrap_width);
+                rendered_option_lines += chunks.len();
                 let marker = crate::common::output::styled(
                     marker,
                     crate::common::output::Style::BoldCyan,
                     output.diagnostic_format().color,
                 );
-                let label = format!("{marker}{choice}");
-                let chunks = wrap_terminal_text(&label, wrap_width);
-                option_lines += chunks.len();
-                for chunk in chunks {
-                    write!(writer, "{chunk}\r\n").map_err(terminal_issue)?;
+                if let Some((first, rest)) = chunks.split_first() {
+                    write!(writer, "{marker}{first}\r\n").map_err(terminal_issue)?;
+                    for chunk in rest {
+                        write!(writer, "  {chunk}\r\n").map_err(terminal_issue)?;
+                    }
                 }
             }
-            let hint = crate::common::output::styled(
-                "  ↑↓ move · Enter select · Esc cancel",
-                crate::common::output::Style::Cyan,
-                output.diagnostic_format().color,
-            );
-            write!(writer, "{hint}\r\n").map_err(terminal_issue)?;
+            let hint_chunks = wrap_terminal_text("  ↑↓ move · Enter select · Esc cancel", width);
+            for chunk in &hint_chunks {
+                let hint = crate::common::output::styled(
+                    chunk,
+                    crate::common::output::Style::Cyan,
+                    output.diagnostic_format().color,
+                );
+                write!(writer, "{hint}\r\n").map_err(terminal_issue)?;
+            }
             writer.flush().map_err(terminal_issue)?;
-            rendered_lines = option_lines + 2;
+            rendered_lines = header_chunks.len() + rendered_option_lines + hint_chunks.len();
 
             while !event::poll(
                 Duration::from_millis(50)
@@ -228,9 +250,17 @@ pub(crate) fn select_index_or_back_bounded(
             }
         }
     })();
-    let _ = write!(writer, "\r\n").and_then(|()| writer.flush());
+    let newline = write!(writer, "\r\n").and_then(|()| writer.flush());
+    let restored = raw_mode.restore();
     drop(raw_mode);
-    result
+    match result {
+        Err(error) => Err(error),
+        Ok(selection) => {
+            newline.map_err(terminal_issue)?;
+            restored.map_err(terminal_issue)?;
+            Ok(selection)
+        }
+    }
 }
 
 pub(crate) fn confirm_bounded(

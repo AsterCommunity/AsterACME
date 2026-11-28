@@ -1,13 +1,15 @@
 """Verify chain selection deadline and terminal restoration through a PTY."""
 import errno
+import fcntl
+import json
 import os
 from pathlib import Path
 import pty
 import select
+import struct
 import subprocess
 import termios
 import time
-import json
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = "commands::cert::execute::chain_selector::tests::bounded_chain_prompt_child"
@@ -43,6 +45,7 @@ def test_binary():
 def main():
     binary = test_binary()
     master, slave = pty.openpty()
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 36, 0, 0))
     before = termios.tcgetattr(slave)
     process = subprocess.Popen(
         [binary, "--exact", FIXTURE, "--ignored", "--nocapture"],
@@ -77,8 +80,9 @@ def main():
                 break
         assert process.poll() is not None, bytes(transcript).decode(errors="replace")
         assert process.wait(timeout=1) == 0, bytes(transcript).decode(errors="replace")
-        assert b"CHAIN_TERMINAL_TIMEOUT_DONE" in transcript, transcript
-        assert b"Certificate chain:" in transcript, transcript
+        output = bytes(transcript).replace(b"\r", b"")
+        assert b"CHAIN_TERMINAL_TIMEOUT_DONE" in output, transcript
+        assert b"Certificate chain:" in output, transcript
         assert termios.tcgetattr(slave) == before, "terminal mode was not restored"
     finally:
         if process.poll() is None:
