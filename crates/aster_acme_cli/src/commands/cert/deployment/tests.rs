@@ -105,6 +105,7 @@ impl Fixture {
             self.store
                 .create(
                     &IssueRequest {
+                        chain_selection: None,
                         name: self.name.clone(),
                         identifiers: vec![Identifier::Dns(
                             DnsIdentifier::new("example.com").unwrap(),
@@ -150,6 +151,7 @@ impl Fixture {
         self.store
             .create(
                 &IssueRequest {
+                    chain_selection: None,
                     name: CertificateName::new(name).unwrap(),
                     identifiers: vec![Identifier::Dns(
                         DnsIdentifier::new("pending.example.com").unwrap(),

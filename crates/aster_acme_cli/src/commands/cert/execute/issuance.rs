@@ -68,7 +68,10 @@ pub(super) async fn issue(
     let run = args.run.clone();
     let root = settings.data_dir.clone();
     let input = if let Some(record) = selected {
-        IssueInput::Resume(Box::new(record))
+        IssueInput::Resume {
+            record: Box::new(record),
+            chain_override: request_chain_selection(&args),
+        }
     } else {
         IssueInput::New {
             request: proposed.take().ok_or("Missing new request definition.")?.0,
@@ -95,6 +98,27 @@ pub(super) async fn issue(
     })
 }
 
+fn request_chain_selection(args: &IssueArgs) -> Option<aster_acme::issuance::ChainSelection> {
+    args.chain
+        .as_ref()
+        .map(|chain| aster_acme::issuance::ChainSelection::Named {
+            chain: chain.clone(),
+            remember: false,
+        })
+        .or_else(|| {
+            args.preferred_chain
+                .as_ref()
+                .map(|chain| aster_acme::issuance::ChainSelection::Named {
+                    chain: chain.clone(),
+                    remember: true,
+                })
+        })
+        .or_else(|| {
+            args.default_chain
+                .then_some(aster_acme::issuance::ChainSelection::Default)
+        })
+}
+
 /// Interactive default-profile selection against the bound CA's directory:
 /// advertised names with descriptions, account default preselected, Esc
 /// cancels the issuance. CAs without advertisements keep the CA default.
@@ -117,36 +141,52 @@ async fn prompt_profile(
     let Some(advertised) = advertised.filter(|map| !map.is_empty()) else {
         return Ok(());
     };
-    let names = advertised.keys().cloned().collect::<Vec<_>>();
-    // CA-provided names/descriptions are untrusted terminal text: escape the
-    // display labels, while selection still indexes the original names.
-    let mut choices = names
+    request.profile = select_profile(
+        &advertised,
+        account.preferred_profile.as_deref(),
+        |choices, default| {
+            terminal::select_index_or_back(
+                "Default certificate profile:",
+                choices,
+                default,
+                &cli.output,
+            )
+        },
+    )?;
+    Ok(())
+}
+
+fn select_profile(
+    advertised: &std::collections::BTreeMap<String, String>,
+    preferred: Option<&str>,
+    prompt: impl FnOnce(&[String], usize) -> CliResult<Option<usize>>,
+) -> CliResult<Option<String>> {
+    let mut names = vec![None];
+    names.extend(advertised.keys().map(Some));
+    let choices = names
         .iter()
-        .map(|name| match advertised.get(name).map(String::as_str) {
-            None | Some("") => crate::common::output::safe(name),
-            Some(description) => {
-                format!(
-                    "{} — {}",
-                    crate::common::output::safe(name),
-                    crate::common::output::safe(description)
-                )
+        .map(|name| match name {
+            None => "(no default; the CA default applies)".to_owned(),
+            Some(name) => {
+                let label = crate::common::output::safe(name);
+                let description = &advertised[*name];
+                if description.is_empty() {
+                    label
+                } else {
+                    format!("{label} — {}", crate::common::output::safe(description))
+                }
             }
         })
         .collect::<Vec<_>>();
-    choices.push("(no default; the CA default applies)".to_owned());
     let default = names
         .iter()
-        .position(|name| account.preferred_profile.as_deref() == Some(name.as_str()))
+        .position(|name| name.map(String::as_str) == preferred)
         .unwrap_or(0);
-    let selection = crate::common::terminal::select_index_or_back(
-        "Default certificate profile:",
-        &choices,
-        default,
-        &cli.output,
-    )?
-    .ok_or(crate::common::terminal::Canceled)?;
-    request.profile = names.get(selection).cloned();
-    Ok(())
+    let selected = prompt(&choices, default)?.ok_or(terminal::Canceled)?;
+    Ok(names
+        .get(selected)
+        .ok_or("Invalid certificate profile selection.")?
+        .map(String::clone))
 }
 
 pub(super) async fn select_saved_issue(
@@ -226,8 +266,8 @@ pub(super) async fn select_saved_issue(
 }
 
 /// The explicit `--profile` flag wins; otherwise the account's saved default
-/// ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles)) applies; without either the CA default is used.pub(super)
-fn request(
+/// ([draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/html/draft-ietf-acme-profiles)) applies; without either the CA default is used.
+pub(super) fn request(
     args: &IssueArgs,
     account: &str,
     account_default_profile: Option<&str>,
@@ -272,6 +312,7 @@ fn request(
             .profile
             .clone()
             .or_else(|| account_default_profile.map(str::to_owned)),
+        chain_selection: request_chain_selection(args),
         account_name: account.into(),
     };
     request.validate()?;
@@ -286,7 +327,10 @@ pub(super) async fn prepare_session(
     progress: &Progress,
 ) -> CliResult<Box<dyn IssueSession>> {
     let session = match input {
-        IssueInput::Resume(record) => {
+        IssueInput::Resume {
+            record,
+            chain_override,
+        } => {
             progress.output.progress(
                 MessageKind::Info,
                 &format!(
@@ -302,7 +346,13 @@ pub(super) async fn prepare_session(
                     record.key_algorithm.name()
                 ),
             );
-            store.open(&record.name, &record.operation_id).await?
+            let session = store.open(&record.name, &record.operation_id).await?;
+            if let Some(chain_override) = chain_override {
+                let mut current = session.record().await?;
+                current.chain_selection = Some(chain_override);
+                session.save(&current).await?;
+            }
+            session
         }
         IssueInput::New { request, naming } => {
             progress.output.progress(
@@ -357,4 +407,40 @@ pub(super) async fn allocate_certificate(
     Err(IssueError::InvalidInput(
         "automatic certificate name allocation exceeded its collision budget",
     ))
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use crate::commands::cert::execute::issuance::select_profile;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn profile_menu_keeps_default_first_and_preselects_the_account_profile() {
+        let advertised = BTreeMap::from([
+            ("baseline".into(), String::new()),
+            ("shortlived".into(), "Short\nlifetime".into()),
+        ]);
+        for (index, expected) in [(0, None), (1, Some("baseline")), (2, Some("shortlived"))] {
+            let choice = select_profile(&advertised, Some("shortlived"), |labels, default| {
+                assert_eq!(
+                    labels,
+                    [
+                        "(no default; the CA default applies)",
+                        "baseline",
+                        "shortlived — Short\\nlifetime"
+                    ]
+                );
+                assert_eq!(default, 2);
+                Ok(Some(index))
+            })
+            .unwrap();
+            assert_eq!(choice.as_deref(), expected);
+        }
+        let cancelled = select_profile(&advertised, Some("not advertised"), |_, default| {
+            assert_eq!(default, 0);
+            Ok(None)
+        })
+        .unwrap_err();
+        assert!(cancelled.is::<crate::common::terminal::Canceled>());
+    }
 }

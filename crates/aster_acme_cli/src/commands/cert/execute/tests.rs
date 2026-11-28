@@ -32,6 +32,7 @@ async fn external_dns_renewal_uses_the_shared_automatic_deployment_path() {
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(2));
     let account = allocation_account();
     let mut request = IssueRequest {
+        chain_selection: None,
         name: CertificateName::new("dns-cert").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
         profile: None,
@@ -239,6 +240,7 @@ async fn renewal_failure_predecessor(
 ) -> IssueRecord {
     use rcgen::{CertificateParams, Issuer, KeyPair};
     let request = IssueRequest {
+        chain_selection: None,
         name: CertificateName::new("deadline").unwrap(),
         identifiers: vec![Identifier::Dns(DnsIdentifier::new("example.com").unwrap())],
         profile: None,
@@ -301,6 +303,7 @@ async fn renewal_material_logs_name_before_ca_for_each_batch_item() {
         for suffix in ["first", "second"] {
             let name = format!("cdn.example.com-{suffix}-{json}");
             let request = IssueRequest {
+                chain_selection: None,
                 name: CertificateName::new(&name).unwrap(),
                 identifiers: vec![Identifier::Dns(
                     DnsIdentifier::new("cdn.example.com").unwrap(),
@@ -351,6 +354,7 @@ async fn automatic_allocation_retries_only_name_collisions_while_explicit_names_
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
     let account = allocation_account();
     let request = IssueRequest {
+        chain_selection: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -385,6 +389,7 @@ async fn allocation_propagates_unsafe_storage_errors_without_creating_another_ra
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
     let account = allocation_account();
     let request = IssueRequest {
+        chain_selection: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -438,6 +443,7 @@ async fn renew_not_due_uses_saved_definition_and_never_contacts_ca_or_creates_a_
     accounts.save(&account).await.unwrap();
     let store = CliIssueStore::new(temp.path().into(), Duration::from_secs(1));
     let request = IssueRequest {
+        chain_selection: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -507,3 +513,44 @@ async fn renew_not_due_uses_saved_definition_and_never_contacts_ca_or_creates_a_
 }
 
 mod entrypoints;
+
+#[test]
+fn chain_flags_reach_the_issuance_request() {
+    use crate::commands::cert::{args::IssueArgs, execute::issuance::request};
+    use aster_acme::issuance::{ChainName, ChainSelection};
+    use clap::{Args as _, FromArgMatches as _};
+    let command = IssueArgs::augment_args(clap::Command::new("issue"));
+    for (flags, expected) in [
+        (vec![], None),
+        (vec!["--default-chain"], Some(ChainSelection::Default)),
+        (
+            vec!["--chain", "CA Name"],
+            Some(ChainSelection::Named {
+                chain: ChainName::new("CA Name").unwrap(),
+                remember: false,
+            }),
+        ),
+        (
+            vec!["--preferred-chain", "CA Name"],
+            Some(ChainSelection::Named {
+                chain: ChainName::new("CA Name").unwrap(),
+                remember: true,
+            }),
+        ),
+    ] {
+        let args = ["issue", "-d", "example.com", "-c", "manual_dns"]
+            .into_iter()
+            .chain(flags);
+        let matches = command.clone().try_get_matches_from(args).unwrap();
+        assert_eq!(
+            request(
+                &IssueArgs::from_arg_matches(&matches).unwrap(),
+                "default",
+                None
+            )
+            .unwrap()
+            .chain_selection,
+            expected
+        );
+    }
+}

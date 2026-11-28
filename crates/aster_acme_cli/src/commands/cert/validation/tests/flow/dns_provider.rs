@@ -760,6 +760,9 @@ impl aster_acme::storage::issuance::IssueSession for FailSave<'_> {
         }
         self.inner.save(record).await
     }
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        self.inner.certificate_key().await
+    }
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         self.inner.csr().await
     }

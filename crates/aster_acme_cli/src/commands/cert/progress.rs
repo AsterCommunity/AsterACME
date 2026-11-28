@@ -134,6 +134,17 @@ impl IssueObserver for Progress {
                 MessageKind::Info,
                 "Downloading and checking the issued certificate chain".into(),
             ),
+            IssueEvent::ChainCandidatesObserved { .. } => return,
+            IssueEvent::ChainSelectionUnavailable { requested, using } => (
+                MessageKind::Warning,
+                format!(
+                    "Preferred certificate chain unavailable: {requested}; using CA default {using}"
+                ),
+            ),
+            IssueEvent::ChainSelected { chain } => (
+                MessageKind::Success,
+                format!("Certificate chain: {chain}"),
+            ),
             IssueEvent::CertificateSaved { name } => (
                 MessageKind::Success,
                 format!("Certificate {name} verified and saved"),
@@ -205,6 +216,28 @@ fn protocol_messages(
     if let Some(profile) = &record.profile {
         lines.push(format!("Certificate profile: {profile}"));
     }
+    // RFC 8555 §7.4.2 (https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2):
+    // surface the saved chain preference and the actually published chain so
+    // operators can pass the exact name to --preferred-chain.
+    if let Some(selection) = &record.chain_selection {
+        let description = match selection {
+            aster_acme::issuance::ChainSelection::Default => "CA default".to_owned(),
+            aster_acme::issuance::ChainSelection::Named { chain, remember } => {
+                if *remember {
+                    format!("soft preferred {}", chain.as_str())
+                } else {
+                    format!("one-time {}", chain.as_str())
+                }
+            }
+        };
+        lines.push(format!("Preferred certificate chain: {description}"));
+    }
+    if let Some(chain) = &record.selected_chain {
+        lines.push(format!(
+            "Certificate chain: {} (sha256:{})",
+            chain.dn, chain.fingerprint_sha256
+        ));
+    }
     lines.push(strategy.into());
     lines.push(timing.into());
     lines
@@ -214,6 +247,20 @@ fn protocol_messages(
 mod tests {
     use crate::commands::cert::progress::*;
     use std::time::Duration;
+
+    #[test]
+    fn progress_displays_only_the_published_chain() {
+        let (output, _, stderr) = crate::common::session::tests::session(false);
+        let progress = Progress::new(output);
+        progress.observe(&IssueEvent::ChainCandidatesObserved {
+            available: vec!["CN=Other".into()],
+        });
+        progress.observe(&IssueEvent::ChainSelected {
+            chain: "CN=Published".into(),
+        });
+        assert_eq!(stderr.text().lines().count(), 1);
+        assert!(stderr.text().contains("Certificate chain: CN=Published"));
+    }
 
     #[test]
     fn saved_events_identify_each_certificate_and_keep_json_silent() {
@@ -377,6 +424,83 @@ mod tests {
             !lines
                 .iter()
                 .any(|line| line.contains("Certificate profile:"))
+        );
+    }
+    #[test]
+    fn chain_preference_and_selected_chain_are_surfaced_to_the_operator() {
+        let directory: aster_acme_protocol::directory::Directory = serde_json::from_value(
+            serde_json::json!({
+                "newNonce": "https://ca.example/nonce", "newAccount": "https://ca.example/account",
+                "newOrder": "https://ca.example/order", "keyChange": "https://ca.example/key-change",
+                "renewalInfo": "https://ca.example/ari"
+            }),
+        )
+        .unwrap();
+        let record: aster_acme::issuance::IssueRecord = serde_json::from_value(serde_json::json!({
+            "challenge": "http-01",
+            "solver_config": {},
+            "solver_id": "standalone",
+            "operation_id": "a".repeat(43),
+            "name": "web",
+            "created_at": "2026-01-01T00:00:00Z",
+            "account_name": "default",
+            "account_id": "stable",
+            "account_thumbprint": "key",
+            "directory": "https://ca.example/directory",
+            "account_url": "https://ca.example/account",
+            "key_algorithm": "ecdsa-p256",
+            "identifiers": ["example.com"],
+            "chain_selection": {"named": {"chain": "CN=Mock Default CA", "remember": true}},
+            "selected_chain": {
+                "dn": "CN=Mock Default CA",
+                "common_name": "Mock Default CA",
+                "fingerprint_sha256": "00"
+            },
+            "phase": "authorizing",
+            "new_order_intent_saved": true,
+            "finalize_submitted": "not_submitted",
+            "authorizations": []
+        }))
+        .unwrap();
+        let lines = protocol_messages(&directory, &record);
+        assert!(
+            lines.iter().any(|line| {
+                line.contains("Preferred certificate chain: soft preferred CN=Mock Default CA")
+            }),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Certificate chain: CN=Mock Default CA (sha256:00")),
+            "{lines:?}"
+        );
+
+        // A CA-default preference reads differently from a named one.
+        let default_only: aster_acme::issuance::IssueRecord =
+            serde_json::from_value(serde_json::json!({
+                "challenge": "http-01", "solver_config": {}, "solver_id": "standalone",
+                "operation_id": "a".repeat(43), "name": "web",
+                "created_at": "2026-01-01T00:00:00Z", "account_name": "default",
+                "account_id": "stable", "account_thumbprint": "key",
+                "directory": "https://ca.example/directory",
+                "account_url": "https://ca.example/account", "key_algorithm": "ecdsa-p256",
+                "identifiers": ["example.com"],
+            "chain_selection": "default",
+                "phase": "authorizing", "new_order_intent_saved": true,
+                "finalize_submitted": "not_submitted", "authorizations": []
+            }))
+            .unwrap();
+        let lines = protocol_messages(&directory, &default_only);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Preferred certificate chain: CA default")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("Certificate chain:")),
+            "{lines:?}"
         );
     }
 }

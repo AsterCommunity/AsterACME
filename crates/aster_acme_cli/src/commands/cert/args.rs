@@ -182,6 +182,29 @@ pub(crate) struct IssueArgs {
     /// the CA directory must advertise it. Omitted keeps the CA default.
     #[arg(long, value_name = "NAME", conflicts_with = "resume", value_parser = parse_profile)]
     pub profile: Option<String>,
+    /// Certificate chain to use for this issuance only among the CA's offered chains
+    /// ([RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2));
+    /// matched case-insensitively against the top-most certificate's RFC 4514
+    /// distinguished name or its common name. It is not saved for renewals
+    /// and may be supplied together with --resume to replace the saved choice.
+    #[arg(
+        long = "chain",
+        value_name = "CHAIN",
+        conflicts_with_all = ["preferred_chain", "default_chain"],
+        value_parser = parse_chain_name
+    )]
+    pub chain: Option<aster_acme::issuance::ChainName>,
+    /// Certificate chain to use now and retain as a soft preference for future renewals.
+    #[arg(
+        long,
+        value_name = "CHAIN",
+        conflicts_with = "default_chain",
+        value_parser = parse_chain_name
+    )]
+    pub preferred_chain: Option<aster_acme::issuance::ChainName>,
+    /// Use the CA default certificate chain for this issuance and do not save a preference.
+    #[arg(long, conflicts_with_all = ["chain", "preferred_chain"])]
+    pub default_chain: bool,
     /// Validation implementation; omitted prompts on terminals, required in scripts.
     #[arg(short = 'c', long, value_enum, conflicts_with = "resume")]
     pub challenge: Option<crate::commands::cert::validation::ValidationMethod>,
@@ -295,6 +318,10 @@ pub(crate) fn parse_profile(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
+fn parse_chain_name(value: &str) -> Result<aster_acme::issuance::ChainName, String> {
+    aster_acme::issuance::ChainName::new(value).map_err(|error| error.to_string())
+}
+
 fn parse_certificate_name(value: &str) -> Result<String, String> {
     aster_acme::issuance::CertificateName::new(value)
         .map(|name| name.as_str().to_owned())
@@ -321,4 +348,40 @@ fn profile_names_reject_emptiness_control_characters_and_multibyte_names_pass() 
     // advertise multibyte names (22 chars of 型 = 66 bytes) and must parse.
     let multibyte = "\u{578b}".repeat(22);
     assert_eq!(parse_profile(&multibyte).unwrap().as_str(), multibyte);
+}
+
+#[test]
+fn chain_flags_are_mutually_exclusive_and_off_resume() {
+    let command = IssueArgs::augment_args(clap::Command::new("issue"));
+    let parse = |arguments: &[&str]| {
+        command
+            .clone()
+            .try_get_matches_from(arguments.to_vec())
+            .is_ok()
+    };
+    assert!(parse(&["issue", "--chain", "ISRG Root X1"]));
+    assert!(parse(&["issue", "--preferred-chain", "ISRG Root X1"]));
+    assert!(parse(&["issue", "--default-chain"]));
+    assert!(!parse(&[
+        "issue",
+        "--preferred-chain",
+        "X",
+        "--default-chain"
+    ]));
+    assert!(parse(&["issue", "--resume", "web", "--chain", "X"]));
+    assert!(parse(&[
+        "issue",
+        "--resume",
+        "web",
+        "--preferred-chain",
+        "X"
+    ]));
+}
+
+#[test]
+fn chain_names_accept_distinguished_and_common_names_but_reject_unsafe_input() {
+    parse_chain_name("CN=ISRG Root X1,O=ISRG,C=US").unwrap();
+    parse_chain_name("ISRG Root X1").unwrap();
+    assert!(parse_chain_name("").is_err());
+    assert!(parse_chain_name("root\nx1").is_err());
 }

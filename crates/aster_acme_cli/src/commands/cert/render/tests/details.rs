@@ -103,3 +103,21 @@ fn authorization_details_escape_materials_and_keep_wildcard_and_status_observati
             .contains("127.0.0.1:80")
     );
 }
+
+#[test]
+fn request_details_display_the_published_chain_and_preference() {
+    use aster_acme::issuance::{ChainIdentity, ChainName, ChainSelection};
+    let mut record = detailed_record();
+    record.chain_selection = Some(ChainSelection::Named {
+        chain: ChainName::new("Root CA").unwrap(),
+        remember: true,
+    });
+    record.selected_chain = Some(ChainIdentity {
+        dn: "CN=Root CA,O=Issuer".into(),
+        common_name: Some("Root CA".into()),
+        fingerprint_sha256: "ab".repeat(32),
+    });
+    let text = request_lines(&record, record.created_at, false).join("\n");
+    assert!(text.contains("Preferred chain:") && text.contains("Published chain:"));
+    assert!(text.contains(&format!("CN=Root CA,O=Issuer (sha256:{})", "ab".repeat(32))));
+}

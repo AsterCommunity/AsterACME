@@ -474,6 +474,7 @@ async fn cleanup_filters_legacy_foreign_idle_and_nonterminal_requests() {
         ("nonterminal", "dns_provider", "prod", true),
     ] {
         let request = aster_acme::issuance::IssueRequest {
+            chain_selection: None,
             challenge: aster_acme::challenge::ChallengeKind::Dns01,
             solver_id: solver.into(),
             solver_config: if solver == "dns_provider" && provider == "prod" {
@@ -557,6 +558,7 @@ async fn cleanup_records_open_failures_and_continues_to_later_matching_certifica
     let mut held = Vec::new();
     for name in ["a-locked", "b-available"] {
         let request = aster_acme::issuance::IssueRequest {
+            chain_selection: None,
             challenge: aster_acme::challenge::ChallengeKind::Dns01,
             solver_id: "dns_provider".into(),
             solver_config: config.clone(),

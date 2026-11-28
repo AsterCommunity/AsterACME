@@ -33,7 +33,7 @@ python3 scripts/check-precheck-features.py
 
 证书报告的字节级回归用例位于 `crates/aster_acme_cli/src/commands/cert/render/tests/contract.rs`，快照来自模块拆分前的 `26ef130`，覆盖文本、颜色和 JSON 输出以及对应退出状态；ActionRequired 文本提示有意追加精确 `--operation`，对应两项基准已定点更新。预期路径仅按宿主路径分隔符适配，不修改实际输出；报告有意变更时应先核对 [CLI 契约](cli-contract.md)，不要在结构重构中重新生成快照掩盖差异。
 
-覆盖率由 CI 的 Linux `coverage` 任务收集：先用 `cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report` 运行普通测试，再在相同 `CARGO_TARGET_DIR` / `CARGO_LLVM_COV_TARGET_DIR` 中追加下文的账户与 PKCS#12 PTY 数据，最后以独立步骤运行 `cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info` 导出合并报告，发布摘要并上传 Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
+覆盖率由 CI 的 Linux `coverage` 任务收集：先用 `cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report` 运行普通测试，再在相同 `CARGO_TARGET_DIR` / `CARGO_LLVM_COV_TARGET_DIR` 中追加账户、PKCS#12 与证书链 PTY 数据，最后以独立步骤运行 `cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info` 导出合并报告，发布摘要并上传 Codecov（flag `rust`）。本地复现需先`rustup component add llvm-tools-preview`并安装`cargo-llvm-cov`；`coverage/`输出不入库。
 
 ## 证据记录
 
@@ -60,3 +60,5 @@ DNS 后端测试包括：registry 重复/未知 ID、编译 feature 集合、写
 阿里云与 DNSPod 的 mock 测试验证签名字节、分页、所有权和清理边界。CLI 的 `signed_rpc` 测试把真实文件 checkpoint、跨进程租约、厂商 HTTP mock 和 ACME loopback 服务组合在同一签发流程中。覆盖已持久化 ID、创建响应丢失、恢复、TTL 回读和限频下限。独立 feature 矩阵验证未启用、单厂商启用和 registry 一致性。
 
 华为云测试对照官方 HWS GET/POST 签名向量，验证 marker 分页、TXT 引号/转义、多 publication 同 owner、意图与 ID 恢复、描述保留、最后一个值删除、变更身份拒绝、有界冲突与 pending、限频脱敏。CLI `signed_rpc` 同时覆盖华为云文件恢复、跨进程争用、丢响应和取消后的 ACME loopback 签发/清理。它证明本地契约，不证明云端 CAS 或真实厂商/公网 CA 验收。
+
+证书链交互使用统一颜色与 Esc/上下键语义的 bounded 终端控件；默认项、候选映射、取消、deadline 和 termios 恢复由 CLI 单测与 `scripts/test-chain-terminal.py` 覆盖。

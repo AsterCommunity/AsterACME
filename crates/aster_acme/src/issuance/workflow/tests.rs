@@ -26,7 +26,12 @@ use wiremock::{
     matchers::{method, path},
 };
 
-struct Session(Mutex<IssueRecord>, Mutex<Option<Vec<u8>>>);
+struct Session(
+    Mutex<IssueRecord>,
+    Mutex<Option<Vec<u8>>>,
+    Vec<u8>,
+    std::sync::atomic::AtomicBool,
+);
 #[async_trait]
 impl IssueSession for Session {
     async fn record(&self) -> Result<IssueRecord, IssueError> {
@@ -40,26 +45,39 @@ impl IssueSession for Session {
         Ok(b"fixed-csr".to_vec())
     }
 
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        Ok(self.2.clone())
+    }
+
     async fn complete(
         &self,
         record: &IssueRecord,
         chain: &[u8],
     ) -> Result<IssueRecord, IssueError> {
+        assert_eq!(
+            self.0.lock().unwrap().phase,
+            aster_acme_core::workflow::IssuancePhase::Downloading
+        );
+        if self.3.swap(false, Ordering::SeqCst) {
+            return Err(IssueError::InvalidInput("injected completion failure"));
+        }
         let mut completed = record.clone();
         let now = time::OffsetDateTime::now_utc();
         completed.is_in_use = true;
-        completed.renewal = Some(crate::renewal::RenewalPlan {
-            certificate_id: Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
-            not_before: now - time::Duration::days(30),
-            not_after: now + time::Duration::days(60),
-            renew_at: now - time::Duration::seconds(1),
-            source: crate::renewal::RenewalSource::Fallback,
-            suggested_window: None,
-            explanation_url: None,
-            last_checked_at: None,
-            next_check_at: None,
-            last_query_failed: false,
-        });
+        if completed.renewal.is_none() {
+            completed.renewal = Some(crate::renewal::RenewalPlan {
+                certificate_id: Some("aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE".into()),
+                not_before: now - time::Duration::days(30),
+                not_after: now + time::Duration::days(60),
+                renew_at: now - time::Duration::seconds(1),
+                source: crate::renewal::RenewalSource::Fallback,
+                suggested_window: None,
+                explanation_url: None,
+                last_checked_at: None,
+                next_check_at: None,
+                last_query_failed: false,
+            });
+        }
         *self.0.lock().unwrap() = completed.clone();
         *self.1.lock().unwrap() = Some(chain.to_vec());
         Ok(completed)
@@ -104,12 +122,13 @@ struct Observer {
 }
 impl crate::issuance::progress::IssueObserver for Observer {
     fn observe(&self, event: &crate::issuance::progress::IssueEvent) {
-        if matches!(
-            event,
-            crate::issuance::progress::IssueEvent::CreatingOrder { .. }
-        ) {
-            self.stages.lock().unwrap().push("new-order");
-        }
+        use crate::issuance::progress::IssueEvent;
+        let stage = match event {
+            IssueEvent::CreatingOrder { .. } => "new-order",
+            IssueEvent::CertificateSaved { .. } => "saved",
+            _ => return,
+        };
+        self.stages.lock().unwrap().push(stage);
     }
 }
 impl WorkflowObserver for Observer {
@@ -125,7 +144,57 @@ struct Fixture {
     identity: IssueIdentity,
     session: Session,
     observer: Arc<Observer>,
+    /// Leaf and issuing intermediate.
+    issued_chain: Vec<u8>,
+    /// Second valid chain over the same leaf, advertised via rel="alternate".
+    alternate_chain: Vec<u8>,
 }
+
+/// PEM leaf signed by the same fixed key the CSR used, so mock CA responses
+/// satisfy the download stage's key/identifier validation.
+fn certificate_chain(key_der: &[u8], common_name: &'static str) -> Vec<u8> {
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+    let key = KeyPair::try_from(key_der).unwrap();
+    let mut params = CertificateParams::new(Vec::new()).unwrap();
+    params.distinguished_name = DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, common_name);
+    params.subject_alt_names = vec![SanType::DnsName("example.com".try_into().unwrap())];
+    let now = time::OffsetDateTime::now_utc();
+    params.not_before = now - time::Duration::days(1);
+    params.not_after = now + time::Duration::days(89);
+    params.self_signed(&key).unwrap().pem().into_bytes()
+}
+fn shared_leaf_chains(key_der: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+    let leaf_key = KeyPair::try_from(key_der).unwrap();
+    let ca_params = |name: &str| {
+        let mut params = CertificateParams::new(Vec::new()).unwrap();
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.distinguished_name.push(DnType::CommonName, name);
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params
+    };
+    let root_key = KeyPair::generate().unwrap();
+    let root_params = ca_params("Mock Alternate CA");
+    let root = root_params.self_signed(&root_key).unwrap();
+    let root_issuer = Issuer::new(root_params, root_key);
+    let intermediate_key = KeyPair::generate().unwrap();
+    let intermediate_params = ca_params("Mock Default CA");
+    let intermediate = intermediate_params
+        .signed_by(&intermediate_key, &root_issuer)
+        .unwrap();
+    let intermediate_issuer = Issuer::new(intermediate_params, intermediate_key);
+    let leaf = CertificateParams::new(vec!["example.com".into()])
+        .unwrap()
+        .signed_by(&leaf_key, &intermediate_issuer)
+        .unwrap();
+    let default = format!("{}{}", leaf.pem(), intermediate.pem());
+    let alternate = format!("{default}{}", root.pem());
+    (default.into_bytes(), alternate.into_bytes())
+}
+
 impl Fixture {
     async fn new() -> Self {
         let server = MockServer::start().await;
@@ -155,12 +224,27 @@ impl Fixture {
         let signer = Arc::new(SoftwareSigningKey::generate(KeyAlgorithm::EcdsaP256).unwrap());
         let thumbprint = signer.jwk().unwrap().thumbprint().unwrap();
         let account: AccountRecord = serde_json::from_value(serde_json::json!({"key_algorithm":"ecdsa-p256","account_id":"a".repeat(43),"directory_url":url("/directory"),"key_thumbprint":thumbprint,"account_url":url("/account/1"),"contacts":[],"server_contacts":null,"last_status":"valid","deactivation":"not_requested","key_rotation":null,"accepted_terms_url":null,"state":"registered"})).unwrap();
-        let record: IssueRecord = serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":account.account_id,"directory":url("/directory"),"account_url":url("/account/1"),"account_thumbprint":thumbprint,"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted"})).unwrap();
+        let record: IssueRecord = serde_json::from_value(serde_json::json!({"operation_id":"a".repeat(43),"name":"web","created_at":"2026-11-12T00:00:00Z","account_name":"default","account_id":account.account_id,"directory":url("/directory"),"account_url":url("/account/1"),"account_thumbprint":thumbprint,"key_algorithm":"ecdsa-p256","identifiers":["example.com"],"solver_id":"manual_dns","solver_config":{},"challenge":"dns-01","phase":"creating_order","new_order_intent_saved":false,"authorizations":[],"finalize_submitted":"not_submitted","renewal":{"certificate_id":"aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE","not_before":"2026-11-01T00:00:00Z","not_after":"2099-01-01T00:00:00Z","renew_at":"2099-01-01T00:00:00Z","source":"fallback","suggested_window":null,"explanation_url":null,"last_checked_at":null,"next_check_at":"2099-01-01T00:00:00Z","last_query_failed":false}})).unwrap();
+        let material = crate::issuance::certificate::generate(
+            &[crate::identifier::Identifier::Dns(
+                crate::identifier::DnsIdentifier::new("example.com").unwrap(),
+            )],
+            KeyAlgorithm::EcdsaP256,
+        )
+        .unwrap();
+        let (issued_chain, alternate_chain) = shared_leaf_chains(&material.key);
         Self {
             server,
             identity: IssueIdentity { account, signer },
-            session: Session(Mutex::new(record), Mutex::new(None)),
+            session: Session(
+                Mutex::new(record),
+                Mutex::new(None),
+                material.key.to_vec(),
+                std::sync::atomic::AtomicBool::new(false),
+            ),
             observer: Arc::new(Observer::default()),
+            issued_chain,
+            alternate_chain,
         }
     }
     fn identity(&self) -> IssueIdentity {
@@ -180,6 +264,12 @@ impl Fixture {
         )
         .unwrap()
         .with_observer(self.observer.clone())
+    }
+    fn workflow_with_selector(
+        &self,
+        selector: Arc<dyn crate::issuance::ChainSelector>,
+    ) -> Workflow {
+        self.workflow().with_chain_selector(selector)
     }
     async fn count(&self, target: &str) -> usize {
         self.server
@@ -231,6 +321,30 @@ async fn discovers_then_drives_protocol_and_always_shuts_down_without_recreating
 }
 
 async fn mount_complete_ca(f: &Fixture) {
+    mount_protocol(f).await;
+    mount_certificate(f, None, 0).await;
+}
+
+/// Response the single alternate URL offers; `None` keeps a single-chain CA.
+#[derive(Clone, Copy)]
+enum AlternateResponse {
+    Valid,
+    ServerError,
+    WrongCertificate,
+    DifferentLeafSameKey,
+    TooManyLinks,
+}
+
+async fn mount_chain_ca(
+    f: &Fixture,
+    alternate: AlternateResponse,
+    expected_alternate_requests: usize,
+) {
+    mount_protocol(f).await;
+    mount_certificate(f, Some(alternate), expected_alternate_requests).await;
+}
+
+async fn mount_protocol(f: &Fixture) {
     let url = |suffix: &str| format!("{}{suffix}", f.server.uri());
     Mock::given(method("GET"))
         .and(path("/directory"))
@@ -281,7 +395,7 @@ async fn mount_complete_ca(f: &Fixture) {
             }
         })
         .with_priority(1)
-        .expect(2)
+        .expect(2..=3)
         .mount(&f.server)
         .await;
     Mock::given(method("POST"))
@@ -290,25 +404,76 @@ async fn mount_complete_ca(f: &Fixture) {
         .expect(1)
         .mount(&f.server)
         .await;
-    Mock::given(method("POST"))
-        .and(path("/certificate"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header(
-                    "Content-Type",
-                    "application/pem-certificate-chain; charset=utf-8",
-                )
-                .set_body_bytes(
-                    b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n".to_vec(),
-                ),
-        )
-        .expect(1)
-        .mount(&f.server)
-        .await;
     Mock::given(method("GET"))
         .and(path("/ari/aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"))
         .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .mount(&f.server)
+        .await;
+}
+
+async fn mount_certificate(
+    f: &Fixture,
+    alternate: Option<AlternateResponse>,
+    expected_alternate_requests: usize,
+) {
+    let url = |suffix: &str| format!("{}{suffix}", f.server.uri());
+    let certificate = ResponseTemplate::new(200)
+        .insert_header(
+            "Content-Type",
+            "application/pem-certificate-chain; charset=utf-8",
+        )
+        .set_body_bytes(f.issued_chain.clone());
+    let certificate = if matches!(alternate, Some(AlternateResponse::TooManyLinks)) {
+        let mut certificate = certificate;
+        for index in 1..=9 {
+            certificate = certificate.append_header(
+                "Link",
+                format!(
+                    r#"<{}>; rel="alternate""#,
+                    url(&format!("/acme/alt/{index}"))
+                ),
+            );
+        }
+        certificate
+    } else if alternate.is_some() {
+        certificate.insert_header(
+            "Link",
+            format!(r#"<{}/acme/alt/1>; rel="alternate""#, url("")),
+        )
+    } else {
+        certificate
+    };
+    Mock::given(method("POST"))
+        .and(path("/certificate"))
+        .respond_with(certificate)
         .expect(1)
+        .mount(&f.server)
+        .await;
+    let Some(alternate) = alternate else { return };
+    let response = match alternate {
+        AlternateResponse::Valid => ResponseTemplate::new(200)
+            .insert_header("Content-Type", "application/pem-certificate-chain")
+            .set_body_bytes(f.alternate_chain.clone()),
+        AlternateResponse::ServerError => ResponseTemplate::new(500),
+        AlternateResponse::DifferentLeafSameKey => ResponseTemplate::new(200)
+            .insert_header("Content-Type", "application/pem-certificate-chain")
+            .set_body_bytes(certificate_chain(&f.session.2, "Different Leaf")),
+        AlternateResponse::TooManyLinks => return,
+        AlternateResponse::WrongCertificate => {
+            use rcgen::KeyPair;
+            let wrong_key = KeyPair::generate().unwrap();
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "application/pem-certificate-chain")
+                .set_body_bytes(certificate_chain(
+                    wrong_key.serialize_der().as_slice(),
+                    "Wrong Leaf",
+                ))
+        }
+    };
+    Mock::given(method("POST"))
+        .and(path("/acme/alt/1"))
+        .respond_with(response)
+        .expect(expected_alternate_requests as u64)
         .mount(&f.server)
         .await;
 }
@@ -337,6 +502,8 @@ async fn cancel_when_ari_is_requested(server: &MockServer, cancellation: Cancell
 async fn finalize_download_and_complete_follow_the_real_http_transport() {
     let mut f = Fixture::new().await;
     mount_complete_ca(&f).await;
+    // Clear the fixture's undiue plan so this case exercises the real ARI query.
+    f.session.0.lock().unwrap().renewal = None;
     let solver = Solver(AtomicUsize::new(0), true);
     let workflow = f.workflow();
     let identity = f.identity();
@@ -374,9 +541,21 @@ async fn finalize_download_and_complete_follow_the_real_http_transport() {
     let IssueOutcome::Completed { record, .. } = result.unwrap() else {
         panic!("workflow did not complete after recording the advisory cancellation");
     };
+    // The promoted chain is the validated response body, not raw wire bytes.
     assert_eq!(
         f.session.1.lock().unwrap().as_deref(),
-        Some(b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n".as_slice())
+        Some(f.issued_chain.as_slice())
+    );
+    assert!(record.selected_chain.is_some());
+    assert_eq!(
+        f.observer
+            .stages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|stage| **stage == "saved")
+            .count(),
+        1
     );
     assert_eq!(f.count("/finalize").await, 1);
     assert_eq!(f.count("/certificate").await, 1);
@@ -662,4 +841,387 @@ async fn cancellation_during_discovery_stops_without_submitting_order_and_releas
     assert!(matches!(running.await, Err(IssueError::Cancelled)));
     assert_eq!(solver.0.load(Ordering::SeqCst), 1);
     assert_eq!(f.count("/create").await, 0);
+}
+/// One decision per invocation: the selector records what it saw and returns
+/// the configured decision, so tests assert the offered candidates exactly.
+struct FixedSelector {
+    decision: crate::issuance::ChainDecision,
+    seen: Mutex<Vec<(bool, String)>>,
+    requested: Mutex<Option<String>>,
+}
+impl crate::issuance::ChainSelector for FixedSelector {
+    fn select(
+        &self,
+        requested: Option<&crate::issuance::ChainName>,
+        candidates: &[crate::issuance::ChainCandidate],
+        _: &ExecutionContext,
+    ) -> Result<crate::issuance::ChainDecision, IssueError> {
+        *self.requested.lock().unwrap() = requested.map(|name| name.as_str().to_owned());
+        *self.seen.lock().unwrap() = candidates
+            .iter()
+            .map(|candidate| (candidate.is_default, candidate.identity.dn.clone()))
+            .collect();
+        Ok(self.decision.clone())
+    }
+}
+
+const DEFAULT_DN: &str = "CN=Mock Default CA";
+const ALTERNATE_DN: &str = "CN=Mock Alternate CA";
+
+async fn run_to_completion(f: &mut Fixture, workflow: Workflow) -> IssueRecord {
+    let solver = Solver(AtomicUsize::new(0), true);
+    let identity = f.identity();
+    let mut context = execution();
+    context.context.deadline = Instant::now() + Duration::from_secs(30);
+    let outcome = workflow
+        .run(identity, &mut f.session, &solver, &context)
+        .await
+        .unwrap();
+    let IssueOutcome::Completed { record, .. } = outcome else {
+        panic!("expected a completed issuance");
+    };
+    *record
+}
+
+fn set_selection(f: &Fixture, selection: Option<crate::issuance::ChainSelection>) {
+    f.session.0.lock().unwrap().chain_selection = selection;
+}
+
+#[tokio::test]
+async fn no_preference_and_no_selector_fetches_only_the_default_chain() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 0).await;
+    let workflow = f.workflow();
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(f.count("/certificate").await, 1);
+    assert_eq!(f.count("/acme/alt/1").await, 0);
+    assert!(record.selected_chain.is_some());
+    assert_eq!(record.chain_selection, None);
+}
+
+#[tokio::test]
+async fn explicit_ca_default_never_downloads_alternates() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::TooManyLinks, 0).await;
+    set_selection(&f, Some(crate::issuance::ChainSelection::Default));
+    let workflow = f.workflow();
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(f.count("/acme/alt/1").await, 0);
+    assert_eq!(
+        record.chain_selection,
+        Some(crate::issuance::ChainSelection::Default)
+    );
+}
+
+#[tokio::test]
+async fn a_preference_matching_the_default_chain_skips_the_fetch() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 0).await;
+    set_selection(
+        &f,
+        Some(crate::issuance::ChainSelection::Named {
+            chain: crate::issuance::ChainName::new(DEFAULT_DN).unwrap(),
+            remember: true,
+        }),
+    );
+    let workflow = f.workflow();
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(f.count("/acme/alt/1").await, 0);
+    assert_eq!(
+        record
+            .selected_chain
+            .as_ref()
+            .map(|chain| chain.dn.as_str()),
+        Some(DEFAULT_DN)
+    );
+}
+
+#[tokio::test]
+async fn a_preference_matches_an_alternate_by_common_name_fallback() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 1).await;
+    set_selection(
+        &f,
+        Some(crate::issuance::ChainSelection::Named {
+            chain: crate::issuance::ChainName::new("mock alternate ca").unwrap(),
+            remember: true,
+        }),
+    );
+    let workflow = f.workflow();
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(f.count("/acme/alt/1").await, 1);
+    assert_eq!(
+        record
+            .selected_chain
+            .as_ref()
+            .map(|chain| chain.dn.as_str()),
+        Some(ALTERNATE_DN)
+    );
+}
+
+#[tokio::test]
+async fn an_unmatched_preference_without_a_selector_fails_closed_without_reordering() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 1).await;
+    set_selection(
+        &f,
+        Some(crate::issuance::ChainSelection::Named {
+            chain: crate::issuance::ChainName::new("ISRG Root X9").unwrap(),
+            remember: false,
+        }),
+    );
+    let solver = Solver(AtomicUsize::new(0), true);
+    let mut context = execution();
+    context.context.deadline = Instant::now() + Duration::from_secs(30);
+    let error = f
+        .workflow()
+        .run(f.identity(), &mut f.session, &solver, &context)
+        .await
+        .err()
+        .expect("issuance must fail with ChainUnavailable");
+    let IssueError::ChainUnavailable {
+        requested,
+        available,
+    } = error
+    else {
+        panic!("expected ChainUnavailable, got {error:?}");
+    };
+    assert_eq!(requested, "ISRG Root X9");
+    assert_eq!(available, [DEFAULT_DN, ALTERNATE_DN]);
+    // The certificate was issued; the order must not be recreated to retry.
+    assert_eq!(f.count("/finalize").await, 1);
+    assert_eq!(f.count("/create").await, 1);
+    assert!(matches!(
+        f.session.0.lock().unwrap().phase,
+        aster_acme_core::workflow::IssuancePhase::Downloading
+    ));
+}
+
+#[tokio::test]
+async fn an_unavailable_soft_preference_falls_back_to_the_ca_default() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 1).await;
+    set_selection(
+        &f,
+        Some(crate::issuance::ChainSelection::Named {
+            chain: crate::issuance::ChainName::new("ISRG Root X9").unwrap(),
+            remember: true,
+        }),
+    );
+    let workflow = f.workflow();
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(
+        record
+            .selected_chain
+            .as_ref()
+            .map(|chain| chain.dn.as_str()),
+        Some(DEFAULT_DN)
+    );
+    assert_eq!(
+        record.chain_selection,
+        Some(crate::issuance::ChainSelection::Named {
+            chain: crate::issuance::ChainName::new("ISRG Root X9").unwrap(),
+            remember: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn selector_sees_validated_candidates_and_the_decision_becomes_the_definition() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 1).await;
+    let selector = Arc::new(FixedSelector {
+        decision: crate::issuance::ChainDecision::Selected {
+            index: 1,
+            remember: true,
+        },
+        seen: Mutex::new(Vec::new()),
+        requested: Mutex::new(None),
+    });
+    let workflow = f.workflow_with_selector(selector.clone());
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(f.count("/acme/alt/1").await, 1);
+    assert_eq!(
+        *selector.requested.lock().unwrap(),
+        None,
+        "no explicit preference was in place"
+    );
+    assert_eq!(
+        *selector.seen.lock().unwrap(),
+        vec![
+            (true, DEFAULT_DN.to_owned()),
+            (false, ALTERNATE_DN.to_owned())
+        ]
+    );
+    assert_eq!(
+        record
+            .selected_chain
+            .as_ref()
+            .map(|chain| chain.dn.as_str()),
+        Some(ALTERNATE_DN)
+    );
+    // The interactive decision is written back as the inherited definition.
+    assert_eq!(
+        record.chain_selection,
+        Some(crate::issuance::ChainSelection::Named {
+            chain: crate::issuance::ChainName::new(ALTERNATE_DN).unwrap(),
+            remember: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn selector_default_decision_records_an_explicit_ca_default() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 1).await;
+    let selector = Arc::new(FixedSelector {
+        decision: crate::issuance::ChainDecision::DefaultChain,
+        seen: Mutex::new(Vec::new()),
+        requested: Mutex::new(None),
+    });
+    let workflow = f.workflow_with_selector(selector);
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(
+        record.chain_selection,
+        Some(crate::issuance::ChainSelection::Default)
+    );
+}
+
+#[tokio::test]
+async fn selector_abandon_cancels_resumably_after_the_certificate_was_issued() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::Valid, 1).await;
+    let selector = Arc::new(FixedSelector {
+        decision: crate::issuance::ChainDecision::Abandon,
+        seen: Mutex::new(Vec::new()),
+        requested: Mutex::new(None),
+    });
+    let solver = Solver(AtomicUsize::new(0), true);
+    let mut context = execution();
+    context.context.deadline = Instant::now() + Duration::from_secs(30);
+    let error = f
+        .workflow_with_selector(selector)
+        .run(f.identity(), &mut f.session, &solver, &context)
+        .await
+        .err()
+        .expect("abandoned issuance must fail cancelled");
+    assert!(matches!(error, IssueError::Cancelled));
+    assert_eq!(f.count("/finalize").await, 1);
+    // The checkpoint stays resumable: no promotion, no order recreation.
+    assert_eq!(f.count("/certificate").await, 1);
+    assert!(f.session.1.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn failed_alternates_are_dropped_without_endangering_the_default_chain() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::ServerError, 1).await;
+    let selector = Arc::new(FixedSelector {
+        decision: crate::issuance::ChainDecision::DefaultChain,
+        seen: Mutex::new(Vec::new()),
+        requested: Mutex::new(None),
+    });
+    let workflow = f.workflow_with_selector(selector.clone());
+    let record = run_to_completion(&mut f, workflow).await;
+    assert_eq!(f.count("/acme/alt/1").await, 1);
+    // The broken candidate is dropped during fetch; with no valid alternate
+    // left there is no choice to offer, so the selector is never consulted.
+    assert_eq!(*selector.seen.lock().unwrap(), Vec::new());
+    assert_eq!(
+        record
+            .selected_chain
+            .as_ref()
+            .map(|chain| chain.dn.as_str()),
+        Some(DEFAULT_DN)
+    );
+}
+
+#[tokio::test]
+async fn a_mismatched_alternate_leaf_is_rejected_before_selection() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::WrongCertificate, 1).await;
+    let selector = Arc::new(FixedSelector {
+        decision: crate::issuance::ChainDecision::Selected {
+            index: 1,
+            remember: false,
+        },
+        seen: Mutex::new(Vec::new()),
+        requested: Mutex::new(None),
+    });
+    let workflow = f.workflow_with_selector(selector.clone());
+    let record = run_to_completion(&mut f, workflow).await;
+    // The hostile leaf is dropped during validation: with no valid alternates
+    // left there is no choice to offer, so the selector is never consulted.
+    assert_eq!(*selector.seen.lock().unwrap(), Vec::new());
+    assert_eq!(
+        record
+            .selected_chain
+            .as_ref()
+            .map(|chain| chain.dn.as_str()),
+        Some(DEFAULT_DN)
+    );
+}
+
+#[tokio::test]
+async fn an_alternate_with_a_different_leaf_sharing_the_key_is_rejected() {
+    let mut f = Fixture::new().await;
+    mount_chain_ca(&f, AlternateResponse::DifferentLeafSameKey, 1).await;
+    let selector = Arc::new(FixedSelector {
+        decision: crate::issuance::ChainDecision::Selected {
+            index: 1,
+            remember: false,
+        },
+        seen: Mutex::new(Vec::new()),
+        requested: Mutex::new(None),
+    });
+    let workflow = f.workflow_with_selector(selector.clone());
+    let record = run_to_completion(&mut f, workflow).await;
+    assert!(selector.seen.lock().unwrap().is_empty());
+    assert_eq!(record.selected_chain.unwrap().dn, DEFAULT_DN);
+    assert_eq!(f.count("/acme/alt/1").await, 1);
+}
+
+#[tokio::test]
+async fn completion_failure_leaves_the_issued_order_resumable() {
+    let mut f = Fixture::new().await;
+    mount_protocol(&f).await;
+    Mock::given(method("POST"))
+        .and(path("/certificate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "application/pem-certificate-chain")
+                .set_body_bytes(f.issued_chain.clone()),
+        )
+        .expect(2)
+        .mount(&f.server)
+        .await;
+    f.session.3.store(true, Ordering::SeqCst);
+    let solver = Solver(AtomicUsize::new(0), true);
+    let mut context = execution();
+    context.context.deadline = Instant::now() + Duration::from_secs(30);
+    let error = f
+        .workflow()
+        .run(f.identity(), &mut f.session, &solver, &context)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        IssueError::InvalidInput("injected completion failure")
+    ));
+    let saved = f.session.record().await.unwrap();
+    assert_eq!(
+        saved.phase,
+        aster_acme_core::workflow::IssuancePhase::Downloading
+    );
+    assert!(saved.selected_chain.is_none());
+    assert!(f.session.1.lock().unwrap().is_none());
+    assert!(!f.observer.stages.lock().unwrap().contains(&"saved"));
+    // Resume reads the same order and downloads its certificate again.
+    let workflow = f.workflow();
+    let result = run_to_completion(&mut f, workflow).await;
+    assert_eq!(result.selected_chain.unwrap().dn, DEFAULT_DN);
+    assert_eq!(f.count("/certificate").await, 2);
+    assert_eq!(f.count("/create").await, 1);
+    assert_eq!(f.count("/finalize").await, 1);
 }

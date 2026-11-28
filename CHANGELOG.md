@@ -6,6 +6,8 @@
 
 ### Added
 
+- **Alternate certificate chains (#13)** — Discover and validate same-leaf alternate chains from the certificate response's `Link; rel="alternate"` headers. `cert issue --chain CHAIN` selects a one-time chain, `--preferred-chain CHAIN` selects and saves a soft renewal preference, and `--default-chain` follows the current CA default without changing the saved preference. Interactive issuance separates chain selection from the default-No soft-preference confirmation. Missing soft preferences fall back to the CA default with a warning; unavailable one-time selections remain resumable without a new order. Each generation records the published chain identity; alternate URLs are never persisted.
+
 - **PKCS#12 deployment (#55)** — Publish chain and private-key bundles with `cert deploy add/update --p12-path`, using key permissions and the existing prepare-before-publish pipeline. Bindings store exclusive environment/file password references only; use a 0600 password file for the daemon or a transient password during interactive explicit run. Automatic execution without a source fails without retries, JSON excludes password values, and directory targets retain the four PEM files.
 
 - **Embedded library issuance adapters (#48)** — Keep the example's account and issuance adapters self-contained in `aster_acme`, with focused in-memory boundary tests.

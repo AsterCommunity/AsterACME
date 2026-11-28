@@ -101,6 +101,9 @@ pub struct IssueRequest {
     /// `None`
     /// keeps the CA default. Fixed for the lifetime of this definition.
     pub profile: Option<String>,
+    /// Per-operation chain-selection intent. A concrete selection can be
+    /// marked for retention as the definition's soft renewal preference.
+    pub chain_selection: Option<crate::issuance::chain::ChainSelection>,
     /// Stable local account name, never transmitted to the CA.
     pub account_name: String,
 }

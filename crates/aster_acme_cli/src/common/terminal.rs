@@ -3,8 +3,40 @@
 use crate::common::error::CliResult;
 use std::{
     fmt,
-    io::{self, IsTerminal},
+    io::{self, IsTerminal, Write},
+    time::{Duration, Instant},
 };
+
+struct RawModeGuard(bool);
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+}
+
+fn wrap_terminal_text(value: &str, max_width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar as _;
+
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut width = 0usize;
+    for character in value.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if width > 0 && width + character_width > max_width {
+            lines.push(std::mem::take(&mut line));
+            width = 0;
+        }
+        line.push(character);
+        width += character_width;
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
 
 /// A declined prompt or Ctrl-C is a user cancellation, distinct from an operation failure.
 #[derive(Debug)]
@@ -87,6 +119,136 @@ pub(crate) fn select_index_or_back(
         Err(inquire::InquireError::OperationInterrupted) => Err(Box::new(Canceled)),
         Err(error) => Err(Box::new(error)),
         Ok(chosen) => Ok(Some(chosen.index)),
+    }
+}
+
+pub(crate) fn select_index_or_back_bounded(
+    message: &str,
+    choices: &[String],
+    default: usize,
+    output: &crate::common::session::OutputSession,
+    execution: &aster_acme::solver::ExecutionContext,
+) -> Result<Option<usize>, aster_acme::issuance::IssueError> {
+    use aster_acme::issuance::IssueError;
+    use crossterm::{
+        cursor::{MoveToColumn, MoveUp},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+        terminal::{self, Clear, ClearType},
+    };
+
+    if choices.is_empty() || default >= choices.len() {
+        return Err(IssueError::InvalidInput("invalid terminal choices"));
+    }
+    execution.check().map_err(IssueError::from)?;
+    output.interaction_started();
+    let terminal_issue = |error: io::Error| {
+        IssueError::Publication(format!("chain selection terminal failed: {error}"))
+    };
+    let restore_raw = !terminal::is_raw_mode_enabled().map_err(&terminal_issue)?;
+    if restore_raw {
+        terminal::enable_raw_mode().map_err(&terminal_issue)?;
+    }
+    let raw_mode = RawModeGuard(restore_raw);
+    let mut writer = io::stderr().lock();
+    let mut selected = default;
+    let mut rendered_lines = 0usize;
+    let result = (|| {
+        loop {
+            execution.check().map_err(IssueError::from)?;
+            if rendered_lines > 0 {
+                let lines = u16::try_from(rendered_lines)
+                    .map_err(|_| IssueError::InvalidInput("too many terminal choices"))?;
+                crossterm::queue!(
+                    writer,
+                    MoveUp(lines),
+                    MoveToColumn(0),
+                    Clear(ClearType::FromCursorDown)
+                )
+                .map_err(terminal_issue)?;
+            }
+            write!(writer, "{message}\r\n").map_err(terminal_issue)?;
+            let width = terminal::size().map_err(&terminal_issue)?.0.max(1) as usize;
+            let wrap_width = width.saturating_sub(2).max(1);
+            let mut option_lines = 0usize;
+            for (index, choice) in choices.iter().enumerate() {
+                let marker = if index == selected { "> " } else { "  " };
+                let marker = crate::common::output::styled(
+                    marker,
+                    crate::common::output::Style::BoldCyan,
+                    output.diagnostic_format().color,
+                );
+                let label = format!("{marker}{choice}");
+                let chunks = wrap_terminal_text(&label, wrap_width);
+                option_lines += chunks.len();
+                for chunk in chunks {
+                    write!(writer, "{chunk}\r\n").map_err(terminal_issue)?;
+                }
+            }
+            let hint = crate::common::output::styled(
+                "  ↑↓ move · Enter select · Esc cancel",
+                crate::common::output::Style::Cyan,
+                output.diagnostic_format().color,
+            );
+            write!(writer, "{hint}\r\n").map_err(terminal_issue)?;
+            writer.flush().map_err(terminal_issue)?;
+            rendered_lines = option_lines + 2;
+
+            while !event::poll(
+                Duration::from_millis(50)
+                    .min(execution.deadline.saturating_duration_since(Instant::now())),
+            )
+            .map_err(terminal_issue)?
+            {
+                execution.check().map_err(IssueError::from)?;
+            }
+            execution.check().map_err(IssueError::from)?;
+            let Event::Key(key) = event::read().map_err(terminal_issue)? else {
+                continue;
+            };
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+            match key.code {
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Err(IssueError::Cancelled);
+                }
+                KeyCode::Enter => return Ok(Some(selected)),
+                KeyCode::Up => selected = selected.checked_sub(1).unwrap_or(choices.len() - 1),
+                KeyCode::Down => selected = (selected + 1) % choices.len(),
+                KeyCode::Char(digit @ '1'..='9') => {
+                    let index = digit
+                        .to_digit(10)
+                        .map_or(choices.len(), |value| value as usize - 1);
+                    if index < choices.len() {
+                        selected = index;
+                    }
+                }
+                _ => {}
+            }
+        }
+    })();
+    let _ = write!(writer, "\r\n").and_then(|()| writer.flush());
+    drop(raw_mode);
+    result
+}
+
+pub(crate) fn confirm_bounded(
+    message: &str,
+    default: bool,
+    output: &crate::common::session::OutputSession,
+    execution: &aster_acme::solver::ExecutionContext,
+) -> Result<bool, aster_acme::issuance::IssueError> {
+    let choices = if default {
+        vec!["Yes (default)".to_owned(), "No".to_owned()]
+    } else {
+        vec!["Yes".to_owned(), "No (default)".to_owned()]
+    };
+    let starting_cursor = usize::from(!default);
+    match select_index_or_back_bounded(message, &choices, starting_cursor, output, execution)? {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        Some(_) | None => Err(aster_acme::issuance::IssueError::Cancelled),
     }
 }
 

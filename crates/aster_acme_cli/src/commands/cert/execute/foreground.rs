@@ -17,6 +17,7 @@ pub(super) struct Foreground<'a> {
     pub(super) options: &'a AccountArgs,
     pub(super) args: &'a crate::commands::cert::args::RunArgs,
     pub(super) mode: RunMode,
+    pub(super) allow_chain_prompt: bool,
     pub(super) cli: &'a crate::common::context::CommandContext,
     pub(super) progress: Arc<Progress>,
     pub(super) execution: ExecutionContext,
@@ -62,6 +63,17 @@ impl Foreground<'_> {
             self.context.transport_options(self.options)?,
         )?
         .with_observer(self.progress.clone());
+        // Interactive sessions choose among validated alternate chains at
+        // download time; scripts keep the CA default without prompting.
+        let workflow = if self.allow_chain_prompt && terminal::interactive(self.options.json) {
+            workflow.with_chain_selector(Arc::new(
+                crate::commands::cert::execute::chain_selector::InteractiveChainSelector::new(
+                    self.cli,
+                ),
+            ))
+        } else {
+            workflow
+        };
         let (_, max_polls, poll_interval) = self.args.limits(&self.context.config);
         let execution = IssueExecution {
             max_polls,
@@ -82,8 +94,7 @@ impl Foreground<'_> {
         let result = workflow
             .run(identity, session, solver.as_ref(), &execution)
             .await;
-        if matches!(result, Err(IssueError::Cancelled | IssueError::TimedOut))
-            && self.execution.cancellation.is_cancelled()
+        if matches!(result, Err(IssueError::TimedOut)) && self.execution.cancellation.is_cancelled()
         {
             return Err(Box::new(terminal::Canceled));
         }

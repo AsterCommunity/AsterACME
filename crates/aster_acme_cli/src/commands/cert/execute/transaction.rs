@@ -84,6 +84,7 @@ pub(in crate::commands::cert) async fn transact(
     .lease()
     .await?;
     validate_new_provider_binding(&start, &data_dir).await?;
+    let allow_chain_prompt = matches!(start, Start::Issue(_)) && matches!(mode, RunMode::Single(_));
     let mut session = match start {
         Start::Issue(input) => prepare_session(store, input, &account, &progress).await?,
         Start::Renew {
@@ -112,6 +113,7 @@ pub(in crate::commands::cert) async fn transact(
         options: &options,
         args: run,
         mode,
+        allow_chain_prompt,
         cli,
         progress: progress.clone(),
         execution: execution.clone(),

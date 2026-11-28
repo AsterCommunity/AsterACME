@@ -53,6 +53,20 @@ pub(in crate::commands::cert::render) fn request_lines(
     if let Some(profile) = &record.profile {
         lines.push(field("Profile:", &output::safe(profile), color));
     }
+    if let Some(selection) = &record.chain_selection {
+        let name = selection
+            .named()
+            .map_or("CA default", aster_acme::issuance::ChainName::as_str);
+        lines.push(field("Preferred chain:", &output::safe(name), color));
+    }
+    if let Some(chain) = &record.selected_chain {
+        let description = format!("{} (sha256:{})", chain.dn, chain.fingerprint_sha256);
+        lines.push(field(
+            "Published chain:",
+            &output::safe(&description),
+            color,
+        ));
+    }
     if matches!(
         crate::commands::cert::validation::ValidationMethod::from_record(record),
         Ok(crate::commands::cert::validation::ValidationMethod::Webroot)

@@ -41,6 +41,7 @@ jobs:
           python3 scripts/test-provider-terminal.py
           python3 scripts/test-account-terminal.py
           python3 scripts/test-deployment-terminal.py
+          python3 scripts/test-chain-terminal.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   precheck-features:
@@ -79,11 +80,12 @@ jobs:
       - run: mkdir -p coverage/rust
       - name: Collect Rust coverage
         run: cargo llvm-cov --workspace --all-features --locked --no-fail-fast --no-report
-      - name: Collect account and deployment terminal coverage
+      - name: Collect terminal coverage
         run: |
           eval "$(cargo llvm-cov show-env --sh)"
           python3 scripts/test-account-terminal.py
           python3 scripts/test-deployment-terminal.py
+          python3 scripts/test-chain-terminal.py
       - name: Export Rust coverage
         if: always()
         run: cargo llvm-cov report --lcov --output-path coverage/rust/lcov.info
