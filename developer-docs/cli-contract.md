@@ -62,6 +62,9 @@
 | `-d` | `--domain` | cert issue 的 DNS 域名，可重复 |
 | `--ip` |  | cert issue 的 IP 标识符（RFC 8738），可重复；仅 HTTP-01/TLS-ALPN-01 支持，主标识符为首个 `-d`，否则首个 `--ip` |
 | `--profile` |  | cert issue 显式证书 profile（draft-ietf-acme-profiles）；优先级高于账户默认，CA directory 未广告时在 newOrder 前拒绝 |
+| `--chain` |  | cert issue 本次使用候选链（RFC 8555 §7.4.2 alternate）；按链顶 RFC 4514 DN 大小写不敏感精确匹配，CN 相等兜底；找不到时失败关闭；可用于 --resume，不写入长期偏好 |
+| `--preferred-chain` |  | cert issue 本次使用并保存软偏好；未来 CA 未提供匹配链时回退 CA 默认并告警；可用于 --resume |
+|  | `--default-chain` | 本次使用 CA 默认链，不改变已保存偏好；可用于 --resume |
 | `-k` | `--key-type` | cert issue 的证书公钥算法，默认 ecdsa-p256；与 resume 互斥 |
 | `-c` | `--challenge` | manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn；webroot用-w，监听用--listen-address |
 | `-m` | `--contact` | account register/update 的邮箱，可重复 |
@@ -86,7 +89,7 @@
 | account remove | [NAME] / -n、-y；仅本地操作 |
 | cert renew | [NAME] / -n 或 --all；--now、-y、HTTP、--operation-timeout；定义固定，未到期返回 not_due |
 | cert deploy | run/add/list/show/update/remove [CERT_NAME]；show 另接受位置 DEPLOY_NAME，其余部署名称用 -n/--name；add/update 提供目标、reload、权限配置 |
-| cert issue | -n、重复 -d、重复 --ip、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
+| cert issue | -n、重复 -d、重复 --ip、-a、-c manual_dns/dns_persist/dns_provider/manual_http/webroot/standalone/tls_alpn、webroot的-w、监听的--listen-address、-k/--key-type、--profile、--chain / --preferred-chain / --default-chain；或 --resume NAME / --operation ID；-y、HTTP、--operation-timeout |
 | cert list | -n 筛选；默认每个托管证书一行，--history 展开版本；不访问 CA |
 | cert show | [NAME] / -n、--operation 或 --history、--verify；默认 in_use，HTTP 参数要求 verify |
 | cert revoke | [NAME] / -n、--operation、--sign-with account/certificate-key、可选 --reason、-y、HTTP、--operation-timeout；不删除本地文件 |
@@ -256,6 +259,12 @@ INFO显示实际监听启动/停止，DEBUG提示转发要求；建议性公网H
 
 RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（实际status、problem、绝对retry_at），不伪造Order invalid；创建拒绝/408或429延后/5xx未确认均不进入无URL恢复候选，不重发newOrder。finalize badCSR按实际4xx状态保存；orderNotReady明确拒绝后先查询订单，只有再次ready才提交相同CSR，轮询预算仍约束。授权invalid/deactivated/expired/revoked及选中challenge invalid保留具体problem并拒绝恢复，已valid订单仍可下载。具体RFC映射与未覆盖能力见[错误状态核对](rfc-reference.md)。未发布finalize_rejection字段直接更新为HTTP证据结构，无旧格式兼容或用户数据回填。
 
+## 证书链选择（RFC 8555 §7.4.2）
+
+默认链验证通过后，只有需要发现候选时才解析响应 `Link; rel="alternate"` 并逐条 POST-as-GET。忽略无效、重复及自引用 URL，超过 8 条不同的可用链接则失败。每个候选须与默认链共用同一张叶子证书，并通过 SAN、公钥、有效期及相邻签名检查。
+
+`--chain CHAIN` 仅约束当前 operation；`--preferred-chain CHAIN` 还会把名称写入 certificate definition，作为后续续期的软偏好；两者都按链顶 RFC 4514 DN 大小写不敏感精确匹配，CN 相等兜底。软偏好无候选命中时保留证书定义并使用 CA 默认链，输出 warning；一次性 `--chain` 无命中时返回 `ChainUnavailable`，证书保持已签发且可用 `cert issue --resume NAME --chain CHAIN` 重入，不重新下单。`--default-chain` 本次直接接受 CA 默认且不改变既有软偏好。交互先选本次链：首项“不保存偏好，跟随 CA 默认”，后续显示本次 CA 默认链及有效 alternates；选具体链后再以默认否确认是否保存为软偏好。Esc 取消并保留可恢复 operation。新申请没有链参数且没有已保存链选择时，交互可选候选，非交互使用 CA 默认；`cert issue --resume` 未指定链参数时沿用该 operation 已保存的链选择。`cert renew` 和 daemon 沿用软偏好但在缺失时回退 CA 默认。世代记录实际发布链的链顶 DN 和 SHA-256 指纹；候选 URL 不落盘。
+
 ## 查询筛选与写入边界
 
 所有库存查询均为本地快照，无 HTTP 或私钥加载。账户列表用 AccountQuery（默认全部）；既有账户交互按显式 CA/usable 或 core operation 资格过滤（Update/Deactivate/RotateKey，未确认轮换仍可恢复），注册为了检查名称占用保留全部本地名称。明确名称的账户操作直接读取该身份。
@@ -280,7 +289,7 @@ RFC错误证据与恢复：newOrder完整错误响应保存creation_failure（�
 | account register | 新建/继续、账户名、CA、联系人、条款、未来条款更新授权和复用确认 | EAB、密钥算法等高级选项 |
 | account show/switch/recover | 缺名称选择已有账户 | verify 等查询/行为开关 |
 | account update/rotate-key/remove --deactivate | 账户选择、联系人/profile/条款授权输入或操作确认 | key-type 等可选参数使用默认/显式值 |
-| cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认 | 脚本须-c/-d和必要目录；账户/密钥类型等使用显式参数或配置/内置默认 |
+| cert issue | 缺域名输入、验证方式选择、webroot目录或standalone/TLS-ALPN监听地址输入；相似申请选择、人工发布确认；多候选链选择和具体链的软偏好确认 | 脚本须-c/-d和必要目录；链选择用 --chain / --preferred-chain / --default-chain |
 | cert issue --resume | 缺名称选未完成申请，多版本选择 | 脚本必须精确指明歧义目标 |
 | cert show/revoke/remove/renew | 缺名称选证书，必要时选版本；危险操作确认 | revoke reason、renew --now 等行为选项 |
 | cert deploy add | 选证书、名称建议可确认/修改、输入现有目录、可选 reload；脚本缺省部署名自动生成 | 五种精确文件路径只能显式传入 |

@@ -71,6 +71,25 @@ pub enum IssueEvent {
     Finalizing,
     /// The issued certificate is being downloaded and inspected.
     Downloading,
+    /// Validated candidate chains
+    /// ([RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2))
+    /// are available for selection; the first entry is the CA default.
+    ChainCandidatesObserved {
+        /// RFC 4514 names of every validated candidate chain, default first.
+        available: Vec<String>,
+    },
+    /// A saved soft preference was unavailable, so the valid CA default is used.
+    ChainSelectionUnavailable {
+        /// Requested chain-top name.
+        requested: String,
+        /// CA default chain-top name used for this issuance.
+        using: String,
+    },
+    /// One candidate chain was selected for publication.
+    ChainSelected {
+        /// RFC 4514 name of the selected chain's top-most certificate.
+        chain: String,
+    },
     /// Artifact validation, persistence and `in_use`-generation promotion finished.
     CertificateSaved {
         /// Stable managed certificate name, independent of its domains and generation.

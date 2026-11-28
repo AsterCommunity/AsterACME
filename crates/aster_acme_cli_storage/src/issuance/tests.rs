@@ -220,6 +220,7 @@ async fn order_and_authorization_extension_nulls_roundtrip_through_journal() {
 
 fn request() -> IssueRequest {
     IssueRequest {
+        chain_selection: None,
         challenge: aster_acme::challenge::ChallengeKind::Dns01,
         solver_id: "manual_dns".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
@@ -3382,5 +3383,258 @@ async fn renewing_an_expired_predecessor_does_not_try_to_reschedule_the_old_cert
     assert_eq!(
         reopened.record().await.unwrap().operation_id,
         record.operation_id
+    );
+}
+
+#[tokio::test]
+async fn chain_preferences_persist_into_and_rebuild_from_the_certificate_definition() {
+    let fixture = fixture().await;
+    let mut defined = request();
+    defined.chain_selection = Some(aster_acme::issuance::ChainSelection::Named {
+        chain: aster_acme::issuance::ChainName::new("ISRG Root X1").unwrap(),
+        remember: true,
+    });
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    let saved = selection(&fixture.store.slot(&defined.name)).unwrap();
+    assert_eq!(
+        saved.cert.preferred_chain.as_ref(),
+        defined
+            .chain_selection
+            .as_ref()
+            .and_then(aster_acme::issuance::ChainSelection::persisted)
+            .as_ref(),
+        "the definition written at creation must carry the preference"
+    );
+
+    // Renewals rebuild the request from the definition, not from flags.
+    drop(session);
+    let renewed = fixture
+        .store
+        .renew(&defined.name, &fixture.account)
+        .await
+        .unwrap();
+    assert_eq!(
+        renewed.record().await.unwrap().chain_selection,
+        defined.chain_selection
+    );
+}
+
+fn test_chain(generation: &Path, identifiers: &[Identifier], ca_name: &str) -> (String, String) {
+    let key = KeyPair::try_from(
+        fs::read(generation.join("private-key.pk8"))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    let ca_key = KeyPair::generate().unwrap();
+    let mut params = CertificateParams::new(Vec::new()).unwrap();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, ca_name);
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca = params.self_signed(&ca_key).unwrap();
+    let issuer = Issuer::new(params, ca_key);
+    let leaf = CertificateParams::new(
+        identifiers
+            .iter()
+            .map(Identifier::value)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+    .signed_by(&key, &issuer)
+    .unwrap();
+    (
+        format!("{}{}", leaf.pem(), ca.pem()),
+        ca.pem().replace("\r\n", "\n"),
+    )
+}
+
+#[tokio::test]
+async fn default_chain_promotion_preserves_the_definition_for_future_renewals() {
+    use aster_acme::issuance::{ChainName, ChainSelection, chain::chain_identity};
+    let fixture = fixture().await;
+    let mut defined = request();
+    defined.chain_selection = Some(ChainSelection::Named {
+        chain: ChainName::new("Previous CA").unwrap(),
+        remember: true,
+    });
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    let slot = fixture.store.slot(&defined.name);
+    let mut record = session.record().await.unwrap();
+    let (chain, _) = test_chain(
+        &slot.join(record.generation_name()),
+        &record.identifiers,
+        "First Default CA",
+    );
+    record.phase = IssuancePhase::Completed;
+    record.chain_selection = Some(ChainSelection::Default);
+    record.selected_chain = Some(chain_identity(chain.as_bytes()).unwrap());
+    session.complete(&record, chain.as_bytes()).await.unwrap();
+    assert_eq!(
+        selection(&slot).unwrap().cert.preferred_chain,
+        Some(ChainName::new("Previous CA").unwrap())
+    );
+    assert_eq!(
+        session.record().await.unwrap().selected_chain,
+        record.selected_chain
+    );
+    drop(session);
+
+    let renewal = fixture
+        .store
+        .renew(&defined.name, &fixture.account)
+        .await
+        .unwrap();
+    let mut renewed = renewal.record().await.unwrap();
+    assert_eq!(
+        renewed.chain_selection,
+        Some(ChainSelection::Named {
+            chain: ChainName::new("Previous CA").unwrap(),
+            remember: true,
+        })
+    );
+    let (new_chain, new_ca) = test_chain(
+        &slot.join(renewed.generation_name()),
+        &renewed.identifiers,
+        "Replacement Default CA",
+    );
+    renewed.phase = IssuancePhase::Completed;
+    renewed.selected_chain = Some(chain_identity(new_chain.as_bytes()).unwrap());
+    assert_eq!(
+        renewed.selected_chain.as_ref().unwrap().dn,
+        "CN=Replacement Default CA"
+    );
+    renewal
+        .complete(&renewed, new_chain.as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(
+        selection(&slot).unwrap().cert.in_use.as_deref(),
+        Some(renewed.operation_id.as_str())
+    );
+    assert_eq!(
+        selection(&slot).unwrap().cert.preferred_chain,
+        Some(ChainName::new("Previous CA").unwrap())
+    );
+    let generation = slot.join(renewed.generation_name());
+    assert_eq!(
+        fs::read(generation.join("fullchain.pem")).unwrap(),
+        new_chain.as_bytes()
+    );
+    assert_eq!(
+        fs::read(generation.join("ca.pem")).unwrap(),
+        new_ca.as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn once_chain_promotion_preserves_the_existing_soft_definition() {
+    use aster_acme::issuance::{ChainName, ChainSelection, chain::chain_identity};
+    let fixture = fixture().await;
+    let mut defined = request();
+    let existing = ChainName::new("Existing Preferred CA").unwrap();
+    defined.chain_selection = Some(ChainSelection::Named {
+        chain: existing.clone(),
+        remember: true,
+    });
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    let slot = fixture.store.slot(&defined.name);
+    let mut record = session.record().await.unwrap();
+    let key = KeyPair::try_from(
+        fs::read(slot.join(record.generation_name()).join("private-key.pk8"))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    let issuer = Issuer::new(
+        CertificateParams::new(Vec::<String>::new()).unwrap(),
+        KeyPair::generate().unwrap(),
+    );
+    let mut params = CertificateParams::new(
+        record
+            .identifiers
+            .iter()
+            .map(Identifier::value)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+    params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(89);
+    let leaf = params.signed_by(&key, &issuer).unwrap().pem();
+    record.phase = IssuancePhase::Completed;
+    record.chain_selection = Some(ChainSelection::Named {
+        chain: ChainName::new("One-time CA").unwrap(),
+        remember: false,
+    });
+    record.selected_chain = Some(chain_identity(leaf.as_bytes()).unwrap());
+    session.complete(&record, leaf.as_bytes()).await.unwrap();
+    assert_eq!(
+        selection(&slot).unwrap().cert.preferred_chain,
+        Some(existing)
+    );
+}
+
+#[tokio::test]
+async fn explicit_default_is_only_stored_in_the_operation_checkpoint() {
+    let fixture = fixture().await;
+    let mut defined = request();
+    defined.chain_selection = Some(aster_acme::issuance::ChainSelection::Default);
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    assert_eq!(
+        session.record().await.unwrap().chain_selection,
+        defined.chain_selection
+    );
+    assert!(
+        selection(&fixture.store.slot(&defined.name))
+            .unwrap()
+            .cert
+            .preferred_chain
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn record_snapshots_inherit_the_definition_chain_preference() {
+    let fixture = fixture().await;
+    let mut defined = request();
+    defined.chain_selection = Some(aster_acme::issuance::ChainSelection::Named {
+        chain: aster_acme::issuance::ChainName::new("Saved CA").unwrap(),
+        remember: true,
+    });
+    let session = fixture
+        .store
+        .create(&defined, &fixture.account)
+        .await
+        .unwrap();
+    let mut record = session.record().await.unwrap();
+    assert_eq!(record.chain_selection, defined.chain_selection);
+    // Simulate a crash between an interactive decision (journal) and the
+    // definition write: the definition stays authoritative for recovery.
+    record.chain_selection = None;
+    let generation = fixture
+        .store
+        .slot(&record.name)
+        .join(record.generation_name());
+    write_journal(&generation.join("operation.toml"), &record).unwrap();
+    assert_eq!(
+        session.record().await.unwrap().chain_selection,
+        defined.chain_selection,
+        "the definition preference must survive journal-only recovery"
     );
 }

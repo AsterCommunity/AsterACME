@@ -37,7 +37,12 @@ pub(crate) fn exit_status(
     mut error: &(dyn std::error::Error + 'static),
 ) -> crate::common::session::ExitStatus {
     loop {
-        if error.is::<crate::common::terminal::Canceled>() {
+        if error.is::<crate::common::terminal::Canceled>()
+            || matches!(
+                error.downcast_ref::<aster_acme::issuance::IssueError>(),
+                Some(aster_acme::issuance::IssueError::Cancelled)
+            )
+        {
             return crate::common::session::ExitStatus::Cancelled;
         }
         match error.source() {
@@ -214,6 +219,7 @@ fn issue_diagnostic(issue: &aster_acme::issuance::IssueError) -> (String, Option
         IssueError::Transport(error)=>transport_diagnostic(error),
         IssueError::Store(error)=>(format!("Could not access certificate storage: {}", error.message),Some("Check --data-dir, managed files and permissions. Retain any .removing marker and remaining files for inspection.".into())),
         IssueError::InvalidProfile(_) => (issue.to_string(), Some("Run account show --profiles to list the profiles this CA advertises, then pass the exact name with cert issue --profile or account update --profile. Let's Encrypt IP identifiers require the shortlived profile. No order was created.".into())),
+        IssueError::ChainUnavailable { requested, .. } => (format!("No certificate chain matches {requested:?}. The CA issued the certificate, and it is awaiting publication."), Some("Run cert issue --resume <CERTIFICATE> --chain <CHAIN> to choose an available validated chain.".into())),
         IssueError::PollLimit { .. } => (issue.to_string(), Some("Resume the saved request, or increase --max-polls. Retry-After and the overall --operation-timeout still apply; no new order is created.".into())),
         IssueError::InvalidOrder { problem } => self::problem::invalid_order(problem.as_deref()),
         IssueError::Expired=>(issue.to_string(),Some("Use cert show <CERTIFICATE> --verify to inspect the saved request. Start a new cert issue explicitly; local readiness cannot bypass CA expiry.".into())),
@@ -301,8 +307,17 @@ pub(crate) fn render(
     error: &(dyn std::error::Error + 'static),
     format: crate::common::session::Format,
 ) -> CliResult<String> {
-    let (message, hint) = diagnostic(error);
+    let (mut message, hint) = diagnostic(error);
+    let available = std::iter::successors(Some(error), |error| error.source()).find_map(|source| {
+        match source.downcast_ref::<aster_acme::issuance::IssueError>()? {
+            aster_acme::issuance::IssueError::ChainUnavailable { available, .. } => Some(available),
+            _ => None,
+        }
+    });
     if format.json {
+        if let Some(available) = available {
+            let _ = write!(message, " Available certificate chains: {available:?}");
+        }
         Ok(serde_json::to_string(&ErrorOutput {
             error: Diagnostic {
                 message: &message,
@@ -315,6 +330,13 @@ pub(crate) fn render(
             crate::common::output::MessageKind::Error.badge(format.color),
             safe(&message)
         );
+        if let Some(available) = available {
+            text.push_str("\n  Available certificate chains:");
+            for (index, name) in available.iter().enumerate() {
+                let suffix = if index == 0 { " (CA default)" } else { "" };
+                let _ = write!(text, "\n    - {}{suffix}", safe(name));
+            }
+        }
         if let Some(hint) = hint {
             text.push('\n');
             text.push_str(&styled("  Hint:", Style::Yellow, format.color));
@@ -329,6 +351,31 @@ pub(crate) fn render(
 mod tests {
     use crate::common::error::*;
     use aster_acme_protocol::problem::ProblemKind;
+
+    #[test]
+    fn unavailable_chain_lists_each_candidate_on_its_own_row() {
+        let error = ContextError {
+            context: "Issuance".into(),
+            source: Box::new(aster_acme::issuance::IssueError::ChainUnavailable {
+                requested: "Missing".into(),
+                available: vec!["CN=Default,O=CA".into(), "CN=Alternate,O=CA\nunsafe".into()],
+            }),
+        };
+        let human = render(&error, crate::common::session::Format::plain(false)).unwrap();
+        assert!(
+            human.contains(
+                "\n    - CN=Default,O=CA (CA default)\n    - CN=Alternate,O=CA\\nunsafe\n"
+            )
+        );
+        let machine = render(&error, crate::common::session::Format::plain(true)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&machine).unwrap();
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("CN=Default,O=CA")
+        );
+    }
 
     #[test]
     fn rejected_bad_nonce_retry_keeps_rejection_and_preparation_failure_in_json() {

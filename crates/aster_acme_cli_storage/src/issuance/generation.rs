@@ -81,6 +81,8 @@ impl CliIssueStore {
                 account_thumbprint: account.key_thumbprint,
                 key_algorithm: request.key_algorithm,
                 profile: request.profile,
+                chain_selection: request.chain_selection,
+                selected_chain: None,
                 identifiers: request.identifiers,
                 phase: IssuancePhase::CreatingOrder,
                 new_order_intent_saved: false,
@@ -278,6 +280,10 @@ fn initialize_definition(
                         identifiers: request.identifiers.clone(),
                         key_algorithm: request.key_algorithm,
                         profile: request.profile.clone(),
+                        preferred_chain: request
+                            .chain_selection
+                            .as_ref()
+                            .and_then(aster_acme::issuance::ChainSelection::persisted),
                         account_name: request.account_name.clone(),
                         account_id: account.account_id.clone(),
                         directory: account.directory_url.clone(),
@@ -317,6 +323,12 @@ fn initialize_definition(
                 identifiers: config.cert.identifiers,
                 key_algorithm: config.cert.key_algorithm,
                 profile: config.cert.profile,
+                chain_selection: config.cert.preferred_chain.map(|chain| {
+                    aster_acme::issuance::ChainSelection::Named {
+                        chain,
+                        remember: true,
+                    }
+                }),
                 account_name: config.cert.account_name,
             };
             validate_request(&request, account)?;

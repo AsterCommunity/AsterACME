@@ -18,8 +18,12 @@ aster-acme
 │   ├── rotate-key [NAME] [-k KEY_TYPE]
 │   └── remove [NAME] [--deactivate]
 ├── cert
-│   ├── issue (-n NAME | --resume NAME [--operation ID]) -d DOMAIN... -a ACCOUNT
-│   │          -c CHALLENGE [-w WEBROOT | --listen-address ADDR] [--provider PROFILE] [-k KEY_TYPE]
+│   ├── issue [-n NAME] [-d DOMAIN...] [--ip ADDRESS...] -a ACCOUNT -c CHALLENGE
+│   │          [-w WEBROOT | --listen-address ADDR] [--provider PROFILE] [-k KEY_TYPE] [--profile NAME]
+│   │          [--chain CHAIN | --preferred-chain CHAIN | --default-chain]
+│   │          (新申请至少需要一个 DNS 或 IP 标识符)
+│   ├── issue --resume NAME [--operation ID]
+│   │          [--chain CHAIN | --preferred-chain CHAIN | --default-chain]
 │   ├── list [-n NAME] [--history]
 │   ├── show [NAME] [--operation ID | --history] [--verify]
 │   ├── renew (NAME | --all) [--now]

@@ -37,6 +37,7 @@ CLI 源码构建默认包含 Cloudflare、阿里云云解析 DNS、腾讯云 DNS
 - 具名 CA 账户：注册、找回、联系人更新、换钥和停用。
 - 单域名、多 SAN、通配符与 IP 地址（RFC 8738）证书，账户与证书可独立选择密钥类型。
 - CA 证书 profile（draft-ietf-acme-profiles）：发现广告列表、设置账户默认或按次选择——Let's Encrypt 的 IP 标识符需要 `shortlived`。
+- 候选证书链选择（RFC 8555 §7.4.2）：`--chain` 指定本次签发链，`--preferred-chain` 保存后续软偏好，`--default-chain` 跟随 CA 当次默认链。交互先选择本次链，再单独确认是否保存偏好；未来偏好链不可用时告警并回退 CA 默认。
 - 保存申请后恢复、ARI 刷新、前台单次／批量续期，以及受支持验证方式的无人值守维护。
 - 每张证书绑定多个部署目标，续期后自动部署，reload 有界执行并展示 stdout/stderr。
 - 交互式输入、结构化 JSON、离线查看及可选 debug 诊断。

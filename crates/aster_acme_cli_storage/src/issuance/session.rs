@@ -22,6 +22,16 @@ impl IssueSession for Session {
             let config = selection(&slot)?;
             record.is_in_use = config.cert.in_use.as_deref() == Some(record.operation_id.as_str());
             record.deployment_count = Some(config.cert.deployments.len());
+            // A generation's own selection takes precedence. The definition
+            // supplies the named policy when the journal has no preference.
+            record.chain_selection = record.chain_selection.or_else(|| {
+                config.cert.preferred_chain.clone().map(|chain| {
+                    aster_acme::issuance::ChainSelection::Named {
+                        chain,
+                        remember: true,
+                    }
+                })
+            });
             Ok::<_, IssueError>(record)
         })
         .await
@@ -107,6 +117,22 @@ impl IssueSession for Session {
         .map_err(|_| failure("CSR worker failed"))?
     }
 
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        let generation = self.generation.clone();
+        let record = self.initial.clone();
+        let lease = self.lease.clone();
+        let permit = self.io.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lease = lease;
+            check_material(&generation, &record)?;
+            read_private(&generation.join("private-key.pk8"), 64 * 1024)
+                .map_err(|_| failure("fixed certificate key missing or unsafe"))
+        })
+        .await
+        .map_err(|_| failure("certificate key worker failed"))?
+    }
+
     async fn complete(
         &self,
         record: &IssueRecord,
@@ -174,6 +200,23 @@ impl IssueSession for Session {
             publication::NATIVE.publish(&slot, &record)?;
             let mut config = selection(&slot)?;
             config.cert.in_use = Some(record.operation_id.clone());
+            // Only a remembered concrete selection changes the definition.
+            match record.chain_selection.as_ref() {
+                Some(
+                    selection @ aster_acme::issuance::ChainSelection::Named {
+                        remember: true, ..
+                    },
+                ) => {
+                    config.cert.preferred_chain = selection.persisted();
+                }
+                Some(
+                    aster_acme::issuance::ChainSelection::Named {
+                        remember: false, ..
+                    }
+                    | aster_acme::issuance::ChainSelection::Default,
+                )
+                | None => {}
+            }
             if let Err(error) = write_selection(&slot, &config) {
                 // The write may have replaced catalog state before a sync error;
                 // recover according to what is actually persisted, not the attempted value.

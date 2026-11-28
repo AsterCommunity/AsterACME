@@ -128,6 +128,8 @@ struct CertificateSelection {
     key_algorithm: aster_acme::crypto::key_algorithm::KeyAlgorithm,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preferred_chain: Option<aster_acme::issuance::ChainName>,
     account_name: String,
     account_id: String,
     directory: aster_acme_protocol::url::AcmeUrl,

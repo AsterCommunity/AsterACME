@@ -58,6 +58,9 @@ impl IssueSession for Session {
         Ok(())
     }
 
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        unreachable!()
+    }
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         Err(IssueError::InvalidInput("ARI must not read CSR"))
     }

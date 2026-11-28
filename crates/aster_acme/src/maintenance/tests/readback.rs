@@ -50,6 +50,9 @@ impl IssueSession for Session {
     async fn save(&self, _: &IssueRecord) -> Result<(), IssueError> {
         unreachable!()
     }
+    async fn certificate_key(&self) -> Result<Vec<u8>, IssueError> {
+        unreachable!()
+    }
     async fn csr(&self) -> Result<Vec<u8>, IssueError> {
         unreachable!()
     }

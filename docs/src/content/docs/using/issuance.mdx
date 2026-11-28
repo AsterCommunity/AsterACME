@@ -16,6 +16,11 @@ aster-acme cert issue -n example-cert -a default \
 - `-d/--domain`:DNS 域名,可重复;通配符写 `*.example.com`,通配符只能走 DNS 验证
 - `--ip`:IP 地址(RFC 8738),可重复;只能走 HTTP-01/TLS-ALPN-01,主标识符为首个 `-d`,否则首个 `--ip`
 - `--profile`:CA 证书 profile(draft-ietf-acme-profiles);`account show --profiles` 查看广告列表,账户默认用 `account update --profile`,显式指定优先。Let's Encrypt 签发 IP 证书必须选 `shortlived`
+- `--chain CHAIN`:本次使用匹配的候选链,不保存偏好;`CHAIN` 可填写链顶证书的 RFC 4514 DN,或填写其 CN,例如 `CN=ISRG Root X1,O=Internet Security Research Group,C=US` 或 `ISRG Root X1`;无匹配时失败,已签发 operation 可通过 `--resume` 重选
+- `--preferred-chain CHAIN`:本次使用并保存软偏好;`CHAIN` 同样可填写链顶证书的 RFC 4514 DN 或 CN;未来 CA 未提供匹配链时回退默认链并告警
+- `--default-chain`:本次跟随 CA 默认,不改变已保存偏好
+
+**证书链选择**:CA 在下载响应通过 `Link; rel="alternate"` 提供同一叶子的候选链。交互先选本次链；首项不保存偏好、跟随 CA 默认，具体链后续可确认是否保存为软偏好（默认否）。非交互用 `--chain` 指定一次性链、`--preferred-chain` 指定并保存软偏好，或 `--default-chain` 跟随 CA 默认。软偏好不可用时自动回退默认并告警；一次性链不可用时失败，`--resume` 可重试链选择而不重新下单。`cert show` 展示世代实际发布链和 definition 的软偏好。
 - `-c/--challenge`:验证实现,见[验证方式](/using/challenges/)
 - `-k/--key-type`:证书公钥算法,默认 ecdsa-p256;支持 ecdsa-p384/p521、ed25519、rsa-2048/3072/4096/8192。CA 拒绝时保留实际错误,不自动换算法重试
 

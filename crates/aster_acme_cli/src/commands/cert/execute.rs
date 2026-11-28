@@ -26,6 +26,7 @@ pub(super) fn options(local: &LocalArgs, http: &HttpArgs, account: Option<String
     }
 }
 
+pub(crate) mod chain_selector;
 pub(crate) mod failure;
 pub(crate) mod foreground;
 pub(crate) mod inspection;
@@ -34,7 +35,10 @@ pub(crate) mod transaction;
 pub(super) enum IssueInput {
     // A saved journal is large; keep it off the transaction frame. New input holds
     // only the desired definition, not the entire parsed CLI/output/HTTP args.
-    Resume(Box<IssueRecord>),
+    Resume {
+        record: Box<IssueRecord>,
+        chain_override: Option<aster_acme::issuance::ChainSelection>,
+    },
     New {
         request: IssueRequest,
         naming: Naming,

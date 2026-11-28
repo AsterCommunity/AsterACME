@@ -700,6 +700,7 @@ async fn new_request_provider_binding_rejects_profile_drift_and_accepts_pinned_t
     let start = crate::commands::cert::execute::Start::Issue(
         crate::commands::cert::execute::IssueInput::New {
             request: aster_acme::issuance::IssueRequest {
+                chain_selection: None,
                 challenge: aster_acme::challenge::ChallengeKind::Dns01,
                 solver_id: "dns_provider".into(),
                 solver_config: request.solver_config.clone(),
@@ -722,6 +723,7 @@ async fn new_request_provider_binding_rejects_profile_drift_and_accepts_pinned_t
     let start = crate::commands::cert::execute::Start::Issue(
         crate::commands::cert::execute::IssueInput::New {
             request: aster_acme::issuance::IssueRequest {
+                chain_selection: None,
                 challenge: aster_acme::challenge::ChallengeKind::Dns01,
                 solver_id: "dns_provider".into(),
                 solver_config: request.solver_config,

@@ -66,6 +66,7 @@ fn protocol_method_validation_prevents_http_wildcards_before_material_or_network
             DnsIdentifier::new("*.example.com").unwrap(),
         )],
         profile: None,
+        chain_selection: None,
         key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         account_name: "default".into(),
         challenge: crate::challenge::ChallengeKind::Http01,
@@ -95,6 +96,7 @@ fn dns_methods_reject_ip_identifiers_and_http_methods_accept_mixed_sans_before_a
             Identifier::Ip(IpIdentifier::new("2001:db8::1").unwrap()),
         ],
         profile: None,
+        chain_selection: None,
         key_algorithm: crate::crypto::key_algorithm::KeyAlgorithm::EcdsaP256,
         account_name: "default".into(),
         challenge: crate::challenge::ChallengeKind::Dns01,
@@ -154,6 +156,7 @@ fn certificate_profile_names_are_bounded_and_become_resume_identity() {
         solver_id: "webroot".into(),
         solver_config: serde_json::Value::Object(serde_json::Map::default()),
         profile: profile.map(str::to_owned),
+        chain_selection: None,
     };
     for invalid in [Some(""), Some("short\nlived"), Some("short\u{0}lived")] {
         assert!(
@@ -189,6 +192,8 @@ fn certificate_profile_names_are_bounded_and_become_resume_identity() {
             account_thumbprint: "A".repeat(43),
             key_algorithm: request.key_algorithm,
             profile: request.profile.clone(),
+            chain_selection: None,
+            selected_chain: None,
             identifiers: request.identifiers.clone(),
             phase: aster_acme_core::workflow::IssuancePhase::Authorizing,
             new_order_intent_saved: true,

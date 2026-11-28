@@ -34,6 +34,7 @@ async fn failed_cli_requires_confirmation_then_deletes_only_evidenced_failure_of
     let session = store
         .create(
             &IssueRequest {
+                chain_selection: None,
                 name: CertificateName::new("failed.example.com").unwrap(),
                 identifiers: vec![aster_acme::identifier::Identifier::Dns(
                     aster_acme::identifier::DnsIdentifier::new("example.com").unwrap(),

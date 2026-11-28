@@ -139,6 +139,7 @@ impl Fixture {
         std::fs::create_dir(&root).unwrap();
         let solver_config = fixture_solver_config(implementation, &root);
         let request = IssueRequest {
+            chain_selection: None,
             name: aster_acme::issuance::CertificateName::new("web").unwrap(),
             identifiers: vec![identifier.clone()],
             profile: profile.map(str::to_owned),
@@ -1436,6 +1437,7 @@ async fn similarity_requires_a_complete_resumable_definition_and_ignores_domain_
         DnsIdentifier::new("www.example.com").unwrap(),
     ));
     let mut request = IssueRequest {
+        chain_selection: None,
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),
         profile: None,
@@ -1518,6 +1520,7 @@ async fn matching_includes_every_unfinished_phase_but_unconfirmed_creation_never
     let mut fixture = Fixture::new(ValidationMethod::ManualHttp).await;
     let mut record = fixture.session.as_ref().unwrap().record().await.unwrap();
     let request = IssueRequest {
+        chain_selection: None,
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),
         profile: None,
@@ -1603,6 +1606,7 @@ async fn expired_invalid_or_csr_rejected_requests_are_not_automatic_recovery_can
     let fixture = Fixture::new(ValidationMethod::ManualHttp).await;
     let record = fixture.session.as_ref().unwrap().record().await.unwrap();
     let request = IssueRequest {
+        chain_selection: None,
         name: record.name.clone(),
         identifiers: record.identifiers.clone(),
         profile: None,

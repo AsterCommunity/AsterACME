@@ -1,5 +1,6 @@
 //! [RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555) issuance orchestration. All mutations follow durable checkpoints.
 
+use crate::issuance::chain::ChainSelector;
 use crate::issuance::progress::{IssueEvent, IssueObserver};
 use crate::issuance::service::{
     execution::{bounded, bounded_context, check},
@@ -22,6 +23,7 @@ pub struct IssueService {
     client: Arc<AcmeClient>,
     identity: IssueIdentity,
     observer: Option<Arc<dyn IssueObserver>>,
+    chain_selector: Option<Arc<dyn ChainSelector>>,
 }
 
 mod authorization;
@@ -50,6 +52,7 @@ impl IssueService {
             client,
             identity,
             observer: None,
+            chain_selector: None,
         })
     }
 
@@ -57,6 +60,16 @@ impl IssueService {
     #[must_use]
     pub fn with_observer(mut self, observer: Arc<dyn IssueObserver>) -> Self {
         self.observer = Some(observer);
+        self
+    }
+
+    /// Attach a product-owned chain selector for interactive
+    /// [RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2)
+    /// alternate-chain selection. Without one, explicit preferences still match
+    /// automatically but undiscovered candidates never prompt.
+    #[must_use]
+    pub fn with_chain_selector(mut self, selector: Arc<dyn ChainSelector>) -> Self {
+        self.chain_selector = Some(selector);
         self
     }
 

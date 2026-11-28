@@ -50,6 +50,15 @@ pub struct IssueRecord {
     /// CA certificate profile selected at creation; fixed for this generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Per-operation chain-selection intent. The certificate definition stores
+    /// only the concrete soft preference, separately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_selection: Option<crate::issuance::chain::ChainSelection>,
+    /// Identity of the chain actually published with this generation
+    /// ([RFC 8555 §7.4.2](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4.2));
+    /// saved once the selection is durable, never transmitted to the CA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_chain: Option<crate::issuance::chain::ChainIdentity>,
     /// Ordered canonical DNS and IP identifiers.
     pub identifiers: Vec<Identifier>,
     /// Local execution stage, independent of order status.
